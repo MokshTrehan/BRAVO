@@ -44,8 +44,17 @@ checkpoints:
         result: mathematical_decisions_frozen_human_signoff_pending
       - path: docs/iterated_update_spec.md
         result: equations_rank_gate_and_two_pass_policy_specified
+      - path: results/immutable/cp1/automated/cp1_math_20260722T184905076028292Z-g8b05afb88ce8
+        result: automated_math_component_passed_human_signoff_pending
+        tested_commit: 8b05afb88ce89b2b18bbb77d462a0866a2cac571
+        source_dirty: false
+        sha256sums_sha256: 6985a04acdf3738babc9bae06842b841c146629eb6f39663d161ed952cf85b44
+        gtests: 5
+        equivalence_fixtures: 128
+        rank_rejection_fixtures: 128
+        projection_fixtures: 256
+        retraction_fixtures: 256
     blockers:
-      - automated_cp1_test_evidence
       - named_human_vio_ekf_reviewer_and_signoff
   - id: CP2
     due: 2026-07-31T23:59:00-04:00

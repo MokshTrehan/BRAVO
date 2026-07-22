@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="2" failures="0" disabled="0" errors="0" time="0.002" timestamp="2026-07-22T14:49:05" name="AllTests">
+  <testsuite name="CP1Projection" tests="1" failures="0" disabled="0" errors="0" time="0.001" timestamp="2026-07-22T14:49:05">
+    <testcase name="ActualOpenVINSJacobiansMatchAllDoubleFiniteDifferences" status="run" result="completed" time="0.001" timestamp="2026-07-22T14:49:05" classname="CP1Projection" />
+  </testsuite>
+  <testsuite name="CP1Retraction" tests="1" failures="0" disabled="0" errors="0" time="0.001" timestamp="2026-07-22T14:49:05">
+    <testcase name="FixedPriorChartDifferentialMatchesExactJPLRetraction" status="run" result="completed" time="0.001" timestamp="2026-07-22T14:49:05" classname="CP1Retraction" />
+  </testsuite>
+</testsuites>

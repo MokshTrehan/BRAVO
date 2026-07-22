@@ -1,13 +1,13 @@
 # Estimator conventions
 
-Status: **mathematical decisions frozen; blocking on CP1 tests and human signoff**
+Status: **automated CP1 evidence passed; blocking on named human signoff**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 Human reviewer: **unassigned**
 Signoff date: **not signed**
 
-No production estimator modification is permitted while any blocking field
-below is unresolved. Each decision must cite the defining source file/function
-and the test that protects it.
+No production estimator modification is permitted until the human review below
+is signed. Each decision cites the defining source file/function and the test
+or later parity gate that protects it.
 
 ## Frames and transforms
 

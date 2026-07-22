@@ -35,9 +35,34 @@ frozen_contract:
     covariance_minimum_eigenvalue_relative: -1.0e-10
 
 automated_evidence:
-  status: pending
+  status: passed
+  scope: automated_math_component_only
   command: scripts/cp1/run_cp1.sh
-  report: null
+  tested_commit: 8b05afb88ce89b2b18bbb77d462a0866a2cac571
+  source_dirty: false
+  generated_utc: "2026-07-22T18:49:05.204095Z"
+  artifact: results/immutable/cp1/automated/cp1_math_20260722T184905076028292Z-g8b05afb88ce8
+  seal_method: Linux renameat2(RENAME_NOREPLACE)
+  report: results/immutable/cp1/automated/cp1_math_20260722T184905076028292Z-g8b05afb88ce8/cp1_math_report.json
+  sha256sums_sha256: 6985a04acdf3738babc9bae06842b841c146629eb6f39663d161ed952cf85b44
+  independent_verifier: scripts/cp1/verify_report.py
+  results:
+    gtests: 5
+    failures: 0
+    errors: 0
+    disabled: 0
+    well_conditioned_equivalence_fixtures: 128
+    near_column_space_fixtures: 16
+    rank_rejection_fixtures: 128
+    projection_finite_difference_fixtures: 256
+    retraction_differential_fixtures: 256
+    max_state_increment_error: 2.23431e-15
+    max_landmark_increment_error: 4.3639e-15
+    max_posterior_covariance_error: 8.86741e-15
+    max_nis_error: 2.24283e-15
+    max_projection_normalized_frobenius: 2.17193e-9
+    max_residual_definition_error: 0.0
+    max_fixed_chart_normalized_frobenius: 1.02009e-9
   requirements:
     - full_joint_nullspace_and_schur_equivalence
     - lambda_eta_gamma_nis_and_gate_dof_parity
@@ -48,6 +73,7 @@ automated_evidence:
 
 human_review:
   status: pending
+  review_target_commit: 8b05afb88ce89b2b18bbb77d462a0866a2cac571
   reviewer: null
   signed_at: null
   reviewed_commit: null
@@ -60,5 +86,4 @@ human_review:
     - exactly_once_covariance_and_identity_reset_policy
 
 blockers:
-  - automated_cp1_test_evidence
   - named_human_vio_ekf_reviewer_and_signoff

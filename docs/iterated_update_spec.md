@@ -1,6 +1,6 @@
 # Reduced and iterated visual update specification
 
-Status: **mathematically specified; blocking on CP1 tests and human signoff**
+Status: **automated CP1 evidence passed; blocking on named human signoff**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 Frozen rank threshold: `1e-6` relative singular-value ratio
 Primary reset policy through CP3: identity, for OpenVINS covariance parity

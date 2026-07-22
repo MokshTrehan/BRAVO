@@ -1,0 +1,17 @@
+[==========] Running 2 tests from 2 test suites.
+[----------] Global test environment set-up.
+[----------] 1 test from CP1Projection
+[ RUN      ] CP1Projection.ActualOpenVINSJacobiansMatchAllDoubleFiniteDifferences
+CP1_PROJECTION fixtures=256 seed=1900496914 max_state_normalized_frobenius=2.59487e-10 max_landmark_normalized_frobenius=2.17193e-09 max_residual_definition_error=0 max_residual_sign_normalized_frobenius=2.17193e-09
+[       OK ] CP1Projection.ActualOpenVINSJacobiansMatchAllDoubleFiniteDifferences (1 ms)
+[----------] 1 test from CP1Projection (1 ms total)
+
+[----------] 1 test from CP1Retraction
+[ RUN      ] CP1Retraction.FixedPriorChartDifferentialMatchesExactJPLRetraction
+CP1_RETRACTION fixtures=256 seed=32199698170528780 max_normalized_frobenius=1.02009e-09
+[       OK ] CP1Retraction.FixedPriorChartDifferentialMatchesExactJPLRetraction (1 ms)
+[----------] 1 test from CP1Retraction (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 2 tests from 2 test suites ran. (2 ms total)
+[  PASSED  ] 2 tests.
