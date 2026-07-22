@@ -1,0 +1,985 @@
+{
+  "artifact_locations": {
+    "immutable": "results/immutable/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93",
+    "seal_method": "Linux renameat2(RENAME_NOREPLACE)",
+    "seal_preconditions_passed": true,
+    "seal_requested": true,
+    "staging": "results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93"
+  },
+  "build": {
+    "catkin_profile_sha256": "2c38eca03b4c87e519073db10a7dbba7ea3773a000622d3f735e65ef77c6ac36",
+    "dependencies": {
+      "c_compiler": {
+        "executable": "/usr/bin/gcc",
+        "exit_code": 0,
+        "first_line": "gcc (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0"
+      },
+      "catkin": {
+        "executable": "/usr/bin/catkin",
+        "exit_code": 0,
+        "first_line": "catkin_tools 0.9.4 (C) 2014-2026 Open Source Robotics Foundation"
+      },
+      "ceres": {
+        "library_sha256": "bec3b211a1fda35a44986a4000b666e4d218d84190b545805461b1652e086aad",
+        "prefix": "/home/moksh/newSlam variant/build/vendor/ceres-install",
+        "version": "1.14.0",
+        "version_header_sha256": "5ace9a6e3f82197a7e844457cb3163bb00f2d4c5dee7a303bfa729f70b1f17a7"
+      },
+      "cmake": {
+        "executable": "/usr/bin/cmake",
+        "exit_code": 0,
+        "first_line": "cmake version 3.16.3"
+      },
+      "cxx_compiler": {
+        "executable": "/usr/bin/g++",
+        "exit_code": 0,
+        "first_line": "g++ (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0"
+      },
+      "evo": {
+        "version": "1.31.1"
+      },
+      "evo_ape": {
+        "executable": "/home/moksh/.local/bin/evo_ape",
+        "exit_code": 0,
+        "first_line": "usage: evo_ape [-h] {kitti,tum,euroc,bag,bag2} ..."
+      },
+      "ros_distro": {
+        "executable": "/home/moksh/miniconda3/bin/rosversion",
+        "exit_code": 0,
+        "first_line": "noetic"
+      },
+      "roslaunch": {
+        "executable": "/home/moksh/miniconda3/bin/rosversion",
+        "exit_code": 0,
+        "first_line": "1.17.4"
+      }
+    },
+    "estimator_executable": {
+      "device": 66309,
+      "inode": 70260505,
+      "mtime_ns": 1784737568671966742,
+      "path": "/home/moksh/newSlam variant/build/cp0-ws/devel/lib/ov_msckf/ros1_serial_msckf",
+      "sha256": "702407c0dd00aac01b914a8fdce08e7caaa9f639c6f3059fecd66c1cc04cffd3",
+      "size_bytes": 37448696
+    },
+    "ov_msckf_cmake_cache_sha256": "aafdeb0459422aaf016cad1c1d0c7d1b79f37bffed8edeeda4111ad5ba0e7136",
+    "provenance_marker": {
+      "device": 66309,
+      "inode": 70267911,
+      "mtime_ns": 1784738254469260033,
+      "path": "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/build/CP0_BUILD_PROVENANCE.json",
+      "sha256": "5c01c36304609f387ffcf4e8ada10996c4d59f11baf5773c9355d99bc238b2de",
+      "size_bytes": 27498
+    },
+    "provenance_verification": {
+      "argv": [
+        "/usr/bin/python3",
+        "/home/moksh/newSlam variant/scripts/cp0/build_provenance.py",
+        "--verify",
+        "/home/moksh/newSlam variant/build/cp0-ws/CP0_BUILD_PROVENANCE.json"
+      ],
+      "exit_code": 0,
+      "output": "CP0 build provenance verified: source_tree=67386f6acef6ba39af5465fffd8ad61366772e45e39a8992a71d8c8daf16801c executable=702407c0dd00aac01b914a8fdce08e7caaa9f639c6f3059fecd66c1cc04cffd3\n"
+    },
+    "python_executable": "/usr/bin/python3",
+    "python_version": "3.8.10",
+    "workspace": "/home/moksh/newSlam variant/build/cp0-ws"
+  },
+  "checkpoint": "CP0",
+  "configuration": {
+    "baseline_spec": {
+      "checkpoint": "CP0",
+      "dataset": {
+        "bag_identity": {
+          "sha256": "57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9",
+          "size_bytes": 2673818914
+        },
+        "bag_start_seconds": 40.0,
+        "completion_witness": {
+          "expected_timing_rows": 2767,
+          "final_selected_camera_timestamp_seconds": 1403636763.7635555,
+          "timestamp_tolerance_seconds": 1e-05
+        },
+        "configuration": "euroc_mav",
+        "ground_truth": "ov_data/euroc_mav/MH_01_easy.txt",
+        "name": "MH_01_easy"
+      },
+      "estimator": {
+        "calib_cam_extrinsics": false,
+        "calib_cam_intrinsics": false,
+        "calib_cam_timeoffset": false,
+        "capture_method": "ROS1Visualizer synchronous save_total_state",
+        "config_file": "config/euroc_mav/estimator_config.yaml",
+        "launch_file": "project/cp0_serial.launch",
+        "max_cameras": 2,
+        "multi_threading_publishers": false,
+        "multi_threading_subscribers": false,
+        "num_opencv_threads": 0,
+        "save_total_state": true,
+        "stereo": true
+      },
+      "evaluation": {
+        "alignment": "se3",
+        "ape_translation_rmse_max_m": 0.25,
+        "minimum_timing_rows": 100,
+        "minimum_trajectory_poses": 100,
+        "rpe_delta": 1.0,
+        "rpe_delta_unit": "m",
+        "rpe_pairs": "all_pairs_from_reference",
+        "scale_correction": false,
+        "timestamp_association_max_difference_seconds": 0.01
+      },
+      "frozen_source": {
+        "input_sha256": {
+          "config/euroc_mav/estimator_config.yaml": "b706f0082106e49e20c3292147d238b7e225b0df414106b9d4ac009bbb123f3b",
+          "config/euroc_mav/kalibr_imu_chain.yaml": "408ea8b60b5f9e7c8251e6d302f04c0675bfefdd31229bb1afd139bc8f4a0287",
+          "config/euroc_mav/kalibr_imucam_chain.yaml": "b9e11b7bcda102f7c8c384c97318d67f3916b58942f9073722f83c22bd7073f7",
+          "ov_data/euroc_mav/MH_01_easy.txt": "ab1579de35a047d241e2d0d1a4f4306b4fa51d99c6f11bcdebf336ab2b784df9"
+        },
+        "serial_runner_patch_path": "ov_msckf/src/ros1_serial_msckf.cpp",
+        "serial_runner_patch_sha256": "e59723fe2978cd6cbaf7cc23e6d29e8d1f93705ca1e618ec2672dd3df3f2044d"
+      },
+      "runtime": {
+        "command_timeout_seconds": 300,
+        "environment": {
+          "LANG": "C.UTF-8",
+          "LC_ALL": "C.UTF-8",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1",
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "PYTHONHASHSEED": "0",
+          "TZ": "UTC",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        },
+        "ros_master_port": 11381
+      },
+      "schema_version": 1
+    },
+    "files": {
+      "config/euroc_mav/estimator_config.yaml": "b706f0082106e49e20c3292147d238b7e225b0df414106b9d4ac009bbb123f3b",
+      "config/euroc_mav/kalibr_imu_chain.yaml": "408ea8b60b5f9e7c8251e6d302f04c0675bfefdd31229bb1afd139bc8f4a0287",
+      "config/euroc_mav/kalibr_imucam_chain.yaml": "b9e11b7bcda102f7c8c384c97318d67f3916b58942f9073722f83c22bd7073f7",
+      "project/cp0_baseline.json": "667c86ad3ea2272b29d06ddf1daa5c1f71d061ac8cb9ea94d03bd449442b7fa7",
+      "project/cp0_serial.launch": "edf61dcbeca37381a9353453f64ba2bb58792f5e2210d52f68398d9f276c1530"
+    },
+    "resolved_parameters_file": "resolved_ros_parameters.yaml"
+  },
+  "created_utc": "2026-07-22T16:37:34.461216Z",
+  "dataset": {
+    "bag_start_seconds": 40.0,
+    "configuration": "euroc_mav",
+    "ground_truth": {
+      "device": 66309,
+      "inode": 70263258,
+      "mtime_ns": 1784734283876491649,
+      "path": "/home/moksh/newSlam variant/ov_data/euroc_mav/MH_01_easy.txt",
+      "sha256": "ab1579de35a047d241e2d0d1a4f4306b4fa51d99c6f11bcdebf336ab2b784df9",
+      "size_bytes": 3043947
+    },
+    "ground_truth_snapshot": {
+      "device": 66309,
+      "inode": 70267897,
+      "mtime_ns": 1784738254461259977,
+      "path": "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/ov_data/euroc_mav/MH_01_easy.txt",
+      "sha256": "ab1579de35a047d241e2d0d1a4f4306b4fa51d99c6f11bcdebf336ab2b784df9",
+      "size_bytes": 3043947
+    },
+    "ground_truth_used_by_estimator": false,
+    "identity": {
+      "device": 66309,
+      "inode": 69736784,
+      "mtime_ns": 1446665554000000000,
+      "path": "/home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag",
+      "sha256": "57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9",
+      "size_bytes": 2673818914
+    },
+    "name": "MH_01_easy",
+    "rosbag_info": {
+      "compression": "none",
+      "duration_seconds": 186.886386,
+      "end_seconds": 1403636766.695649,
+      "indexed": true,
+      "messages": 47283,
+      "size_bytes": 2673818914,
+      "start_seconds": 1403636579.809263,
+      "version": "2.0"
+    },
+    "rosbag_info_exit_code": 0
+  },
+  "finished_utc": "2026-07-22T16:37:55.405672Z",
+  "host": {
+    "hostname": "moksh-System-Product-Name",
+    "initial_process_affinity": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    "logical_cpu_count": 32,
+    "os_release": {
+      "BUG_REPORT_URL": "https://bugs.launchpad.net/ubuntu/",
+      "HOME_URL": "https://www.ubuntu.com/",
+      "ID": "ubuntu",
+      "ID_LIKE": "debian",
+      "NAME": "Ubuntu",
+      "PRETTY_NAME": "Ubuntu 20.04.6 LTS",
+      "PRIVACY_POLICY_URL": "https://www.ubuntu.com/legal/terms-and-policies/privacy-policy",
+      "SUPPORT_URL": "https://help.ubuntu.com/",
+      "UBUNTU_CODENAME": "focal",
+      "VERSION": "20.04.6 LTS (Focal Fossa)",
+      "VERSION_CODENAME": "focal",
+      "VERSION_ID": "20.04"
+    },
+    "platform": "Linux-5.15.0-67-generic-x86_64-with-glibc2.29",
+    "uname": [
+      "Linux",
+      "moksh-System-Product-Name",
+      "5.15.0-67-generic",
+      "#74~20.04.1-Ubuntu SMP Wed Feb 22 14:52:34 UTC 2023",
+      "x86_64",
+      "x86_64"
+    ]
+  },
+  "reproducibility_inputs": {
+    "UPSTREAM_REVISION": {
+      "sha256": "bdc8719ed2874d26be77bed902bc0292e13e4d982ccb04fba3f95cd5647c3455",
+      "size_bytes": 438
+    },
+    "config/euroc_mav/estimator_config.yaml": {
+      "sha256": "b706f0082106e49e20c3292147d238b7e225b0df414106b9d4ac009bbb123f3b",
+      "size_bytes": 5948
+    },
+    "config/euroc_mav/kalibr_imu_chain.yaml": {
+      "sha256": "408ea8b60b5f9e7c8251e6d302f04c0675bfefdd31229bb1afd139bc8f4a0287",
+      "size_bytes": 1320
+    },
+    "config/euroc_mav/kalibr_imucam_chain.yaml": {
+      "sha256": "b9e11b7bcda102f7c8c384c97318d67f3916b58942f9073722f83c22bd7073f7",
+      "size_bytes": 1226
+    },
+    "ov_data/euroc_mav/MH_01_easy.txt": {
+      "sha256": "ab1579de35a047d241e2d0d1a4f4306b4fa51d99c6f11bcdebf336ab2b784df9",
+      "size_bytes": 3043947
+    },
+    "project/cp0_baseline.json": {
+      "sha256": "667c86ad3ea2272b29d06ddf1daa5c1f71d061ac8cb9ea94d03bd449442b7fa7",
+      "size_bytes": 2434
+    },
+    "project/cp0_serial.launch": {
+      "sha256": "edf61dcbeca37381a9353453f64ba2bb58792f5e2210d52f68398d9f276c1530",
+      "size_bytes": 1853
+    },
+    "scripts/cp0/bootstrap_ceres_1_14.sh": {
+      "sha256": "51e97357920025afddbe5c31baf1b9c6e58f80bbca53b24ae20eddd83613ad99",
+      "size_bytes": 3520
+    },
+    "scripts/cp0/build_provenance.py": {
+      "sha256": "2a1866cc34f48fa5a1b37a7189fce3cb48bf1dd1865e6755db1e85a75ef11e25",
+      "size_bytes": 9979
+    },
+    "scripts/cp0/build_ros1.sh": {
+      "sha256": "ef94973592e1b12b5438fe36f7a91f9cd712637686186e7e12ae1af571feb0dc",
+      "size_bytes": 3495
+    },
+    "scripts/cp0/openvins_to_tum.py": {
+      "sha256": "1d09172e88f152dea3490496030df12d8f80abf9ee528d7b412222940e45b5e4",
+      "size_bytes": 4549
+    },
+    "scripts/cp0/run_mh01.py": {
+      "sha256": "24363ae81b3d219f5510e71afa794d475dad2954fa7ddaf0d918ba51e714a985",
+      "size_bytes": 67199
+    },
+    "scripts/cp0/run_mh01.sh": {
+      "sha256": "44992088f4f39844c7f5f20853992c91d52b3ade87c619869ea4c77120759678",
+      "size_bytes": 776
+    },
+    "scripts/cp0/verify_run.py": {
+      "sha256": "c95e24930760dc54570799b085aa879675359aabe973c61e7c00dc6d4115f18a",
+      "size_bytes": 17217
+    }
+  },
+  "reproducibility_snapshot": {
+    "UPSTREAM_REVISION": "reproducibility/UPSTREAM_REVISION",
+    "config/euroc_mav/estimator_config.yaml": "reproducibility/config/euroc_mav/estimator_config.yaml",
+    "config/euroc_mav/kalibr_imu_chain.yaml": "reproducibility/config/euroc_mav/kalibr_imu_chain.yaml",
+    "config/euroc_mav/kalibr_imucam_chain.yaml": "reproducibility/config/euroc_mav/kalibr_imucam_chain.yaml",
+    "ov_data/euroc_mav/MH_01_easy.txt": "reproducibility/ov_data/euroc_mav/MH_01_easy.txt",
+    "project/cp0_baseline.json": "reproducibility/project/cp0_baseline.json",
+    "project/cp0_serial.launch": "reproducibility/project/cp0_serial.launch",
+    "scripts/cp0/bootstrap_ceres_1_14.sh": "reproducibility/scripts/cp0/bootstrap_ceres_1_14.sh",
+    "scripts/cp0/build_provenance.py": "reproducibility/scripts/cp0/build_provenance.py",
+    "scripts/cp0/build_ros1.sh": "reproducibility/scripts/cp0/build_ros1.sh",
+    "scripts/cp0/openvins_to_tum.py": "reproducibility/scripts/cp0/openvins_to_tum.py",
+    "scripts/cp0/run_mh01.py": "reproducibility/scripts/cp0/run_mh01.py",
+    "scripts/cp0/run_mh01.sh": "reproducibility/scripts/cp0/run_mh01.sh",
+    "scripts/cp0/verify_run.py": "reproducibility/scripts/cp0/verify_run.py"
+  },
+  "run_id": "cp0_mh01_20260722T163734461107Z-g69488123ed93",
+  "runtime": {
+    "additional_environment": {
+      "MPLBACKEND": "Agg",
+      "ROS_HOSTNAME": "127.0.0.1",
+      "ROS_IP": "127.0.0.1",
+      "ROS_MASTER_URI": "http://127.0.0.1:11381"
+    },
+    "affinity_effective_cpus": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "affinity_requested": "0-3",
+    "allowlisted_subprocess_environment": {
+      "CMAKE_PREFIX_PATH": "/home/moksh/newSlam variant/build/cp0-ws/devel:/opt/ros/noetic",
+      "HOME": "/home/moksh",
+      "LANG": "C.UTF-8",
+      "LC_ALL": "C.UTF-8",
+      "LD_LIBRARY_PATH": "/home/moksh/newSlam variant/build/cp0-ws/devel/lib:/opt/ros/noetic/lib:/usr/local/cuda-12.8/lib64:/usr/local/cuda/lib64",
+      "LOGNAME": "moksh",
+      "MKL_NUM_THREADS": "1",
+      "MPLBACKEND": "Agg",
+      "NUMEXPR_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "PATH": "/opt/ros/noetic/bin:/home/moksh/.local/bin:/home/moksh/.local/bin:/home/moksh/.codex/tmp/arg0/codex-arg0fQ0eYS:/home/moksh/.local/bin:/home/moksh/.local/bin:/home/moksh/.local/bin:/home/moksh/miniconda3/bin:/home/moksh/miniconda3/condabin:/home/moksh/.local/bin:/usr/local/cuda-12.8/bin:/usr/local/cuda/bin:/home/moksh/.local/bin:/home/moksh/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/moksh/.vscode/extensions/openai.chatgpt-26.5715.61943-linux-x64/bin/linux-x86_64",
+      "PKG_CONFIG_PATH": "/home/moksh/newSlam variant/build/cp0-ws/devel/lib/pkgconfig:/opt/ros/noetic/lib/pkgconfig",
+      "PYTHONHASHSEED": "0",
+      "PYTHONPATH": "/opt/ros/noetic/lib/python3/dist-packages",
+      "ROS_DISTRO": "noetic",
+      "ROS_ETC_DIR": "/opt/ros/noetic/etc/ros",
+      "ROS_HOME": "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-home",
+      "ROS_HOSTNAME": "127.0.0.1",
+      "ROS_IP": "127.0.0.1",
+      "ROS_LOG_DIR": "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-logs",
+      "ROS_MASTER_URI": "http://127.0.0.1:11381",
+      "ROS_PACKAGE_PATH": "/home/moksh/newSlam variant/build/cp0-ws/src/ov_core:/home/moksh/newSlam variant/build/cp0-ws/src/ov_data:/home/moksh/newSlam variant/build/cp0-ws/src/ov_eval:/home/moksh/newSlam variant/build/cp0-ws/src/ov_init:/home/moksh/newSlam variant/build/cp0-ws/src/ov_msckf:/opt/ros/noetic/share",
+      "ROS_PYTHON_VERSION": "3",
+      "ROS_ROOT": "/opt/ros/noetic/share/ros",
+      "ROS_VERSION": "1",
+      "SHELL": "/bin/bash",
+      "TZ": "UTC",
+      "USER": "moksh",
+      "VECLIB_MAXIMUM_THREADS": "1"
+    },
+    "commands": {
+      "ape_translation": {
+        "argv": [
+          "/home/moksh/.local/bin/evo_ape",
+          "tum",
+          "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/ov_data/euroc_mav/MH_01_easy.txt",
+          "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/trajectory_tum.txt",
+          "--t_max_diff",
+          "0.01",
+          "--pose_relation",
+          "trans_part",
+          "--align",
+          "--save_results",
+          "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/evo_ape_translation.zip",
+          "--no_warnings"
+        ],
+        "duration_seconds": 0.2762419990003764,
+        "error": null,
+        "exit_code": 0,
+        "finished_utc": "2026-07-22T16:37:53.257017Z",
+        "interrupted": false,
+        "log": "evo_ape_translation.txt",
+        "shell": "/home/moksh/.local/bin/evo_ape tum '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/ov_data/euroc_mav/MH_01_easy.txt' '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/trajectory_tum.txt' --t_max_diff 0.01 --pose_relation trans_part --align --save_results '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/evo_ape_translation.zip' --no_warnings",
+        "started_utc": "2026-07-22T16:37:52.980794Z",
+        "timed_out": false,
+        "timeout_seconds": 300.0
+      },
+      "resolve_parameters": {
+        "argv": [
+          "/opt/ros/noetic/bin/roslaunch",
+          "--dump-params",
+          "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/project/cp0_serial.launch",
+          "bag:=/home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag",
+          "bag_start:=40.0",
+          "config_path:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/config/euroc_mav/estimator_config.yaml",
+          "path_state:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_estimate.txt",
+          "path_std:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_deviation.txt",
+          "path_time:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/timing_openvins.csv",
+          "max_cameras:=2",
+          "use_stereo:=true",
+          "verbosity:=INFO"
+        ],
+        "exit_code": 0,
+        "output": "/cp0_vio/bag_durr: -1.0\n/cp0_vio/bag_start: 40.0\n/cp0_vio/calib_cam_extrinsics: false\n/cp0_vio/calib_cam_intrinsics: false\n/cp0_vio/calib_cam_timeoffset: false\n/cp0_vio/config_path: /home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/config/euroc_mav/estimator_config.yaml\n/cp0_vio/filepath_est: /home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_estimate.txt\n/cp0_vio/filepath_std: /home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_deviation.txt\n/cp0_vio/max_cameras: 2\n/cp0_vio/multi_threading_pubs: false\n/cp0_vio/multi_threading_subs: false\n/cp0_vio/num_opencv_threads: 0\n/cp0_vio/path_bag: /home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag\n/cp0_vio/record_timing_filepath: /home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/timing_openvins.csv\n/cp0_vio/record_timing_information: true\n/cp0_vio/save_total_state: true\n/cp0_vio/use_stereo: true\n/cp0_vio/verbosity: INFO\n\n",
+        "shell": "/opt/ros/noetic/bin/roslaunch --dump-params '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/project/cp0_serial.launch' bag:=/home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag bag_start:=40.0 'config_path:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/config/euroc_mav/estimator_config.yaml' 'path_state:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_estimate.txt' 'path_std:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_deviation.txt' 'path_time:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/timing_openvins.csv' max_cameras:=2 use_stereo:=true verbosity:=INFO"
+      },
+      "roslaunch": {
+        "argv": [
+          "/usr/bin/taskset",
+          "--cpu-list",
+          "0-3",
+          "/opt/ros/noetic/bin/roslaunch",
+          "-p",
+          "11381",
+          "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/project/cp0_serial.launch",
+          "bag:=/home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag",
+          "bag_start:=40.0",
+          "config_path:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/config/euroc_mav/estimator_config.yaml",
+          "path_state:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_estimate.txt",
+          "path_std:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_deviation.txt",
+          "path_time:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/timing_openvins.csv",
+          "max_cameras:=2",
+          "use_stereo:=true",
+          "verbosity:=INFO"
+        ],
+        "duration_seconds": 18.126309974000833,
+        "error": null,
+        "exit_code": 0,
+        "finished_utc": "2026-07-22T16:37:52.955727Z",
+        "interrupted": false,
+        "log": "console.log",
+        "shell": "/usr/bin/taskset --cpu-list 0-3 /opt/ros/noetic/bin/roslaunch -p 11381 '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/project/cp0_serial.launch' bag:=/home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag bag_start:=40.0 'config_path:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/config/euroc_mav/estimator_config.yaml' 'path_state:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_estimate.txt' 'path_std:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_deviation.txt' 'path_time:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/timing_openvins.csv' max_cameras:=2 use_stereo:=true verbosity:=INFO",
+        "started_utc": "2026-07-22T16:37:34.829420Z",
+        "timed_out": false,
+        "timeout_seconds": 300.0
+      },
+      "rpe_rotation_1m": {
+        "argv": [
+          "/home/moksh/.local/bin/evo_rpe",
+          "tum",
+          "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/ov_data/euroc_mav/MH_01_easy.txt",
+          "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/trajectory_tum.txt",
+          "--t_max_diff",
+          "0.01",
+          "--pose_relation",
+          "angle_deg",
+          "--delta",
+          "1.0",
+          "--delta_unit",
+          "m",
+          "--all_pairs",
+          "--pairs_from_reference",
+          "--align",
+          "--save_results",
+          "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/evo_rpe_rotation_1m_deg.zip",
+          "--no_warnings"
+        ],
+        "duration_seconds": 0.3884155539999483,
+        "error": null,
+        "exit_code": 0,
+        "finished_utc": "2026-07-22T16:37:53.966668Z",
+        "interrupted": false,
+        "log": "evo_rpe_rotation_1m_deg.txt",
+        "shell": "/home/moksh/.local/bin/evo_rpe tum '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/ov_data/euroc_mav/MH_01_easy.txt' '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/trajectory_tum.txt' --t_max_diff 0.01 --pose_relation angle_deg --delta 1.0 --delta_unit m --all_pairs --pairs_from_reference --align --save_results '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/evo_rpe_rotation_1m_deg.zip' --no_warnings",
+        "started_utc": "2026-07-22T16:37:53.578275Z",
+        "timed_out": false,
+        "timeout_seconds": 300.0
+      },
+      "rpe_translation_1m": {
+        "argv": [
+          "/home/moksh/.local/bin/evo_rpe",
+          "tum",
+          "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/ov_data/euroc_mav/MH_01_easy.txt",
+          "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/trajectory_tum.txt",
+          "--t_max_diff",
+          "0.01",
+          "--pose_relation",
+          "trans_part",
+          "--delta",
+          "1.0",
+          "--delta_unit",
+          "m",
+          "--all_pairs",
+          "--pairs_from_reference",
+          "--align",
+          "--save_results",
+          "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/evo_rpe_translation_1m.zip",
+          "--no_warnings"
+        ],
+        "duration_seconds": 0.32099095700050384,
+        "error": null,
+        "exit_code": 0,
+        "finished_utc": "2026-07-22T16:37:53.578132Z",
+        "interrupted": false,
+        "log": "evo_rpe_translation_1m.txt",
+        "shell": "/home/moksh/.local/bin/evo_rpe tum '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/ov_data/euroc_mav/MH_01_easy.txt' '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/trajectory_tum.txt' --t_max_diff 0.01 --pose_relation trans_part --delta 1.0 --delta_unit m --all_pairs --pairs_from_reference --align --save_results '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/evo_rpe_translation_1m.zip' --no_warnings",
+        "started_utc": "2026-07-22T16:37:53.257162Z",
+        "timed_out": false,
+        "timeout_seconds": 300.0
+      },
+      "trajectory_conversion": {
+        "argv": [
+          "/usr/bin/python3",
+          "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/scripts/cp0/openvins_to_tum.py",
+          "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_estimate.txt",
+          "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/trajectory_tum.txt"
+        ],
+        "duration_seconds": 0.024624799999401148,
+        "error": null,
+        "exit_code": 0,
+        "finished_utc": "2026-07-22T16:37:52.980536Z",
+        "interrupted": false,
+        "log": "trajectory_conversion.log",
+        "shell": "/usr/bin/python3 '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/scripts/cp0/openvins_to_tum.py' '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_estimate.txt' '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/trajectory_tum.txt'",
+        "started_utc": "2026-07-22T16:37:52.955927Z",
+        "timed_out": false,
+        "timeout_seconds": 300.0
+      },
+      "verify_build_after_run": {
+        "argv": [
+          "/usr/bin/python3",
+          "/home/moksh/newSlam variant/scripts/cp0/build_provenance.py",
+          "--verify",
+          "/home/moksh/newSlam variant/build/cp0-ws/CP0_BUILD_PROVENANCE.json"
+        ],
+        "exit_code": 0,
+        "output": "CP0 build provenance verified: source_tree=67386f6acef6ba39af5465fffd8ad61366772e45e39a8992a71d8c8daf16801c executable=702407c0dd00aac01b914a8fdce08e7caaa9f639c6f3059fecd66c1cc04cffd3\n"
+      }
+    },
+    "cpu_governors": {
+      "0": "ondemand",
+      "1": "ondemand",
+      "2": "ondemand",
+      "3": "ondemand"
+    },
+    "environment_policy": "minimal allowlist; arbitrary inherited variables excluded",
+    "expected_roslaunch_wording": "REQUIRED process [cp0_vio-N] has died! followed by process has finished cleanly is a successful required-node shutdown",
+    "fixed_environment": {
+      "LANG": "C.UTF-8",
+      "LC_ALL": "C.UTF-8",
+      "MKL_NUM_THREADS": "1",
+      "NUMEXPR_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "PYTHONHASHSEED": "0",
+      "TZ": "UTC",
+      "VECLIB_MAXIMUM_THREADS": "1"
+    },
+    "ros_bookkeeping": {
+      "removed_before_sealing": [
+        "ros-logs/latest",
+        "ros-home/"
+      ]
+    }
+  },
+  "schema_version": 1,
+  "source": {
+    "allowed_build_source_changes": [
+      "ov_msckf/src/ros1_serial_msckf.cpp"
+    ],
+    "build_source_changes_from_pinned_base": [
+      "ov_msckf/src/ros1_serial_msckf.cpp"
+    ],
+    "commit": "69488123ed9362dd44b6f28e7f4680abbff1442b",
+    "dirty": true,
+    "head_equals_pinned_base": true,
+    "persisted_delta_artifact_identity": {
+      "device": 66309,
+      "inode": 70267886,
+      "mtime_ns": 1784738254457259950,
+      "path": "/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/source_tracked_binary.diff",
+      "sha256": "dd65e99a9e7cf2c54be61578175c2e799039ba54c1447a79a4dd421d52f0fb7b",
+      "size_bytes": 1986
+    },
+    "pinned_base_is_ancestor": true,
+    "pinned_upstream_base": "69488123ed9362dd44b6f28e7f4680abbff1442b",
+    "serial_runner_patch_artifact": "serial_runner_patch.diff",
+    "serial_runner_patch_sha256": "e59723fe2978cd6cbaf7cc23e6d29e8d1f93705ca1e618ec2672dd3df3f2044d",
+    "status_porcelain_v1": [
+      " M .gitignore",
+      " M ov_msckf/src/ros1_serial_msckf.cpp",
+      "?? UPSTREAM_REVISION",
+      "?? docs/checkpoints.md",
+      "?? docs/conventions.md",
+      "?? docs/cp0_reproduction.md",
+      "?? docs/estimator_update_notes.md",
+      "?? docs/iterated_update_spec.md",
+      "?? docs/schurvio_lite_execution_plan.md",
+      "?? project/",
+      "?? scripts/"
+    ],
+    "tracked_delta_from_pinned_base_artifact": "source_tracked_binary.diff",
+    "tracked_delta_from_pinned_base_exit_code": 0,
+    "tracked_delta_from_pinned_base_sha256": "dd65e99a9e7cf2c54be61578175c2e799039ba54c1447a79a4dd421d52f0fb7b"
+  },
+  "status": "passed",
+  "validation": {
+    "checkpoint": "CP0",
+    "checks": [
+      {
+        "details": {
+          "allowed": [
+            "ov_msckf/src/ros1_serial_msckf.cpp"
+          ],
+          "changes": [
+            "ov_msckf/src/ros1_serial_msckf.cpp"
+          ],
+          "expected_serial_runner_patch_sha256": "e59723fe2978cd6cbaf7cc23e6d29e8d1f93705ca1e618ec2672dd3df3f2044d",
+          "persisted_diff_sha256": "dd65e99a9e7cf2c54be61578175c2e799039ba54c1447a79a4dd421d52f0fb7b",
+          "persisted_serial_runner_patch_sha256": "e59723fe2978cd6cbaf7cc23e6d29e8d1f93705ca1e618ec2672dd3df3f2044d",
+          "serial_runner_patch_sha256": "e59723fe2978cd6cbaf7cc23e6d29e8d1f93705ca1e618ec2672dd3df3f2044d"
+        },
+        "name": "declared_serial_runner_source_delta_only",
+        "passed": true
+      },
+      {
+        "details": {
+          "exit_code": 0,
+          "timed_out": false
+        },
+        "name": "roslaunch_exit_zero_without_timeout",
+        "passed": true
+      },
+      {
+        "details": {
+          "cp0_vio_start_count": 1,
+          "required_process_banner": "expected because cp0_vio is required",
+          "required_process_result": "process has finished cleanly",
+          "state_capture": "synchronous ROS1Visualizer save_total_state"
+        },
+        "name": "clean_console_and_single_estimator_lifetime",
+        "passed": true
+      },
+      {
+        "details": {
+          "calib_cam_extrinsics": false,
+          "calib_cam_intrinsics": false,
+          "calib_cam_timeoffset": false,
+          "capture_transport": "in-process synchronous file write",
+          "ground_truth_parameter_present": false,
+          "multi_threading_pubs": false,
+          "multi_threading_subs": false,
+          "num_opencv_threads": 0,
+          "save_total_state": true
+        },
+        "name": "deterministic_parameters_and_no_ground_truth_initialization",
+        "passed": true
+      },
+      {
+        "details": {
+          "exit_code": 0
+        },
+        "name": "roslaunch_parameter_resolution_exit_zero",
+        "passed": true
+      },
+      {
+        "details": {
+          "exit_code": 0,
+          "output": "CP0 build provenance verified: source_tree=67386f6acef6ba39af5465fffd8ad61366772e45e39a8992a71d8c8daf16801c executable=702407c0dd00aac01b914a8fdce08e7caaa9f639c6f3059fecd66c1cc04cffd3"
+        },
+        "name": "build_provenance_unchanged_after_run",
+        "passed": true
+      },
+      {
+        "details": {
+          "missing": [],
+          "sizes": {
+            "console.log": 603564,
+            "evo_ape_translation.txt": 206,
+            "evo_ape_translation.zip": 112240,
+            "evo_rpe_rotation_1m_deg.txt": 254,
+            "evo_rpe_rotation_1m_deg.zip": 109084,
+            "evo_rpe_translation_1m.txt": 241,
+            "evo_rpe_translation_1m.zip": 109078,
+            "state_deviation.txt": 1978522,
+            "state_estimate.txt": 2209701,
+            "timing_openvins.csv": 229758,
+            "trajectory_tum.txt": 229921
+          }
+        },
+        "name": "required_nonempty_artifacts",
+        "passed": true
+      },
+      {
+        "details": [
+          2767,
+          1403636624.66356,
+          1403636763.76356,
+          79
+        ],
+        "name": "full_state_estimate_is_finite_monotonic_and_complete",
+        "passed": true
+      },
+      {
+        "details": [
+          2767,
+          1403636624.66356,
+          1403636763.76356,
+          74
+        ],
+        "name": "full_state_deviation_is_finite_monotonic_and_complete",
+        "passed": true
+      },
+      {
+        "details": [
+          2767,
+          1403636624.66356,
+          1403636763.76356
+        ],
+        "name": "trajectory_is_finite_monotonic_and_long_enough",
+        "passed": true
+      },
+      {
+        "details": {
+          "first_timestamp": 1403636624.66356,
+          "last_timestamp": 1403636763.76356,
+          "minimum": 100,
+          "rows": 2767
+        },
+        "name": "minimum_trajectory_length",
+        "passed": true
+      },
+      {
+        "details": [
+          2767,
+          1403636624.6635554,
+          1403636763.7635555
+        ],
+        "name": "timing_is_finite_monotonic_and_long_enough",
+        "passed": true
+      },
+      {
+        "details": {
+          "first_timestamp": 1403636624.6635554,
+          "last_timestamp": 1403636763.7635555,
+          "minimum": 100,
+          "rows": 2767
+        },
+        "name": "minimum_timing_length",
+        "passed": true
+      },
+      {
+        "details": {
+          "state_columns": 79,
+          "state_first_timestamp_seconds": 1403636624.66356,
+          "state_last_timestamp_seconds": 1403636763.76356,
+          "state_rows": 2767,
+          "std_columns": 74,
+          "std_first_timestamp_seconds": 1403636624.66356,
+          "std_last_timestamp_seconds": 1403636763.76356,
+          "std_rows": 2767,
+          "timing_first_timestamp_seconds": 1403636624.6635554,
+          "timing_last_timestamp_seconds": 1403636763.7635555,
+          "timing_rows": 2767,
+          "trajectory_rows": 2767
+        },
+        "name": "synchronous_state_and_std_cover_every_timed_update",
+        "passed": true
+      },
+      {
+        "details": {
+          "expected_final_selected_camera_timestamp_seconds": 1403636763.7635555,
+          "expected_timing_rows": 2767,
+          "last_timing_timestamp_seconds": 1403636763.7635555,
+          "timing_rows": 2767,
+          "tolerance_seconds": 1e-05
+        },
+        "name": "full_selected_camera_interval_processed",
+        "passed": true
+      },
+      {
+        "details": true,
+        "name": "tum_trajectory_reorders_total_state_pose_columns",
+        "passed": true
+      },
+      {
+        "details": {
+          "exit_code": 0,
+          "timed_out": false
+        },
+        "name": "trajectory_conversion_exit_zero_without_timeout",
+        "passed": true
+      },
+      {
+        "details": {
+          "exit_code": 0,
+          "timed_out": false
+        },
+        "name": "ape_translation_exit_zero_without_timeout",
+        "passed": true
+      },
+      {
+        "details": {
+          "exit_code": 0,
+          "timed_out": false
+        },
+        "name": "rpe_translation_1m_exit_zero_without_timeout",
+        "passed": true
+      },
+      {
+        "details": {
+          "exit_code": 0,
+          "timed_out": false
+        },
+        "name": "rpe_rotation_1m_exit_zero_without_timeout",
+        "passed": true
+      },
+      {
+        "details": {
+          "label": "APE (m)",
+          "samples": 2746,
+          "stats": {
+            "max": 0.13767225789254559,
+            "mean": 0.06587120548186894,
+            "median": 0.06462822980571853,
+            "min": 0.011642898243110864,
+            "rmse": 0.07118699166247568,
+            "sse": 13.915596049243984,
+            "std": 0.026992074212975576
+          },
+          "title": "APE w.r.t. translation part (m)\n(with SE(3) Umeyama alignment)"
+        },
+        "name": "valid_ape_translation_archive",
+        "passed": true
+      },
+      {
+        "details": {
+          "label": "RPE (m)",
+          "samples": 2666,
+          "stats": {
+            "max": 0.08693142633427973,
+            "mean": 0.029391097801598896,
+            "median": 0.026710692408249206,
+            "min": 0.004023772241297412,
+            "rmse": 0.03314322935673762,
+            "sse": 2.9285307567473757,
+            "std": 0.01531786611151053
+          },
+          "title": "RPE w.r.t. translation part (m)\nfor delta = 1.0 (m) using all pairs\n(with SE(3) Umeyama alignment)"
+        },
+        "name": "valid_rpe_translation_1m_archive",
+        "passed": true
+      },
+      {
+        "details": {
+          "label": "RPE (deg)",
+          "samples": 2666,
+          "stats": {
+            "max": 1.8033892523649435,
+            "mean": 0.2144575598247552,
+            "median": 0.15320449970428274,
+            "min": 0.02313607512001802,
+            "rmse": 0.3290284002023306,
+            "sse": 288.6203285804536,
+            "std": 0.24953485362513306
+          },
+          "title": "RPE w.r.t. rotation angle in degrees (deg)\nfor delta = 1.0 (m) using all pairs\n(with SE(3) Umeyama alignment)"
+        },
+        "name": "valid_rpe_rotation_1m_deg_archive",
+        "passed": true
+      },
+      {
+        "details": {
+          "alignment": "SE(3), no scale",
+          "maximum_m": 0.25,
+          "rmse_m": 0.07118699166247568
+        },
+        "name": "ape_translation_rmse_gate",
+        "passed": true
+      },
+      {
+        "details": {
+          "after": {
+            "device": 66309,
+            "inode": 69736784,
+            "mtime_ns": 1446665554000000000,
+            "path": "/home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag",
+            "sha256": "57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9",
+            "size_bytes": 2673818914
+          },
+          "before": {
+            "device": 66309,
+            "inode": 69736784,
+            "mtime_ns": 1446665554000000000,
+            "path": "/home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag",
+            "sha256": "57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9",
+            "size_bytes": 2673818914
+          }
+        },
+        "name": "dataset_unchanged_during_run",
+        "passed": true
+      },
+      {
+        "details": {
+          "removed_before_sealing": [
+            "ros-logs/latest",
+            "ros-home/"
+          ]
+        },
+        "name": "ros_bookkeeping_removed_before_sealing",
+        "passed": true
+      }
+    ],
+    "errors": [],
+    "generated_utc": "2026-07-22T16:37:55.402650Z",
+    "metrics": {
+      "ape_translation": {
+        "label": "APE (m)",
+        "samples": 2746,
+        "stats": {
+          "max": 0.13767225789254559,
+          "mean": 0.06587120548186894,
+          "median": 0.06462822980571853,
+          "min": 0.011642898243110864,
+          "rmse": 0.07118699166247568,
+          "sse": 13.915596049243984,
+          "std": 0.026992074212975576
+        },
+        "title": "APE w.r.t. translation part (m)\n(with SE(3) Umeyama alignment)"
+      },
+      "rpe_rotation_1m_deg": {
+        "label": "RPE (deg)",
+        "samples": 2666,
+        "stats": {
+          "max": 1.8033892523649435,
+          "mean": 0.2144575598247552,
+          "median": 0.15320449970428274,
+          "min": 0.02313607512001802,
+          "rmse": 0.3290284002023306,
+          "sse": 288.6203285804536,
+          "std": 0.24953485362513306
+        },
+        "title": "RPE w.r.t. rotation angle in degrees (deg)\nfor delta = 1.0 (m) using all pairs\n(with SE(3) Umeyama alignment)"
+      },
+      "rpe_translation_1m": {
+        "label": "RPE (m)",
+        "samples": 2666,
+        "stats": {
+          "max": 0.08693142633427973,
+          "mean": 0.029391097801598896,
+          "median": 0.026710692408249206,
+          "min": 0.004023772241297412,
+          "rmse": 0.03314322935673762,
+          "sse": 2.9285307567473757,
+          "std": 0.01531786611151053
+        },
+        "title": "RPE w.r.t. translation part (m)\nfor delta = 1.0 (m) using all pairs\n(with SE(3) Umeyama alignment)"
+      }
+    },
+    "passed": true,
+    "schema_version": 1
+  }
+}

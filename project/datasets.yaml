@@ -1,0 +1,204 @@
+schema_version: 1
+project: SchurVIO-Lite
+as_of: "2026-07-22"
+timezone: America/Toronto
+
+status_vocabulary:
+  verified: Local file exists and passed the recorded integrity checks.
+  downloading: Acquisition is active; do not use until size and checksum pass.
+  pending_archive: Sequence is unavailable until its containing archive is verified and extracted.
+  pending_download: Sequence is selected but has not been acquired.
+
+datasets:
+  euroc_mav:
+    status: verified_all_11
+    official_landing_page: "https://projects.asl.ethz.ch/datasets/euroc-mav/"
+    required_ros_topics:
+      - /cam0/image_raw
+      - /cam1/image_raw
+      - /imu0
+    ground_truth:
+      root: "/home/moksh/newSlam variant/ov_data/euroc_mav"
+      format: tum
+      extension: .txt
+      status: verified_all_11
+      note: V1_01_easy.txt is the corrected OpenVINS trajectory; the original is retained as V1_01_easy_original.txt.
+    local_bags:
+      - id: MH_01_easy
+        status: verified
+        path: "/home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag"
+        bytes: 2673818914
+        sha256: "57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9"
+        duration_s: 186.886
+        messages: 47283
+        ground_truth: MH_01_easy.txt
+      - id: MH_02_easy
+        status: verified
+        path: "/home/moksh/Downloads/machine_hall/MH_02_easy/MH_02_easy.bag"
+        bytes: 2207602649
+        sha256: "b5b2178bf0602d56dcb6372f3463aa70be1ff95e8c8d3a4a059747c270d45575"
+        duration_s: 151.411
+        messages: 38967
+        ground_truth: MH_02_easy.txt
+      - id: MH_03_medium
+        status: verified
+        path: "/home/moksh/Downloads/machine_hall/MH_03_medium/MH_03_medium.bag"
+        bytes: 1960673046
+        sha256: "c51b0064681dfb287b6653f5fd54e6c56af5d9151c866e17574fdbc527db2311"
+        duration_s: 135.914
+        messages: 34284
+        ground_truth: MH_03_medium.txt
+      - id: MH_04_difficult
+        status: verified
+        path: "/home/moksh/Downloads/machine_hall/MH_04_difficult/MH_04_difficult.bag"
+        bytes: 1475957410
+        sha256: "4d28ea2883327774fd28477c8e73200237350c0e3b407d20eb6358b2f72124b9"
+        duration_s: 102.582
+        messages: 25855
+        ground_truth: MH_04_difficult.txt
+      - id: MH_05_difficult
+        status: verified
+        path: "/home/moksh/Downloads/machine_hall/MH_05_difficult/MH_05_difficult.bag"
+        bytes: 1650601827
+        sha256: "0a56ceb1a4618176fde985a93aab71b546bee805a6ca054cc64e76a804c17c03"
+        duration_s: 114.773
+        messages: 28932
+        ground_truth: MH_05_difficult.txt
+      - id: V1_01_easy
+        status: verified
+        path: "/home/moksh/Downloads/vicon_room1/V1_01_easy/V1_01_easy.bag"
+        bytes: 2130599434
+        sha256: "6dc6192fac63dd0a05ba745548b41fe8cae14724168a98865a81d37e681bbc81"
+        duration_s: 144.725
+        messages: 107819
+        ground_truth: V1_01_easy.txt
+      - id: V1_02_medium
+        status: verified
+        path: "/home/moksh/Downloads/vicon_room1/V1_02_medium/V1_02_medium.bag"
+        bytes: 1251654819
+        sha256: "16bf6781505aa16fe8ab9047696c881621824d19cf50adf053ccaa0eb885f9ff"
+        duration_s: 88.121
+        messages: 64144
+        ground_truth: V1_02_medium.txt
+      - id: V1_03_difficult
+        status: verified
+        path: "/home/moksh/Downloads/vicon_room1/V1_03_difficult/V1_03_difficult.bag"
+        bytes: 1572354176
+        sha256: "d36fc630d34d2f6863c2e62c5d79ce1cbab4228c9ef55c5034772922ea376f56"
+        duration_s: 109.896
+        messages: 79588
+        ground_truth: V1_03_difficult.txt
+    local_integrity_audit:
+      rosbag_version: "2.0"
+      indexed: true
+      compression: none
+      full_raw_message_scan: pass
+      required_topics: pass
+      notes:
+        - MH_04_difficult contains 2033 cam0 and 2032 cam1 images; the indexed messages remain readable.
+        - V1_02_medium contains 1710 cam0 and 1711 cam1 images; the indexed messages remain readable.
+        - V1 bags contain an unavailable auxiliary asctec_hl_comm/MotorSpeed type that OpenVINS does not consume.
+    vicon_room2_acquisition:
+      status: verified_and_extracted
+      archive_name: vicon_room2.zip
+      local_path: "/home/moksh/Downloads/vicon_room2.zip"
+      expected_bytes: 6013384949
+      checksum:
+        algorithm: md5
+        value: "c6347f4e0476aaa9a43a919c163c49c5"
+      source_url: "https://www.research-collection.ethz.ch/server/api/core/bitstreams/ea12bc01-3677-4b4c-853d-87c7870b8c44/content"
+      metadata_url: "https://www.research-collection.ethz.ch/server/api/core/bitstreams/ea12bc01-3677-4b4c-853d-87c7870b8c44"
+      record_url: "https://doi.org/10.3929/ethz-b-000690084"
+      resume_supported: true
+      verification:
+        exact_size: pass
+        md5: pass
+        zip_test: pass
+        extracted_bag_full_raw_message_scan: pass
+        extracted_bag_sha256: pass
+      verification_required:
+        - exact_size
+        - md5
+        - zip_test
+        - extracted_bag_full_raw_message_scan
+        - extracted_bag_sha256
+      sequences:
+        - id: V2_01_easy
+          status: verified
+          canonical_path: "/home/moksh/Downloads/vicon_room2/V2_01_easy/V2_01_easy.bag"
+          bytes: 1658222247
+          sha256: "d4a4c07aa599008479d5a7a0c10435588d28e0194ef1de67e7385fe4294c73c7"
+          duration_s: 113.974
+          messages: 41035
+          ground_truth: V2_01_easy.txt
+        - id: V2_02_medium
+          status: verified
+          canonical_path: "/home/moksh/Downloads/vicon_room2/V2_02_medium/V2_02_medium.bag"
+          bytes: 1707681870
+          sha256: "fa020a53ef21d4e7002a0892feea41295fcd49ece383d7e3107c61c1018e3318"
+          duration_s: 117.400
+          messages: 42274
+          ground_truth: V2_02_medium.txt
+        - id: V2_03_difficult
+          status: verified
+          canonical_path: "/home/moksh/Downloads/vicon_room2/V2_03_difficult/V2_03_difficult.bag"
+          bytes: 1549418209
+          sha256: "3c765fe04aa4f7f4caa4ffd29e38fd045e8121b8a97eb40a2e9bb296c0311f7b"
+          duration_s: 116.808
+          messages: 41647
+          ground_truth: V2_03_difficult.txt
+      notes:
+        - V2_03_difficult contains 1922 cam0 and 2336 cam1 images; all 41647 indexed messages remain readable.
+
+  tum_vi:
+    status: selected_pending_acquisition
+    role: CP7_second_dataset
+    official_landing_page: "https://cvg.cit.tum.de/data/datasets/visual-inertial-dataset"
+    variant: calibrated_512_16
+    selection:
+      included: [room1, room2, room3, room4, room5]
+      first_smoke_test: room4
+      excluded:
+        room6: Requires a different IMU initialization threshold and is outside the frozen five-sequence matrix.
+    local_bag_root: "/home/moksh/Downloads/tum_vi"
+    ground_truth:
+      root: "/home/moksh/newSlam variant/ov_data/tum_vi"
+      format: tum
+      extension: .txt
+      status: verified_room1_through_room5
+    bags:
+      - id: room1
+        status: pending_download
+        path: "/home/moksh/Downloads/tum_vi/dataset-room1_512_16.bag"
+        url: "https://cdn3.vision.in.tum.de/tumvi/calibrated/512_16/dataset-room1_512_16.bag"
+        expected_bytes: 2971525053
+        md5: "8aa20cf81bedac03e45c78239ce156c0"
+        ground_truth: dataset-room1_512_16.txt
+      - id: room2
+        status: pending_download
+        path: "/home/moksh/Downloads/tum_vi/dataset-room2_512_16.bag"
+        url: "https://cdn3.vision.in.tum.de/tumvi/calibrated/512_16/dataset-room2_512_16.bag"
+        expected_bytes: 3035570964
+        md5: "a70ce1fc5585042af812427e9ab85752"
+        ground_truth: dataset-room2_512_16.txt
+      - id: room3
+        status: pending_download
+        path: "/home/moksh/Downloads/tum_vi/dataset-room3_512_16.bag"
+        url: "https://cdn3.vision.in.tum.de/tumvi/calibrated/512_16/dataset-room3_512_16.bag"
+        expected_bytes: 2971328666
+        md5: "89085c84870391b04404e7b976a06e1b"
+        ground_truth: dataset-room3_512_16.txt
+      - id: room4
+        status: pending_download
+        path: "/home/moksh/Downloads/tum_vi/dataset-room4_512_16.bag"
+        url: "https://cdn3.vision.in.tum.de/tumvi/calibrated/512_16/dataset-room4_512_16.bag"
+        expected_bytes: 2346890121
+        md5: "1d9914b87a5374123988ea35ea5ccfa0"
+        ground_truth: dataset-room4_512_16.txt
+      - id: room5
+        status: pending_download
+        path: "/home/moksh/Downloads/tum_vi/dataset-room5_512_16.bag"
+        url: "https://cdn3.vision.in.tum.de/tumvi/calibrated/512_16/dataset-room5_512_16.bag"
+        expected_bytes: 2998956689
+        md5: "4b637d704c97486c24c70e8d6ab097c7"
+        ground_truth: dataset-room5_512_16.txt

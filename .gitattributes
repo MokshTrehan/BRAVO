@@ -1,0 +1,4 @@
+# Sealed evidence is byte-addressed and must never be reformatted. Its source
+# tools may emit trailing spaces, so exclude it from working-tree whitespace
+# diagnostics while preserving every byte.
+results/immutable/** -whitespace

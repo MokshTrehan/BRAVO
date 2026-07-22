@@ -8,3 +8,7 @@ doxgen_generated
 *.swo
 doc
 .vscode
+/Testing/
+__pycache__/
+*.py[cod]
+/results/staging/

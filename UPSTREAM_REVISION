@@ -1,0 +1,9 @@
+OpenVINS upstream: https://github.com/rpng/open_vins.git
+Pinned commit: 69488123ed9362dd44b6f28e7f4680abbff1442b
+Commit date: 2025-11-30T00:23:17-08:00
+Bootstrap date: 2026-07-22
+
+CP0 baseline identity: the pinned commit plus the sealed manifest's exact
+source-tree SHA-256 and persisted binary working-tree diff. The permitted dirty
+change is limited to the declared ROS1 serial-runner lifecycle patch; it does
+not alter estimator math.

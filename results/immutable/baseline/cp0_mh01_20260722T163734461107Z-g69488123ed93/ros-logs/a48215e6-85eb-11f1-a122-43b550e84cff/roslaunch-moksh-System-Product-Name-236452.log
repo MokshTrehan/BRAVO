@@ -1,0 +1,104 @@
+[roslaunch][INFO] 2026-07-22 16:37:34,909: Checking log directory for disk usage. This may take a while.
+Press Ctrl-C to interrupt
+[roslaunch][INFO] 2026-07-22 16:37:34,911: Done checking log file disk usage. Usage is <1GB.
+[roslaunch][INFO] 2026-07-22 16:37:34,911: roslaunch starting with args ['/opt/ros/noetic/bin/roslaunch', '-p', '11381', '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/project/cp0_serial.launch', 'bag:=/home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag', 'bag_start:=40.0', 'config_path:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/config/euroc_mav/estimator_config.yaml', 'path_state:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_estimate.txt', 'path_std:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_deviation.txt', 'path_time:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/timing_openvins.csv', 'max_cameras:=2', 'use_stereo:=true', 'verbosity:=INFO']
+[roslaunch][INFO] 2026-07-22 16:37:34,911: roslaunch env is environ({'CMAKE_PREFIX_PATH': '/home/moksh/newSlam variant/build/cp0-ws/devel:/opt/ros/noetic', 'HOME': '/home/moksh', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8', 'LD_LIBRARY_PATH': '/home/moksh/newSlam variant/build/cp0-ws/devel/lib:/opt/ros/noetic/lib:/usr/local/cuda-12.8/lib64:/usr/local/cuda/lib64', 'LOGNAME': 'moksh', 'PATH': '/opt/ros/noetic/bin:/home/moksh/.local/bin:/home/moksh/.local/bin:/home/moksh/.codex/tmp/arg0/codex-arg0fQ0eYS:/home/moksh/.local/bin:/home/moksh/.local/bin:/home/moksh/.local/bin:/home/moksh/miniconda3/bin:/home/moksh/miniconda3/condabin:/home/moksh/.local/bin:/usr/local/cuda-12.8/bin:/usr/local/cuda/bin:/home/moksh/.local/bin:/home/moksh/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/moksh/.vscode/extensions/openai.chatgpt-26.5715.61943-linux-x64/bin/linux-x86_64', 'PKG_CONFIG_PATH': '/home/moksh/newSlam variant/build/cp0-ws/devel/lib/pkgconfig:/opt/ros/noetic/lib/pkgconfig', 'PYTHONPATH': '/opt/ros/noetic/lib/python3/dist-packages', 'ROS_DISTRO': 'noetic', 'ROS_ETC_DIR': '/opt/ros/noetic/etc/ros', 'ROS_PACKAGE_PATH': '/home/moksh/newSlam variant/build/cp0-ws/src/ov_core:/home/moksh/newSlam variant/build/cp0-ws/src/ov_data:/home/moksh/newSlam variant/build/cp0-ws/src/ov_eval:/home/moksh/newSlam variant/build/cp0-ws/src/ov_init:/home/moksh/newSlam variant/build/cp0-ws/src/ov_msckf:/opt/ros/noetic/share', 'ROS_PYTHON_VERSION': '3', 'ROS_ROOT': '/opt/ros/noetic/share/ros', 'ROS_VERSION': '1', 'SHELL': '/bin/bash', 'USER': 'moksh', 'TZ': 'UTC', 'PYTHONHASHSEED': '0', 'OMP_NUM_THREADS': '1', 'OPENBLAS_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1', 'NUMEXPR_NUM_THREADS': '1', 'VECLIB_MAXIMUM_THREADS': '1', 'MPLBACKEND': 'Agg', 'ROS_HOME': '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-home', 'ROS_LOG_DIR': '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-logs', 'ROS_MASTER_URI': 'http://127.0.0.1:11381', 'ROS_HOSTNAME': '127.0.0.1', 'ROS_IP': '127.0.0.1', 'ROS_LOG_FILENAME': '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-logs/a48215e6-85eb-11f1-a122-43b550e84cff/roslaunch-moksh-System-Product-Name-236452.log'})
+[roslaunch][INFO] 2026-07-22 16:37:34,911: starting in server mode
+[roslaunch.parent][INFO] 2026-07-22 16:37:34,911: starting roslaunch parent run
+[roslaunch][INFO] 2026-07-22 16:37:34,911: loading roscore config file /opt/ros/noetic/etc/ros/roscore.xml
+[roslaunch][INFO] 2026-07-22 16:37:34,963: Added core node of type [rosout/rosout] in namespace [/]
+[roslaunch.config][INFO] 2026-07-22 16:37:34,963: loading config file /home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/project/cp0_serial.launch
+[roslaunch][INFO] 2026-07-22 16:37:34,964: Added node of type [ov_msckf/ros1_serial_msckf] in namespace [/]
+[roslaunch][INFO] 2026-07-22 16:37:34,964: ... selected machine [] for node of type [ov_msckf/ros1_serial_msckf]
+[roslaunch.pmon][INFO] 2026-07-22 16:37:34,965: start_process_monitor: creating ProcessMonitor
+[roslaunch.pmon][INFO] 2026-07-22 16:37:34,965: created process monitor <ProcessMonitor(ProcessMonitor-1, initial daemon)>
+[roslaunch.pmon][INFO] 2026-07-22 16:37:34,965: start_process_monitor: ProcessMonitor started
+[roslaunch.parent][INFO] 2026-07-22 16:37:34,965: starting parent XML-RPC server
+[roslaunch.server][INFO] 2026-07-22 16:37:34,965: starting roslaunch XML-RPC server
+[roslaunch.server][INFO] 2026-07-22 16:37:34,965: waiting for roslaunch XML-RPC server to initialize
+[xmlrpc][INFO] 2026-07-22 16:37:34,966: XML-RPC server binding to 127.0.0.1:0
+[xmlrpc][INFO] 2026-07-22 16:37:34,966: Started XML-RPC server [http://127.0.0.1:40771/]
+[xmlrpc][INFO] 2026-07-22 16:37:34,966: xml rpc node: starting XML-RPC server
+[roslaunch][INFO] 2026-07-22 16:37:34,976: started roslaunch server http://127.0.0.1:40771/
+[roslaunch.parent][INFO] 2026-07-22 16:37:34,977: ... parent XML-RPC server started
+[roslaunch][INFO] 2026-07-22 16:37:34,977: master.is_running[http://127.0.0.1:11381/]
+[roslaunch][INFO] 2026-07-22 16:37:34,977: auto-starting new master
+[roslaunch][INFO] 2026-07-22 16:37:34,977: create_master_process: rosmaster, /opt/ros/noetic/share/ros, 11381, 3, None, False
+[roslaunch][INFO] 2026-07-22 16:37:34,977: process[master]: launching with args [['rosmaster', '--core', '-p', '11381', '-w', '3']]
+[roslaunch.pmon][INFO] 2026-07-22 16:37:34,977: ProcessMonitor.register[master]
+[roslaunch.pmon][INFO] 2026-07-22 16:37:34,977: ProcessMonitor.register[master] complete
+[roslaunch][INFO] 2026-07-22 16:37:34,977: process[master]: starting os process
+[roslaunch][INFO] 2026-07-22 16:37:34,977: process[master]: start w/ args [['rosmaster', '--core', '-p', '11381', '-w', '3', '__log:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-logs/a48215e6-85eb-11f1-a122-43b550e84cff/master.log']]
+[roslaunch][INFO] 2026-07-22 16:37:34,977: process[master]: cwd will be [/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-home]
+[roslaunch][INFO] 2026-07-22 16:37:34,979: process[master]: started with pid [236461]
+[roslaunch][INFO] 2026-07-22 16:37:34,979: master.is_running[http://127.0.0.1:11381/]
+[roslaunch][INFO] 2026-07-22 16:37:35,079: master.is_running[http://127.0.0.1:11381/]
+[roslaunch][INFO] 2026-07-22 16:37:35,080: master.is_running[http://127.0.0.1:11381/]
+[roslaunch][INFO] 2026-07-22 16:37:35,081: ROS_MASTER_URI=http://127.0.0.1:11381/
+[roslaunch][INFO] 2026-07-22 16:37:35,082: setting /run_id to a48215e6-85eb-11f1-a122-43b550e84cff
+[roslaunch][INFO] 2026-07-22 16:37:35,082: setting /roslaunch/uris/host_127_0_0_1__40771' to http://127.0.0.1:40771/
+[roslaunch][INFO] 2026-07-22 16:37:35,083: ... preparing to launch node of type [rosout/rosout]
+[roslaunch][INFO] 2026-07-22 16:37:35,083: create_node_process: package[rosout] type[rosout] machine[Machine(name[] env_loader[None] address[localhost] ssh_port[22] user[None] assignable[True] timeout[10.0])] master_uri[http://127.0.0.1:11381/]
+[roslaunch][INFO] 2026-07-22 16:37:35,083: process[rosout-1]: env[{'CMAKE_PREFIX_PATH': '/home/moksh/newSlam variant/build/cp0-ws/devel:/opt/ros/noetic', 'HOME': '/home/moksh', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8', 'LD_LIBRARY_PATH': '/home/moksh/newSlam variant/build/cp0-ws/devel/lib:/opt/ros/noetic/lib:/usr/local/cuda-12.8/lib64:/usr/local/cuda/lib64', 'LOGNAME': 'moksh', 'PATH': '/opt/ros/noetic/bin:/home/moksh/.local/bin:/home/moksh/.local/bin:/home/moksh/.codex/tmp/arg0/codex-arg0fQ0eYS:/home/moksh/.local/bin:/home/moksh/.local/bin:/home/moksh/.local/bin:/home/moksh/miniconda3/bin:/home/moksh/miniconda3/condabin:/home/moksh/.local/bin:/usr/local/cuda-12.8/bin:/usr/local/cuda/bin:/home/moksh/.local/bin:/home/moksh/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/moksh/.vscode/extensions/openai.chatgpt-26.5715.61943-linux-x64/bin/linux-x86_64', 'PKG_CONFIG_PATH': '/home/moksh/newSlam variant/build/cp0-ws/devel/lib/pkgconfig:/opt/ros/noetic/lib/pkgconfig', 'PYTHONPATH': '/opt/ros/noetic/lib/python3/dist-packages', 'ROS_DISTRO': 'noetic', 'ROS_ETC_DIR': '/opt/ros/noetic/etc/ros', 'ROS_PACKAGE_PATH': '/home/moksh/newSlam variant/build/cp0-ws/src/ov_core:/home/moksh/newSlam variant/build/cp0-ws/src/ov_data:/home/moksh/newSlam variant/build/cp0-ws/src/ov_eval:/home/moksh/newSlam variant/build/cp0-ws/src/ov_init:/home/moksh/newSlam variant/build/cp0-ws/src/ov_msckf:/opt/ros/noetic/share', 'ROS_PYTHON_VERSION': '3', 'ROS_ROOT': '/opt/ros/noetic/share/ros', 'ROS_VERSION': '1', 'SHELL': '/bin/bash', 'USER': 'moksh', 'TZ': 'UTC', 'PYTHONHASHSEED': '0', 'OMP_NUM_THREADS': '1', 'OPENBLAS_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1', 'NUMEXPR_NUM_THREADS': '1', 'VECLIB_MAXIMUM_THREADS': '1', 'MPLBACKEND': 'Agg', 'ROS_HOME': '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-home', 'ROS_LOG_DIR': '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-logs', 'ROS_MASTER_URI': 'http://127.0.0.1:11381/', 'ROS_HOSTNAME': '127.0.0.1', 'ROS_IP': '127.0.0.1', 'ROS_LOG_FILENAME': '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-logs/a48215e6-85eb-11f1-a122-43b550e84cff/roslaunch-moksh-System-Product-Name-236452.log'}]
+[roslaunch][INFO] 2026-07-22 16:37:35,096: process[rosout-1]: args[['/opt/ros/noetic/lib/rosout/rosout', '__name:=rosout']]
+[roslaunch][INFO] 2026-07-22 16:37:35,097: ... created process [rosout-1]
+[roslaunch.pmon][INFO] 2026-07-22 16:37:35,097: ProcessMonitor.register[rosout-1]
+[roslaunch.pmon][INFO] 2026-07-22 16:37:35,097: ProcessMonitor.register[rosout-1] complete
+[roslaunch][INFO] 2026-07-22 16:37:35,097: ... registered process [rosout-1]
+[roslaunch][INFO] 2026-07-22 16:37:35,097: process[rosout-1]: starting os process
+[roslaunch][INFO] 2026-07-22 16:37:35,097: process[rosout-1]: start w/ args [['/opt/ros/noetic/lib/rosout/rosout', '__name:=rosout', '__log:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-logs/a48215e6-85eb-11f1-a122-43b550e84cff/rosout-1.log']]
+[roslaunch][INFO] 2026-07-22 16:37:35,097: process[rosout-1]: cwd will be [/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-home]
+[roslaunch][INFO] 2026-07-22 16:37:35,098: process[rosout-1]: started with pid [236471]
+[roslaunch][INFO] 2026-07-22 16:37:35,098: ... successfully launched [rosout-1]
+[roslaunch][INFO] 2026-07-22 16:37:35,098: load_parameters starting ...
+[roslaunch][INFO] 2026-07-22 16:37:35,108: ... load_parameters complete
+[roslaunch][INFO] 2026-07-22 16:37:35,108: launch_nodes: launching local nodes ...
+[roslaunch][INFO] 2026-07-22 16:37:35,108: ... preparing to launch node of type [ov_msckf/ros1_serial_msckf]
+[roslaunch][INFO] 2026-07-22 16:37:35,108: create_node_process: package[ov_msckf] type[ros1_serial_msckf] machine[Machine(name[] env_loader[None] address[localhost] ssh_port[22] user[None] assignable[True] timeout[10.0])] master_uri[http://127.0.0.1:11381/]
+[roslaunch][INFO] 2026-07-22 16:37:35,109: process[cp0_vio-2]: env[{'CMAKE_PREFIX_PATH': '/home/moksh/newSlam variant/build/cp0-ws/devel:/opt/ros/noetic', 'HOME': '/home/moksh', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8', 'LD_LIBRARY_PATH': '/home/moksh/newSlam variant/build/cp0-ws/devel/lib:/opt/ros/noetic/lib:/usr/local/cuda-12.8/lib64:/usr/local/cuda/lib64', 'LOGNAME': 'moksh', 'PATH': '/opt/ros/noetic/bin:/home/moksh/.local/bin:/home/moksh/.local/bin:/home/moksh/.codex/tmp/arg0/codex-arg0fQ0eYS:/home/moksh/.local/bin:/home/moksh/.local/bin:/home/moksh/.local/bin:/home/moksh/miniconda3/bin:/home/moksh/miniconda3/condabin:/home/moksh/.local/bin:/usr/local/cuda-12.8/bin:/usr/local/cuda/bin:/home/moksh/.local/bin:/home/moksh/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/moksh/.vscode/extensions/openai.chatgpt-26.5715.61943-linux-x64/bin/linux-x86_64', 'PKG_CONFIG_PATH': '/home/moksh/newSlam variant/build/cp0-ws/devel/lib/pkgconfig:/opt/ros/noetic/lib/pkgconfig', 'PYTHONPATH': '/opt/ros/noetic/lib/python3/dist-packages', 'ROS_DISTRO': 'noetic', 'ROS_ETC_DIR': '/opt/ros/noetic/etc/ros', 'ROS_PACKAGE_PATH': '/home/moksh/newSlam variant/build/cp0-ws/src/ov_core:/home/moksh/newSlam variant/build/cp0-ws/src/ov_data:/home/moksh/newSlam variant/build/cp0-ws/src/ov_eval:/home/moksh/newSlam variant/build/cp0-ws/src/ov_init:/home/moksh/newSlam variant/build/cp0-ws/src/ov_msckf:/opt/ros/noetic/share', 'ROS_PYTHON_VERSION': '3', 'ROS_ROOT': '/opt/ros/noetic/share/ros', 'ROS_VERSION': '1', 'SHELL': '/bin/bash', 'USER': 'moksh', 'TZ': 'UTC', 'PYTHONHASHSEED': '0', 'OMP_NUM_THREADS': '1', 'OPENBLAS_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1', 'NUMEXPR_NUM_THREADS': '1', 'VECLIB_MAXIMUM_THREADS': '1', 'MPLBACKEND': 'Agg', 'ROS_HOME': '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-home', 'ROS_LOG_DIR': '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-logs', 'ROS_MASTER_URI': 'http://127.0.0.1:11381/', 'ROS_HOSTNAME': '127.0.0.1', 'ROS_IP': '127.0.0.1', 'ROS_LOG_FILENAME': '/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-logs/a48215e6-85eb-11f1-a122-43b550e84cff/roslaunch-moksh-System-Product-Name-236452.log'}]
+[roslaunch][INFO] 2026-07-22 16:37:35,109: process[cp0_vio-2]: args[['/home/moksh/newSlam variant/build/cp0-ws/devel/lib/ov_msckf/ros1_serial_msckf', '__name:=cp0_vio']]
+[roslaunch][INFO] 2026-07-22 16:37:35,109: ... created process [cp0_vio-2]
+[roslaunch.pmon][INFO] 2026-07-22 16:37:35,109: ProcessMonitor.register[cp0_vio-2]
+[roslaunch.pmon][INFO] 2026-07-22 16:37:35,109: ProcessMonitor.register[cp0_vio-2] complete
+[roslaunch][INFO] 2026-07-22 16:37:35,109: ... registered process [cp0_vio-2]
+[roslaunch][INFO] 2026-07-22 16:37:35,109: process[cp0_vio-2]: starting os process
+[roslaunch][INFO] 2026-07-22 16:37:35,110: process[cp0_vio-2]: start w/ args [['/home/moksh/newSlam variant/build/cp0-ws/devel/lib/ov_msckf/ros1_serial_msckf', '__name:=cp0_vio', '__log:=/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-logs/a48215e6-85eb-11f1-a122-43b550e84cff/cp0_vio-2.log']]
+[roslaunch][INFO] 2026-07-22 16:37:35,110: process[cp0_vio-2]: cwd will be [/home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-home]
+[roslaunch][INFO] 2026-07-22 16:37:35,111: process[cp0_vio-2]: started with pid [236479]
+[roslaunch][INFO] 2026-07-22 16:37:35,111: ... successfully launched [cp0_vio-2]
+[roslaunch][INFO] 2026-07-22 16:37:35,111: ... launch_nodes complete
+[roslaunch.pmon][INFO] 2026-07-22 16:37:35,111: registrations completed <ProcessMonitor(ProcessMonitor-1, started daemon 140601185158912)>
+[roslaunch.parent][INFO] 2026-07-22 16:37:35,111: ... roslaunch parent running, waiting for process exit
+[roslaunch][INFO] 2026-07-22 16:37:35,111: spin
+[roslaunch][ERROR] 2026-07-22 16:37:52,297: ================================================================================REQUIRED process [cp0_vio-2] has died!
+process has finished cleanly
+log file: /home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-logs/a48215e6-85eb-11f1-a122-43b550e84cff/cp0_vio-2*.log
+Initiating shutdown!
+================================================================================
+[roslaunch.pmon][INFO] 2026-07-22 16:37:52,397: ProcessMonitor._post_run <ProcessMonitor(ProcessMonitor-1, started daemon 140601185158912)>
+[roslaunch.pmon][INFO] 2026-07-22 16:37:52,397: ProcessMonitor._post_run <ProcessMonitor(ProcessMonitor-1, started daemon 140601185158912)>: remaining procs are [<roslaunch.nodeprocess.LocalProcess object at 0x7fe043b7bd00>, <roslaunch.nodeprocess.LocalProcess object at 0x7fe043b9a5b0>, <roslaunch.nodeprocess.LocalProcess object at 0x7fe043b65f40>]
+[roslaunch.pmon][INFO] 2026-07-22 16:37:52,397: ProcessMonitor exit: killing cp0_vio-2
+[roslaunch][INFO] 2026-07-22 16:37:52,398: [cp0_vio-2] killing on exit
+[roslaunch.pmon][INFO] 2026-07-22 16:37:52,398: ProcessMonitor exit: killing rosout-1
+[roslaunch][INFO] 2026-07-22 16:37:52,398: [rosout-1] killing on exit
+[roslaunch][INFO] 2026-07-22 16:37:52,398: process[rosout-1]: killing os process with pid[236471] pgid[236471]
+[roslaunch][INFO] 2026-07-22 16:37:52,398: [rosout-1] sending SIGINT to pgid [236471]
+[roslaunch][INFO] 2026-07-22 16:37:52,398: [rosout-1] sent SIGINT to pgid [236471]
+[roslaunch][INFO] 2026-07-22 16:37:52,599: process[rosout-1]: SIGINT killed with return value 0
+[roslaunch.pmon][INFO] 2026-07-22 16:37:52,599: ProcessMonitor exit: killing master
+[roslaunch][INFO] 2026-07-22 16:37:52,599: [master] killing on exit
+[roslaunch][INFO] 2026-07-22 16:37:52,599: process[master]: killing os process with pid[236461] pgid[236461]
+[roslaunch][INFO] 2026-07-22 16:37:52,599: [master] sending SIGINT to pgid [236461]
+[roslaunch][INFO] 2026-07-22 16:37:52,599: [master] sent SIGINT to pgid [236461]
+[roslaunch][INFO] 2026-07-22 16:37:52,799: process[master]: SIGINT killed with return value 0
+[roslaunch.pmon][INFO] 2026-07-22 16:37:52,799: ProcessMonitor exit: cleaning up data structures and signals
+[roslaunch.pmon][INFO] 2026-07-22 16:37:52,800: ProcessMonitor exit: pmon has shutdown
+[roslaunch][INFO] 2026-07-22 16:37:52,833: process monitor is done spinning, initiating full shutdown
+[roslaunch][INFO] 2026-07-22 16:37:52,833: runner.stop()
+[roslaunch][INFO] 2026-07-22 16:37:52,833: shutting down processing monitor...
+[roslaunch][INFO] 2026-07-22 16:37:52,834: shutting down processing monitor <ProcessMonitor(ProcessMonitor-1, stopped daemon 140601185158912)>
+[roslaunch.pmon][INFO] 2026-07-22 16:37:52,834: ProcessMonitor.shutdown <ProcessMonitor(ProcessMonitor-1, stopped daemon 140601185158912)>
+[roslaunch][INFO] 2026-07-22 16:37:52,834: ... shutting down processing monitor complete
+[roslaunch][INFO] 2026-07-22 16:37:52,834: done
+[roslaunch.pmon][INFO] 2026-07-22 16:37:52,834: ProcessMonitor.shutdown <ProcessMonitor(ProcessMonitor-1, stopped daemon 140601185158912)>
+[rospy.core][INFO] 2026-07-22 16:37:52,834: signal_shutdown [atexit]

@@ -1,0 +1,88 @@
+schema_version: 1
+project: SchurVIO-Lite
+timezone: America/Toronto
+as_of: 2026-07-22
+upstream_commit: 69488123ed9362dd44b6f28e7f4680abbff1442b
+source_of_truth: docs/checkpoints.md
+checkpoints:
+  - id: D0
+    due: 2026-07-23T18:00:00-04:00
+    status: in_progress
+    evidence:
+      - path: project/datasets.yaml
+        result: all_11_euroc_bags_verified
+      - path: project/dependencies.yaml
+        result: dataset_and_gpl_pass_hardware_and_reviewer_open
+    blockers:
+      - target_board_and_power_interface
+      - mathematical_reviewer
+  - id: CP0
+    due: 2026-07-24T23:59:00-04:00
+    status: passed
+    evidence:
+      - path: project/baselines.yaml
+        baseline_id: cp0_mh01_openvins_69488123
+        result: canonical_observed_result_recorded
+      - path: results/immutable/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93
+        sha256sums_sha256: c5e70f3f0aa204a96e2ab030838355b97639c3f10ab7e8d11b3a2b6d14ec964d
+        ape_translation_rmse_m: 0.07118699166247568
+        synchronized_rows: 2767
+        observed_state_columns: 79
+        observed_state_std_columns: 74
+        timing_use: instrumentation_and_completion_only
+      - path: docs/cp0_reproduction.md
+      - path: docs/conventions.md
+      - path: docs/estimator_update_notes.md
+    decision: baseline_frozen_specification_work_permitted
+  - id: CP1
+    due: 2026-07-28T23:59:00-04:00
+    status: pending
+    evidence: []
+  - id: CP2
+    due: 2026-07-31T23:59:00-04:00
+    status: pending
+    evidence: []
+  - id: CP3
+    due: 2026-08-05T23:59:00-04:00
+    status: pending
+    evidence: []
+  - id: CP4
+    due: 2026-08-09T23:59:00-04:00
+    status: pending
+    evidence: []
+  - id: CP5
+    due: 2026-08-12T23:59:00-04:00
+    status: pending
+    evidence: []
+  - id: CP6
+    due: 2026-08-15T23:59:00-04:00
+    status: pending
+    evidence: []
+  - id: CP7
+    due: 2026-08-25T23:59:00-04:00
+    status: pending
+    evidence: []
+  - id: CP8
+    due: 2026-09-01T23:59:00-04:00
+    status: pending
+    evidence: []
+  - id: CP9
+    due: 2026-09-05T23:59:00-04:00
+    status: pending
+    evidence: []
+  - id: CP10
+    due: 2026-09-08T23:59:00-04:00
+    status: pending
+    evidence: []
+  - id: CP11
+    due: 2026-09-11T23:59:00-04:00
+    status: pending
+    evidence: []
+  - id: CP12
+    due: 2026-09-13T18:00:00-04:00
+    status: pending
+    evidence: []
+  - id: CP13
+    due: 2026-09-14T17:00:00-04:00
+    status: pending
+    evidence: []

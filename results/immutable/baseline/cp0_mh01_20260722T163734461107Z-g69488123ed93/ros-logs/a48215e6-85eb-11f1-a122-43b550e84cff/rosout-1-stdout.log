@@ -1,0 +1,3 @@
+logging to /home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/ros-logs/a48215e6-85eb-11f1-a122-43b550e84cff/rosout.log
+re-publishing aggregated messages to /rosout_agg
+subscribed to /rosout

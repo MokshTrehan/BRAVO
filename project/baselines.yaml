@@ -1,0 +1,106 @@
+schema_version: 1
+project: SchurVIO-Lite
+purpose: Canonical observed-result index for frozen comparison baselines.
+
+# The run contract remains project/cp0_baseline.json. This registry records
+# what actually ran and is the stable lookup point for later comparisons.
+baselines:
+  - baseline_id: cp0_mh01_openvins_69488123
+    checkpoint: CP0
+    role: canonical_accuracy_and_state_reference
+    status: passed
+    recorded_at: "2026-07-22T14:02:37-04:00"
+
+    run:
+      run_id: cp0_mh01_20260722T163734461107Z-g69488123ed93
+      created_utc: "2026-07-22T16:37:34.461216Z"
+      finished_utc: "2026-07-22T16:37:55.405672Z"
+      artifact_path: results/immutable/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93
+      seal_method: Linux renameat2(RENAME_NOREPLACE)
+      logical_immutability: checksum_enforced
+      sha256sums_sha256: c5e70f3f0aa204a96e2ab030838355b97639c3f10ab7e8d11b3a2b6d14ec964d
+      independent_verification: passed
+      verification_command: >-
+        scripts/cp0/verify_run.py
+        results/immutable/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93
+        --sha256sums-sha256
+        c5e70f3f0aa204a96e2ab030838355b97639c3f10ab7e8d11b3a2b6d14ec964d
+
+    source:
+      upstream_repository: https://github.com/rpng/open_vins.git
+      upstream_commit: 69488123ed9362dd44b6f28e7f4680abbff1442b
+      source_tree_sha256: 67386f6acef6ba39af5465fffd8ad61366772e45e39a8992a71d8c8daf16801c
+      tracked_delta_sha256: dd65e99a9e7cf2c54be61578175c2e799039ba54c1447a79a4dd421d52f0fb7b
+      serial_runner_patch_sha256: e59723fe2978cd6cbaf7cc23e6d29e8d1f93705ca1e618ec2672dd3df3f2044d
+      estimator_executable_sha256: 702407c0dd00aac01b914a8fdce08e7caaa9f639c6f3059fecd66c1cc04cffd3
+      contract_path: project/cp0_baseline.json
+      contract_sha256: 667c86ad3ea2272b29d06ddf1daa5c1f71d061ac8cb9ea94d03bd449442b7fa7
+      launch_path: project/cp0_serial.launch
+      launch_sha256: edf61dcbeca37381a9353453f64ba2bb58792f5e2210d52f68398d9f276c1530
+
+    dataset:
+      name: MH_01_easy
+      configuration: euroc_mav
+      bag_start_seconds: 40.0
+      bag_size_bytes: 2673818914
+      bag_sha256: 57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9
+      ground_truth_path: ov_data/euroc_mav/MH_01_easy.txt
+      ground_truth_sha256: ab1579de35a047d241e2d0d1a4f4306b4fa51d99c6f11bcdebf336ab2b784df9
+      ground_truth_used_for_initialization: false
+
+    protocol:
+      evaluator: evo
+      evaluator_version: 1.31.1
+      alignment: SE3
+      scale_correction: false
+      timestamp_association_max_difference_seconds: 0.01
+      ape: translation
+      rpe:
+        delta: 1.0
+        delta_unit: m
+        pairs: all_pairs_from_reference
+        relations:
+          - translation
+          - rotation_degrees
+      stereo: true
+      calibration_fixed: true
+      affinity_cpus: [0, 1, 2, 3]
+      cpu_governors: [ondemand, ondemand, ondemand, ondemand]
+
+    completion:
+      state_rows: 2767
+      observed_state_columns: 79
+      state_deviation_rows: 2767
+      observed_state_deviation_columns: 74
+      trajectory_rows: 2767
+      timing_rows: 2767
+      last_selected_camera_timestamp_seconds: 1403636763.7635555
+
+    metrics:
+      ape_translation:
+        unit: m
+        samples: 2746
+        rmse: 0.07118699166247568
+        median: 0.06462822980571853
+      rpe_translation_1m:
+        unit: m
+        samples: 2666
+        rmse: 0.03314322935673762
+        median: 0.026710692408249206
+      rpe_rotation_1m:
+        unit: degrees
+        samples: 2666
+        rmse: 0.3290284002023306
+        median: 0.15320449970428274
+
+    timing:
+      classification: instrumentation_and_completion_only
+      performance_claim_permitted: false
+      comparative_timing_baseline_required_before: CP2
+
+    durability:
+      artifact_checksum_anchor_recorded: true
+      git_commit_status: anchored_by_containing_commit
+      git_tag_status: annotated_tag
+      git_tag: schurvio-lite-cp0-mh01
+      note: The containing commit and annotated tag freeze this registry, the CP0 inputs, and the checksum anchor without changing the sealed run or its contract.

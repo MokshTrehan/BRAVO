@@ -1,0 +1,34 @@
+<launch>
+    <!-- Dedicated CP0 launch surface. Keep all reproducibility overrides here. -->
+    <arg name="bag" />
+    <arg name="bag_start" default="40.0" />
+    <arg name="config_path" />
+    <arg name="path_state" />
+    <arg name="path_std" />
+    <arg name="path_time" />
+    <arg name="verbosity" default="INFO" />
+    <arg name="max_cameras" default="2" />
+    <arg name="use_stereo" default="true" />
+    <node name="cp0_vio" pkg="ov_msckf" type="ros1_serial_msckf"
+          output="screen" clear_params="true" required="true">
+        <param name="path_bag" type="str" value="$(arg bag)" />
+        <param name="bag_start" type="double" value="$(arg bag_start)" />
+        <param name="bag_durr" type="double" value="-1" />
+        <param name="verbosity" type="str" value="$(arg verbosity)" />
+        <param name="config_path" type="str" value="$(arg config_path)" />
+        <param name="use_stereo" type="bool" value="$(arg use_stereo)" />
+        <param name="max_cameras" type="int" value="$(arg max_cameras)" />
+        <param name="num_opencv_threads" type="int" value="0" />
+        <param name="multi_threading_pubs" type="bool" value="false" />
+        <param name="multi_threading_subs" type="bool" value="false" />
+        <param name="calib_cam_extrinsics" type="bool" value="false" />
+        <param name="calib_cam_intrinsics" type="bool" value="false" />
+        <param name="calib_cam_timeoffset" type="bool" value="false" />
+        <param name="save_total_state" type="bool" value="true" />
+        <param name="filepath_est" type="str" value="$(arg path_state)" />
+        <param name="filepath_std" type="str" value="$(arg path_std)" />
+        <param name="record_timing_information" type="bool" value="true" />
+        <param name="record_timing_filepath" type="str" value="$(arg path_time)" />
+    </node>
+
+</launch>

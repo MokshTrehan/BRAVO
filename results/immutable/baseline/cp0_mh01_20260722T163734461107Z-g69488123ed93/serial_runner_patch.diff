@@ -1,0 +1,52 @@
+diff --git a/ov_msckf/src/ros1_serial_msckf.cpp b/ov_msckf/src/ros1_serial_msckf.cpp
+index 28a9100..5e60980 100644
+--- a/ov_msckf/src/ros1_serial_msckf.cpp
++++ b/ov_msckf/src/ros1_serial_msckf.cpp
+@@ -34,9 +34,6 @@
+ 
+ using namespace ov_msckf;
+ 
+-std::shared_ptr<VioManager> sys;
+-std::shared_ptr<ROS1Visualizer> viz;
+-
+ // Main function
+ int main(int argc, char **argv) {
+ 
+@@ -63,16 +60,18 @@ int main(int argc, char **argv) {
+   // Create our VIO system
+   VioManagerOptions params;
+   params.print_and_load(parser);
+-  // params.num_opencv_threads = 0; // uncomment if you want repeatability
+-  // params.use_multi_threading_pubs = 0; // uncomment if you want repeatability
++  // The serial runner cannot safely detach the visualizer's publishing thread:
++  // it has no join/ownership protocol and captures the visualizer by reference.
++  params.use_multi_threading_pubs = false;
+   params.use_multi_threading_subs = false;
+-  sys = std::make_shared<VioManager>(params);
+-  viz = std::make_shared<ROS1Visualizer>(nh, sys);
++  auto sys = std::make_shared<VioManager>(params);
++  auto viz = std::make_shared<ROS1Visualizer>(nh, sys);
+ 
+   // Ensure we read in all parameters required
+   if (!parser->successful()) {
+     PRINT_ERROR(RED "[SERIAL]: unable to parse all parameters, please fix\n" RESET);
+-    std::exit(EXIT_FAILURE);
++    ros::shutdown();
++    return EXIT_FAILURE;
+   }
+ 
+   //===================================================================================
+@@ -277,6 +276,13 @@ int main(int argc, char **argv) {
+   // Final visualization
+   viz->visualize_final();
+ 
++  ros::shutdown();
++
++  // Destroy plugin-owning ROS objects before process-static class loaders.
++  viz.reset();
++  sys.reset();
++  nh.reset();
++
+   // Done!
+   return EXIT_SUCCESS;
+ }

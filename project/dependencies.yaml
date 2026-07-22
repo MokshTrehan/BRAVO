@@ -1,0 +1,86 @@
+schema_version: 1
+project: SchurVIO-Lite
+as_of: "2026-07-22T14:13:43-04:00"
+timezone: America/Toronto
+
+gate:
+  id: D0
+  name: external_dependency_gate
+  due: "2026-07-23T18:00:00-04:00"
+  overall_status: partial_blocked
+  source_of_truth: docs/checkpoints.md
+  validation_command: project/d0_status.py --strict
+  decision:
+    desktop_work: permitted
+    embedded_power_claims: blocked
+    cp6_embedded_claim: blocked_until_target_evidence_exists
+
+dependencies:
+  dataset_readiness:
+    status: pass
+    euroc_local_sequences_verified: 11
+    euroc_v2_acquisition_plan: pass
+    second_dataset_selection: pass
+    second_dataset: TUM-VI room1 through room5
+    registry: project/datasets.yaml
+
+  target_board_and_power:
+    status: blocked
+    board_model: null
+    board_os: null
+    toolchain: null
+    access_method: null
+    available_cpu_cores: null
+    power_reading_interface: null
+    blocker: No CPU-only embedded target or board-level watt/energy telemetry is available.
+    local_probe:
+      checked_at: "2026-07-22T14:02:37-04:00"
+      desktop_host:
+        board: ASUS ProArt X870E-CREATOR WIFI
+        cpu: AMD Ryzen 9 9950X 16-Core Processor
+        logical_cpus: 32
+        os: Ubuntu 20.04.6 LTS
+        compiler: GCC/G++ 9.4.0
+        cmake: 3.16.3
+        classification: desktop_development_host_not_embedded_target
+      connected_devices:
+        - device: STMicroelectronics Virtual COM Port
+          classification: unsuitable_as_openvins_compute_target
+        - device: CyberPower UPS
+          classification: charge_and_runtime_only_no_synchronized_board_power
+      usable_board_power_or_energy_channel_found: false
+    observed_non_targets:
+      - An STM32 Virtual COM Port is not a suitable OpenVINS compute target.
+      - The visible UPS reports charge/runtime but not usable watts or energy rate.
+      - GPU-only power telemetry cannot support a CPU-only target claim.
+    required_to_unblock:
+      - Name the target board and OS/toolchain.
+      - Record the access method and usable CPU cores.
+      - Demonstrate synchronized board-level power or energy telemetry.
+
+  mathematical_reviewer:
+    status: pending
+    reviewer: null
+    required_scope:
+      - frames and conventions
+      - projection and state Jacobians
+      - covariance update and reset
+      - frozen-prior iterated update
+    required_to_unblock: Name a human VIO/EKF reviewer and obtain dated signoff at the required checkpoints.
+
+  gplv3_derivative_acceptance:
+    status: pass
+    decision_owner: Moksh Trehan
+    accepted: true
+    accepted_at: "2026-07-22T14:13:43-04:00"
+    accepted_via: explicit_user_message
+    acceptance_statement: I accept the applicable GPLv3 Corresponding Source and license-notice obligations if covered binaries or artifacts are conveyed.
+    implication: Private modification/use does not itself require publication; if covered binaries or artifacts are conveyed, GPLv3 Corresponding Source and license-notice duties must be satisfied.
+    official_references:
+      - https://www.gnu.org/licenses/gpl-3.0.en.html
+      - https://www.gnu.org/licenses/gpl-faq.html#NoDistributionRequirements
+    result: Author acceptance recorded; obtain legal or venue review if the eventual release plan is unclear.
+
+failure_action:
+  active: true
+  statement: Desktop work continues, but embedded power and energy claims remain blocked until target-board evidence is recorded.

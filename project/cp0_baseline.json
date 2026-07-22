@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "checkpoint": "CP0",
+  "frozen_source": {
+    "serial_runner_patch_path": "ov_msckf/src/ros1_serial_msckf.cpp",
+    "serial_runner_patch_sha256": "e59723fe2978cd6cbaf7cc23e6d29e8d1f93705ca1e618ec2672dd3df3f2044d",
+    "input_sha256": {
+      "config/euroc_mav/estimator_config.yaml": "b706f0082106e49e20c3292147d238b7e225b0df414106b9d4ac009bbb123f3b",
+      "config/euroc_mav/kalibr_imu_chain.yaml": "408ea8b60b5f9e7c8251e6d302f04c0675bfefdd31229bb1afd139bc8f4a0287",
+      "config/euroc_mav/kalibr_imucam_chain.yaml": "b9e11b7bcda102f7c8c384c97318d67f3916b58942f9073722f83c22bd7073f7",
+      "ov_data/euroc_mav/MH_01_easy.txt": "ab1579de35a047d241e2d0d1a4f4306b4fa51d99c6f11bcdebf336ab2b784df9"
+    }
+  },
+  "dataset": {
+    "name": "MH_01_easy",
+    "configuration": "euroc_mav",
+    "ground_truth": "ov_data/euroc_mav/MH_01_easy.txt",
+    "bag_start_seconds": 40.0,
+    "bag_identity": {
+      "size_bytes": 2673818914,
+      "sha256": "57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9"
+    },
+    "completion_witness": {
+      "expected_timing_rows": 2767,
+      "final_selected_camera_timestamp_seconds": 1403636763.7635555,
+      "timestamp_tolerance_seconds": 0.00001
+    }
+  },
+  "estimator": {
+    "launch_file": "project/cp0_serial.launch",
+    "config_file": "config/euroc_mav/estimator_config.yaml",
+    "stereo": true,
+    "max_cameras": 2,
+    "num_opencv_threads": 0,
+    "multi_threading_publishers": false,
+    "multi_threading_subscribers": false,
+    "calib_cam_extrinsics": false,
+    "calib_cam_intrinsics": false,
+    "calib_cam_timeoffset": false,
+    "capture_method": "ROS1Visualizer synchronous save_total_state",
+    "save_total_state": true
+  },
+  "evaluation": {
+    "alignment": "se3",
+    "scale_correction": false,
+    "ape_translation_rmse_max_m": 0.25,
+    "timestamp_association_max_difference_seconds": 0.01,
+    "rpe_delta": 1.0,
+    "rpe_delta_unit": "m",
+    "rpe_pairs": "all_pairs_from_reference",
+    "minimum_trajectory_poses": 100,
+    "minimum_timing_rows": 100
+  },
+  "runtime": {
+    "ros_master_port": 11381,
+    "command_timeout_seconds": 300,
+    "environment": {
+      "LANG": "C.UTF-8",
+      "LC_ALL": "C.UTF-8",
+      "TZ": "UTC",
+      "PYTHONHASHSEED": "0",
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "NUMEXPR_NUM_THREADS": "1",
+      "VECLIB_MAXIMUM_THREADS": "1"
+    }
+  }
+}

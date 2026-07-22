@@ -1,0 +1,356 @@
+{
+  "checkpoint": "CP0",
+  "checks": [
+    {
+      "details": {
+        "allowed": [
+          "ov_msckf/src/ros1_serial_msckf.cpp"
+        ],
+        "changes": [
+          "ov_msckf/src/ros1_serial_msckf.cpp"
+        ],
+        "expected_serial_runner_patch_sha256": "e59723fe2978cd6cbaf7cc23e6d29e8d1f93705ca1e618ec2672dd3df3f2044d",
+        "persisted_diff_sha256": "dd65e99a9e7cf2c54be61578175c2e799039ba54c1447a79a4dd421d52f0fb7b",
+        "persisted_serial_runner_patch_sha256": "e59723fe2978cd6cbaf7cc23e6d29e8d1f93705ca1e618ec2672dd3df3f2044d",
+        "serial_runner_patch_sha256": "e59723fe2978cd6cbaf7cc23e6d29e8d1f93705ca1e618ec2672dd3df3f2044d"
+      },
+      "name": "declared_serial_runner_source_delta_only",
+      "passed": true
+    },
+    {
+      "details": {
+        "exit_code": 0,
+        "timed_out": false
+      },
+      "name": "roslaunch_exit_zero_without_timeout",
+      "passed": true
+    },
+    {
+      "details": {
+        "cp0_vio_start_count": 1,
+        "required_process_banner": "expected because cp0_vio is required",
+        "required_process_result": "process has finished cleanly",
+        "state_capture": "synchronous ROS1Visualizer save_total_state"
+      },
+      "name": "clean_console_and_single_estimator_lifetime",
+      "passed": true
+    },
+    {
+      "details": {
+        "calib_cam_extrinsics": false,
+        "calib_cam_intrinsics": false,
+        "calib_cam_timeoffset": false,
+        "capture_transport": "in-process synchronous file write",
+        "ground_truth_parameter_present": false,
+        "multi_threading_pubs": false,
+        "multi_threading_subs": false,
+        "num_opencv_threads": 0,
+        "save_total_state": true
+      },
+      "name": "deterministic_parameters_and_no_ground_truth_initialization",
+      "passed": true
+    },
+    {
+      "details": {
+        "exit_code": 0
+      },
+      "name": "roslaunch_parameter_resolution_exit_zero",
+      "passed": true
+    },
+    {
+      "details": {
+        "exit_code": 0,
+        "output": "CP0 build provenance verified: source_tree=67386f6acef6ba39af5465fffd8ad61366772e45e39a8992a71d8c8daf16801c executable=702407c0dd00aac01b914a8fdce08e7caaa9f639c6f3059fecd66c1cc04cffd3"
+      },
+      "name": "build_provenance_unchanged_after_run",
+      "passed": true
+    },
+    {
+      "details": {
+        "missing": [],
+        "sizes": {
+          "console.log": 603564,
+          "evo_ape_translation.txt": 206,
+          "evo_ape_translation.zip": 112240,
+          "evo_rpe_rotation_1m_deg.txt": 254,
+          "evo_rpe_rotation_1m_deg.zip": 109084,
+          "evo_rpe_translation_1m.txt": 241,
+          "evo_rpe_translation_1m.zip": 109078,
+          "state_deviation.txt": 1978522,
+          "state_estimate.txt": 2209701,
+          "timing_openvins.csv": 229758,
+          "trajectory_tum.txt": 229921
+        }
+      },
+      "name": "required_nonempty_artifacts",
+      "passed": true
+    },
+    {
+      "details": [
+        2767,
+        1403636624.66356,
+        1403636763.76356,
+        79
+      ],
+      "name": "full_state_estimate_is_finite_monotonic_and_complete",
+      "passed": true
+    },
+    {
+      "details": [
+        2767,
+        1403636624.66356,
+        1403636763.76356,
+        74
+      ],
+      "name": "full_state_deviation_is_finite_monotonic_and_complete",
+      "passed": true
+    },
+    {
+      "details": [
+        2767,
+        1403636624.66356,
+        1403636763.76356
+      ],
+      "name": "trajectory_is_finite_monotonic_and_long_enough",
+      "passed": true
+    },
+    {
+      "details": {
+        "first_timestamp": 1403636624.66356,
+        "last_timestamp": 1403636763.76356,
+        "minimum": 100,
+        "rows": 2767
+      },
+      "name": "minimum_trajectory_length",
+      "passed": true
+    },
+    {
+      "details": [
+        2767,
+        1403636624.6635554,
+        1403636763.7635555
+      ],
+      "name": "timing_is_finite_monotonic_and_long_enough",
+      "passed": true
+    },
+    {
+      "details": {
+        "first_timestamp": 1403636624.6635554,
+        "last_timestamp": 1403636763.7635555,
+        "minimum": 100,
+        "rows": 2767
+      },
+      "name": "minimum_timing_length",
+      "passed": true
+    },
+    {
+      "details": {
+        "state_columns": 79,
+        "state_first_timestamp_seconds": 1403636624.66356,
+        "state_last_timestamp_seconds": 1403636763.76356,
+        "state_rows": 2767,
+        "std_columns": 74,
+        "std_first_timestamp_seconds": 1403636624.66356,
+        "std_last_timestamp_seconds": 1403636763.76356,
+        "std_rows": 2767,
+        "timing_first_timestamp_seconds": 1403636624.6635554,
+        "timing_last_timestamp_seconds": 1403636763.7635555,
+        "timing_rows": 2767,
+        "trajectory_rows": 2767
+      },
+      "name": "synchronous_state_and_std_cover_every_timed_update",
+      "passed": true
+    },
+    {
+      "details": {
+        "expected_final_selected_camera_timestamp_seconds": 1403636763.7635555,
+        "expected_timing_rows": 2767,
+        "last_timing_timestamp_seconds": 1403636763.7635555,
+        "timing_rows": 2767,
+        "tolerance_seconds": 1e-05
+      },
+      "name": "full_selected_camera_interval_processed",
+      "passed": true
+    },
+    {
+      "details": true,
+      "name": "tum_trajectory_reorders_total_state_pose_columns",
+      "passed": true
+    },
+    {
+      "details": {
+        "exit_code": 0,
+        "timed_out": false
+      },
+      "name": "trajectory_conversion_exit_zero_without_timeout",
+      "passed": true
+    },
+    {
+      "details": {
+        "exit_code": 0,
+        "timed_out": false
+      },
+      "name": "ape_translation_exit_zero_without_timeout",
+      "passed": true
+    },
+    {
+      "details": {
+        "exit_code": 0,
+        "timed_out": false
+      },
+      "name": "rpe_translation_1m_exit_zero_without_timeout",
+      "passed": true
+    },
+    {
+      "details": {
+        "exit_code": 0,
+        "timed_out": false
+      },
+      "name": "rpe_rotation_1m_exit_zero_without_timeout",
+      "passed": true
+    },
+    {
+      "details": {
+        "label": "APE (m)",
+        "samples": 2746,
+        "stats": {
+          "max": 0.13767225789254559,
+          "mean": 0.06587120548186894,
+          "median": 0.06462822980571853,
+          "min": 0.011642898243110864,
+          "rmse": 0.07118699166247568,
+          "sse": 13.915596049243984,
+          "std": 0.026992074212975576
+        },
+        "title": "APE w.r.t. translation part (m)\n(with SE(3) Umeyama alignment)"
+      },
+      "name": "valid_ape_translation_archive",
+      "passed": true
+    },
+    {
+      "details": {
+        "label": "RPE (m)",
+        "samples": 2666,
+        "stats": {
+          "max": 0.08693142633427973,
+          "mean": 0.029391097801598896,
+          "median": 0.026710692408249206,
+          "min": 0.004023772241297412,
+          "rmse": 0.03314322935673762,
+          "sse": 2.9285307567473757,
+          "std": 0.01531786611151053
+        },
+        "title": "RPE w.r.t. translation part (m)\nfor delta = 1.0 (m) using all pairs\n(with SE(3) Umeyama alignment)"
+      },
+      "name": "valid_rpe_translation_1m_archive",
+      "passed": true
+    },
+    {
+      "details": {
+        "label": "RPE (deg)",
+        "samples": 2666,
+        "stats": {
+          "max": 1.8033892523649435,
+          "mean": 0.2144575598247552,
+          "median": 0.15320449970428274,
+          "min": 0.02313607512001802,
+          "rmse": 0.3290284002023306,
+          "sse": 288.6203285804536,
+          "std": 0.24953485362513306
+        },
+        "title": "RPE w.r.t. rotation angle in degrees (deg)\nfor delta = 1.0 (m) using all pairs\n(with SE(3) Umeyama alignment)"
+      },
+      "name": "valid_rpe_rotation_1m_deg_archive",
+      "passed": true
+    },
+    {
+      "details": {
+        "alignment": "SE(3), no scale",
+        "maximum_m": 0.25,
+        "rmse_m": 0.07118699166247568
+      },
+      "name": "ape_translation_rmse_gate",
+      "passed": true
+    },
+    {
+      "details": {
+        "after": {
+          "device": 66309,
+          "inode": 69736784,
+          "mtime_ns": 1446665554000000000,
+          "path": "/home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag",
+          "sha256": "57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9",
+          "size_bytes": 2673818914
+        },
+        "before": {
+          "device": 66309,
+          "inode": 69736784,
+          "mtime_ns": 1446665554000000000,
+          "path": "/home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag",
+          "sha256": "57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9",
+          "size_bytes": 2673818914
+        }
+      },
+      "name": "dataset_unchanged_during_run",
+      "passed": true
+    },
+    {
+      "details": {
+        "removed_before_sealing": [
+          "ros-logs/latest",
+          "ros-home/"
+        ]
+      },
+      "name": "ros_bookkeeping_removed_before_sealing",
+      "passed": true
+    }
+  ],
+  "errors": [],
+  "generated_utc": "2026-07-22T16:37:55.402650Z",
+  "metrics": {
+    "ape_translation": {
+      "label": "APE (m)",
+      "samples": 2746,
+      "stats": {
+        "max": 0.13767225789254559,
+        "mean": 0.06587120548186894,
+        "median": 0.06462822980571853,
+        "min": 0.011642898243110864,
+        "rmse": 0.07118699166247568,
+        "sse": 13.915596049243984,
+        "std": 0.026992074212975576
+      },
+      "title": "APE w.r.t. translation part (m)\n(with SE(3) Umeyama alignment)"
+    },
+    "rpe_rotation_1m_deg": {
+      "label": "RPE (deg)",
+      "samples": 2666,
+      "stats": {
+        "max": 1.8033892523649435,
+        "mean": 0.2144575598247552,
+        "median": 0.15320449970428274,
+        "min": 0.02313607512001802,
+        "rmse": 0.3290284002023306,
+        "sse": 288.6203285804536,
+        "std": 0.24953485362513306
+      },
+      "title": "RPE w.r.t. rotation angle in degrees (deg)\nfor delta = 1.0 (m) using all pairs\n(with SE(3) Umeyama alignment)"
+    },
+    "rpe_translation_1m": {
+      "label": "RPE (m)",
+      "samples": 2666,
+      "stats": {
+        "max": 0.08693142633427973,
+        "mean": 0.029391097801598896,
+        "median": 0.026710692408249206,
+        "min": 0.004023772241297412,
+        "rmse": 0.03314322935673762,
+        "sse": 2.9285307567473757,
+        "std": 0.01531786611151053
+      },
+      "title": "RPE w.r.t. translation part (m)\nfor delta = 1.0 (m) using all pairs\n(with SE(3) Umeyama alignment)"
+    }
+  },
+  "passed": true,
+  "schema_version": 1
+}

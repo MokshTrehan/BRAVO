@@ -1,0 +1,19 @@
+/cp0_vio/bag_durr: -1.0
+/cp0_vio/bag_start: 40.0
+/cp0_vio/calib_cam_extrinsics: false
+/cp0_vio/calib_cam_intrinsics: false
+/cp0_vio/calib_cam_timeoffset: false
+/cp0_vio/config_path: /home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/config/euroc_mav/estimator_config.yaml
+/cp0_vio/filepath_est: /home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_estimate.txt
+/cp0_vio/filepath_std: /home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/state_deviation.txt
+/cp0_vio/max_cameras: 2
+/cp0_vio/multi_threading_pubs: false
+/cp0_vio/multi_threading_subs: false
+/cp0_vio/num_opencv_threads: 0
+/cp0_vio/path_bag: /home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag
+/cp0_vio/record_timing_filepath: /home/moksh/newSlam variant/results/staging/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/timing_openvins.csv
+/cp0_vio/record_timing_information: true
+/cp0_vio/save_total_state: true
+/cp0_vio/use_stereo: true
+/cp0_vio/verbosity: INFO
+
