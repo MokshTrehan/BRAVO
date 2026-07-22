@@ -158,3 +158,35 @@ install(TARGETS test_sim_repeat
         RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
+##################################################
+# SchurVIO-Lite CP1 mathematical gates
+##################################################
+if (CATKIN_ENABLE_TESTING)
+    catkin_add_gtest(test_cp1_schur_equivalence
+            test/cp1/gtest_main.cpp
+            test/cp1/test_schur_equivalence.cpp)
+    catkin_add_gtest(test_cp1_rank_rejection
+            test/cp1/gtest_main.cpp
+            test/cp1/test_rank_rejection.cpp)
+    catkin_add_gtest(test_cp1_projection_jacobian
+            test/cp1/gtest_main.cpp
+            test/cp1/test_projection_jacobian.cpp)
+
+    set(CP1_TEST_TARGETS
+            test_cp1_schur_equivalence
+            test_cp1_rank_rejection
+            test_cp1_projection_jacobian)
+    foreach (CP1_TEST_TARGET ${CP1_TEST_TARGETS})
+        if (TARGET ${CP1_TEST_TARGET})
+            target_link_libraries(${CP1_TEST_TARGET} ov_msckf_lib ${thirdparty_libraries})
+            target_include_directories(${CP1_TEST_TARGET} PRIVATE test/cp1)
+            # The repository enables aggressive floating-point flags globally.
+            # CP1 numerical gates need strict IEEE behavior and stable operation
+            # ordering, so override those flags for these targets only.
+            target_compile_options(${CP1_TEST_TARGET} PRIVATE
+                    -fno-fast-math
+                    -ffp-contract=off
+                    -fsigned-zeros)
+        endif ()
+    endforeach ()
+endif ()

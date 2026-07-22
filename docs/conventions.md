@@ -1,6 +1,6 @@
 # Estimator conventions
 
-Status: **blocking draft**
+Status: **mathematical decisions frozen; blocking on CP1 tests and human signoff**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 Human reviewer: **unassigned**
 Signoff date: **not signed**
@@ -28,8 +28,8 @@ and the test that protects it.
 - Evidence: `ov_msckf/src/state/State.h`,
   `ov_msckf/src/update/UpdaterHelper.cpp:get_feature_jacobian_full`, and
   `ov_msckf/src/core/VioManagerOptions.h`.
-- Protecting test: planned `test_transform_conventions` and
-  `test_projection_jacobian` at CP1.
+- Protecting test: `test_cp1_projection_jacobian` exercises the stored
+  `G -> I -> C` transform chain; loader inversion remains in human review.
 
 ## Quaternion and rotation convention
 
@@ -39,12 +39,16 @@ and the test that protects it.
   coordinates. This is not Hamilton quaternion multiplication.
 - Rotation matrix direction: the direction is encoded by the symbol
   (`R_AtoB` maps coordinates from `A` to `B`).
-- Exp/Log definition: orientation error is left-multiplicative in JPL form,
-  equivalent to `R_true ~= Exp(-delta_theta)*R_hat`.
+- Exact retraction: for `a in R^3`, OpenVINS constructs
+  `d(a)=[a/2,1]/sqrt(1+||a||^2/4)` and applies
+  `q boxplus a=d(a) (x) q`. Its first-order rotation interpretation is
+  `R(q boxplus a) ~= Exp(-a)*R(q)`.
+- Fixed-chart differential: at absolute orientation increment `a`, the map
+  from a fixed prior-chart perturbation to the local OpenVINS perturbation is
+  `T_theta(a)=(I-0.5*[a]_x)/(1+||a||^2/4)`.
 - Evidence: `ov_core/src/types/JPLQuat.h` and
   `ov_core/src/utils/quat_ops.h`.
-- Protecting test: planned `test_exp_log_conventions` and
-  `test_transform_conventions` at CP1.
+- Protecting test: `CP1Retraction.FixedPriorChartDifferentialMatchesExactJPLRetraction`.
 
 ## Error-state and perturbation
 
@@ -57,12 +61,13 @@ and the test that protects it.
 - Error-state block dimensions: pose 6, IMU 15. Nominal storage is pose 7 and
   IMU 16 because the unit quaternion stores four coefficients.
 - Evidence: `ov_core/src/types/JPLQuat.h`, `PoseJPL.h`, and `IMU.h`.
-- Protecting test: planned `test_error_state_retraction` at CP1.
+- Protecting test: the CP1 retraction and projection-Jacobian tests.
 
 ## Residual and innovation
 
 - Reprojection residual sign: `r = z_measured - z_predicted` in distorted
-  pixel coordinates.
+  pixel coordinates. OpenVINS stores `H=+d h/d delta`, so `d r/d delta=-H`
+  and the linear measurement equation is `r ~= H*delta + noise`.
 - Innovation sign: identical to the residual sign above.
 - State increment sign: `delta_x = K*r`, followed directly by each type's
   `update(delta_x_block)` operation.
@@ -71,8 +76,9 @@ and the test that protects it.
   measurement-compression rotations preserve that covariance.
 - Evidence: `ov_msckf/src/update/UpdaterHelper.cpp`,
   `UpdaterMSCKF.cpp`, and `ov_msckf/src/state/StateHelper.cpp:EKFUpdate`.
-- Protecting test: planned `test_residual_increment_sign` and one-pass parity
-  fixture at CP1/CP2.
+- Protecting test: `CP1Projection.ActualOpenVINSJacobiansMatchAllDoubleFiniteDifferences`
+  asserts `r=z-h`, `H=dh/delta`, and `dr/delta=-H`; positive update injection
+  is checked by the CP2 one-pass parity fixture.
 
 ## State and covariance ordering
 
@@ -91,7 +97,7 @@ and the test that protects it.
   type's local block. Use the ordered `Type` vector and each `id()/size()`.
 - Evidence: `ov_msckf/src/state/State.cpp`, `State.h`, `StateHelper.cpp`, and
   `ov_core/src/types/Type.h`.
-- Protecting test: planned `test_state_block_order` at CP1.
+- Protecting test: human CP1 code review and the CP2 blockwise parity fixture.
 
 ## Units and gravity
 
@@ -104,7 +110,7 @@ and the test that protects it.
   stored vector is `[0,0,+9.81]` and propagation subtracts it.
 - Evidence: `ov_msckf/src/state/State.h`, `Propagator.h`, `Propagator.cpp`, and
   `config/euroc_mav/estimator_config.yaml`.
-- Protecting test: planned `test_gravity_and_time_conventions` at CP1.
+- Protecting test: CP0 configuration/trajectory evidence and CP2 parity runs.
 
 ## Feature and projection model
 
@@ -125,8 +131,8 @@ and the test that protects it.
 - Evidence: `config/euroc_mav/estimator_config.yaml`,
   `ov_core/src/types/LandmarkRepresentation.h`,
   `ov_core/src/feat/FeatureInitializer.cpp`, and `UpdaterHelper.cpp`.
-- Protecting test: planned `test_projection_jacobian` and
-  `test_feature_parameterization` at CP1.
+- Protecting test: the CP1 actual-OpenVINS `GLOBAL_3D` projection-Jacobian
+  test; other representations remain outside the first Schur implementation.
 
 ## FEJ and linearization points
 
@@ -158,26 +164,41 @@ and the test that protects it.
   the lower triangle. The baseline exits on a negative diagonal; it does not
   perform a full eigenvalue PSD check.
 - Manifold reset Jacobian and timing: **the baseline applies no explicit
-  covariance reset transport after nominal-state injection**. CP2 parity must
-  preserve this. The iterated-update policy remains blocking until its exact
-  final reset decision is derived and reviewed.
-- Regularization policy: the baseline has no declared hidden regularization;
-  LLT assumes a valid innovation covariance. Proposed code must reject or log
-  conditioning failures rather than silently clamp.
+  covariance reset transport after nominal-state injection**. The primary
+  policy is frozen to `G=I` through CP3 so CP2 covariance parity is not
+  confounded; exact chart transport is a later named ablation.
+- Regularization policy: landmark nullspace elimination and
+  `StateHelper::EKFUpdate` add no numerical regularization; LLT assumes a valid
+  innovation covariance. Upstream feature refinement separately uses declared
+  Levenberg--Marquardt damping and geometry rejection. Proposed elimination
+  must reject and log conditioning failures rather than silently clamp.
 - Evidence: `ov_msckf/src/state/StateHelper.cpp:EKFUpdate` and the type-specific
   `update` methods.
-- Protecting test: planned full/Schur covariance parity and PSD tests at CP1;
-  iterated final-covariance/reset tests at CP3.
+- Protecting test: CP1 full/nullspace/Schur covariance and PSD tests; iterated
+  final-covariance/reset tests at CP3.
 
 ## Iterated-update invariants
 
-- Definition of the frozen predicted prior: **TBD — blocking**
-- Pass-1 nominal update without covariance commit: **TBD — blocking**
-- Pass-2 re-triangulation/relinearization policy: **TBD — blocking**
-- Robust weight, gate, and feature-set policy across passes: **TBD — blocking**
-- Final covariance/reset exactly once: **TBD — blocking**
-- Evidence: `docs/iterated_update_spec.md` once complete
-- Protecting test: **TBD**
+- Frozen predicted prior: snapshot `x^-`, `P^-`, FEJ values, observations,
+  feature order, and configuration before pass 1. Both proposals are absolute
+  corrections in `x(delta)=x^- boxplus delta`.
+- Pass-1 behavior: gate and freeze the accepted feature set, then compute a
+  working mean proposal without writing the live mean or covariance.
+- Pass-2 behavior: reconstruct the working state from the frozen prior and the
+  pass-1 absolute proposal; re-triangulate the fixed feature set and use the
+  fixed-chart Jacobian/right-hand-side correction defined in
+  `docs/iterated_update_spec.md`.
+- Cross-pass policy: robust weights remain one; feature IDs, measurements,
+  order, gate decisions, weights, and clone FEJ values are frozen. Any
+  pass-2 feature failure rejects the complete second pass.
+- Final commit: select pass 1 or pass 2 using the same-set pixel cost and
+  frozen-prior objective, compute covariance once from `P^-`, and commit mean
+  and covariance exactly once.
+- Reset: use `G=I` through CP3 to preserve OpenVINS covariance parity. Exact
+  `T(delta) P T(delta)^T` transport is a separately named later ablation.
+- Evidence: `docs/iterated_update_spec.md`.
+- Protecting tests: CP1 Schur/retraction tests and CP3 exactly-once/fallback
+  integration tests.
 
 ## Signoff
 

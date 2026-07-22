@@ -1,0 +1,64 @@
+schema_version: 1
+project: SchurVIO-Lite
+timezone: America/Toronto
+
+gate:
+  id: CP1
+  name: conventions_and_mathematical_correctness
+  due: "2026-07-28T23:59:00-04:00"
+  overall_status: in_progress
+  source_of_truth: docs/checkpoints.md
+  production_estimator_math_edits_permitted: false
+
+frozen_contract:
+  upstream_commit: 69488123ed9362dd44b6f28e7f4680abbff1442b
+  convention_document: docs/conventions.md
+  equation_document: docs/iterated_update_spec.md
+  master_seed: 20260728
+  landmark_dimension: 3
+  landmark_minimum_relative_singular_value: 1.0e-6
+  robust_weights: disabled_unit_weights
+  covariance_reset_through_cp3: identity_for_openvins_parity
+  test_counts:
+    well_conditioned_equivalence: 128
+    projection_finite_difference: 256
+    rank_and_condition_rejection: 128
+  tolerances:
+    increment_landmark_covariance:
+      absolute: 1.0e-9
+      relative: 1.0e-7
+    final_residual_norm:
+      absolute: 1.0e-10
+      relative: 1.0e-7
+    projection_normalized_frobenius: 1.0e-5
+    covariance_symmetry_relative_inf: 1.0e-10
+    covariance_minimum_eigenvalue_relative: -1.0e-10
+
+automated_evidence:
+  status: pending
+  command: scripts/cp1/run_cp1.sh
+  report: null
+  requirements:
+    - full_joint_nullspace_and_schur_equivalence
+    - lambda_eta_gamma_nis_and_gate_dof_parity
+    - actual_openvins_jpl_retraction_projection_jacobians
+    - deterministic_rank_and_condition_rejection
+    - posterior_symmetry_and_psd
+    - fixed_prior_chart_differential
+
+human_review:
+  status: pending
+  reviewer: null
+  signed_at: null
+  reviewed_commit: null
+  exceptions: []
+  required_scope:
+    - frames_retraction_and_residual_sign
+    - whitening_schur_statistics_nis_and_gate_dof
+    - rank_threshold_and_failure_policy
+    - fixed_prior_two_pass_and_feature_set_lock
+    - exactly_once_covariance_and_identity_reset_policy
+
+blockers:
+  - automated_cp1_test_evidence
+  - named_human_vio_ekf_reviewer_and_signoff

@@ -36,8 +36,17 @@ checkpoints:
     decision: baseline_frozen_specification_work_permitted
   - id: CP1
     due: 2026-07-28T23:59:00-04:00
-    status: pending
-    evidence: []
+    status: in_progress
+    evidence:
+      - path: project/cp1_gate.yaml
+        result: frozen_automated_and_human_acceptance_contract
+      - path: docs/conventions.md
+        result: mathematical_decisions_frozen_human_signoff_pending
+      - path: docs/iterated_update_spec.md
+        result: equations_rank_gate_and_two_pass_policy_specified
+    blockers:
+      - automated_cp1_test_evidence
+      - named_human_vio_ekf_reviewer_and_signoff
   - id: CP2
     due: 2026-07-31T23:59:00-04:00
     status: pending
