@@ -259,6 +259,9 @@ def main() -> int:
     report = {
         "schema_version": 2,
         "checkpoint": "CP1",
+        "evidence_scope": "automated_math_component_only",
+        "overall_checkpoint_status": "in_progress_pending_human_signoff",
+        "production_estimator_math_edits_permitted": False,
         "status": "passed" if passed else "failed",
         "generated_utc": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
         "source": {
@@ -277,6 +280,7 @@ def main() -> int:
             "well_conditioned_equivalence_fixtures": 128,
             "projection_finite_difference_fixtures": 256,
             "rank_rejection_fixtures": 128,
+            "ill_conditioned_fixture_relative_singular_value": 1e-13,
             "landmark_relative_singular_floor": 1e-6,
         },
         "gtest": {

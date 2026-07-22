@@ -80,6 +80,12 @@ def main() -> int:
         errors.append("unsupported report schema")
     if report.get("checkpoint") != "CP1" or report.get("status") != "passed":
         errors.append("report does not record a passed CP1 automated run")
+    if report.get("evidence_scope") != "automated_math_component_only":
+        errors.append("report does not limit its pass claim to the automated component")
+    if report.get("overall_checkpoint_status") != "in_progress_pending_human_signoff":
+        errors.append("report does not preserve the overall human-signoff blocker")
+    if report.get("production_estimator_math_edits_permitted") is not False:
+        errors.append("report incorrectly permits production estimator math edits")
     if report.get("validation_errors") != []:
         errors.append("report contains validation errors")
     gtest = report.get("gtest", {})
