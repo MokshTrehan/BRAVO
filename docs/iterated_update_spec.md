@@ -1,14 +1,14 @@
 # Reduced and iterated visual update specification
 
-Status: **replacement schema-3 CP1 evidence passed; fresh commit-specific signoff pending**
+Status: **CP1 passed; one-pass production implementation authorized**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 Frozen rank threshold: `1e-6` relative singular-value ratio
 Primary reset policy through CP3: identity, for OpenVINS covariance parity
 
 This document is normative for the SchurVIO-Lite one-pass update and records
-the still-blocked fixed-two-pass candidate. Production estimator integration
-remains forbidden until the post-review CP1 addendum tests pass and the named
-human reviewer attests the corrected commit.
+the still-blocked fixed-two-pass candidate. The post-review CP1 evidence and
+fresh signoff authorize one-pass production integration. They do not authorize
+fixed-two-pass implementation.
 
 ## 1. Symbols and scope
 

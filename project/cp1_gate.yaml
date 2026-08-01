@@ -6,9 +6,9 @@ gate:
   id: CP1
   name: conventions_and_mathematical_correctness
   due: "2026-07-28T23:59:00-04:00"
-  overall_status: in_progress_replacement_evidence_passed_pending_fresh_signoff
+  overall_status: passed
   source_of_truth: docs/checkpoints.md
-  production_estimator_math_edits_permitted: false
+  production_estimator_math_edits_permitted: true
 
 frozen_contract:
   upstream_commit: 69488123ed9362dd44b6f28e7f4680abbff1442b
@@ -131,10 +131,10 @@ post_review_addendum:
       semidefinite_clone_prior_fixtures: 128
       production_measurement_compression_fixtures: 128
       historical_schema2_sha256sums_sha256: 6985a04acdf3738babc9bae06842b841c146629eb6f39663d161ed952cf85b44
-  fresh_review_status: pending
+  fresh_review_status: superseded_not_current_authorization_target
 
 second_adversarial_reaudit:
-  status: replacement_schema3_evidence_passed_fresh_signoff_pending
+  status: passed_with_fresh_commit_specific_signoff
   audited_head: 67ada8eed2342cd0b9506a432ccc618c8b3f92bd
   blocking_finding:
     - opening_contract_incorrectly_called_mixed_fej_model_matrix_a_current_residual_derivative
@@ -222,5 +222,22 @@ human_review:
     - fixed_prior_two_pass_and_feature_set_lock
     - exactly_once_covariance_and_identity_reset_policy
 
-blockers:
-  - fresh_commit_specific_signoff_after_addendum_evidence
+fresh_human_review:
+  status: passed
+  review_target_commit: 952771e955fe3459f2fd43122a9c6f8ce57d1799
+  reviewer: Moksh Trehan
+  reviewer_relationship: project_author_self_review
+  signed_at: "2026-08-01"
+  recorded_at: "2026-08-01T17:44:55-04:00"
+  attested_via: explicit_user_message
+  attestation: >-
+    I, Moksh Trehan, approve the CP1 replacement mathematical contract and
+    evidence recorded at commit 952771e955fe3459f2fd43122a9c6f8ce57d1799,
+    including the review-lock scope in docs/iterated_update_spec.md; no
+    exceptions.
+  exceptions: []
+  authorization:
+    one_pass_production_implementation: permitted
+    fixed_two_pass_implementation: blocked_pending_separate_cp2_cp3_tests_and_review
+
+blockers: []

@@ -35,16 +35,21 @@ checkpoints:
     decision: baseline_frozen_specification_work_permitted
   - id: CP1
     due: 2026-07-28T23:59:00-04:00
-    status: in_progress
+    status: passed
     evidence:
       - path: project/cp1_gate.yaml
         result: frozen_automated_and_human_acceptance_contract
       - path: docs/conventions.md
-        result: replacement_schema3_automated_evidence_passed_fresh_commit_specific_signoff_pending
+        result: replacement_schema3_automated_evidence_and_fresh_commit_specific_signoff_passed
         prior_reviewer: Moksh Trehan
         prior_signed_at: "2026-07-27"
         prior_reviewed_commit: 7288b4a2d09420266cfadd9983145e09fd4cf789
-        fresh_review_status: pending
+        fresh_review_status: passed
+        fresh_reviewer: Moksh Trehan
+        fresh_signed_at: "2026-08-01"
+        fresh_recorded_at: "2026-08-01T17:44:55-04:00"
+        fresh_reviewed_commit: 952771e955fe3459f2fd43122a9c6f8ce57d1799
+        fresh_exceptions: []
       - path: docs/iterated_update_spec.md
         result: second_adversarial_contract_hashed_replacement_cp1_component_verified_later_cp2_cp3_tests_required
       - path: results/immutable/cp1/automated/cp1_math_20260722T184905076028292Z-g8b05afb88ce8
@@ -78,7 +83,7 @@ checkpoints:
         errors: 0
         disabled: 0
       - path: results/immutable/cp1/automated/cp1_math_20260801T213626466303302Z-g1f29c92ac070
-        result: replacement_schema3_automated_component_passed_fresh_signoff_pending
+        result: replacement_schema3_automated_component_passed_and_fresh_signoff_recorded
         tested_commit: 1f29c92ac070ce1392384d24e4cac431c6142bf9
         source_dirty: false
         sha256sums_sha256: 8d554519dbeb4259515869bc21ce9f98b96f16c793077e6f229da5cbc0ae7fda
@@ -92,11 +97,11 @@ checkpoints:
         retraction_differential_fixtures: 256
         semidefinite_clone_prior_fixtures: 128
         production_measurement_compression_fixtures: 128
-    blockers:
-      - fresh_commit_specific_signoff_after_addendum_evidence
+    decision: one_pass_production_implementation_permitted_fixed_two_pass_remains_blocked
+    blockers: []
   - id: CP2
     due: 2026-07-31T23:59:00-04:00
-    status: pending
+    status: in_progress
     evidence: []
   - id: CP3
     due: 2026-08-05T23:59:00-04:00

@@ -1,14 +1,15 @@
 # Estimator conventions
 
-Status: **replacement schema-3 CP1 evidence passed; fresh commit-specific signoff pending**
+Status: **CP1 passed; one-pass production implementation authorized**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 Prior human reviewer: **Moksh Trehan (project-author self-review)**
 Prior signoff date: **2026-07-27 (date-only attestation; superseded for authorization)**
 
-No production estimator modification is permitted until the post-review
-mathematical addendum passes and its replacement commit receives a fresh
-attestation. Each decision cites the defining source file/function and the
-test or later parity gate that protects it.
+The replacement mathematical contract and evidence received fresh,
+commit-specific signoff on 2026-08-01. Production implementation is permitted
+only for the one-pass path; fixed two-pass remains blocked behind its separate
+CP2/CP3 protecting tests and review. Each decision cites the defining source
+file/function and the test or later parity gate that protects it.
 
 ## Frames and transforms
 
@@ -290,10 +291,14 @@ mean that the proposed algorithm or paper claim is accepted in advance.
 - Evidence boundary: schema 3 executes the CP1 algebra/Jacobian/rank/PSD-prior
   component and hashes the complete normative scope; fixed-two-pass behavior
   still requires its separately named CP2/CP3 protecting tests
-- Authorization status: automated CP1 component passed; production estimator
-  mathematics remains forbidden until fresh commit-specific signoff, after
-  which only the one-pass implementation is eligible to begin
-- Fresh reviewer: pending
-- Fresh signoff date: pending
-- Fresh reviewed commit: pending
-- Fresh exceptions: pending
+- Authorization status: CP1 passed; one-pass production implementation is
+  authorized; fixed two-pass remains unauthorized
+- Fresh reviewer: Moksh Trehan
+- Reviewer relationship: project-author self-review
+- Fresh signoff date: 2026-08-01 (recorded at 2026-08-01T17:44:55-04:00)
+- Fresh reviewed commit: `952771e955fe3459f2fd43122a9c6f8ce57d1799`
+- Fresh attestation: "I, Moksh Trehan, approve the CP1 replacement
+  mathematical contract and evidence recorded at commit
+  952771e955fe3459f2fd43122a9c6f8ce57d1799, including the review-lock scope
+  in docs/iterated_update_spec.md; no exceptions."
+- Fresh exceptions: none
