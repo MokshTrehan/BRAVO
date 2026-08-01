@@ -19,7 +19,7 @@ prototype will provide a baseline-parity one-pass reduced visual update, a
 deadline-aware bounded mode, and complete accuracy, latency, resource, and
 power evidence. A fixed-two-pass mode remains a conditional research candidate
 and is not called mathematically correct unless its mixed-FEJ surrogate and
-exact-chart covariance gates pass separately.
+chart-consistent first-order covariance-transport gates pass separately.
 
 This project is VIO, not a flight-ready SLAM product. Loop closure,
 relocalization, online calibration, a new initializer, learned features,

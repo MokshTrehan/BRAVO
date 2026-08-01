@@ -200,9 +200,12 @@ test or later parity gate that protects it.
 - Manifold reset Jacobian and timing: **the baseline applies no explicit
   covariance reset transport after nominal-state injection**. The primary
   policy is frozen to `G=I` through CP3 so CP2 covariance parity is not
-  confounded. This is a baseline-parity approximation, not an exact manifold
-  covariance statement. Exact selected-chart transport is
-  `T(delta) P T(delta)^T` and remains a separately named ablation.
+  confounded. This is a baseline-parity approximation, not a chart-consistent
+  local covariance statement. The exact differential reset Jacobian is
+  `T(delta)`; within the EKF's first-order covariance model, the corresponding
+  transport is `T(delta) P T(delta)^T`. It is not the exact finite
+  transformation of a nonlinear probability distribution and remains a
+  separately named ablation.
 - Regularization policy: landmark nullspace elimination and
   `StateHelper::EKFUpdate` add no numerical regularization; LLT assumes a valid
   innovation covariance. Upstream feature refinement separately uses declared
@@ -218,14 +221,15 @@ test or later parity gate that protects it.
 
 These rules freeze a candidate affine surrogate and transaction policy. They
 do not establish that the mixed-FEJ matrix is a Taylor derivative, and they do
-not permit fixed-two-pass implementation before the FEJ-on and exact-chart
-review gates in `docs/iterated_update_spec.md` are satisfied.
+not permit fixed-two-pass implementation before the FEJ-on and differential
+chart-transport review gates in `docs/iterated_update_spec.md` are satisfied.
 
 - Frozen predicted prior: snapshot `x^-`, `P^-`, FEJ values, observations,
   feature order, and configuration before pass 1. Both proposals are absolute
   corrections in `x(delta)=x^- boxplus delta`.
 - Pass-1 behavior: gate and freeze the accepted feature set, then compute a
-  working mean proposal without writing the live mean or covariance.
+  working mean proposal without writing the live mean or covariance. If pass 1
+  is invalid or has a nonfinite acceptance cost, reject the complete update.
 - Pass-2 behavior: reconstruct the working state from the frozen prior and the
   pass-1 absolute proposal; re-triangulate the fixed feature set and use the
   fixed-chart Jacobian/right-hand-side correction defined in
@@ -234,10 +238,12 @@ review gates in `docs/iterated_update_spec.md` are satisfied.
   order, gate decisions, weights, and clone FEJ values are frozen. Any
   pass-2 feature failure rejects the complete second pass.
 - Final commit: select pass 1 or pass 2 using the same-set pixel cost and
-  frozen-prior objective, compute covariance once from `P^-`, and commit mean
-  and covariance exactly once.
-- Reset: use `G=I` only when measuring OpenVINS parity. Any mathematically
-  exact covariance claim requires `T(delta) P T(delta)^T` transport.
+  frozen-prior objective, compute only the selected covariance from `P^-`, and
+  commit mean and covariance exactly once. A selected-covariance symmetry/PSD
+  failure rejects the update without computing the alternative covariance.
+- Reset: use `G=I` only when measuring OpenVINS parity. A chart-consistent local
+  covariance claim uses the exact differential reset Jacobian and
+  `T(delta) P T(delta)^T` within the EKF's first-order covariance model.
 - Evidence: `docs/iterated_update_spec.md`.
 - Protecting tests: CP1 Schur/retraction tests and CP3 exactly-once/fallback
   integration tests.

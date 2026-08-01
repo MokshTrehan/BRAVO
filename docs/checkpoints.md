@@ -102,13 +102,15 @@ Required evidence:
 - At least 100 tall-system calls to the actual OpenVINS measurement compressor
   prove `Lambda/eta` preservation and explicitly account for residual-only
   energy discarded from `gamma`.
-- Posterior covariance symmetry error is at most
-  `1e-10 * max(1, ||P||_inf)` and its minimum eigenvalue is at least
-  `-1e-10 * max(1, lambda_max(P))` on seeded fixtures.
+- Raw posterior covariance symmetry error is at most
+  `1e-10 * max(1, ||P||_inf)`. After that check passes, define
+  `P_sym=0.5*(P+P^T)`; its minimum eigenvalue is at least
+  `-1e-10 * max(1, lambda_max(P_sym))` on seeded fixtures.
 
 Pass decision: production one-pass implementation is permitted. Fixed
 two-pass remains blocked until the mixed-FEJ affine-surrogate semantics and
-exact-chart covariance claim receive their own protecting test and review.
+chart-consistent first-order covariance-transport claim receive their own
+protecting test and review.
 
 Failure action: estimator integration remains blocked. Fix the derivation or
 tests; do not change the baseline to make the tests pass.
@@ -141,14 +143,19 @@ branch, and block two-pass work until parity is restored.
 
 Required evidence:
 
-- A linear fixture produces identical one- and two-pass mean/covariance with
-  relative error at most `1e-10`.
-- Across 100 seeded nonlinear fixtures, pass 2 lowers true reprojection cost in
-  at least 90% of trials, with at least 10% median reduction and no aggregate
-  cost increase from an altered accepted measurement set.
-- Runtime assertions prove both passes use the same predicted prior, pass 1
-  does not commit covariance, and posterior covariance/reset occur exactly
-  once at the final linearization.
+- The canonical Euclidean affine fixture uses `T=I`, locked measurements, the
+  same predicted prior, constant same-model `H_x,H_f,R`, and exact landmark
+  rebasing within `col(H_f)`; it produces identical one- and two-pass
+  mean/covariance with relative error at most `1e-10`.
+- Across 100 seeded nonlinear fixtures, pass 2 lowers the actual unweighted
+  runtime-pixel `C_pix` in at least 90% of trials, with at least 10% median
+  reduction and no aggregate cost increase from an altered accepted
+  measurement set.
+- Runtime assertions prove both passes use the same predicted prior and pass 1
+  does not commit covariance. A successful update computes and commits only
+  the selected posterior covariance once at the final linearization; a rejected
+  update has zero mean/covariance commits and never computes an alternative
+  covariance after a selected-posterior failure.
 - MH_01_easy, V1_01_easy, and MH_04_difficult complete in one-pass and fixed
   two-pass modes without NaN, covariance-gate violation, or unexplained reset.
 - Fixed two-pass ATE is no more than 10% worse than one-pass on any of those

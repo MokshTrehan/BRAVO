@@ -120,7 +120,8 @@ gate.
 
 Rank and conditioning are tested on the whitened `B`, never on `B^T B`, a
 determinant, or an explicit inverse. Let its singular values satisfy
-`s_1 >= s_2 >= s_3 >= 0` and define `rho=s_3/s_1`.
+`s_1 >= s_2 >= s_3 >= 0`. After `s_1` passes its floor, define
+`rho=s_3/s_1`; before that point `rho` is unavailable.
 
 Reject the complete feature before gating using this ordered status priority:
 
@@ -128,22 +129,27 @@ Reject the complete feature before gating using this ordered status priority:
    invalid-input status);
 2. `m<=3` (`insufficient_rows`);
 3. a residual/Jacobian field is nonfinite (`nonfinite`);
-4. `s_1` is not strictly greater than
+4. the SVD does not produce a finite, complete three-value singular spectrum
+   (`nonfinite`);
+5. `s_1` is not strictly greater than
    `std::numeric_limits<double>::min()` (`rank_deficient`);
-5. `s_3` is not strictly greater than
+6. `s_3` is not strictly greater than
    `max(m,3)*std::numeric_limits<double>::epsilon()*s_1`
    (`rank_deficient`);
-6. `rho < 1e-6` (`ill_conditioned`).
+7. `rho < 1e-6` (`ill_conditioned`).
 
 The conditions are evaluated in the numbered order above. Thus equality at
 the numerical-rank floor is rejected, while equality at the `rho=1e-6`
 conditioning boundary is accepted. No diagonal damping,
 pseudo-measurement, clamping, or silent rank repair is
-allowed. Every rejection logs the three singular values, `rho`, feature ID,
-pass index, and one of `nonfinite`, `insufficient_rows`, `rank_deficient`, or
-`ill_conditioned`. The `1e-6` policy is frozen before real-data Schur results
-are inspected and bounds the condition number of the conceptual normal block
-to approximately `1e12`.
+allowed. Every rejection logs feature ID, pass index, row count, and one of
+`nonfinite`, `insufficient_rows`, `rank_deficient`, or `ill_conditioned`.
+Log `s_1,s_2,s_3` only after a successful SVD, and log `rho` only when `s_1`
+passes its floor. Otherwise record those fields as unavailable with the
+precise pre-SVD or zero-scale reason; never fabricate numeric values. The
+`1e-6` policy is frozen before real-data Schur results are inspected and
+bounds the condition number of the conceptual normal block to approximately
+`1e12`.
 
 For accepted `B`, use a direct QR or SVD factorization. With
 
@@ -301,8 +307,8 @@ P_live^+ = P_chart,1.              # G = I
 
 OpenVINS performs no explicit covariance reset transport after injection.
 This identity policy is a deliberate baseline-parity approximation and must be
-used by both compared one-pass paths. Exact chart transport is reserved for a
-separately named ablation after CP3.
+used by both compared one-pass paths. Chart-consistent first-order covariance
+transport is reserved for a separately named ablation after CP3.
 
 ## 8. Fixed two-pass candidate — blocked
 
@@ -313,7 +319,7 @@ residual function. Consequently the rules below define an affine FEJ
 surrogate candidate; they are not a Taylor/Newton derivation of the current
 pixel objective. Fixed-two-pass production work is blocked until an FEJ-on
 golden fixture freezes this surrogate and a later review accepts its objective
-and exact-chart interpretation.
+and differential chart-covariance interpretation.
 
 Before pass 1, snapshot `x^-`, `P^-`, every clone FEJ value, raw observations,
 feature IDs/order, configuration, and the predicted prior factor. A pass uses
@@ -340,13 +346,20 @@ r_i + H_x,i T(delta_i) delta_i
     ~= H_x,i T(delta_i) delta + H_f,i delta_lambda.
 ```
 
-If `r_i=z-h_i` and `H_x,i=d h_i/d(local)` for the same smooth current model
-`h_i`, this follows from the usual Taylor model of `h_i`. Under the frozen
-mixed-FEJ baseline—and also when pairing the float-quantized runtime residual
-with the continuous `CamRadtan` derivative—it is instead an explicit
-algorithmic definition and no stronger derivative claim is made.
-For a genuinely linear current-Jacobian system, pass 2 recreates the pass-1
-right-hand side and must return identical mean and covariance.
+If `r_i=z-h_i`, `H_x,i=d h_i/d(local)`, and
+`H_f,i=d h_i/d(lambda)` for the same smooth current model `h_i`, this follows
+from the usual Taylor model of `h_i`. Under the frozen mixed-FEJ baseline—and
+also when pairing the float-quantized runtime residual with the continuous
+`CamRadtan` derivatives—it is instead an explicit algorithmic definition and
+no stronger derivative claim is made.
+More generally, pass idempotence is guaranteed when
+`A_i=whiten(H_x,i T(delta_i))`, the whitened landmark column space, and the
+projected corrected right-hand side are pass-invariant. The canonical CP3
+fixture is Euclidean (`T=I`) with a locked measurement set and constant affine
+same-model `H_x,H_f,R`; exact landmark rebasing changes the right-hand side
+only inside the whitened `col(H_f)`, which elimination removes. Under those
+hypotheses pass 2 must reproduce pass 1's mean and covariance at the declared
+tolerance.
 
 ### Pass-1 selection lock
 
@@ -368,25 +381,39 @@ feature-set fallback is forbidden.
 
 ### Pass-2 acceptance and fallback
 
-Evaluate both proposals on the same accepted raw pixel measurements. For each
-proposal, re-triangulate/refine the locked features and compute:
-
-- the unweighted distorted-pixel cost before nullspace/compression; and
-- the frozen-prior posterior objective. For `P^-=L_p L_p^T`, the prior term is
-  `0.5*min ||xi||^2` subject to `L_p xi=delta`; inverse-covariance notation is
-  allowed only for an SPD prior.
-
-The initializer's normalized-coordinate LM cost is not this acceptance cost.
-Select pass 2 only when both costs are finite and neither exceeds the pass-1
-value by more than
+Evaluate both proposals on the same accepted raw pixel measurements. For
+proposal `j`, re-triangulate/refine every locked feature, evaluate its actual
+runtime pixel residual `r_f,j`, and define
 
 ```text
-tau_cost = 1e-9 * max(1, abs(pass1_cost)).
+C_pix,j  = sum_f ||r_f,j||^2
+C_post,j = 0.5 * min_{xi: L_p xi=delta_j} ||xi||^2
+           + 0.5 * sum_f ||solve(L_f,r_f,j)||^2,
+R_f      = L_f L_f^T.
 ```
 
-Otherwise select pass 1 and log the precise fallback reason. Equal-cost linear
-fixtures are valid. CP3 improvement statistics use the raw, untoleranced cost
-difference.
+`C_pix` is the unweighted distorted-pixel cost before nullspace/compression.
+`C_post` is the frozen-prior negative-log posterior objective up to constants,
+with unit robust weights and the frozen measurement covariance. If
+`L_p xi=delta_j` is infeasible, `C_post,j=+infinity`; inverse-covariance
+notation is allowed only for an SPD prior.
+
+The initializer's normalized-coordinate LM cost is not either acceptance
+cost. For each `c in {pix,post}`, define its own tolerance
+
+```text
+tau_c = 1e-9 * max(1, abs(C_c,1)).
+```
+
+Pass 1 must remain valid under every Section 9 geometry, finite, rank,
+conditioning, and solve-factorization check, and both of its costs must be
+finite. Otherwise reject the complete update and leave the live state unchanged
+because no valid fallback exists. Given a valid pass 1, select pass 2 only when
+both pass-2 costs are finite and
+`C_c,2 <= C_c,1 + tau_c` for both cost types. Otherwise select pass 1 and log
+the precise fallback reason. Equal-cost linear fixtures are valid. CP3 logs
+both raw, untoleranced differences; its reprojection-improvement criterion
+uses `C_pix,1-C_pix,2`.
 
 ### Exactly-once commit
 
@@ -401,36 +428,58 @@ P_live = P_chart,*                 # identity reset through CP3
 ```
 
 No `P_1 -> P_2` sequential covariance update is permitted. Runtime counters
-must prove `pass1_live_mean_writes=0`, `pass1_covariance_writes=0`,
-`final_mean_commits=1`, and `final_covariance_commits=1`.
+must prove `pass1_live_mean_writes=0` and `pass1_covariance_writes=0`. After
+selection, compute only the selected posterior covariance. If it fails the
+Section 9 symmetry or numerical PSD bound, reject the complete update, leave
+the live state unchanged, and do not compute an alternative-pass covariance.
+A successful update has `final_mean_commits=1` and
+`final_covariance_commits=1`; a rejected update has both counters equal to
+zero.
 
-The exact selected-chart transport would be
-`P_live=T(delta_*) P_chart,* T(delta_*)^T`. It is explicitly not the primary
-CP1--CP3 policy because mixing it with an identity-reset baseline would
-confound iteration with reset effects. Therefore identity-reset results may be
-called baseline-parity results, but never mathematically exact manifold
+The exact differential of the selected retraction is `T(delta_*)`. Within the
+EKF's first-order covariance model, the chart-consistent coordinate transport
+is `P_live=T(delta_*) P_chart,* T(delta_*)^T`; this is not the exact finite
+transformation of a nonlinear probability distribution. The transport is not
+the primary CP1--CP3 policy because mixing it with an identity-reset baseline
+would confound iteration with reset effects. Therefore identity-reset results
+may be called baseline-parity results, but not chart-consistent local
 covariance results.
 
 ## 9. Failure and diagnostics contract
 
-Any failed factorization, nonfinite value, invalid depth, inconsistent state
-ordering, or non-PSD posterior rejects the affected proposal. No failure may
-silently add damping or repair an eigenvalue. Required diagnostics include:
+Before selection, any failed factorization, nonfinite value, invalid depth, or
+inconsistent state ordering rejects the affected proposal under the Section 8
+selection/fallback rules. After selection, a posterior that fails the declared
+symmetry or numerical PSD bound rejects the complete update without an
+alternative covariance computation. No failure may silently add damping or
+repair an eigenvalue. Required diagnostics include:
 
-- mode, pass, feature ID, row count, rank, singular values, and `rho`;
+- mode, pass, applicable feature ID, row count, status, and precise reason;
+- rank and singular values after a successful SVD, plus `rho` only when `s_1`
+  passes its floor; otherwise explicit unavailable markers;
+- for every remaining stage-dependent field below, the value when that stage
+  was reached and computed, or an explicit `unavailable`/`not_reached` marker
+  with the causal status otherwise;
 - `Lambda` raw symmetry error, `eta`, `gamma`, NIS, gate DoF and decision;
 - triangulation/refinement result and accepted-set hash;
 - fixed-chart correction, current and corrected residual norms;
 - pass costs, fallback reason, and selected pass;
 - prior/state/config hashes and mean/covariance write counters;
-- posterior symmetry error, minimum eigenvalue, and maximum diagonal.
+- posterior symmetry error, `lambda_min(P_sym)`, `lambda_max(P_sym)`, the two
+  computed acceptance bounds, and maximum diagonal.
 
 The posterior acceptance bounds are
 
 ```text
 ||P-P^T||_inf <= 1e-10 * max(1, ||P||_inf)
-lambda_min(P) >= -1e-10 * max(1, lambda_max(P)).
+P_sym = 0.5 * (P+P^T)
+lambda_min(P_sym) >= -1e-10 * max(1, lambda_max(P_sym)).
 ```
+
+Check the raw symmetry inequality first. Only then compute the eigenvalues of
+`0.5*(P+P^T)` for the numerical PSD inequality. A small negative eigenvalue
+inside the declared roundoff band is accepted and logged, not clamped; failure
+of either inequality rejects the complete update.
 
 ## 10. CP1 protecting tests
 
@@ -447,8 +496,8 @@ The automated gate must cover at least:
    projection. `CamEqui` is outside this CP1 derivative proof.
 3. 100 exact-rank-deficient or condition-ratio-at-most-`1e-12` landmark
    fixtures, all rejected deterministically without `.inverse()` or NaN.
-4. Raw posterior symmetry and PSD checks before any symmetric view hides an
-   error.
+4. A raw posterior symmetry check before forming `P_sym`, followed by the
+   numerical PSD check on `P_sym`.
 5. Fixed-chart `T_theta` finite differences through the exact normalized JPL
    perturbing quaternion.
 6. At least 100 algebraic exact clone-copy PSD priors, comparing known and
@@ -476,7 +525,13 @@ Fresh human signoff on the replacement addendum commit must explicitly approve:
   `m-3` DoF, and strict-`>` rejection boundary;
 - the fact that mixed-FEJ fixed-two-pass work remains blocked and is specified
   only as an affine surrogate candidate;
-- identity reset as a baseline-parity policy, not an exact chart transport.
+- the separate `C_pix/C_post` objectives and tolerances, invalid-pass-1
+  rejection, pass-2 fallback rule, selected-covariance failure behavior, and
+  sufficient linear-idempotence invariants;
+- pre-SVD diagnostic availability and the raw-symmetry-then-`P_sym` numerical
+  PSD sequence;
+- identity reset as a baseline-parity policy, and differential
+  chart-consistent first-order covariance transport as a separate ablation.
 
 Reviewer, date, reviewed commit, and exceptions are recorded in
 `docs/conventions.md` and `project/checkpoints.yaml`.

@@ -19,7 +19,7 @@ frozen_contract:
   landmark_minimum_relative_singular_value: 1.0e-6
   robust_weights: disabled_unit_weights
   covariance_reset_through_cp3: identity_for_openvins_parity
-  covariance_reset_exactness: parity_approximation_not_exact_chart_transport
+  covariance_reset_exactness: parity_approximation_not_chart_consistent_first_order_transport
   prior_covariance_factor: rectangular_full_column_factor_supports_psd_clone_augmentation
   full_prior_inverse_or_llt: forbidden
   global_measurement_compression:
@@ -37,7 +37,7 @@ frozen_contract:
     projection_derivative_scope: frozen_euroc_camradtan_valid_geometry_camequi_excluded
   largest_landmark_singular_value_floor: std_numeric_limits_double_min_strict
   numerical_rank_boundary: smallest_must_be_strictly_greater_than_max_rows_cols_times_epsilon_times_largest
-  fixed_two_pass_status: blocked_pending_fej_surrogate_golden_and_exact_chart_review
+  fixed_two_pass_status: blocked_pending_fej_surrogate_golden_and_differential_chart_transport_review
   test_counts:
     well_conditioned_equivalence: 128
     projection_finite_difference: 256
@@ -104,10 +104,15 @@ post_review_addendum:
     - identity_reset_is_baseline_parity_only
     - chi_square_quantile_multiplier_dof_and_boundary_are_frozen
   fresh_review_required_scope:
+    - runtime_float_residual_continuous_camradtan_derivative_and_mixed_fej_surrogate
+    - ordered_rank_boundaries_and_pre_svd_diagnostic_availability
     - rectangular_factor_psd_prior_and_exact_clone_constraints
     - compression_gamma_and_exact_gate_threshold_policy
     - mixed_fej_two_pass_blocked_surrogate_status
-    - identity_reset_baseline_parity_not_exact_transport
+    - separate_pixel_and_posterior_costs_tolerances_invalid_pass1_pass2_fallback_and_selected_covariance_failure
+    - sufficient_linear_idempotence_invariants
+    - raw_symmetry_then_symmetric_view_numerical_psd_check
+    - identity_reset_baseline_parity_not_chart_consistent_first_order_transport
   evidence:
     command: scripts/cp1/run_cp1.sh
     tested_commit: 26588223597a2864149fd228e52caf569e7dfd12
