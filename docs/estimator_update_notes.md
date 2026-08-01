@@ -85,9 +85,11 @@ compression, pixel noise, and `StateHelper::EKFUpdate` unchanged. It must match
 the baseline's fixed three-column elimination and FEJ behavior. This isolates
 the elimination method as the only variable for CP2.
 
-The seam is not authorization to code yet. The exact reduced covariance and
-information equations, conditioning policy, and equivalence target remain
-blocking in `docs/iterated_update_spec.md` until CP1.
+CP1 authorization was recorded at
+`8d80f483752411d34a3bc4c1ff6330b3a5c0fef3`. The exact authorized production
+realization and CP2 evidence boundaries are frozen in
+`docs/cp2_one_pass_contract.md`. Fixed-two-pass implementation remains
+unauthorized.
 
 ## Known baseline properties that tests must capture
 

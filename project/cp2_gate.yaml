@@ -1,0 +1,198 @@
+schema_version: 1
+project: SchurVIO-Lite
+timezone: America/Toronto
+
+gate:
+  id: CP2
+  name: one_pass_baseline_parity
+  status: in_progress_contract_frozen
+  due: "2026-07-31T23:59:00-04:00"
+  deadline_status: missed
+  deadline_decision_recorded_at: "2026-08-01"
+  deadline_decision: continue_cp2_without_waiver_or_cp3_deadline_change
+  deadline_reason: extended_adversarial_cp1_audit_and_fresh_commit_specific_signoff
+  deadline_scope_impact: cp2_evidence_delayed_cp3_schedule_compressed_requirements_unchanged
+  source_of_truth: docs/checkpoints.md
+  implementation_contract: docs/cp2_one_pass_contract.md
+  cp1_authorization_commit: 8d80f483752411d34a3bc4c1ff6330b3a5c0fef3
+  branch: schurvio-lite/cp2-one-pass
+
+scope:
+  baseline_mode: nullspace
+  candidate_mode: schur
+  default_mode: nullspace
+  configuration_key: up_msckf_landmark_elimination
+  configuration_required: false
+  valid_configuration_values: [nullspace, schur]
+  frozen_euroc_yaml_modified_for_mode_key: false
+  evidence_mode_selection: dedicated_ros_launch_override
+  landmark_representation: GLOBAL_3D
+  landmark_dimension: 3
+  startup_validation:
+    mode_known: required
+    sigma_px_finite_and_strictly_positive: required
+    schur_representation_GLOBAL_3D: required
+    failure: fail_fast_before_feature_processing
+  camera_model: CamRadtan
+  use_fej: true
+  frontend: stereo_KLT
+  clone_count: 11
+  camera_extrinsic_calibration: false
+  camera_intrinsic_calibration: false
+  camera_timeoffset_calibration: false
+  ground_truth_initialization: false
+  fixed_two_pass_permitted: false
+  direct_information_covariance_update_permitted: false
+  state_update: unchanged_StateHelper_EKFUpdate
+  shared_update_preflight:
+    applies_to: [nullspace, schur]
+    position: after_global_compression_before_any_live_write
+    checks:
+      - shapes_and_finite_H_res_R_P
+      - exact_H_order_full_state_M
+      - finite_S_and_successful_LLT
+      - finite_S_inverse_K_dx_and_subtractive_mirrored_P_plus
+      - nonnegative_P_plus_diagonal
+    failure: reject_whole_update_zero_writes
+    repair_or_fallback: forbidden
+  covariance_reset: identity_for_openvins_parity
+  robust_weights: disabled_unit_weights
+  silent_fallback: forbidden
+  regularization: forbidden
+
+reduction:
+  whitening: scalar_sigma_px
+  rank_check: thin_svd_on_whitened_landmark_jacobian
+  square_root: householder_qr_on_whitened_landmark_jacobian
+  emitted_system: Q2T_Hx_Q2T_res_with_sigma_px_squared_identity_noise
+  invariant_statistics: [lambda, eta, gamma]
+  degrees_of_freedom: raw_rows_minus_3
+  condition_ratio_floor: 1.0e-6
+  largest_singular_value_floor: strict_greater_than_std_numeric_limits_double_min
+  numerical_rank_boundary: smallest_strictly_greater_than_max_rows_cols_times_epsilon_times_largest
+  conditioning_boundary: reject_strictly_below_1e-6_accept_equality
+  svd_requirement: complete_finite_three_value_spectrum
+  qr_requirement: complete_m_row_householder_QT_transform_bottom_m_minus_3_rows_finite
+  chi_square_confidence: 0.95
+  rejection_boundary: strict_greater_than
+
+checkpoints:
+  CP2-A:
+    name: production_reducer
+    status: pending
+    minimum_fixtures: 1024
+    statistics_tolerance:
+      absolute: 1.0e-10
+      relative: 1.0e-8
+    posterior_tolerance:
+      absolute: 1.0e-8
+      relative: 1.0e-6
+  CP2-B:
+    name: openvins_fej_and_clone_semantics
+    status: pending
+    minimum_clone_fixtures: 128
+    clone_api: StateHelper_clone
+  CP2-C:
+    name: recorded_updater_parity
+    status: pending
+    minimum_visual_updates: 1000
+    counted_record: accepted_nonempty_global_system_preflight_passed_and_baseline_committed
+    noncounted_records_reported: [all_rejected, empty_after_compression, preflight_rejected]
+    disagreement_exempts_state_or_covariance_bound: false
+    minimum_accept_reject_agreement: 0.999
+    source: deterministic_serial_ROS1_on_predeclared_CP2_bags_offsets_and_config
+    feature_agreement_denominator: all_attempted_feature_gate_decisions_in_counted_nonempty_updates
+    row_weighted_agreement_denominator: sum_raw_measurement_rows_over_all_attempted_feature_gate_decisions
+    both_agreements_required: true
+    state_block_tolerance:
+      absolute: 1.0e-8
+      relative: 1.0e-6
+    covariance_scope: every_block_pair
+    covariance_block_pair_tolerance:
+      absolute: 1.0e-8
+      relative: 1.0e-6
+  CP2-D:
+    name: sequence_parity
+    status: pending
+    sequences: [MH_01_easy, MH_03_medium, V1_01_easy]
+    startup_offsets_seconds:
+      MH_01_easy: 40.0
+      MH_03_medium: 5.0
+      V1_01_easy: 0.0
+    bag_sha256:
+      MH_01_easy: 57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9
+      MH_03_medium: c51b0064681dfb287b6653f5fd54e6c56af5d9151c866e17574fdbc527db2311
+      V1_01_easy: 6dc6192fac63dd0a05ba745548b41fe8cae14724168a98865a81d37e681bbc81
+    config_sha256:
+      estimator: b706f0082106e49e20c3292147d238b7e225b0df414106b9d4ac009bbb123f3b
+      imu: 408ea8b60b5f9e7c8251e6d302f04c0675bfefdd31229bb1afd139bc8f4a0287
+      imucam: b9e11b7bcda102f7c8c384c97318d67f3916b58942f9073722f83c22bd7073f7
+    minimum_selected_input_time_coverage: 0.995
+    minimum_processed_synchronized_fraction: 0.995
+    synchronized_pair_rule:
+      source: hashed_rosbag_topic_index_and_serial_callback_trace
+      topics: [/cam0/image_raw, /cam1/image_raw]
+      strict_max_difference_seconds: 0.02
+      search: serial_forward_search_with_used_message_deduplication
+    alignment: one_nullspace_to_ground_truth_SE3_on_shared_timestamps_applied_to_both_modes
+    position_p95_m_max: 0.01
+    orientation_p95_deg_max: 0.05
+    relative_ate_formula: abs_ATE_schur_minus_ATE_nullspace_divided_by_ATE_nullspace
+    relative_ate_difference_max: 0.01
+    evaluator:
+      command: evo_ape
+      format: tum
+      pose_relation: trans_part
+      statistic: rmse
+      alignment: SE3_no_scale
+      timestamp_association_max_difference_seconds: 0.01
+  CP2-E:
+    name: fixed_clock_timing
+    status: blocked_pending_fixed_clock_profile
+    observed_governor: ondemand
+    primary_sample: nonempty_msckf_invocation_reaching_and_committing_global_update
+    clock: std_chrono_steady_clock_integer_nanoseconds
+    timer_start: first_operation_in_UpdaterMSCKF_update
+    committing_timer_end: immediately_after_StateHelper_EKFUpdate_returns
+    early_return_timer_end: immediately_before_each_return
+    warmup_seconds_after_frozen_offset: 60.0
+    quantile_method: numpy_linear
+    minimum_paired_interleaved_runs_per_mode: 3
+    paired_order: [nullspace_schur, schur_nullspace, nullspace_schur]
+    paired_population: intersection_of_post_warmup_committing_camera_timestamps
+    cross_run_gate: every_pair_ratio_must_pass
+    cross_run_summary: median_of_three_paired_ratios
+    candidate_median_ratio_max: 1.10
+    candidate_p95_ratio_max: 1.15
+
+evidence_policy:
+  clean_source_required: true
+  rerun_complete_cp1_suite: true
+  immutable_no_overwrite_seal_required: true
+  independent_verifier_required: true
+  sha256_manifest_required: true
+  report_schema_version: 1
+  report_filename: cp2_report.json
+  planned_commands:
+    unit: scripts/cp2/run_unit_gate.sh
+    recorded_parity: scripts/cp2/run_recorded_parity.py
+    sequence_pair: scripts/cp2/run_sequence_pair.py
+    timing_pair: scripts/cp2/run_timing_pair.py
+    verifier: scripts/cp2/verify_report.py
+  commands_must_exist_and_pass_self_tests_before_evidence: true
+  current_artifact: null
+
+protecting_configuration_tests:
+  - absent_key_selects_nullspace
+  - explicit_schur_selects_candidate_only
+  - unknown_mode_rejected
+  - fixed_two_pass_mode_rejected
+  - unsupported_schur_representation_rejected
+  - runtime_failure_zero_silent_fallback
+
+blockers:
+  - production_reducer_not_implemented
+  - production_semantics_tests_not_passed
+  - recorded_updater_parity_not_collected
+  - three_sequence_parity_not_collected
+  - fixed_clock_timing_profile_not_established

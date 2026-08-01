@@ -102,7 +102,16 @@ checkpoints:
   - id: CP2
     due: 2026-07-31T23:59:00-04:00
     status: in_progress
-    evidence: []
+    deadline_status: missed
+    deadline_decision_recorded_at: "2026-08-01"
+    deadline_reason: extended_adversarial_cp1_audit_and_fresh_commit_specific_signoff
+    decision: continue_without_waiver_or_cp3_deadline_change
+    scope_impact: cp2_evidence_delayed_cp3_schedule_compressed_requirements_unchanged
+    evidence:
+      - path: docs/cp2_one_pass_contract.md
+        result: implementation_contract_frozen_evidence_pending
+      - path: project/cp2_gate.yaml
+        result: machine_readable_gate_in_progress
   - id: CP3
     due: 2026-08-05T23:59:00-04:00
     status: pending

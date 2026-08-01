@@ -117,12 +117,19 @@ tests; do not change the baseline to make the tests pass.
 
 ## CP2 — one-pass parity — July 31, 23:59
 
+Deadline record (2026-08-01): the July 31 checkpoint was missed because the
+adversarial CP1 audit and fresh commit-specific signoff were completed first.
+Decision: continue CP2 without waiving evidence or moving CP3's August 5 due
+date. Impact: CP2 evidence is delayed and the CP3 schedule is compressed;
+fixed-two-pass work remains blocked.
+
 Required evidence:
 
 - A deterministic updater fixture matches baseline state increment and
   posterior covariance to `1e-8 + 1e-6*||reference||` by state block on at
-  least 1,000 recorded visual updates, and accept/reject decisions agree on at
-  least 99.9% of measurements.
+  least 1,000 recorded visual updates. Both feature-gate decision agreement
+  and the same agreement weighted by raw measurement-row count are at least
+  99.9%.
 - On MH_01_easy, MH_03_medium, and V1_01_easy, both modes complete with identical calibration,
   initialization, startup offset, inputs, and gating configuration.
 - The aligned trajectory difference between modes is at most 1 cm at p95 in
