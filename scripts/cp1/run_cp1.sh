@@ -58,12 +58,13 @@ catkin config --workspace "${workspace}" \
 catkin build --workspace "${workspace}" ov_msckf --jobs "${jobs}" --no-status --summarize
 
 # catkin_add_gtest deliberately marks test executables EXCLUDE_FROM_ALL.  Build
-# the three CP1 gate targets explicitly before looking for or running them.
+# the four CP1 gate targets explicitly before looking for or running them.
 cmake --build "${workspace}/build/ov_msckf" \
     --target \
         test_cp1_schur_equivalence \
         test_cp1_rank_rejection \
         test_cp1_projection_jacobian \
+        test_cp1_prior_and_compression \
     -- -j"${jobs}"
 
 run_id="cp1_math_$(date -u +%Y%m%dT%H%M%S%NZ)-g$(git -C "${repo_root}" rev-parse --short=12 HEAD)"
@@ -74,6 +75,7 @@ test_names=(
     test_cp1_schur_equivalence
     test_cp1_rank_rejection
     test_cp1_projection_jacobian
+    test_cp1_prior_and_compression
 )
 binary_args=()
 for test_name in "${test_names[@]}"; do
@@ -94,9 +96,18 @@ for test_name in "${test_names[@]}"; do
         2>&1 | tee "${artifact_dir}/${test_name}.log"
 done
 
+readonly historical_schema2_artifact="${repo_root}/results/immutable/cp1/automated/cp1_math_20260722T184905076028292Z-g8b05afb88ce8"
+readonly historical_schema2_sha256sums_sha256="6985a04acdf3738babc9bae06842b841c146629eb6f39663d161ed952cf85b44"
+read -r historical_schema2_actual_sha256 _ < <(sha256sum "${historical_schema2_artifact}/SHA256SUMS")
+if [[ "${historical_schema2_actual_sha256}" != "${historical_schema2_sha256sums_sha256}" ]]; then
+    echo "historical CP1 schema-2 checksum anchor changed" >&2
+    exit 1
+fi
+/usr/bin/python3 "${script_dir}/verify_report.py" "${historical_schema2_artifact}" "${repo_root}"
+
 /usr/bin/python3 "${script_dir}/make_report.py" \
     "${artifact_dir}" "${repo_root}" "${binary_args[@]}"
 /usr/bin/python3 "${script_dir}/verify_report.py" "${artifact_dir}" "${repo_root}"
 
-echo "CP1 automated evidence retained under staging pending human signoff:"
+echo "CP1 automated addendum evidence retained under staging pending fresh human signoff:"
 echo "  ${artifact_dir}"

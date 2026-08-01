@@ -1,13 +1,14 @@
 # Estimator conventions
 
-Status: **automated CP1 evidence passed; blocking on named human signoff**
+Status: **review recorded for `7288b4a`; post-review mathematical addendum in progress**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
-Human reviewer: **unassigned**
-Signoff date: **not signed**
+Human reviewer: **Moksh Trehan (project-author self-review)**
+Signoff date: **2026-07-27 (date-only attestation)**
 
-No production estimator modification is permitted until the human review below
-is signed. Each decision cites the defining source file/function and the test
-or later parity gate that protects it.
+No production estimator modification is permitted until the post-review
+mathematical addendum passes and its replacement commit receives a fresh
+attestation. Each decision cites the defining source file/function and the
+test or later parity gate that protects it.
 
 ## Frames and transforms
 
@@ -74,11 +75,21 @@ or later parity gate that protects it.
 - Measurement whitening convention: the MSCKF baseline does not explicitly
   whiten. It assumes isotropic `sigma_px^2 I`; orthogonal nullspace and
   measurement-compression rotations preserve that covariance.
+- Compression statistic convention: the Givens rotation preserves the full
+  residual norm, but `measurement_compress_inplace` then truncates
+  zero-Jacobian rows. The resized system preserves `Lambda` and `eta`, not
+  `gamma`; retain pre-compression `gamma` (or the dropped squared residual)
+  whenever NIS/objective parity needs it.
+- Gate convention: `q=m-3`, threshold is the configured chi-square multiplier
+  times the 95% `ChiSquared(q)` quantile, and rejection occurs only for a
+  strict `chi2 > threshold`; equality is accepted.
 - Evidence: `ov_msckf/src/update/UpdaterHelper.cpp`,
   `UpdaterMSCKF.cpp`, and `ov_msckf/src/state/StateHelper.cpp:EKFUpdate`.
 - Protecting test: `CP1Projection.ActualOpenVINSJacobiansMatchAllDoubleFiniteDifferences`
   asserts `r=z-h`, `H=dh/delta`, and `dr/delta=-H`; positive update injection
   is checked by the CP2 one-pass parity fixture.
+  `CP1Compression.ProductionTruncationPreservesLambdaEtaButNotGamma` calls the
+  actual production compressor and checks the retained/dropped statistics.
 
 ## State and covariance ordering
 
@@ -150,6 +161,11 @@ or later parity gate that protects it.
   the normalized-projection derivative, but `uv_norm` is not recomputed before
   the distortion Jacobian. One-pass parity must preserve this mixed evaluation
   until a separately tested ablation changes it.
+- Mathematical scope: this mixed-FEJ matrix is not generally the derivative
+  of the current residual function. One-pass Schur/nullspace equivalence only
+  requires both paths to consume the same matrix. A Taylor/Newton claim for a
+  second pass is blocked pending an FEJ-on golden fixture and separate review
+  of the explicitly defined affine surrogate.
 - Evidence: `ov_core/src/types/Type.h`, `PoseJPL.h`,
   `ov_msckf/src/state/Propagator.cpp`,
   `ov_msckf/src/update/UpdaterHelper.cpp`, and `UpdaterMSCKF.cpp`.
@@ -157,6 +173,12 @@ or later parity gate that protects it.
 
 ## Covariance and manifold reset
 
+- Prior rank: exact `StateHelper::clone` augmentation copies a pose covariance
+  and all cross-covariances, so a valid full prior may be positive
+  semidefinite. Schur state updates use a possibly rectangular factor
+  `P=L L^T` and the strictly positive-definite reduced matrix
+  `I+L^T Lambda L`. They may not require `LLT(P)`, invert `P`, add clone noise,
+  inject diagonal jitter, or silently clamp eigenvalues.
 - Kalman covariance update form: baseline computes `M=P*H^T`,
   `S=H*P_small*H^T+R`, `K=M*S^-1` through LLT, and updates
   `P <- P-K*M^T`. It is not Joseph form.
@@ -166,7 +188,9 @@ or later parity gate that protects it.
 - Manifold reset Jacobian and timing: **the baseline applies no explicit
   covariance reset transport after nominal-state injection**. The primary
   policy is frozen to `G=I` through CP3 so CP2 covariance parity is not
-  confounded; exact chart transport is a later named ablation.
+  confounded. This is a baseline-parity approximation, not an exact manifold
+  covariance statement. Exact selected-chart transport is
+  `T(delta) P T(delta)^T` and remains a separately named ablation.
 - Regularization policy: landmark nullspace elimination and
   `StateHelper::EKFUpdate` add no numerical regularization; LLT assumes a valid
   innovation covariance. Upstream feature refinement separately uses declared
@@ -174,10 +198,16 @@ or later parity gate that protects it.
   must reject and log conditioning failures rather than silently clamp.
 - Evidence: `ov_msckf/src/state/StateHelper.cpp:EKFUpdate` and the type-specific
   `update` methods.
-- Protecting test: CP1 full/nullspace/Schur covariance and PSD tests; iterated
-  final-covariance/reset tests at CP3.
+- Protecting test: CP1 full/nullspace/Schur covariance tests and
+  `CP1Prior.SemidefiniteCloneAugmentationMatchesInnovationUpdate`; iterated
+  final-covariance/reset tests remain blocked behind the fixed-two-pass gate.
 
-## Iterated-update invariants
+## Fixed-two-pass candidate invariants — implementation blocked
+
+These rules freeze a candidate affine surrogate and transaction policy. They
+do not establish that the mixed-FEJ matrix is a Taylor derivative, and they do
+not permit fixed-two-pass implementation before the FEJ-on and exact-chart
+review gates in `docs/iterated_update_spec.md` are satisfied.
 
 - Frozen predicted prior: snapshot `x^-`, `P^-`, FEJ values, observations,
   feature order, and configuration before pass 1. Both proposals are absolute
@@ -194,8 +224,8 @@ or later parity gate that protects it.
 - Final commit: select pass 1 or pass 2 using the same-set pixel cost and
   frozen-prior objective, compute covariance once from `P^-`, and commit mean
   and covariance exactly once.
-- Reset: use `G=I` through CP3 to preserve OpenVINS covariance parity. Exact
-  `T(delta) P T(delta)^T` transport is a separately named later ablation.
+- Reset: use `G=I` only when measuring OpenVINS parity. Any mathematically
+  exact covariance claim requires `T(delta) P T(delta)^T` transport.
 - Evidence: `docs/iterated_update_spec.md`.
 - Protecting tests: CP1 Schur/retraction tests and CP3 exactly-once/fallback
   integration tests.
@@ -205,7 +235,13 @@ or later parity gate that protects it.
 Reviewer signoff means the cited code, equations, and tests agree. It does not
 mean that the proposed algorithm or paper claim is accepted in advance.
 
-- Reviewer:
-- Date:
-- Reviewed commit:
-- Exceptions:
+- Reviewer: Moksh Trehan
+- Reviewer relationship: project-author self-review
+- Date: 2026-07-27 (date-only attestation, recorded 2026-08-01)
+- Reviewed commit: `7288b4a2d09420266cfadd9983145e09fd4cf789`
+- Remote verification: `origin/schurvio-lite/cp1-math` resolved to the reviewed
+  commit on 2026-08-01.
+- Exceptions: none stated
+- Post-review note: later audit corrections are not covered by this signoff;
+  their replacement commit requires a fresh attestation before production
+  estimator mathematics is enabled.

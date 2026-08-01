@@ -1,7 +1,7 @@
 schema_version: 1
 project: SchurVIO-Lite
 timezone: America/Toronto
-as_of: 2026-07-22
+as_of: 2026-08-01
 upstream_commit: 69488123ed9362dd44b6f28e7f4680abbff1442b
 source_of_truth: docs/checkpoints.md
 checkpoints:
@@ -12,10 +12,9 @@ checkpoints:
       - path: project/datasets.yaml
         result: all_11_euroc_bags_verified
       - path: project/dependencies.yaml
-        result: dataset_and_gpl_pass_hardware_and_reviewer_open
+        result: dataset_gpl_and_reviewer_pass_jetson_nano_family_selected_remaining_hardware_details_open
     blockers:
       - target_board_and_power_interface
-      - mathematical_reviewer
   - id: CP0
     due: 2026-07-24T23:59:00-04:00
     status: passed
@@ -41,9 +40,12 @@ checkpoints:
       - path: project/cp1_gate.yaml
         result: frozen_automated_and_human_acceptance_contract
       - path: docs/conventions.md
-        result: mathematical_decisions_frozen_human_signoff_pending
+        result: original_math_contract_reviewed_post_review_addendum_in_progress
+        reviewer: Moksh Trehan
+        signed_at: "2026-07-27"
+        reviewed_commit: 7288b4a2d09420266cfadd9983145e09fd4cf789
       - path: docs/iterated_update_spec.md
-        result: equations_rank_gate_and_two_pass_policy_specified
+        result: psd_prior_compression_gamma_gate_boundary_and_fej_scope_corrections_in_progress
       - path: results/immutable/cp1/automated/cp1_math_20260722T184905076028292Z-g8b05afb88ce8
         result: automated_math_component_passed_human_signoff_pending
         tested_commit: 8b05afb88ce89b2b18bbb77d462a0866a2cac571
@@ -55,7 +57,8 @@ checkpoints:
         projection_fixtures: 256
         retraction_fixtures: 256
     blockers:
-      - named_human_vio_ekf_reviewer_and_signoff
+      - complete_and_pass_post_review_math_addendum
+      - fresh_commit_specific_signoff_after_addendum_evidence
   - id: CP2
     due: 2026-07-31T23:59:00-04:00
     status: pending

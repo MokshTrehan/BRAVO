@@ -90,11 +90,21 @@ Required evidence:
   at most `1e-5`.
 - At least 100 singular or ill-conditioned landmark fixtures are rejected
   deterministically without an explicit matrix inverse or NaN.
+- At least 100 algebraic exact clone-copy PSD fixtures match the
+  covariance-form innovation update through rectangular prior factors; no
+  full-prior LLT, inverse, clone noise, jitter, or eigenvalue clamping is
+  permitted. A production `StateHelper::clone` integration fixture remains a
+  CP2 requirement.
+- At least 100 tall-system calls to the actual OpenVINS measurement compressor
+  prove `Lambda/eta` preservation and explicitly account for residual-only
+  energy discarded from `gamma`.
 - Posterior covariance symmetry error is at most
   `1e-10 * max(1, ||P||_inf)` and its minimum eigenvalue is at least
   `-1e-10 * max(1, lambda_max(P))` on seeded fixtures.
 
-Pass decision: production one-pass implementation is permitted.
+Pass decision: production one-pass implementation is permitted. Fixed
+two-pass remains blocked until the mixed-FEJ affine-surrogate semantics and
+exact-chart covariance claim receive their own protecting test and review.
 
 Failure action: estimator integration remains blocked. Fix the derivation or
 tests; do not change the baseline to make the tests pass.
@@ -116,7 +126,9 @@ Required evidence:
 - Median visual-update time is no more than 10% above baseline and p95 is no
   more than 15% above baseline on the frozen desktop profile.
 
-Pass decision: permit fixed two-pass implementation.
+Pass decision: one-pass parity is established. Fixed-two-pass implementation
+is permitted only if its separately recorded FEJ-surrogate and chart-transport
+prerequisites have also passed; CP2 alone does not satisfy them.
 
 Failure action: keep the original updater as default, revert the integration
 branch, and block two-pass work until parity is restored.

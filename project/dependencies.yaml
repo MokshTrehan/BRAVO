@@ -1,6 +1,6 @@
 schema_version: 1
 project: SchurVIO-Lite
-as_of: "2026-07-22T14:13:43-04:00"
+as_of: "2026-08-01T16:06:56-04:00"
 timezone: America/Toronto
 
 gate:
@@ -25,14 +25,17 @@ dependencies:
     registry: project/datasets.yaml
 
   target_board_and_power:
-    status: blocked
-    board_model: null
+    status: partial
+    architecture_selected_at: "2026-08-01T16:06:56-04:00"
+    architecture_selected_via: explicit_user_message
+    board_model: NVIDIA Jetson Nano
+    board_variant: null
     board_os: null
     toolchain: null
     access_method: null
     available_cpu_cores: null
     power_reading_interface: null
-    blocker: No CPU-only embedded target or board-level watt/energy telemetry is available.
+    blocker: The Jetson Nano family is selected, but its exact variant, software image/toolchain, access method, usable CPU-core policy, and synchronized board-power interface are not yet recorded or demonstrated.
     local_probe:
       checked_at: "2026-07-22T14:02:37-04:00"
       desktop_host:
@@ -54,19 +57,26 @@ dependencies:
       - The visible UPS reports charge/runtime but not usable watts or energy rate.
       - GPU-only power telemetry cannot support a CPU-only target claim.
     required_to_unblock:
-      - Name the target board and OS/toolchain.
+      - Confirm the exact Jetson Nano variant and OS/toolchain.
       - Record the access method and usable CPU cores.
       - Demonstrate synchronized board-level power or energy telemetry.
 
   mathematical_reviewer:
-    status: pending
-    reviewer: null
+    status: pass
+    reviewer: Moksh Trehan
+    reviewer_relationship: project_author_self_review
+    signed_at: "2026-07-27"
+    signed_at_precision: date_only
+    reviewed_commit: 7288b4a2d09420266cfadd9983145e09fd4cf789
+    recorded_at: "2026-08-01T16:06:56-04:00"
+    attested_via: explicit_user_message
+    exceptions: []
     required_scope:
       - frames and conventions
       - projection and state Jacobians
       - covariance update and reset
       - frozen-prior iterated update
-    required_to_unblock: Name a human VIO/EKF reviewer and obtain dated signoff at the required checkpoints.
+    result: Human review attestation recorded for commit 7288b4a; the corrected post-review CP1 addendum requires a fresh commit-specific attestation before estimator integration.
 
   gplv3_derivative_acceptance:
     status: pass

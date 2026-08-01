@@ -16,8 +16,10 @@ on-site presenter if accepted.
 
 Build a reproducible CPU-only VIO research prototype from pinned OpenVINS. The
 prototype will provide a baseline-parity one-pass reduced visual update, a
-mathematically correct fixed two-pass iterated update, a deadline-aware bounded
-mode, and complete accuracy, latency, resource, and power evidence.
+deadline-aware bounded mode, and complete accuracy, latency, resource, and
+power evidence. A fixed-two-pass mode remains a conditional research candidate
+and is not called mathematically correct unless its mixed-FEJ surrogate and
+exact-chart covariance gates pass separately.
 
 This project is VIO, not a flight-ready SLAM product. Loop closure,
 relocalization, online calibration, a new initializer, learned features,
@@ -77,7 +79,7 @@ evidence and human decisions required by `docs/checkpoints.md`.
 | D0 | Jul 23 | External dependencies named | Embedded path is testable or explicitly blocked |
 | CP0 | Jul 24 | Pinned build and MH_01 baseline | Baseline frozen; estimator mapping may proceed |
 | CP1 | Jul 28 | Conventions, derivation, synthetic math | Production estimator edits permitted or blocked |
-| CP2 | Jul 31 | One-pass baseline parity | Two-pass work permitted or blocked |
+| CP2 | Jul 31 | One-pass baseline parity | One-pass retained; two-pass also needs its separate math prerequisites |
 | CP3 | Aug 05 | Fixed two-pass correctness | Iteration retained or reduced to an ablation |
 | CP4 | Aug 09 | EuRoC stability | Resource work continues or algorithm path stops |
 | CP5 | Aug 12 | Deadline/resource behavior | Bounded mode may be a primary claim or only a heuristic |

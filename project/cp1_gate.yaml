@@ -6,7 +6,7 @@ gate:
   id: CP1
   name: conventions_and_mathematical_correctness
   due: "2026-07-28T23:59:00-04:00"
-  overall_status: in_progress
+  overall_status: in_progress_math_addendum
   source_of_truth: docs/checkpoints.md
   production_estimator_math_edits_permitted: false
 
@@ -19,10 +19,24 @@ frozen_contract:
   landmark_minimum_relative_singular_value: 1.0e-6
   robust_weights: disabled_unit_weights
   covariance_reset_through_cp3: identity_for_openvins_parity
+  covariance_reset_exactness: parity_approximation_not_exact_chart_transport
+  prior_covariance_factor: rectangular_full_column_factor_supports_psd_clone_augmentation
+  full_prior_inverse_or_llt: forbidden
+  global_measurement_compression:
+    preserves: [lambda, eta]
+    gamma_policy: retain_precompression_gamma_or_explicit_discarded_residual_energy
+  chi_square_gate:
+    degrees_of_freedom: raw_measurement_rows_minus_3
+    confidence: 0.95
+    threshold: configured_multiplier_times_quantile
+    rejection_boundary: strict_greater_than
+  fixed_two_pass_status: blocked_pending_fej_surrogate_golden_and_exact_chart_review
   test_counts:
     well_conditioned_equivalence: 128
     projection_finite_difference: 256
     rank_and_condition_rejection: 128
+    semidefinite_clone_prior: 128
+    production_measurement_compression: 128
   tolerances:
     increment_landmark_covariance:
       absolute: 1.0e-9
@@ -35,8 +49,8 @@ frozen_contract:
     covariance_minimum_eigenvalue_relative: -1.0e-10
 
 automated_evidence:
-  status: passed
-  scope: automated_math_component_only
+  status: passed_original_schema2_component
+  scope: original_automated_math_component_only
   command: scripts/cp1/run_cp1.sh
   tested_commit: 8b05afb88ce89b2b18bbb77d462a0866a2cac571
   source_dirty: false
@@ -71,12 +85,37 @@ automated_evidence:
     - posterior_symmetry_and_psd
     - fixed_prior_chart_differential
 
+post_review_addendum:
+  status: implementation_and_automated_validation_in_progress
+  report_schema_version: 3
+  required_tests:
+    - algebraic_exact_clone_copy_psd_prior_rectangular_factor_equivalence
+    - exact_clone_nullspace_preserved_without_jitter
+    - production_measurement_compression_lambda_eta_and_gamma_accounting
+  required_spec_corrections:
+    - mixed_fej_two_pass_is_an_affine_surrogate_not_a_current_residual_taylor_derivative
+    - identity_reset_is_baseline_parity_only
+    - chi_square_quantile_multiplier_dof_and_boundary_are_frozen
+  fresh_review_required_scope:
+    - rectangular_factor_psd_prior_and_exact_clone_constraints
+    - compression_gamma_and_exact_gate_threshold_policy
+    - mixed_fej_two_pass_blocked_surrogate_status
+    - identity_reset_baseline_parity_not_exact_transport
+  evidence: null
+  fresh_review_status: pending
+
 human_review:
-  status: pending
-  review_target_commit: 8b05afb88ce89b2b18bbb77d462a0866a2cac571
-  reviewer: null
-  signed_at: null
-  reviewed_commit: null
+  status: passed_for_reviewed_commit_not_post_review_addendum
+  review_target_commit: 7288b4a2d09420266cfadd9983145e09fd4cf789
+  reviewer: Moksh Trehan
+  reviewer_relationship: project_author_self_review
+  signed_at: "2026-07-27"
+  signed_at_precision: date_only
+  recorded_at: "2026-08-01T16:06:56-04:00"
+  attested_via: explicit_user_message
+  reviewed_commit: 7288b4a2d09420266cfadd9983145e09fd4cf789
+  reviewed_remote_ref: origin/schurvio-lite/cp1-math
+  remote_ref_verified_at: "2026-08-01T16:06:56-04:00"
   exceptions: []
   required_scope:
     - frames_retraction_and_residual_sign
@@ -86,4 +125,5 @@ human_review:
     - exactly_once_covariance_and_identity_reset_policy
 
 blockers:
-  - named_human_vio_ekf_reviewer_and_signoff
+  - complete_and_pass_post_review_math_addendum
+  - fresh_commit_specific_signoff_after_addendum_evidence

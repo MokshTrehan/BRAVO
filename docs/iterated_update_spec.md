@@ -1,14 +1,14 @@
 # Reduced and iterated visual update specification
 
-Status: **automated CP1 evidence passed; blocking on named human signoff**
+Status: **review recorded for `7288b4a`; post-review CP1 math addendum in progress**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 Frozen rank threshold: `1e-6` relative singular-value ratio
 Primary reset policy through CP3: identity, for OpenVINS covariance parity
 
-This document is normative for the SchurVIO-Lite one-pass and fixed two-pass
-visual updates. Production estimator integration remains forbidden until the
-automated CP1 tests pass and the named human reviewer signs the convention and
-equation locks.
+This document is normative for the SchurVIO-Lite one-pass update and records
+the still-blocked fixed-two-pass candidate. Production estimator integration
+remains forbidden until the post-review CP1 addendum tests pass and the named
+human reviewer attests the corrected commit.
 
 ## 1. Symbols and scope
 
@@ -130,12 +130,17 @@ matrix `.inverse()`.
 
 ## 5. Schur sufficient statistics
 
-The whitened joint MAP problem is
+For an SPD prior, the whitened joint MAP problem can be written
 
 ```text
 min 0.5 ||delta_x||_(P^-)^-1^2
   + 0.5 ||b - A delta_x - B delta_lambda||^2.
 ```
+
+This inverse notation is conceptual and is not valid for the exact
+clone-augmented covariance, which can be positive semidefinite. The
+rectangular-factor formulation in Section 7 is normative for both SPD and PSD
+priors.
 
 Landmark elimination produces three sufficient statistics:
 
@@ -186,44 +191,78 @@ q      = m - 3.
 ```
 
 The per-feature innovation statistic, using the marginal prior covariance
-`P_s^-` for the touched state blocks, is
+`P_s^-=L_s L_s^T` for the touched state blocks, is
 
 ```text
 chi2 = b_N^T solve(I + A_N P_s^- A_N^T, b_N)
-     = gamma - eta^T solve((P_s^-)^-1 + Lambda, eta).
+u    = L_s^T eta
+chi2 = gamma - u^T solve(I + L_s^T Lambda L_s, u).
 ```
 
-The second form is evaluated with a symmetric factorization, not an explicit
-inverse. Its chi-square threshold uses exactly `q=m-3` degrees of freedom,
-matching `UpdaterMSCKF.cpp`. A naive `m`-row projector is forbidden because it
-would silently change the threshold even if its numerical NIS matched.
+Here `L_s` may be rectangular. The reduced matrix is strictly positive
+definite because of its identity term, so the second form uses a symmetric
+solve and never an inverse of `P_s^-`. For an SPD prior only, this is
+algebraically equal to the inverse-information expression.
 
-Global OpenVINS measurement compression is another orthogonal transform and
-does not alter the summed `Lambda`, `eta`, or `gamma`.
+The gate freezes the exact baseline policy
+
+```text
+threshold(q) = chi2_multiplier * quantile(ChiSquared(q), 0.95)
+reject if and only if chi2 > threshold(q).
+```
+
+Thus equality is accepted. The frozen EuRoC profile has
+`up_msckf_chi2_multipler=1`; other profiles use their configured multiplier.
+The gate uses exactly `q=m-3` degrees of freedom, matching
+`UpdaterMSCKF.cpp`. A naive `m`-row projector is forbidden because it would
+silently change the threshold even if its numerical NIS matched.
+
+Global OpenVINS measurement compression first applies an orthogonal transform
+and then truncates zero-Jacobian rows. If
+
+```text
+Q^T A_N = [R; 0],       Q^T b_N = [c; d],
+```
+
+the truncated system preserves `Lambda=R^T R` and `eta=R^T c`, but its stored
+residual norm is only `c^T c`; the pre-compression statistic is
+`gamma=c^T c+d^T d`. Any code that needs objective or NIS parity after this
+compression must retain the pre-compression `gamma` or explicitly carry the
+dropped energy `d^T d`. It may not reconstruct `gamma` from the resized
+residual alone.
 
 ## 7. One-pass state and covariance update
 
 Lift and sum the accepted per-feature state statistics into the full filter
-ordering. With `P^-=L_p L_p^T`, solve without forming `(P^-)^-1`:
+ordering. Clone augmentation copies a pose and its cross-covariances exactly,
+so a valid OpenVINS `P^-` can be PSD. Use any full-column covariance factor
+`L_p in R^(n x r)`, `r<=n`, satisfying `P^-=L_p L_p^T`; it may be rectangular.
+Then solve
 
 ```text
-J = I + L_p^T Lambda L_p
+J = I_r + L_p^T Lambda L_p
 solve J y = L_p^T eta
 delta_1 = L_p y
 P_chart,1 = L_p solve(J, L_p^T).
 ```
 
-This is algebraically identical to
+`J` is strictly positive definite on the prior support. This is algebraically
+identical to the covariance-form innovation update for both SPD and PSD
+priors. Only when `P^-` is SPD is it also legitimate to write the conceptual
+inverse-information form
 
 ```text
 ((P^-)^-1 + Lambda) delta_1 = eta
 P_chart,1 = ((P^-)^-1 + Lambda)^-1
 ```
 
-and to the baseline nullspace Kalman update. The CP1 full-joint oracle and
-nullspace oracle must agree with the Schur state increment, back-substituted
-landmark increment, final residual norm, NIS, and posterior covariance at the
-declared tolerances.
+and it remains identical to the baseline nullspace Kalman update. A production
+path may use a preserved augmentation factor or a rank-revealing factor with a
+declared numerical-zero tolerance. It may not demand `LLT(P^-)`, add clone
+noise, apply diagonal jitter, or silently clamp negative eigenvalues. The CP1
+full-joint oracle and nullspace oracle must agree with the Schur state
+increment, back-substituted landmark increment, final residual norm, NIS, and
+posterior covariance at the declared tolerances.
 
 For CP2 parity, inject the mean once using each OpenVINS type's `update` and
 use an identity covariance reset:
@@ -238,7 +277,16 @@ This identity policy is a deliberate baseline-parity approximation and must be
 used by both compared one-pass paths. Exact chart transport is reserved for a
 separately named ablation after CP3.
 
-## 8. Fixed two-pass update
+## 8. Fixed two-pass candidate — blocked
+
+The primary EuRoC configuration uses a mixed FEJ Jacobian: its residual is
+evaluated at current values while parts of its projection Jacobian use frozen
+FEJ geometry. That matrix is not, in general, the derivative of the current
+residual function. Consequently the rules below define an affine FEJ
+surrogate candidate; they are not a Taylor/Newton derivation of the current
+pixel objective. Fixed-two-pass production work is blocked until an FEJ-on
+golden fixture freezes this surrogate and a later review accepts its objective
+and exact-chart interpretation.
 
 Before pass 1, snapshot `x^-`, `P^-`, every clone FEJ value, raw observations,
 feature IDs/order, configuration, and the predicted prior factor. A pass uses
@@ -249,8 +297,8 @@ At pass `i` with absolute fixed-chart proposal `delta_i`:
 1. Construct `x_i=x^- boxplus delta_i` from the snapshot. Never apply an
    absolute proposal sequentially to the previous working state.
 2. Triangulate and refine each permitted transient feature using `x_i`.
-3. Form the current distorted-pixel residual `r_i` and local OpenVINS
-   Jacobians `H_x,i`, `H_f,i`.
+3. Form the current distorted-pixel residual `r_i` and the baseline mixed-FEJ
+   OpenVINS matrices `H_x,i`, `H_f,i`.
 4. Map the local state Jacobian to the frozen prior chart:
    `A_i = whiten(H_x,i T(delta_i))`.
 5. Correct the right-hand side for the absolute chart:
@@ -258,15 +306,18 @@ At pass `i` with absolute fixed-chart proposal `delta_i`:
 6. Factor the whitened landmark Jacobian, form the Schur statistics, and solve
    from the original `P^-`.
 
-The correction follows from
+The candidate defines the affine surrogate
 
 ```text
-h(delta) ~= h(delta_i) + H_x,i T(delta_i) (delta-delta_i).
+r_i + H_x,i T(delta_i) delta_i
+    ~= H_x,i T(delta_i) delta + H_f,i delta_lambda.
 ```
 
-Thus `r_i + A_i delta_i ~= A_i delta + B_i delta_lambda`. For a linear
-system, pass 2 recreates the pass-1 right-hand side and must return identical
-mean and covariance.
+If `H_x,i` is a genuine current local derivative, this follows from the usual
+Taylor model of `h`. Under the frozen mixed-FEJ baseline it is instead an
+explicit algorithmic definition and no stronger derivative claim is made.
+For a genuinely linear current-Jacobian system, pass 2 recreates the pass-1
+right-hand side and must return identical mean and covariance.
 
 ### Pass-1 selection lock
 
@@ -292,8 +343,9 @@ Evaluate both proposals on the same accepted raw pixel measurements. For each
 proposal, re-triangulate/refine the locked features and compute:
 
 - the unweighted distorted-pixel cost before nullspace/compression; and
-- the frozen-prior posterior objective, including
-  `0.5*delta^T(P^-)^-1*delta`.
+- the frozen-prior posterior objective. For `P^-=L_p L_p^T`, the prior term is
+  `0.5*min ||xi||^2` subject to `L_p xi=delta`; inverse-covariance notation is
+  allowed only for an SPD prior.
 
 The initializer's normalized-coordinate LM cost is not this acceptance cost.
 Select pass 2 only when both costs are finite and neither exceeds the pass-1
@@ -323,10 +375,12 @@ No `P_1 -> P_2` sequential covariance update is permitted. Runtime counters
 must prove `pass1_live_mean_writes=0`, `pass1_covariance_writes=0`,
 `final_mean_commits=1`, and `final_covariance_commits=1`.
 
-The mathematically exact optional transport would be
+The exact selected-chart transport would be
 `P_live=T(delta_*) P_chart,* T(delta_*)^T`. It is explicitly not the primary
 CP1--CP3 policy because mixing it with an identity-reset baseline would
-confound iteration with reset effects.
+confound iteration with reset effects. Therefore identity-reset results may be
+called baseline-parity results, but never mathematically exact manifold
+covariance results.
 
 ## 9. Failure and diagnostics contract
 
@@ -365,6 +419,13 @@ The automated gate must cover at least:
    error.
 5. Fixed-chart `T_theta` finite differences through the exact normalized JPL
    perturbing quaternion.
+6. At least 100 algebraic exact clone-copy PSD priors, comparing known and
+   rank-revealing rectangular-factor updates with the covariance-form
+   innovation oracle without jitter or a prior inverse. CP2 must additionally
+   exercise production `StateHelper::clone`.
+7. At least 100 calls to the actual production measurement compressor on tall
+   systems, proving `Lambda/eta` preservation and accounting for the strictly
+   positive discarded contribution to `gamma`.
 
 An FEJ-on golden fixture is required for CP2 parity because the mixed FEJ
 Jacobian is intentionally not the finite-difference derivative of a single
@@ -372,14 +433,17 @@ current residual function.
 
 ## 11. Review lock
 
-Human signoff must explicitly approve:
+Fresh human signoff on the addendum commit must explicitly approve:
 
 - residual/Jacobian sign and exact JPL chart;
 - whitening, three Schur statistics, NIS, and `m-3` gate DoF;
 - the `1e-6` rank threshold and no-regularization rule;
-- fixed-prior absolute iteration, pass-1 selection lock, and whole-pass
-  fallback;
-- exactly-once posterior computation and identity reset through CP3.
+- rectangular-factor handling of exact clone-augmented PSD priors;
+- pre-compression `gamma`, the 95% chi-square quantile, configured multiplier,
+  `m-3` DoF, and strict-`>` rejection boundary;
+- the fact that mixed-FEJ fixed-two-pass work remains blocked and is specified
+  only as an affine surrogate candidate;
+- identity reset as a baseline-parity policy, not an exact chart transport.
 
 Reviewer, date, reviewed commit, and exceptions are recorded in
 `docs/conventions.md` and `project/checkpoints.yaml`.
