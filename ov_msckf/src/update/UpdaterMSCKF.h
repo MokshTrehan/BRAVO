@@ -4,6 +4,8 @@
  * Copyright (C) 2018-2023 Guoquan Huang
  * Copyright (C) 2018-2023 OpenVINS Contributors
  * Copyright (C) 2018-2019 Kevin Eckenhoff
+ * Copyright (C) 2026 Moksh Trehan
+ * Modified in 2026 by Moksh Trehan for SchurVIO-Lite CP2.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -58,6 +60,9 @@ public:
    * @param feat_init_options Feature initializer options
    */
   UpdaterMSCKF(UpdaterOptions &options, ov_core::FeatureInitializerOptions &feat_init_options);
+
+  /// Frozen CP2 gate boundary: equality is accepted; only strict excess rejects.
+  static bool chi2_gate_rejects(double statistic, double threshold) noexcept;
 
   /**
    * @brief Given tracked features, this will try to use them to update the state.

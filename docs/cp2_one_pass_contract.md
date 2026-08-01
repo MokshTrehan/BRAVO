@@ -22,7 +22,10 @@ regularization, or changes to the visual measurement model.
   CP2 evidence selects the mode through a dedicated ROS launch override.
 - Before any feature track is processed, startup validation requires a known
   mode, `GLOBAL_3D` when `schur` is selected, and finite strictly positive
-  `sigma_px`. Invalid global configuration fails startup. The production
+  `sigma_px` whose squared variance is also finite and strictly positive in
+  binary64. This representability condition is required by the already-frozen
+  `R_reduced=sigma_px^2 I>0` contract; it is not a new noise-model restriction.
+  Invalid global configuration fails startup. The production
   reducer still defensively maps an invalid sigma argument to `nonfinite` for
   unit/API callers under the ordered runtime contract.
 - The branch is inside `UpdaterMSCKF::update`, immediately after
@@ -56,7 +59,9 @@ executable priority is:
 2. reject `m<=3` as `insufficient_rows`;
 3. reject nonfinite raw fields or nonfinite/nonpositive `sigma_px` as
    `nonfinite`;
-4. whiten and reject any overflow/nonfinite `A,B,b` as `nonfinite`;
+4. whiten by direct elementwise division and reject any nonfinite `A,B,b` as
+   `nonfinite`; do not reject solely because the unused scalar reciprocal
+   `1/sigma_px` would overflow;
 5. require a complete finite three-value SVD spectrum;
 6. require `s_1>std::numeric_limits<double>::min()`;
 7. require `s_3>max(m,3)*epsilon*s_1`;
@@ -84,6 +89,11 @@ r_reduced = Q_2^T r,
 R_reduced = sigma_px^2 I,
 q = m - 3.
 ```
+
+If `sigma_px^2` is zero or nonfinite in binary64, the unwhitened output cannot
+represent the contracted positive measurement covariance and the reducer
+rejects it as `nonfinite` at `reduced_outputs`. Normal startup rejects the same
+global configuration before feature processing.
 
 This is a square-root realization of the Schur complement. The orthonormal
 basis is not unique, so raw reduced matrices are not a parity target. The

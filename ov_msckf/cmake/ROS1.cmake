@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Modified in 2026 by Moksh Trehan for SchurVIO-Lite CP2.
+
 cmake_minimum_required(VERSION 3.3)
 
 # Find ROS build system
@@ -19,7 +22,6 @@ else ()
     set(CATKIN_PACKAGE_BIN_DESTINATION "${CMAKE_INSTALL_BINDIR}")
     set(CATKIN_GLOBAL_INCLUDE_DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/open_vins/")
 endif ()
-
 
 # Include our header files
 include_directories(
@@ -83,11 +85,21 @@ list(APPEND LIBRARY_SOURCES
         src/state/Propagator.cpp
         src/core/VioManager.cpp
         src/core/VioManagerHelper.cpp
+        src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
+        src/update/UpdaterMSCKFPreview.cpp
         src/update/UpdaterSLAM.cpp
         src/update/UpdaterZeroVelocity.cpp
 )
+
+# The CP2 reducer has exact binary64 boundary semantics (finite direct
+# whitening, strict numerical-rank floor, and signed conditioning boundary).
+# Override the repository-wide relaxed signed-zero setting for the production
+# translation unit itself, not only for the tests that call it.
+set_source_files_properties(src/update/SchurUpdate.cpp PROPERTIES
+        COMPILE_FLAGS "-fno-fast-math -ffp-contract=off -fsigned-zeros")
+
 if (catkin_FOUND AND ENABLE_ROS)
     list(APPEND LIBRARY_SOURCES src/ros/ROS1Visualizer.cpp src/ros/ROSVisualizerHelper.cpp)
 endif ()
@@ -194,3 +206,5 @@ if (CATKIN_ENABLE_TESTING)
         endif ()
     endforeach ()
 endif ()
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CP2Tests.cmake)

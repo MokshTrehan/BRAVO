@@ -4,6 +4,8 @@
  * Copyright (C) 2018-2023 Guoquan Huang
  * Copyright (C) 2018-2023 OpenVINS Contributors
  * Copyright (C) 2018-2019 Kevin Eckenhoff
+ * Copyright (C) 2026 Moksh Trehan
+ * Modified in 2026 by Moksh Trehan for SchurVIO-Lite CP2.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,7 +23,9 @@
 
 #include "UpdaterMSCKF.h"
 
+#include "SchurUpdate.h"
 #include "UpdaterHelper.h"
+#include "UpdaterMSCKFPreview.h"
 
 #include "feat/Feature.h"
 #include "feat/FeatureInitializer.h"
@@ -35,14 +39,30 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/math/distributions/chi_squared.hpp>
 
+#include <Eigen/Cholesky>
+
+#include <cmath>
+#include <cstdlib>
+#include <utility>
+
 using namespace ov_core;
 using namespace ov_type;
 using namespace ov_msckf;
 
 UpdaterMSCKF::UpdaterMSCKF(UpdaterOptions &options, ov_core::FeatureInitializerOptions &feat_init_options) : _options(options) {
 
-  // Save our raw pixel noise squared
-  _options.sigma_pix_sq = std::pow(_options.sigma_pix, 2);
+  // Preserve the startup contract for direct/API construction as well: the
+  // exact variance used by every gate and update must remain finite and >0.
+  const double sigma_pix_sq = _options.sigma_pix * _options.sigma_pix;
+  if (!UpdaterOptions::landmark_elimination_is_supported(_options.landmark_elimination) ||
+      !std::isfinite(_options.sigma_pix) || !(_options.sigma_pix > 0.0) || !std::isfinite(sigma_pix_sq) ||
+      !(sigma_pix_sq > 0.0)) {
+    PRINT_ERROR(RED "invalid MSCKF updater configuration: mode=%s sigma_px=%.17g sigma_px_sq=%.17g\n" RESET,
+                UpdaterOptions::landmark_elimination_as_string(_options.landmark_elimination).c_str(), _options.sigma_pix,
+                sigma_pix_sq);
+    std::exit(EXIT_FAILURE);
+  }
+  _options.sigma_pix_sq = sigma_pix_sq;
 
   // Save our feature initializer
   initializer_feat = std::shared_ptr<ov_core::FeatureInitializer>(new ov_core::FeatureInitializer(feat_init_options));
@@ -54,6 +74,8 @@ UpdaterMSCKF::UpdaterMSCKF(UpdaterOptions &options, ov_core::FeatureInitializerO
     chi_squared_table[i] = boost::math::quantile(chi_squared_dist, 0.95);
   }
 }
+
+bool UpdaterMSCKF::chi2_gate_rejects(double statistic, double threshold) noexcept { return statistic > threshold; }
 
 void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_ptr<Feature>> &feature_vec) {
 
@@ -164,6 +186,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   std::vector<std::shared_ptr<Type>> Hx_order_big;
   size_t ct_jacob = 0;
   size_t ct_meas = 0;
+  double retained_gamma = 0.0;
 
   // 4. Compute linear system for each feature, nullspace project, and reject
   auto it2 = feature_vec.begin();
@@ -202,14 +225,85 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     // Get the Jacobian for this feature
     UpdaterHelper::get_feature_jacobian_full(state, feat, H_f, H_x, res, Hx_order);
 
-    // Nullspace project
-    UpdaterHelper::nullspace_project_inplace(H_f, H_x, res);
+    // Eliminate the transient landmark. The baseline keeps its original
+    // Givens nullspace path; the candidate emits an equivalent square-root
+    // Schur row system after the signed rank/conditioning checks.
+    double feature_gamma = 0.0;
+    if (_options.landmark_elimination == UpdaterOptions::LandmarkElimination::SCHUR) {
+      SchurReductionResult reduction = SchurUpdate::Reduce(H_x, H_f, res, _options.sigma_pix);
+      if (!reduction.accepted()) {
+        if (!reduction.singular_values_available) {
+          PRINT_WARNING(YELLOW
+                        "[MSCKF-SCHUR]: feature=%zu pass=1 rows=%d status=%s stage=%s singular_values=unavailable "
+                        "singular_ratio=unavailable jitter=%zu clamp=%zu regularization=%zu fallback=%zu\n" RESET,
+                        feat.featid, (int)reduction.raw_rows, schur_reduction_status_name(reduction.status),
+                        schur_reduction_stage_name(reduction.stage), reduction.jitter_count, reduction.clamp_count,
+                        reduction.regularization_count, reduction.fallback_count);
+        } else if (!reduction.singular_ratio_available) {
+          PRINT_WARNING(YELLOW
+                        "[MSCKF-SCHUR]: feature=%zu pass=1 rows=%d status=%s stage=%s singular_values=[%.17g,%.17g,%.17g] "
+                        "singular_ratio=unavailable jitter=%zu clamp=%zu regularization=%zu fallback=%zu\n" RESET,
+                        feat.featid, (int)reduction.raw_rows, schur_reduction_status_name(reduction.status),
+                        schur_reduction_stage_name(reduction.stage), reduction.singular_values(0), reduction.singular_values(1),
+                        reduction.singular_values(2), reduction.jitter_count, reduction.clamp_count,
+                        reduction.regularization_count, reduction.fallback_count);
+        } else {
+          PRINT_WARNING(YELLOW
+                        "[MSCKF-SCHUR]: feature=%zu pass=1 rows=%d status=%s stage=%s singular_values=[%.17g,%.17g,%.17g] "
+                        "singular_ratio=%.17g jitter=%zu clamp=%zu regularization=%zu fallback=%zu\n" RESET,
+                        feat.featid, (int)reduction.raw_rows, schur_reduction_status_name(reduction.status),
+                        schur_reduction_stage_name(reduction.stage), reduction.singular_values(0), reduction.singular_values(1),
+                        reduction.singular_values(2), reduction.singular_ratio, reduction.jitter_count, reduction.clamp_count,
+                        reduction.regularization_count, reduction.fallback_count);
+        }
+        (*it2)->to_delete = true;
+        it2 = feature_vec.erase(it2);
+        continue;
+      }
+      H_x = std::move(reduction.H_reduced);
+      res = std::move(reduction.residual_reduced);
+      feature_gamma = reduction.gamma;
+    } else if (_options.landmark_elimination == UpdaterOptions::LandmarkElimination::NULLSPACE) {
+      UpdaterHelper::nullspace_project_inplace(H_f, H_x, res);
+      const Eigen::VectorXd whitened_residual = res.array() / _options.sigma_pix;
+      feature_gamma = whitened_residual.squaredNorm();
+      if (!whitened_residual.allFinite() || !std::isfinite(feature_gamma)) {
+        PRINT_WARNING(YELLOW
+                      "[MSCKF-REDUCTION]: feature=%zu pass=1 rows=%d status=nonfinite stage=statistics "
+                      "jitter=0 clamp=0 regularization=0 fallback=0\n" RESET,
+                      feat.featid, (int)res.rows());
+        (*it2)->to_delete = true;
+        it2 = feature_vec.erase(it2);
+        continue;
+      }
+    } else {
+      PRINT_ERROR(RED "[MSCKF-REDUCTION]: feature=%zu pass=1 rows=%d status=invalid_mode fallback=0\n" RESET,
+                  feat.featid, (int)H_f.rows());
+      return;
+    }
 
     /// Chi2 distance check
     Eigen::MatrixXd P_marg = StateHelper::get_marginal_covariance(state, Hx_order);
     Eigen::MatrixXd S = H_x * P_marg * H_x.transpose();
     S.diagonal() += _options.sigma_pix_sq * Eigen::VectorXd::Ones(S.rows());
-    double chi2 = res.dot(S.llt().solve(res));
+    Eigen::LLT<Eigen::MatrixXd> gate_factor(S);
+    if (gate_factor.info() != Eigen::Success) {
+      PRINT_WARNING(YELLOW
+                    "[MSCKF-GATE]: feature=%zu pass=1 rows=%d status=factorization_failed reason=innovation_factorization\n" RESET,
+                    feat.featid, (int)res.rows());
+      (*it2)->to_delete = true;
+      it2 = feature_vec.erase(it2);
+      continue;
+    }
+    const Eigen::VectorXd solved_residual = gate_factor.solve(res);
+    const double chi2 = res.dot(solved_residual);
+    if (gate_factor.info() != Eigen::Success || !solved_residual.allFinite() || !std::isfinite(chi2)) {
+      PRINT_WARNING(YELLOW "[MSCKF-GATE]: feature=%zu pass=1 rows=%d status=nonfinite reason=innovation_solve\n" RESET,
+                    feat.featid, (int)res.rows());
+      (*it2)->to_delete = true;
+      it2 = feature_vec.erase(it2);
+      continue;
+    }
 
     // Get our threshold (we precompute up to 500 but handle the case that it is more)
     double chi2_check;
@@ -222,7 +316,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     }
 
     // Check if we should delete or not
-    if (chi2 > _options.chi2_multipler * chi2_check) {
+    if (chi2_gate_rejects(chi2, _options.chi2_multipler * chi2_check)) {
       (*it2)->to_delete = true;
       it2 = feature_vec.erase(it2);
       // PRINT_DEBUG("featid = %d\n", feat.featid);
@@ -232,6 +326,13 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
       // PRINT_DEBUG(ss.str().c_str());
       continue;
     }
+
+    if (!std::isfinite(feature_gamma) || !std::isfinite(retained_gamma + feature_gamma)) {
+      PRINT_WARNING(YELLOW "[MSCKF-REDUCTION]: feature=%zu pass=1 rows=%d status=nonfinite reason=gamma_accumulation\n" RESET,
+                    feat.featid, (int)res.rows());
+      return;
+    }
+    retained_gamma += feature_gamma;
 
     // We are good!!! Append to our large H vector
     size_t ct_hx = 0;
@@ -280,6 +381,37 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
 
   // Our noise is isotropic, so make it here after our compression
   Eigen::MatrixXd R_big = _options.sigma_pix_sq * Eigen::MatrixXd::Identity(res_big.rows(), res_big.rows());
+
+  // Shared, read-only failure preflight. It is identical in both modes and
+  // guarantees invalid global proposals have zero live-state writes.
+  const MSCKFUpdatePreviewResult preview = UpdaterMSCKFPreview::Compute(state, Hx_order_big, Hx_big, res_big, R_big);
+  if (!preview.accepted()) {
+    if (preview.diagnostics.minimum_posterior_diagonal_available) {
+      PRINT_WARNING(YELLOW
+                    "[MSCKF-PREFLIGHT]: status=%s stage=%s rows=%d min_diagonal=%.17g diagonal_index=%d "
+                    "jitter=%zu repair=%zu alternate_solve=%zu clamp=%zu regularization=%zu fallback=%zu\n" RESET,
+                    msckf_update_preview_status_name(preview.diagnostics.status),
+                    msckf_update_preview_stage_name(preview.diagnostics.stage), (int)res_big.rows(),
+                    preview.diagnostics.minimum_posterior_diagonal, (int)preview.diagnostics.offending_diagonal_index,
+                    preview.diagnostics.jitter_count, preview.diagnostics.repair_count,
+                    preview.diagnostics.alternate_solve_count, preview.diagnostics.clamp_count,
+                    preview.diagnostics.regularization_count, preview.diagnostics.fallback_count);
+    } else {
+      PRINT_WARNING(YELLOW
+                    "[MSCKF-PREFLIGHT]: status=%s stage=%s rows=%d min_diagonal=unavailable "
+                    "jitter=%zu repair=%zu alternate_solve=%zu clamp=%zu regularization=%zu fallback=%zu\n" RESET,
+                    msckf_update_preview_status_name(preview.diagnostics.status),
+                    msckf_update_preview_stage_name(preview.diagnostics.stage), (int)res_big.rows(),
+                    preview.diagnostics.jitter_count, preview.diagnostics.repair_count,
+                    preview.diagnostics.alternate_solve_count, preview.diagnostics.clamp_count,
+                    preview.diagnostics.regularization_count, preview.diagnostics.fallback_count);
+    }
+    return;
+  }
+
+  PRINT_ALL("[MSCKF-REDUCTION]: mode=%s accepted_gamma=%.17g compressed_rows=%d\n",
+            UpdaterOptions::landmark_elimination_as_string(_options.landmark_elimination).c_str(), retained_gamma,
+            (int)res_big.rows());
 
   // 6. With all good features update the state
   StateHelper::EKFUpdate(state, Hx_order_big, Hx_big, res_big, R_big);

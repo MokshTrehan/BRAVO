@@ -31,6 +31,7 @@ scope:
   startup_validation:
     mode_known: required
     sigma_px_finite_and_strictly_positive: required
+    sigma_px_squared_finite_and_strictly_positive_binary64: required
     schur_representation_GLOBAL_3D: required
     failure: fail_fast_before_feature_processing
   camera_model: CamRadtan
@@ -62,6 +63,7 @@ scope:
 
 reduction:
   whitening: scalar_sigma_px
+  whitening_evaluation: direct_elementwise_division_not_reciprocal_multiplication
   rank_check: thin_svd_on_whitened_landmark_jacobian
   square_root: householder_qr_on_whitened_landmark_jacobian
   emitted_system: Q2T_Hx_Q2T_res_with_sigma_px_squared_identity_noise

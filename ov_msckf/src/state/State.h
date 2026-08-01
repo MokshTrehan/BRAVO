@@ -4,6 +4,8 @@
  * Copyright (C) 2018-2023 Guoquan Huang
  * Copyright (C) 2018-2023 OpenVINS Contributors
  * Copyright (C) 2018-2019 Kevin Eckenhoff
+ * Copyright (C) 2026 Moksh Trehan
+ * Modified in 2026 by Moksh Trehan for SchurVIO-Lite CP2.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -37,6 +39,8 @@
 #include "types/Vec.h"
 
 namespace ov_msckf {
+
+class UpdaterMSCKFPreview;
 
 /**
  * @brief State of our filter
@@ -184,6 +188,7 @@ private:
   // This will allow it to access the below functions which should normally not be called
   // This prevents a developer from thinking that the "insert clone" will actually correctly add it to the covariance
   friend class StateHelper;
+  friend class UpdaterMSCKFPreview;
 
   /// Covariance of all active variables
   Eigen::MatrixXd _Cov;

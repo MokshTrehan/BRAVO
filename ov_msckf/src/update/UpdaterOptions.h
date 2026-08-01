@@ -4,6 +4,8 @@
  * Copyright (C) 2018-2023 Guoquan Huang
  * Copyright (C) 2018-2023 OpenVINS Contributors
  * Copyright (C) 2018-2019 Kevin Eckenhoff
+ * Copyright (C) 2026 Moksh Trehan
+ * Modified in 2026 by Moksh Trehan for SchurVIO-Lite CP2.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +24,10 @@
 #ifndef OV_MSCKF_UPDATER_OPTIONS_H
 #define OV_MSCKF_UPDATER_OPTIONS_H
 
+#include <cstdlib>
+#include <string>
+
+#include "utils/colors.h"
 #include "utils/print.h"
 
 namespace ov_msckf {
@@ -31,6 +37,9 @@ namespace ov_msckf {
  */
 struct UpdaterOptions {
 
+  /// Supported transient-landmark elimination implementations.
+  enum class LandmarkElimination { NULLSPACE, SCHUR };
+
   /// What chi-squared multipler we should apply
   double chi2_multipler = 5;
 
@@ -39,6 +48,56 @@ struct UpdaterOptions {
 
   /// Covariance for our raw pixel measurements
   double sigma_pix_sq = 1;
+
+  /// How transient MSCKF landmarks should be eliminated.
+  LandmarkElimination landmark_elimination = LandmarkElimination::NULLSPACE;
+
+  /// Whether a landmark-elimination enum is one of the two public modes.
+  static bool landmark_elimination_is_supported(LandmarkElimination mode) noexcept {
+    return mode == LandmarkElimination::NULLSPACE || mode == LandmarkElimination::SCHUR;
+  }
+
+  /// Return the configuration spelling for a landmark-elimination mode.
+  static std::string landmark_elimination_as_string(LandmarkElimination mode) {
+    if (mode == LandmarkElimination::NULLSPACE) {
+      return "nullspace";
+    }
+    if (mode == LandmarkElimination::SCHUR) {
+      return "schur";
+    }
+    return "unknown";
+  }
+
+  /**
+   * @brief Parse an exact public configuration spelling without changing the
+   * destination on failure.
+   *
+   * Keeping this classification separate from the CLI/API exit policy gives
+   * the startup tests a non-destructive way to prove that an invalid spelling
+   * cannot silently select either reducer.
+   */
+  static bool try_landmark_elimination_from_string(const std::string &mode, LandmarkElimination &parsed_mode) noexcept {
+    if (mode == "nullspace") {
+      parsed_mode = LandmarkElimination::NULLSPACE;
+      return true;
+    }
+    if (mode == "schur") {
+      parsed_mode = LandmarkElimination::SCHUR;
+      return true;
+    }
+    return false;
+  }
+
+  /// Parse the exact public configuration spelling or terminate startup.
+  static LandmarkElimination landmark_elimination_from_string_or_exit(const std::string &mode) {
+    LandmarkElimination parsed_mode = LandmarkElimination::NULLSPACE;
+    if (try_landmark_elimination_from_string(mode, parsed_mode)) {
+      return parsed_mode;
+    }
+    PRINT_ERROR(RED "invalid MSCKF landmark elimination mode: %s\n" RESET, mode.c_str());
+    PRINT_ERROR(RED "please select a valid mode: nullspace, schur\n" RESET);
+    std::exit(EXIT_FAILURE);
+  }
 
   /// Nice print function of what parameters we have loaded
   void print() {

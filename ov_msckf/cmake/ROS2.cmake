@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Modified in 2026 by Moksh Trehan for SchurVIO-Lite CP2.
+
 cmake_minimum_required(VERSION 3.3)
 
 # Find ROS build system
@@ -61,11 +64,20 @@ list(APPEND LIBRARY_SOURCES
         src/state/Propagator.cpp
         src/core/VioManager.cpp
         src/core/VioManagerHelper.cpp
+        src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
+        src/update/UpdaterMSCKFPreview.cpp
         src/update/UpdaterSLAM.cpp
         src/update/UpdaterZeroVelocity.cpp
 )
+
+# Keep the production CP2 reducer on the same strict binary64 contract as its
+# exact validity/rank boundary tests, despite the project-wide optimization
+# flags inherited above.
+set_source_files_properties(src/update/SchurUpdate.cpp PROPERTIES
+        COMPILE_FLAGS "-fno-fast-math -ffp-contract=off -fsigned-zeros")
+
 list(APPEND LIBRARY_SOURCES src/ros/ROS2Visualizer.cpp src/ros/ROSVisualizerHelper.cpp)
 file(GLOB_RECURSE LIBRARY_HEADERS "src/*.h")
 add_library(ov_msckf_lib SHARED ${LIBRARY_SOURCES} ${LIBRARY_HEADERS})

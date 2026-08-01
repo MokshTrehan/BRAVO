@@ -1,0 +1,148 @@
+/*
+ * OpenVINS: An Open Platform for Visual-Inertial Research
+ * Copyright (C) 2018-2023 Patrick Geneva
+ * Copyright (C) 2018-2023 Guoquan Huang
+ * Copyright (C) 2018-2023 OpenVINS Contributors
+ * Copyright (C) 2018-2019 Kevin Eckenhoff
+ * Copyright (C) 2026 Moksh Trehan
+ * Modified in 2026 by Moksh Trehan for SchurVIO-Lite CP2.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#ifndef OV_MSCKF_UPDATER_MSCKF_PREVIEW_H
+#define OV_MSCKF_UPDATER_MSCKF_PREVIEW_H
+
+#include <Eigen/Core>
+
+#include <cstddef>
+#include <limits>
+#include <memory>
+#include <vector>
+
+namespace ov_type {
+class Type;
+} // namespace ov_type
+
+namespace ov_msckf {
+
+class State;
+
+/// Terminal outcome of the read-only MSCKF EKF update preflight.
+enum class MSCKFUpdatePreviewStatus {
+  kAccepted,
+  kInvalidInput,
+  kNonfinite,
+  kFactorizationFailed,
+  kNegativeDiagonal,
+};
+
+/// Exact terminal stage, retained for deterministic rejection diagnostics.
+enum class MSCKFUpdatePreviewStage {
+  kState,
+  kInputDimensions,
+  kStateOrder,
+  kRawInputs,
+  kCrossCovariance,
+  kMarginalCovariance,
+  kInnovation,
+  kInnovationFactorization,
+  kInnovationInverse,
+  kKalmanGain,
+  kPosteriorCovariance,
+  kPosteriorDiagonal,
+  kStateIncrement,
+  kAccepted,
+};
+
+/// Stable lower-case names for machine-readable diagnostics.
+const char *msckf_update_preview_status_name(MSCKFUpdatePreviewStatus status) noexcept;
+const char *msckf_update_preview_stage_name(MSCKFUpdatePreviewStage stage) noexcept;
+
+/**
+ * @brief Read-only diagnostics for one compressed MSCKF update proposal.
+ *
+ * The zero-valued counters make the CP2 no-repair policy explicit in
+ * traces. This helper contains no jitter, repair, regularization, or alternate
+ * solve path.
+ */
+struct MSCKFUpdatePreviewDiagnostics {
+  MSCKFUpdatePreviewStatus status = MSCKFUpdatePreviewStatus::kInvalidInput;
+  MSCKFUpdatePreviewStage stage = MSCKFUpdatePreviewStage::kState;
+
+  Eigen::Index state_dimension = 0;
+  Eigen::Index measurement_dimension = 0;
+  Eigen::Index jacobian_dimension = 0;
+  Eigen::Index ordered_jacobian_dimension = 0;
+
+  Eigen::Index offending_order_index = -1;
+  Eigen::Index offending_diagonal_index = -1;
+  bool minimum_posterior_diagonal_available = false;
+  double minimum_posterior_diagonal = std::numeric_limits<double>::quiet_NaN();
+
+  std::size_t jitter_count = 0;
+  std::size_t repair_count = 0;
+  std::size_t alternate_solve_count = 0;
+  std::size_t clamp_count = 0;
+  std::size_t regularization_count = 0;
+  std::size_t fallback_count = 0;
+};
+
+/**
+ * @brief Full proposed error-state increment and posterior covariance.
+ *
+ * The proposal fields are populated only for an accepted result. Rejected
+ * results therefore cannot accidentally be committed by a caller that ignores
+ * the status.
+ */
+struct MSCKFUpdatePreviewResult {
+  MSCKFUpdatePreviewDiagnostics diagnostics;
+  Eigen::VectorXd dx;
+  Eigen::MatrixXd P_plus;
+
+  bool accepted() const noexcept { return diagnostics.status == MSCKFUpdatePreviewStatus::kAccepted; }
+};
+
+/**
+ * @brief Read-only preview of StateHelper::EKFUpdate for an MSCKF system.
+ *
+ * The helper snapshots the full covariance, constructs the full-state
+ * Jacobian from H_order, and follows the committed covariance-form operation:
+ * upper-triangle innovation, LLT solve, Kalman gain, upper-triangle
+ * subtractive covariance update, mirroring, diagonal validation, and state
+ * increment. It never updates a Type, covariance, calibration object, or any
+ * other live state field.
+ *
+ * The caller must provide the same external state serialization used by the
+ * live updater; this function does not acquire State::_mutex_state.
+ */
+class UpdaterMSCKFPreview {
+public:
+  /**
+   * @param state State whose covariance is read without mutation.
+   * @param H_order State-variable ordering represented by the columns of H.
+   * @param H Globally compressed measurement Jacobian.
+   * @param residual Globally compressed residual.
+   * @param R Measurement covariance.
+   * @return Accepted full proposal or an exact rejection stage.
+   */
+  static MSCKFUpdatePreviewResult Compute(const std::shared_ptr<State> &state,
+                                          const std::vector<std::shared_ptr<ov_type::Type>> &H_order,
+                                          const Eigen::MatrixXd &H, const Eigen::VectorXd &residual,
+                                          const Eigen::MatrixXd &R);
+};
+
+} // namespace ov_msckf
+
+#endif // OV_MSCKF_UPDATER_MSCKF_PREVIEW_H
