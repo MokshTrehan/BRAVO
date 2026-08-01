@@ -1,9 +1,9 @@
 # Estimator conventions
 
-Status: **second adversarial audit correction in progress; prior schema-3 evidence superseded for authorization**
+Status: **replacement schema-3 CP1 evidence passed; fresh commit-specific signoff pending**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
-Human reviewer: **Moksh Trehan (project-author self-review)**
-Signoff date: **2026-07-27 (date-only attestation)**
+Prior human reviewer: **Moksh Trehan (project-author self-review)**
+Prior signoff date: **2026-07-27 (date-only attestation; superseded for authorization)**
 
 No production estimator modification is permitted until the post-review
 mathematical addendum passes and its replacement commit receives a fresh
@@ -272,6 +272,27 @@ mean that the proposed algorithm or paper claim is accepted in advance.
 - Automated result: 7 tests passed, 0 failures/errors/disabled; clean source
 - Signoff use: superseded by the second-audit derivative-scope correction;
   artifact integrity remains valid, but it cannot authorize implementation
+- Fresh signoff status: not applicable; this artifact was superseded before
+  fresh signoff
+
+## Second adversarial re-audit replacement lock
+
+- Corrected/tested commit: `1f29c92ac070ce1392384d24e4cac431c6142bf9`
+- Automated evidence: `results/immutable/cp1/automated/cp1_math_20260801T213626466303302Z-g1f29c92ac070`
+- `SHA256SUMS` SHA-256: `8d554519dbeb4259515869bc21ce9f98b96f16c793077e6f229da5cbc0ae7fda`
+- Automated result: 7 tests passed, 0 failures/errors/disabled; clean source;
+  24 hashed source inputs and 4 hashed binaries
+- Corrected scope: runtime-float residual versus continuous `CamRadtan`
+  derivatives; mixed-FEJ surrogate; ordered rank/diagnostic availability;
+  dual acceptance costs; sufficient idempotence invariants; selected-only
+  covariance; raw symmetry then `P_sym` numerical PSD; differential
+  first-order chart transport
+- Evidence boundary: schema 3 executes the CP1 algebra/Jacobian/rank/PSD-prior
+  component and hashes the complete normative scope; fixed-two-pass behavior
+  still requires its separately named CP2/CP3 protecting tests
+- Authorization status: automated CP1 component passed; production estimator
+  mathematics remains forbidden until fresh commit-specific signoff, after
+  which only the one-pass implementation is eligible to begin
 - Fresh reviewer: pending
 - Fresh signoff date: pending
 - Fresh reviewed commit: pending

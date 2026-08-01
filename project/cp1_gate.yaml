@@ -6,7 +6,7 @@ gate:
   id: CP1
   name: conventions_and_mathematical_correctness
   due: "2026-07-28T23:59:00-04:00"
-  overall_status: in_progress_second_adversarial_audit_correction
+  overall_status: in_progress_replacement_evidence_passed_pending_fresh_signoff
   source_of_truth: docs/checkpoints.md
   production_estimator_math_edits_permitted: false
 
@@ -134,13 +134,19 @@ post_review_addendum:
   fresh_review_status: pending
 
 second_adversarial_reaudit:
-  status: correction_and_reverification_in_progress
+  status: replacement_schema3_evidence_passed_fresh_signoff_pending
   audited_head: 67ada8eed2342cd0b9506a432ccc618c8b3f92bd
   blocking_finding:
     - opening_contract_incorrectly_called_mixed_fej_model_matrix_a_current_residual_derivative
     - runtime_float_projection_and_continuous_analytic_jacobian_required_explicit_distinction
   additional_precision_correction:
     - largest_singular_value_and_numerical_rank_boundaries_made_executable
+    - singular_value_and_ratio_diagnostic_availability_made_executable
+    - pixel_and_posterior_costs_and_independent_tolerances_made_explicit
+    - linear_idempotence_conditions_scoped_as_sufficient
+    - selected_only_covariance_and_invalid_pass_control_flow_made_exact
+    - raw_symmetry_then_symmetric_view_psd_sequence_made_exact
+    - chart_transport_scoped_to_exact_differential_and_first_order_ekf_covariance
   unarchived_advisory_cross_check:
     evidentiary_status: not_checkpoint_evidence
     provenance: inline_numpy_run_not_retained
@@ -163,7 +169,38 @@ second_adversarial_reaudit:
     failures: 0
     errors: 0
     disabled: 0
-  replacement_evidence: null
+  replacement_evidence:
+    one_pass_implementation_authorization_eligible_after_fresh_signoff: true
+    fixed_two_pass_implementation_authorization_eligible: false
+    fixed_two_pass_blocker: fej_surrogate_and_chart_transport_cp2_cp3_protecting_tests_and_review
+    command: scripts/cp1/run_cp1.sh
+    tested_commit: 1f29c92ac070ce1392384d24e4cac431c6142bf9
+    source_dirty: false
+    generated_utc: "2026-08-01T21:36:26.705522Z"
+    artifact: results/immutable/cp1/automated/cp1_math_20260801T213626466303302Z-g1f29c92ac070
+    report: results/immutable/cp1/automated/cp1_math_20260801T213626466303302Z-g1f29c92ac070/cp1_math_report.json
+    seal_method: Linux renameat2(RENAME_NOREPLACE)
+    sha256sums_sha256: 8d554519dbeb4259515869bc21ce9f98b96f16c793077e6f229da5cbc0ae7fda
+    independent_verifier: scripts/cp1/verify_report.py
+    verifier_result: passed
+    results:
+      gtests: 7
+      failures: 0
+      errors: 0
+      disabled: 0
+      well_conditioned_equivalence_fixtures: 128
+      projection_finite_difference_fixtures: 256
+      rank_rejection_fixtures: 128
+      semidefinite_clone_prior_fixtures: 128
+      production_measurement_compression_fixtures: 128
+      max_state_increment_error: 2.23431e-15
+      max_landmark_increment_error: 4.3639e-15
+      max_posterior_covariance_error: 8.86741e-15
+      max_nis_error: 2.24283e-15
+      max_projection_normalized_frobenius: 2.17193e-9
+      max_residual_definition_error: 0.0
+      max_fixed_chart_normalized_frobenius: 1.02009e-9
+      min_psd_prior_posterior_normalized_eigenvalue: -3.2182e-16
 
 human_review:
   status: passed_for_reviewed_commit_not_post_review_addendum
@@ -186,5 +223,4 @@ human_review:
     - exactly_once_covariance_and_identity_reset_policy
 
 blockers:
-  - correct_derivative_scope_and_regenerate_clean_evidence
   - fresh_commit_specific_signoff_after_addendum_evidence

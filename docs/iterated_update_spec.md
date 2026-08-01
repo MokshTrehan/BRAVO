@@ -1,6 +1,6 @@
 # Reduced and iterated visual update specification
 
-Status: **second adversarial audit correction in progress; prior schema-3 evidence superseded for authorization**
+Status: **replacement schema-3 CP1 evidence passed; fresh commit-specific signoff pending**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 Frozen rank threshold: `1e-6` relative singular-value ratio
 Primary reset policy through CP3: identity, for OpenVINS covariance parity
