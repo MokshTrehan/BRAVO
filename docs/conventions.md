@@ -1,6 +1,6 @@
 # Estimator conventions
 
-Status: **schema-3 CP1 addendum evidence passed; fresh signoff pending**
+Status: **second adversarial audit correction in progress; prior schema-3 evidence superseded for authorization**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 Human reviewer: **Moksh Trehan (project-author self-review)**
 Signoff date: **2026-07-27 (date-only attestation)**
@@ -67,8 +67,17 @@ test or later parity gate that protects it.
 ## Residual and innovation
 
 - Reprojection residual sign: `r = z_measured - z_predicted` in distorted
-  pixel coordinates. OpenVINS stores `H=+d h/d delta`, so `d r/d delta=-H`
-  and the linear measurement equation is `r ~= H*delta + noise`.
+  pixel coordinates. The runtime prediction uses `CamBase::distort_d`, which
+  casts through float. OpenVINS stores a positive-sign model matrix `H_model`
+  and uses the affine surrogate `r ~= H_model*delta + noise`.
+- Derivative scope: on the frozen EuRoC `CamRadtan` path and tested valid
+  geometry, with FEJ disabled, `H_model=+d h_cont/d delta` for the intended
+  smooth all-double camera model and
+  `d(z-h_cont)/d delta=-H_model`. It is not the literal derivative of the
+  float-quantized runtime wrapper. With FEJ enabled, `H_model` is the pinned
+  mixed-current/FEJ surrogate and is not generally the derivative of a single
+  current residual function. CP1 makes no projection-derivative claim for
+  `CamEqui`.
 - Innovation sign: identical to the residual sign above.
 - State increment sign: `delta_x = K*r`, followed directly by each type's
   `update(delta_x_block)` operation.
@@ -86,8 +95,11 @@ test or later parity gate that protects it.
 - Evidence: `ov_msckf/src/update/UpdaterHelper.cpp`,
   `UpdaterMSCKF.cpp`, and `ov_msckf/src/state/StateHelper.cpp:EKFUpdate`.
 - Protecting test: `CP1Projection.ActualOpenVINSJacobiansMatchAllDoubleFiniteDifferences`
-  asserts `r=z-h`, `H=dh/delta`, and `dr/delta=-H`; positive update injection
-  is checked by the CP2 one-pass parity fixture.
+  checks the nominal stored `r=z-h_runtime`, then checks
+  `H_model=d h_cont/delta` and `d(z-h_cont)/d delta=-H_model` with FEJ off on
+  the frozen EuRoC `CamRadtan` path. Positive update injection and the pinned
+  mixed-FEJ matrices are checked by the CP2 parity fixtures; `CamEqui` remains
+  outside the CP1 projection proof.
   `CP1Compression.ProductionTruncationPreservesLambdaEtaButNotGamma` calls the
   actual production compressor and checks the retained/dropped statistics.
 
@@ -252,6 +264,8 @@ mean that the proposed algorithm or paper claim is accepted in advance.
 - Automated evidence: `results/immutable/cp1/automated/cp1_math_20260801T203838596581924Z-g26588223597a`
 - `SHA256SUMS` SHA-256: `320c8cda3a98a4036718e34d499c909a8ac70dd0f8d9e71041a6e3fe134d42c3`
 - Automated result: 7 tests passed, 0 failures/errors/disabled; clean source
+- Signoff use: superseded by the second-audit derivative-scope correction;
+  artifact integrity remains valid, but it cannot authorize implementation
 - Fresh reviewer: pending
 - Fresh signoff date: pending
 - Fresh reviewed commit: pending

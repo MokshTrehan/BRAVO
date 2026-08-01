@@ -40,12 +40,12 @@ checkpoints:
       - path: project/cp1_gate.yaml
         result: frozen_automated_and_human_acceptance_contract
       - path: docs/conventions.md
-        result: original_math_contract_reviewed_schema3_addendum_passed_fresh_signoff_pending
+        result: second_adversarial_audit_found_derivative_scope_correction_schema3_evidence_superseded_for_authorization
         reviewer: Moksh Trehan
         signed_at: "2026-07-27"
         reviewed_commit: 7288b4a2d09420266cfadd9983145e09fd4cf789
       - path: docs/iterated_update_spec.md
-        result: psd_prior_compression_gamma_gate_boundary_and_fej_scope_corrections_automated_verified
+        result: model_matrix_runtime_residual_and_rank_boundaries_under_second_correction
       - path: results/immutable/cp1/automated/cp1_math_20260722T184905076028292Z-g8b05afb88ce8
         result: automated_math_component_passed_human_signoff_pending
         tested_commit: 8b05afb88ce89b2b18bbb77d462a0866a2cac571
@@ -57,7 +57,7 @@ checkpoints:
         projection_fixtures: 256
         retraction_fixtures: 256
       - path: results/immutable/cp1/automated/cp1_math_20260801T203838596581924Z-g26588223597a
-        result: post_review_math_addendum_automated_component_passed_fresh_signoff_pending
+        result: integrity_verified_but_superseded_for_authorization_by_second_audit_derivative_scope_correction
         tested_commit: 26588223597a2864149fd228e52caf569e7dfd12
         source_dirty: false
         sha256sums_sha256: 320c8cda3a98a4036718e34d499c909a8ac70dd0f8d9e71041a6e3fe134d42c3
@@ -68,6 +68,7 @@ checkpoints:
         semidefinite_clone_prior_fixtures: 128
         production_measurement_compression_fixtures: 128
     blockers:
+      - correct_derivative_scope_and_regenerate_clean_evidence
       - fresh_commit_specific_signoff_after_addendum_evidence
   - id: CP2
     due: 2026-07-31T23:59:00-04:00

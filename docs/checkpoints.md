@@ -85,9 +85,13 @@ Required evidence:
   state increments, landmark back-substitution, and posterior covariance obey
   `||candidate-reference|| <= 1e-9 + 1e-7*||reference||`; final residual norms
   obey the same bound with an absolute term of `1e-10`.
-- Central finite-difference pose and landmark projection Jacobians pass at
-  least 200 seeded valid-geometry cases with maximum normalized Frobenius error
-  at most `1e-5`.
+- Central finite-difference pose and landmark model matrices pass at least 200
+  seeded valid-geometry cases on the frozen EuRoC `CamRadtan` path against the
+  intended all-double continuous projection with FEJ disabled, with maximum
+  normalized Frobenius error at most `1e-5`. The nominal stored residual is
+  separately checked against the float-quantized runtime projection;
+  mixed-FEJ matrices are treated as affine surrogates and require a CP2 golden
+  fixture. `CamEqui` is outside this CP1 derivative proof.
 - At least 100 singular or ill-conditioned landmark fixtures are rejected
   deterministically without an explicit matrix inverse or NaN.
 - At least 100 algebraic exact clone-copy PSD fixtures match the

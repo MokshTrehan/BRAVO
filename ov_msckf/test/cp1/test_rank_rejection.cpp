@@ -9,6 +9,7 @@
 
 #include <Eigen/Dense>
 
+#include <cmath>
 #include <iostream>
 #include <limits>
 
@@ -110,6 +111,28 @@ TEST(CP1Schur, BoundaryAndInvalidInputsHaveExplicitStatus) {
   nonfinite(0, 0) = std::numeric_limits<double>::quiet_NaN();
   const auto invalid = schurvio_cp1::reduce_landmark(state_jacobian, nonfinite, residual);
   EXPECT_EQ(invalid.status, schurvio_cp1::FactorStatus::kNonfinite);
+
+  Eigen::MatrixXd largest_at_floor = Eigen::MatrixXd::Zero(rows, 3);
+  largest_at_floor(0, 0) = std::numeric_limits<double>::min();
+  const auto zero_scale = schurvio_cp1::reduce_landmark(state_jacobian, largest_at_floor, residual);
+  EXPECT_EQ(zero_scale.status, schurvio_cp1::FactorStatus::kRankDeficient);
+
+  const double numerical_rank_floor =
+      static_cast<double>(rows) * std::numeric_limits<double>::epsilon();
+  Eigen::MatrixXd exactly_numerical_rank_floor = Eigen::MatrixXd::Zero(rows, 3);
+  exactly_numerical_rank_floor(0, 0) = 1.0;
+  exactly_numerical_rank_floor(1, 1) = 0.5;
+  exactly_numerical_rank_floor(2, 2) = numerical_rank_floor;
+  const auto rank_floor =
+      schurvio_cp1::reduce_landmark(state_jacobian, exactly_numerical_rank_floor, residual);
+  EXPECT_EQ(rank_floor.status, schurvio_cp1::FactorStatus::kRankDeficient);
+
+  Eigen::MatrixXd immediately_above_rank_floor = exactly_numerical_rank_floor;
+  immediately_above_rank_floor(2, 2) =
+      std::nextafter(numerical_rank_floor, std::numeric_limits<double>::infinity());
+  const auto above_rank_floor =
+      schurvio_cp1::reduce_landmark(state_jacobian, immediately_above_rank_floor, residual);
+  EXPECT_EQ(above_rank_floor.status, schurvio_cp1::FactorStatus::kIllConditioned);
 }
 
 } // namespace

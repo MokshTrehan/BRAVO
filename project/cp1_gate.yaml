@@ -6,7 +6,7 @@ gate:
   id: CP1
   name: conventions_and_mathematical_correctness
   due: "2026-07-28T23:59:00-04:00"
-  overall_status: in_progress_pending_fresh_addendum_signoff
+  overall_status: in_progress_second_adversarial_audit_correction
   source_of_truth: docs/checkpoints.md
   production_estimator_math_edits_permitted: false
 
@@ -30,6 +30,13 @@ frozen_contract:
     confidence: 0.95
     threshold: configured_multiplier_times_quantile
     rejection_boundary: strict_greater_than
+  measurement_model_semantics:
+    stored_residual: measured_minus_float_quantized_runtime_projection
+    fej_disabled_matrix: positive_derivative_of_intended_continuous_camera_model
+    fej_enabled_matrix: pinned_mixed_current_fej_affine_surrogate_not_current_residual_derivative
+    projection_derivative_scope: frozen_euroc_camradtan_valid_geometry_camequi_excluded
+  largest_landmark_singular_value_floor: std_numeric_limits_double_min_strict
+  numerical_rank_boundary: smallest_must_be_strictly_greater_than_max_rows_cols_times_epsilon_times_largest
   fixed_two_pass_status: blocked_pending_fej_surrogate_golden_and_exact_chart_review
   test_counts:
     well_conditioned_equivalence: 128
@@ -80,13 +87,13 @@ automated_evidence:
   requirements:
     - full_joint_nullspace_and_schur_equivalence
     - lambda_eta_gamma_nis_and_gate_dof_parity
-    - actual_openvins_jpl_retraction_projection_jacobians
+    - actual_openvins_camradtan_fej_disabled_jpl_retraction_projection_jacobians
     - deterministic_rank_and_condition_rejection
     - posterior_symmetry_and_psd
     - fixed_prior_chart_differential
 
 post_review_addendum:
-  status: automated_evidence_passed_fresh_review_pending
+  status: schema3_evidence_superseded_for_authorization_by_second_audit_correction
   report_schema_version: 3
   required_tests:
     - algebraic_exact_clone_copy_psd_prior_rectangular_factor_equivalence
@@ -121,6 +128,24 @@ post_review_addendum:
       historical_schema2_sha256sums_sha256: 6985a04acdf3738babc9bae06842b841c146629eb6f39663d161ed952cf85b44
   fresh_review_status: pending
 
+second_adversarial_reaudit:
+  status: correction_and_reverification_in_progress
+  audited_head: 67ada8eed2342cd0b9506a432ccc618c8b3f92bd
+  blocking_finding:
+    - opening_contract_incorrectly_called_mixed_fej_model_matrix_a_current_residual_derivative
+    - runtime_float_projection_and_continuous_analytic_jacobian_required_explicit_distinction
+  additional_precision_correction:
+    - largest_singular_value_and_numerical_rank_boundaries_made_executable
+  unarchived_advisory_cross_check:
+    evidentiary_status: not_checkpoint_evidence
+    provenance: inline_numpy_run_not_retained
+    general_spd_measurement_covariance_psd_prior_and_joint_landmark_fixtures: 3000
+    compression_fixtures: 2000
+    jpl_fixed_chart_fixtures: 10000
+    correlated_untouched_state_fixtures_with_nonzero_indirect_update: 1000
+    result: passed
+  replacement_evidence: null
+
 human_review:
   status: passed_for_reviewed_commit_not_post_review_addendum
   review_target_commit: 7288b4a2d09420266cfadd9983145e09fd4cf789
@@ -142,4 +167,5 @@ human_review:
     - exactly_once_covariance_and_identity_reset_policy
 
 blockers:
+  - correct_derivative_scope_and_regenerate_clean_evidence
   - fresh_commit_specific_signoff_after_addendum_evidence

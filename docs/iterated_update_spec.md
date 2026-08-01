@@ -1,6 +1,6 @@
 # Reduced and iterated visual update specification
 
-Status: **schema-3 CP1 addendum evidence passed; fresh signoff pending**
+Status: **second adversarial audit correction in progress; prior schema-3 evidence superseded for authorization**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 Frozen rank threshold: `1e-6` relative singular-value ratio
 Primary reset policy through CP3: identity, for OpenVINS covariance parity
@@ -24,26 +24,45 @@ For one transient feature:
 - `N` observations give `m=2N` distorted-pixel residual rows. A useful feature
   must have `m>3` and a full-rank three-column landmark Jacobian.
 - `r in R^m`, `H_x in R^(m x n)`, `H_f in R^(m x 3)`, and
-  `R in R^(m x m)` denote the residual, state Jacobian, landmark Jacobian, and
-  measurement covariance before landmark elimination.
+  `R in R^(m x m)` denote the residual, positive-sign state model matrix,
+  positive-sign landmark model matrix, and measurement covariance before
+  landmark elimination.
 
-The OpenVINS residual and Jacobian signs are deliberately different objects:
-
-```text
-r = z_measured - h(x_hat, lambda_hat)
-H_x = + d h(x_hat boxplus delta_x, lambda_hat) / d delta_x at zero
-H_f = + d h(x_hat, lambda_hat + delta_lambda) / d delta_lambda at zero
-```
-
-Therefore the local measurement model used by the positive Kalman correction
-is
+OpenVINS evaluates the stored residual as
 
 ```text
-r = H_x delta_x + H_f delta_lambda + noise,
+r = z_measured - h_runtime(x_hat, lambda_hat).
 ```
 
-while the derivative of the residual itself is `-H`. This is defined by
-`UpdaterHelper.cpp:get_feature_jacobian_full` and
+`h_runtime` calls `CamBase::distort_d`, which casts normalized coordinates to
+float and casts the result back to double. For the frozen EuRoC `CamRadtan`
+path and tested valid geometry, the analytic camera Jacobians represent the
+intended smooth all-double camera model `h_cont`, not the literal derivative
+of that quantized wrapper. CP1 makes no derivative claim for `CamEqui`; that
+model remains outside the proved projection scope.
+
+With FEJ disabled, the positive-sign model matrices are the continuous-model
+derivatives
+
+```text
+H_x = + d h_cont(x_hat boxplus delta_x, lambda_hat) / d delta_x at zero
+H_f = + d h_cont(x_hat, lambda_hat + delta_lambda) / d delta_lambda at zero
+d(z_measured-h_cont)/d(delta_x,delta_lambda) = -[H_x H_f].
+```
+
+With FEJ enabled, `H_x` and `H_f` are the pinned mixed-current/FEJ affine
+surrogate produced by `get_feature_jacobian_full`; they are not generally the
+derivative of either `h_runtime` or a single current `h_cont` residual. In both
+cases, the positive Kalman correction consumes the baseline linear surrogate
+
+```text
+r ~= H_x delta_x + H_f delta_lambda + noise.
+```
+
+Schur/nullspace equivalence requires both paths to consume identical
+`r,H_x,H_f`; it does not require the FEJ model matrix to be a current-residual
+derivative. These semantics are defined by
+`UpdaterHelper.cpp:get_feature_jacobian_full`, `CamBase.h:distort_d`, and
 `StateHelper.cpp:EKFUpdate`.
 
 ## 2. OpenVINS retraction and fixed prior chart
@@ -106,12 +125,17 @@ determinant, or an explicit inverse. Let its singular values satisfy
 Reject the complete feature before gating when any condition holds:
 
 1. `m<=3`, or a residual/Jacobian field is nonfinite;
-2. `s_1` is zero at the numerical scale of `B`;
-3. numerical rank is less than three using
-   `max(m,3)*epsilon*s_1`;
-4. `rho < 1e-6`.
+2. `s_1` is not strictly greater than
+   `std::numeric_limits<double>::min()` (`rank_deficient`);
+3. `s_3` is not strictly greater than
+   `max(m,3)*std::numeric_limits<double>::epsilon()*s_1`
+   (`rank_deficient`);
+4. `rho < 1e-6` (`ill_conditioned`).
 
-No diagonal damping, pseudo-measurement, clamping, or silent rank repair is
+The conditions are evaluated in the numbered order above. Thus equality at
+the numerical-rank floor is rejected, while equality at the `rho=1e-6`
+conditioning boundary is accepted. No diagonal damping,
+pseudo-measurement, clamping, or silent rank repair is
 allowed. Every rejection logs the three singular values, `rho`, feature ID,
 pass index, and one of `nonfinite`, `insufficient_rows`, `rank_deficient`, or
 `ill_conditioned`. The `1e-6` policy is frozen before real-data Schur results
@@ -313,9 +337,11 @@ r_i + H_x,i T(delta_i) delta_i
     ~= H_x,i T(delta_i) delta + H_f,i delta_lambda.
 ```
 
-If `H_x,i` is a genuine current local derivative, this follows from the usual
-Taylor model of `h`. Under the frozen mixed-FEJ baseline it is instead an
-explicit algorithmic definition and no stronger derivative claim is made.
+If `r_i=z-h_i` and `H_x,i=d h_i/d(local)` for the same smooth current model
+`h_i`, this follows from the usual Taylor model of `h_i`. Under the frozen
+mixed-FEJ baseline—and also when pairing the float-quantized runtime residual
+with the continuous `CamRadtan` derivative—it is instead an explicit
+algorithmic definition and no stronger derivative claim is made.
 For a genuinely linear current-Jacobian system, pass 2 recreates the pass-1
 right-hand side and must return identical mean and covariance.
 
@@ -410,9 +436,12 @@ The automated gate must cover at least:
 1. 100 deterministic well-conditioned full-joint, nullspace, and Schur
    fixtures for state increment, landmark back-substitution, residual norm,
    `Lambda/eta/gamma`, NIS, and posterior covariance.
-2. 200 seeded valid-geometry `GLOBAL_3D` projection cases using the actual JPL
-   retraction and an all-double forward projection oracle with FEJ disabled.
-   Compare `H` to `d h/d delta`, or `-H` to `d r/d delta`.
+2. 200 seeded valid-geometry `GLOBAL_3D` projection cases on the frozen EuRoC
+   `CamRadtan` path using the actual JPL retraction and an all-double
+   continuous forward-projection oracle with FEJ disabled. Compare `H` to
+   `d h_cont/d delta`, or `-H` to the derivative of `z-h_cont`; separately
+   verify the nominal stored residual against the float-quantized runtime
+   projection. `CamEqui` is outside this CP1 derivative proof.
 3. 100 exact-rank-deficient or condition-ratio-at-most-`1e-12` landmark
    fixtures, all rejected deterministically without `.inverse()` or NaN.
 4. Raw posterior symmetry and PSD checks before any symmetric view hides an
@@ -433,9 +462,10 @@ current residual function.
 
 ## 11. Review lock
 
-Fresh human signoff on the addendum commit must explicitly approve:
+Fresh human signoff on the replacement addendum commit must explicitly approve:
 
-- residual/Jacobian sign and exact JPL chart;
+- runtime residual, continuous-model derivative, mixed-FEJ surrogate, positive
+  update sign, and exact JPL chart;
 - whitening, three Schur statistics, NIS, and `m-3` gate DoF;
 - the `1e-6` rank threshold and no-regularization rule;
 - rectangular-factor handling of exact clone-augmented PSD priors;

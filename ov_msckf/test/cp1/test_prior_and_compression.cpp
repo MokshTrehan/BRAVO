@@ -157,6 +157,33 @@ TEST(CP1Prior, SemidefiniteCloneAugmentationMatchesInnovationUpdate) {
                  worst_spectral_nis_ratio);
   }
 
+  // A directly unobserved but correlated state component must still receive
+  // the indirect mean and covariance correction.  This catches an updater
+  // that commits only the columns named by the measurement matrix.
+  Eigen::Matrix2d correlated_prior;
+  correlated_prior << 1.0, 0.8, 0.8, 1.0;
+  Eigen::LLT<Eigen::Matrix2d> correlated_factor(correlated_prior);
+  ASSERT_EQ(correlated_factor.info(), Eigen::Success);
+  const Eigen::Matrix2d correlated_factor_dense = correlated_factor.matrixL();
+  Eigen::Matrix<double, 1, 2> observed_first_only;
+  observed_first_only << 1.0, 0.0;
+  const Eigen::Vector2d correlated_root_rhs = correlated_factor_dense.transpose() * observed_first_only.transpose();
+  const Eigen::Matrix2d correlated_root_information =
+      Eigen::Matrix2d::Identity() + correlated_root_rhs * correlated_root_rhs.transpose();
+  Eigen::LDLT<Eigen::Matrix2d> correlated_root_solve(correlated_root_information);
+  ASSERT_EQ(correlated_root_solve.info(), Eigen::Success);
+  const Eigen::Vector2d correlated_increment =
+      correlated_factor_dense * correlated_root_solve.solve(correlated_root_rhs);
+  const Eigen::Matrix2d correlated_posterior =
+      correlated_factor_dense * correlated_root_solve.solve(correlated_factor_dense.transpose());
+  Eigen::Vector2d expected_correlated_increment;
+  expected_correlated_increment << 0.5, 0.4;
+  Eigen::Matrix2d expected_correlated_posterior;
+  expected_correlated_posterior << 0.5, 0.4, 0.4, 0.68;
+  EXPECT_LE((correlated_increment - expected_correlated_increment).norm(), 1.0e-14);
+  EXPECT_LE((correlated_posterior - expected_correlated_posterior).norm(), 1.0e-14);
+  EXPECT_GT(std::abs(correlated_increment(1)), 0.1);
+
   std::cout << "CP1_PSD_PRIOR fixtures=128 seed=" << seed
             << " max_known_state_tolerance_ratio=" << worst_known_state_ratio
             << " max_known_covariance_tolerance_ratio=" << worst_known_covariance_ratio
