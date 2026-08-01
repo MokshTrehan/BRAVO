@@ -149,6 +149,20 @@ second_adversarial_reaudit:
     jpl_fixed_chart_fixtures: 10000
     correlated_untouched_state_fixtures_with_nonzero_indirect_update: 1000
     result: passed
+  superseded_intermediate_evidence:
+    authorization_eligible: false
+    superseded_reason: later_fixed_pass_diagnostics_cost_and_covariance_control_flow_precision_corrections
+    tested_commit: 8f8a4e6a96331f50bde33bcae418b13db8bd89f0
+    source_dirty: false
+    generated_utc: "2026-08-01T21:07:21.595717Z"
+    artifact: results/immutable/cp1/automated/cp1_math_20260801T210721366464774Z-g8f8a4e6a9633
+    seal_method: Linux renameat2(RENAME_NOREPLACE)
+    sha256sums_sha256: 6bd4144b81a347359ce402adeb65ec8c11264303bd3a0a890f08903013c58cd3
+    verifier_result: passed
+    gtests: 7
+    failures: 0
+    errors: 0
+    disabled: 0
   replacement_evidence: null
 
 human_review:

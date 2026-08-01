@@ -67,6 +67,15 @@ checkpoints:
         disabled: 0
         semidefinite_clone_prior_fixtures: 128
         production_measurement_compression_fixtures: 128
+      - path: results/immutable/cp1/automated/cp1_math_20260801T210721366464774Z-g8f8a4e6a9633
+        result: integrity_verified_but_superseded_for_authorization_by_later_diagnostics_cost_and_covariance_control_flow_corrections
+        tested_commit: 8f8a4e6a96331f50bde33bcae418b13db8bd89f0
+        source_dirty: false
+        sha256sums_sha256: 6bd4144b81a347359ce402adeb65ec8c11264303bd3a0a890f08903013c58cd3
+        gtests: 7
+        failures: 0
+        errors: 0
+        disabled: 0
     blockers:
       - correct_derivative_scope_and_regenerate_clean_evidence
       - fresh_commit_specific_signoff_after_addendum_evidence

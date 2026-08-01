@@ -1,0 +1,11 @@
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from CP1Schur
+[ RUN      ] CP1Schur.FullJointNullspaceAndReducedSystemsAgree
+CP1_EQUIVALENCE fixtures=128 near_column_space_fixtures=16 seed=20260728 max_state_error=2.23431e-15 max_landmark_error=4.3639e-15 max_covariance_error=8.86741e-15 max_nis_error=2.24283e-15 max_symmetry_ratio=1.22298e-16 min_normalized_eigenvalue=0.10389
+[       OK ] CP1Schur.FullJointNullspaceAndReducedSystemsAgree (22 ms)
+[----------] 1 test from CP1Schur (22 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (22 ms total)
+[  PASSED  ] 1 test.
