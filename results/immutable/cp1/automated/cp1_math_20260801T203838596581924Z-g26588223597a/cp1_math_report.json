@@ -1,0 +1,164 @@
+{
+  "binary_sha256": {
+    "build/cp1-ws/devel/lib/ov_msckf/test_cp1_prior_and_compression": "f2fbb3bb99fc6577f3a7666270688cfcdb790830478c08a903816226ff0d3394",
+    "build/cp1-ws/devel/lib/ov_msckf/test_cp1_projection_jacobian": "b72a34c6de47ef22c58f5530fc32a2c2819bae3c7a4f0e7e4802e58d1c54d1e8",
+    "build/cp1-ws/devel/lib/ov_msckf/test_cp1_rank_rejection": "69d37058f6895c450252ac50c770d535443859a9d2fc1a2898ccdbb8019ea280",
+    "build/cp1-ws/devel/lib/ov_msckf/test_cp1_schur_equivalence": "be61b71ba168f6dd0b559a53e0599300cdb63644bb7fd0b1351ca458f5260f21"
+  },
+  "checkpoint": "CP1",
+  "contract": {
+    "ill_conditioned_fixture_relative_singular_value": 1e-13,
+    "landmark_relative_singular_floor": 1e-06,
+    "master_seed": 20260728,
+    "production_compression_fixtures": 128,
+    "projection_finite_difference_fixtures": 256,
+    "rank_rejection_fixtures": 128,
+    "semidefinite_clone_prior_fixtures": 128,
+    "well_conditioned_equivalence_fixtures": 128
+  },
+  "evidence_scope": "automated_math_component_with_post_review_addendum",
+  "generated_utc": "2026-08-01T20:38:38.827411Z",
+  "gtest": {
+    "disabled": 0,
+    "errors": 0,
+    "failures": 0,
+    "suites": [
+      {
+        "disabled": 0,
+        "errors": 0,
+        "failures": 0,
+        "file": "test_cp1_prior_and_compression.xml",
+        "name": "AllTests",
+        "tests": 2
+      },
+      {
+        "disabled": 0,
+        "errors": 0,
+        "failures": 0,
+        "file": "test_cp1_projection_jacobian.xml",
+        "name": "AllTests",
+        "tests": 2
+      },
+      {
+        "disabled": 0,
+        "errors": 0,
+        "failures": 0,
+        "file": "test_cp1_rank_rejection.xml",
+        "name": "AllTests",
+        "tests": 2
+      },
+      {
+        "disabled": 0,
+        "errors": 0,
+        "failures": 0,
+        "file": "test_cp1_schur_equivalence.xml",
+        "name": "AllTests",
+        "tests": 1
+      }
+    ],
+    "test_cases": [
+      "CP1Compression.ProductionTruncationPreservesLambdaEtaButNotGamma",
+      "CP1Prior.SemidefiniteCloneAugmentationMatchesInnovationUpdate",
+      "CP1Projection.ActualOpenVINSJacobiansMatchAllDoubleFiniteDifferences",
+      "CP1Retraction.FixedPriorChartDifferentialMatchesExactJPLRetraction",
+      "CP1Schur.BoundaryAndInvalidInputsHaveExplicitStatus",
+      "CP1Schur.DegenerateLandmarksAreRejectedDeterministically",
+      "CP1Schur.FullJointNullspaceAndReducedSystemsAgree"
+    ],
+    "tests": 7
+  },
+  "host": {
+    "platform": "Linux-5.15.0-67-generic-x86_64-with-glibc2.29",
+    "python": "3.8.10"
+  },
+  "overall_checkpoint_status": "in_progress_post_review_addendum_pending_fresh_signoff",
+  "production_estimator_math_edits_permitted": false,
+  "schema_version": 3,
+  "source": {
+    "branch": "schurvio-lite/cp1-math",
+    "commit": "26588223597a2864149fd228e52caf569e7dfd12",
+    "dirty": false,
+    "input_sha256": {
+      "docs/checkpoints.md": "ea16fc5c518dbff51f4f8e3da9e2eca759841c513a516cfff0608c5baee3ec33",
+      "docs/conventions.md": "cd71e8a6eb83018150a2b4a1484a96b0059a04e8e66a948537b9110d804c796a",
+      "docs/iterated_update_spec.md": "f3a5db03e38c18502064556a71e00df3b513db1d4ea9434e175e34850ec8c019",
+      "docs/schurvio_lite_execution_plan.md": "5e403ac7d3453949519f5120b7433849fad0f85133b52425080ef31c7a6d2918",
+      "ov_core/src/cam/CamBase.h": "02b4e51e3bc8c678e32f91737054b18da1830c4bdb707227e8c472a86181f415",
+      "ov_core/src/cam/CamRadtan.h": "f0c21847eb3e2c989c2f9cfde579f4321fd2c3913ea34f166f391098f455a82d",
+      "ov_core/src/types/JPLQuat.h": "2b6fd48feae5d0b1443b16b79ea95aced479e88c02242af5bfecf70cdf153c92",
+      "ov_core/src/types/PoseJPL.h": "25886235f0c608a7ce4da951520fa95aaeffc67ad790a14207e45d0d0ee9ca3d",
+      "ov_core/src/utils/quat_ops.h": "2e01cbd84740d6ba4f446ec12d4e2927d367fc07fcc4ec6ada85f4b0d81d3e9a",
+      "ov_msckf/cmake/ROS1.cmake": "028e6a2c078c1ecff0148eb9b43cc2be4ed1f4b943b523896fbd96c0e759157e",
+      "ov_msckf/package.xml": "783ec705e7734f474593943d109a90c8f1b104b1a00de7a00cf7a9a9b5cfbf95",
+      "ov_msckf/src/state/StateHelper.cpp": "efbc95a15fbd931178af75a5b65b60cbf563c6f0f311624d7b6c1e010be37945",
+      "ov_msckf/src/update/UpdaterHelper.cpp": "f68fc2e1dd04a6a33e94c576839dc4643114d2100ddb69f1b00da09bd7b12714",
+      "ov_msckf/src/update/UpdaterMSCKF.cpp": "b0c2c51bb7e5a0593702cba93c006304fd9408be0c5b1bbfd79499248a6327b5",
+      "ov_msckf/test/cp1/cp1_fixture_utils.h": "921b9881bd8db4879dc04f82d438223dcbdc81376f63931d80cdb827860644da",
+      "ov_msckf/test/cp1/gtest_main.cpp": "6fbfbf42e30df97a77ec8ff4421722e48943bc5042ffb06326e290216d440078",
+      "ov_msckf/test/cp1/test_prior_and_compression.cpp": "8026aaef0d09182cf3233569f76ff9332a5bed0f0fee2567e921a7a492aca8aa",
+      "ov_msckf/test/cp1/test_projection_jacobian.cpp": "acbc16b7ea0c7c54a6395cecad50958bc42ff892c3f0787a809f409cd4c7e2e4",
+      "ov_msckf/test/cp1/test_rank_rejection.cpp": "81ddc32b43009187a20c5b01d1d23cc88683f4df43a6f7bba1ba1a5ee4cac056",
+      "ov_msckf/test/cp1/test_schur_equivalence.cpp": "1c4da0da5c0e6871daa552637faa1c77677e3c60e84fabfbb3e8b691851d8603",
+      "project/cp1_gate.yaml": "338eb92e0aa2354206148e374ddd4c5139dd1148507b1bd96f4fde5951bc6ac5",
+      "scripts/cp1/make_report.py": "3c43242f4939d97d10bc3397ce8c3821229386acadaf0e98ebba26be4d792278",
+      "scripts/cp1/run_cp1.sh": "ca3397c22e827e113207cf77872a9fdc787c975c8a5b255fa5b761379e69e3cc",
+      "scripts/cp1/verify_report.py": "c024787e43aa18ef4ccca73b4e2629a03bc0c6774f8c9217c3827283a01a2274"
+    },
+    "status_porcelain_v1": []
+  },
+  "status": "passed",
+  "summaries": {
+    "CP1_COMPRESSION": {
+      "fixtures": 128,
+      "max_eta_tolerance_ratio": 2.99246e-07,
+      "max_gamma_reconstruction_tolerance_ratio": 8.43061e-08,
+      "max_lambda_tolerance_ratio": 8.51133e-08,
+      "min_discarded_energy": 3.01374,
+      "seed": 443998030361
+    },
+    "CP1_EQUIVALENCE": {
+      "fixtures": 128,
+      "max_covariance_error": 8.86741e-15,
+      "max_landmark_error": 4.3639e-15,
+      "max_nis_error": 2.24283e-15,
+      "max_state_error": 2.23431e-15,
+      "max_symmetry_ratio": 1.22298e-16,
+      "min_normalized_eigenvalue": 0.10389,
+      "near_column_space_fixtures": 16,
+      "seed": 20260728
+    },
+    "CP1_PROJECTION": {
+      "fixtures": 256,
+      "max_landmark_normalized_frobenius": 2.17193e-09,
+      "max_residual_definition_error": 0,
+      "max_residual_sign_normalized_frobenius": 2.17193e-09,
+      "max_state_normalized_frobenius": 2.59487e-10,
+      "seed": 1900496914
+    },
+    "CP1_PSD_PRIOR": {
+      "fixtures": 128,
+      "max_clone_nullspace_tolerance_ratio": 0.000600235,
+      "max_known_covariance_tolerance_ratio": 3.53087e-09,
+      "max_known_nis_tolerance_ratio": 4.93098e-08,
+      "max_known_state_tolerance_ratio": 7.39038e-09,
+      "max_spectral_covariance_tolerance_ratio": 4.02405e-08,
+      "max_spectral_nis_tolerance_ratio": 1.29293e-07,
+      "max_spectral_state_tolerance_ratio": 4.03889e-08,
+      "max_zero_eigenvalue_tolerance_ratio": 0.000305143,
+      "min_posterior_normalized_eigenvalue": -3.2182e-16,
+      "seed": 21320732
+    },
+    "CP1_RANK": {
+      "fixtures": 128,
+      "ill_conditioned": 32,
+      "rank_deficient": 96,
+      "seed": 1934903571
+    },
+    "CP1_RETRACTION": {
+      "fixtures": 256,
+      "max_normalized_frobenius": 1.02009e-09,
+      "seed": 32199698170528780
+    }
+  },
+  "validation_errors": []
+}

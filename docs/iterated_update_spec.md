@@ -1,6 +1,6 @@
 # Reduced and iterated visual update specification
 
-Status: **review recorded for `7288b4a`; post-review CP1 math addendum in progress**
+Status: **schema-3 CP1 addendum evidence passed; fresh signoff pending**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 Frozen rank threshold: `1e-6` relative singular-value ratio
 Primary reset policy through CP3: identity, for OpenVINS covariance parity

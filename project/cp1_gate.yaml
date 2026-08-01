@@ -6,7 +6,7 @@ gate:
   id: CP1
   name: conventions_and_mathematical_correctness
   due: "2026-07-28T23:59:00-04:00"
-  overall_status: in_progress_math_addendum
+  overall_status: in_progress_pending_fresh_addendum_signoff
   source_of_truth: docs/checkpoints.md
   production_estimator_math_edits_permitted: false
 
@@ -86,7 +86,7 @@ automated_evidence:
     - fixed_prior_chart_differential
 
 post_review_addendum:
-  status: implementation_and_automated_validation_in_progress
+  status: automated_evidence_passed_fresh_review_pending
   report_schema_version: 3
   required_tests:
     - algebraic_exact_clone_copy_psd_prior_rectangular_factor_equivalence
@@ -101,7 +101,24 @@ post_review_addendum:
     - compression_gamma_and_exact_gate_threshold_policy
     - mixed_fej_two_pass_blocked_surrogate_status
     - identity_reset_baseline_parity_not_exact_transport
-  evidence: null
+  evidence:
+    command: scripts/cp1/run_cp1.sh
+    tested_commit: 26588223597a2864149fd228e52caf569e7dfd12
+    source_dirty: false
+    generated_utc: "2026-08-01T20:38:38.827411Z"
+    artifact: results/immutable/cp1/automated/cp1_math_20260801T203838596581924Z-g26588223597a
+    report: results/immutable/cp1/automated/cp1_math_20260801T203838596581924Z-g26588223597a/cp1_math_report.json
+    seal_method: Linux renameat2(RENAME_NOREPLACE)
+    sha256sums_sha256: 320c8cda3a98a4036718e34d499c909a8ac70dd0f8d9e71041a6e3fe134d42c3
+    independent_verifier: scripts/cp1/verify_report.py
+    results:
+      gtests: 7
+      failures: 0
+      errors: 0
+      disabled: 0
+      semidefinite_clone_prior_fixtures: 128
+      production_measurement_compression_fixtures: 128
+      historical_schema2_sha256sums_sha256: 6985a04acdf3738babc9bae06842b841c146629eb6f39663d161ed952cf85b44
   fresh_review_status: pending
 
 human_review:
@@ -125,5 +142,4 @@ human_review:
     - exactly_once_covariance_and_identity_reset_policy
 
 blockers:
-  - complete_and_pass_post_review_math_addendum
   - fresh_commit_specific_signoff_after_addendum_evidence

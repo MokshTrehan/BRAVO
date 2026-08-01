@@ -1,6 +1,6 @@
 # Estimator conventions
 
-Status: **review recorded for `7288b4a`; post-review mathematical addendum in progress**
+Status: **schema-3 CP1 addendum evidence passed; fresh signoff pending**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 Human reviewer: **Moksh Trehan (project-author self-review)**
 Signoff date: **2026-07-27 (date-only attestation)**
@@ -245,3 +245,14 @@ mean that the proposed algorithm or paper claim is accepted in advance.
 - Post-review note: later audit corrections are not covered by this signoff;
   their replacement commit requires a fresh attestation before production
   estimator mathematics is enabled.
+
+## Post-review addendum lock
+
+- Corrected/tested commit: `26588223597a2864149fd228e52caf569e7dfd12`
+- Automated evidence: `results/immutable/cp1/automated/cp1_math_20260801T203838596581924Z-g26588223597a`
+- `SHA256SUMS` SHA-256: `320c8cda3a98a4036718e34d499c909a8ac70dd0f8d9e71041a6e3fe134d42c3`
+- Automated result: 7 tests passed, 0 failures/errors/disabled; clean source
+- Fresh reviewer: pending
+- Fresh signoff date: pending
+- Fresh reviewed commit: pending
+- Fresh exceptions: pending
