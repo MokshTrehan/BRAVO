@@ -107,6 +107,10 @@ TEST(CP1Schur, BoundaryAndInvalidInputsHaveExplicitStatus) {
   const auto too_short = schurvio_cp1::reduce_landmark(state_jacobian.topRows(3), left.topRows(3), residual.head(3));
   EXPECT_EQ(too_short.status, schurvio_cp1::FactorStatus::kInsufficientRows);
 
+  const auto incompatible_dimensions =
+      schurvio_cp1::reduce_landmark(state_jacobian.topRows(rows - 1), left, residual);
+  EXPECT_EQ(incompatible_dimensions.status, schurvio_cp1::FactorStatus::kNonfinite);
+
   Eigen::MatrixXd nonfinite = left;
   nonfinite(0, 0) = std::numeric_limits<double>::quiet_NaN();
   const auto invalid = schurvio_cp1::reduce_landmark(state_jacobian, nonfinite, residual);

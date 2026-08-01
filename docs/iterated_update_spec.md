@@ -122,15 +122,18 @@ Rank and conditioning are tested on the whitened `B`, never on `B^T B`, a
 determinant, or an explicit inverse. Let its singular values satisfy
 `s_1 >= s_2 >= s_3 >= 0` and define `rho=s_3/s_1`.
 
-Reject the complete feature before gating when any condition holds:
+Reject the complete feature before gating using this ordered status priority:
 
-1. `m<=3`, or a residual/Jacobian field is nonfinite;
-2. `s_1` is not strictly greater than
+1. incompatible `A`, `B`, or `b` dimensions (`nonfinite`, the helper's legacy
+   invalid-input status);
+2. `m<=3` (`insufficient_rows`);
+3. a residual/Jacobian field is nonfinite (`nonfinite`);
+4. `s_1` is not strictly greater than
    `std::numeric_limits<double>::min()` (`rank_deficient`);
-3. `s_3` is not strictly greater than
+5. `s_3` is not strictly greater than
    `max(m,3)*std::numeric_limits<double>::epsilon()*s_1`
    (`rank_deficient`);
-4. `rho < 1e-6` (`ill_conditioned`).
+6. `rho < 1e-6` (`ill_conditioned`).
 
 The conditions are evaluated in the numbered order above. Thus equality at
 the numerical-rank floor is rejected, while equality at the `rho=1e-6`
