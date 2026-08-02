@@ -123,6 +123,21 @@ Decision: continue CP2 without waiving evidence or moving CP3's August 5 due
 date. Impact: CP2 evidence is delayed and the CP3 schedule is compressed;
 fixed-two-pass work remains blocked.
 
+CP2-C1 implementation sub-gate record (2026-08-02): the isolated composite
+state, canonical state-file codec, detached production-type commit oracle, and
+prepared allocation-free phase-3 capture passed at clean source commit
+`fe00fc8a979bec8676d33961ef868ab9e64803e0` (tree
+`dc6f9e1304debab4f00e769e6fc1514c7fbd3a21`). The rolling unit record is
+`project/cp2_ab_unit_evidence.json`; its retained staging artifact has
+`SHA256SUMS` SHA-256
+`85deb80c2fe03e5379addc9609b7f73bdf90c61ea8412d4b7c7fdc169948d945`.
+The clean serialized build and all 15 captured executables passed, covering
+91/91 CP1/CP2 cases, and independent re-execution and verification passed.
+This is a unit-only implementation sub-gate: it does not pass CP2-C, authorize
+recorded-data access, or establish AArch64/Jetson behavior. CP2-C2, CP2-C3,
+CP2-C, CP2-D, and CP2-E remain unexecuted and unpassed. This paragraph is
+post-run metadata and is not part of the tested source tree above.
+
 Required evidence:
 
 - A deterministic updater fixture matches baseline state increment and

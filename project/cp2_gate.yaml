@@ -106,17 +106,21 @@ checkpoints:
     name: recorded_updater_parity
     status: pending
     implementation_readiness:
-      status: partial_unit_verified_not_cp2_c
-      source_commit: e91f60f2e1f4c11f8b79a7f4601f414313ad9316
+      status: cp2_c1_unit_passed_cp2_c2_cp2_c3_unexecuted_not_cp2_c
+      source_commit: fe00fc8a979bec8676d33961ef868ab9e64803e0
+      source_tree: dc6f9e1304debab4f00e769e6fc1514c7fbd3a21
       unit_evidence_record: project/cp2_ab_unit_evidence.json
+      metadata_record_is_post_run_and_not_runtime_tested: true
       clarification_document: docs/cp2_c_composite_and_readiness_clarification.md
       clarification_status: approved
       clarification_reviewed_commit: b37eff6e5baa035175e1dde3cae52ee496ca9e2d
       clarification_approval_record: project/cp2_c_clarification_approval.json
       live_shadow_and_raw_proposal_codec: passed
-      composite_state_snapshot: pending
-      detached_commit_oracle: pending
-      state_snapshot_file: pending
+      composite_state_snapshot: passed_unit_only
+      detached_commit_oracle: passed_unit_only
+      state_snapshot_file: codec_passed_unit_only_not_updater_integrated
+      updater_phase_ordering_and_failure_atomicity: not_run
+      recorded_readiness_barrier: not_run
       recorded_artifact_reporting: pending
       cp2_c_recorded_evidence: not_run
     minimum_visual_updates: 1000
@@ -282,14 +286,15 @@ evidence_policy:
     verifier: scripts/cp2/verify_report.py
   commands_must_exist_and_pass_self_tests_before_evidence: true
   current_artifact:
-    path: results/staging/cp2/unit/cp2_unit_20260802T073706096250910Z-ge91f60f2e1f4-Max1zy8D
-    report: results/staging/cp2/unit/cp2_unit_20260802T073706096250910Z-ge91f60f2e1f4-Max1zy8D/cp2_report.json
+    path: results/staging/cp2/unit/cp2_unit_20260802T152708655097400Z-gfe00fc8a979b-TAamaoSX
+    report: results/staging/cp2/unit/cp2_unit_20260802T152708655097400Z-gfe00fc8a979b-TAamaoSX/cp2_report.json
     evidence_record: project/cp2_ab_unit_evidence.json
-    tested_commit: e91f60f2e1f4c11f8b79a7f4601f414313ad9316
-    result: passed_cp2_a_b_unit_only
-    sha256sums_sha256: 11d182e1064db2adb833aa87d1e14bf915d5cb0d0264d8b6ed9f15b5f6fe7212
-    scope: cp2_a_b_unit_only
-    stage: staging_pending_cp2_c_cp2_d_cp2_e
+    tested_commit: fe00fc8a979bec8676d33961ef868ab9e64803e0
+    tested_tree: dc6f9e1304debab4f00e769e6fc1514c7fbd3a21
+    result: passed_cp2_a_b_cp2_c1_unit_only
+    sha256sums_sha256: 85deb80c2fe03e5379addc9609b7f73bdf90c61ea8412d4b7c7fdc169948d945
+    scope: cp2_a_b_cp2_c1_unit_only
+    stage: staging_cp2_c1_unit_passed_pending_cp2_c2_cp2_c3_cp2_c_cp2_d_cp2_e
     evidence_class: trusted_runner_local_staging_evidence
     finalization: read_only_staging_finalization_only
     distribution_status: internal_non_conveyable_staging
@@ -305,6 +310,8 @@ protecting_configuration_tests:
   - runtime_failure_zero_silent_fallback
 
 blockers:
+  - cp2_c2_updater_phase_ordering_and_failure_atomicity_not_implemented
+  - cp2_c3_recorded_readiness_barrier_not_passed
   - recorded_updater_parity_not_collected
   - three_sequence_parity_not_collected
   - fixed_clock_timing_profile_not_established

@@ -2,23 +2,25 @@
   "schema_version": 1,
   "project": "SchurVIO-Lite",
   "checkpoint": "CP2-A/B-unit",
-  "recorded_utc": "2026-08-02T07:52:26.257547Z",
-  "status": "passed_cp2_a_b_unit_only",
+  "recorded_utc": "2026-08-02T15:42:59Z",
+  "status": "passed_cp2_a_b_cp2_c1_unit_only",
   "overall_cp2_status": "in_progress_cp2_c_cp2_d_cp2_e_unexecuted",
   "source": {
     "branch": "schurvio-lite/cp2-one-pass",
-    "commit": "e91f60f2e1f4c11f8b79a7f4601f414313ad9316",
-    "tree": "3ca67dcc813fb328266722728b76a2747fec609a",
+    "commit": "fe00fc8a979bec8676d33961ef868ab9e64803e0",
+    "tree": "dc6f9e1304debab4f00e769e6fc1514c7fbd3a21",
     "dirty": false
   },
   "artifact": {
-    "path": "results/staging/cp2/unit/cp2_unit_20260802T073706096250910Z-ge91f60f2e1f4-Max1zy8D",
-    "report": "results/staging/cp2/unit/cp2_unit_20260802T073706096250910Z-ge91f60f2e1f4-Max1zy8D/cp2_report.json",
-    "manifest": "results/staging/cp2/unit/cp2_unit_20260802T073706096250910Z-ge91f60f2e1f4-Max1zy8D/SHA256SUMS",
-    "generated_utc": "2026-08-02T07:49:39.842755Z",
-    "report_sha256": "30aaf5cef91b7e3f42bfd95b261ba92cf443305ff6460510cc58eb238cb50b1d",
-    "sha256sums_sha256": "11d182e1064db2adb833aa87d1e14bf915d5cb0d0264d8b6ed9f15b5f6fe7212",
-    "manifest_entries": 90,
+    "path": "results/staging/cp2/unit/cp2_unit_20260802T152708655097400Z-gfe00fc8a979b-TAamaoSX",
+    "report": "results/staging/cp2/unit/cp2_unit_20260802T152708655097400Z-gfe00fc8a979b-TAamaoSX/cp2_report.json",
+    "manifest": "results/staging/cp2/unit/cp2_unit_20260802T152708655097400Z-gfe00fc8a979b-TAamaoSX/SHA256SUMS",
+    "generated_utc": "2026-08-02T15:39:56.681385Z",
+    "report_sha256": "2283e9fbfd6158b31b8902008f4a22d6de39504e110e12c1f13b2242ec2f7645",
+    "sha256sums_sha256": "85deb80c2fe03e5379addc9609b7f73bdf90c61ea8412d4b7c7fdc169948d945",
+    "manifest_entries": 94,
+    "scope": "cp2_a_b_cp2_c1_unit_only",
+    "stage": "staging_cp2_c1_unit_passed_pending_cp2_c2_cp2_c3_cp2_c_cp2_d_cp2_e",
     "finalization": "read_only_staging_finalization_only",
     "no_overwrite": true,
     "evidence_class": "trusted_runner_local_staging_evidence",
@@ -30,16 +32,17 @@
   "verification": {
     "runner_command": "scripts/cp2/run_unit_gate.sh",
     "runner_exit_status": 0,
-    "independent_verifier_command_template": "/usr/bin/python3 -B scripts/cp2/verify_report.py --expected-manifest-sha256 11d182e1064db2adb833aa87d1e14bf915d5cb0d0264d8b6ed9f15b5f6fe7212 ARTIFACT REPO_ROOT",
+    "independent_verifier_command_template": "/usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 /usr/bin/python3 scripts/cp2/verify_report.py --expected-manifest-sha256 85deb80c2fe03e5379addc9609b7f73bdf90c61ea8412d4b7c7fdc169948d945 ARTIFACT REPO_ROOT",
     "independent_verifier_exit_status": 0,
     "external_manifest_anchor_matched": true,
-    "verifier_self_test_corruptions_rejected": 42,
+    "verifier_self_test_corruptions_rejected": 49,
     "strict_floating_point_passed": true,
     "validation_errors": []
   },
   "checkpoint_status": {
     "CP2-A": "passed",
     "CP2-B": "passed",
+    "CP2-C1": "passed_unit_only",
     "CP2-C": "not_run",
     "CP2-D": "not_run",
     "CP2-E": "not_run_blocked_pending_fixed_clock_profile"
@@ -47,19 +50,19 @@
   "counts": {
     "build_commands_passed": 6,
     "build_commands_total": 6,
-    "captured_executables_passed": 14,
-    "captured_executables_total": 14,
-    "cp2_executables": 10,
+    "captured_executables_passed": 15,
+    "captured_executables_total": 15,
+    "cp2_executables": 11,
     "cp1_regression_executables": 4,
-    "gtest_cases": 77,
-    "cp2_cases": 70,
+    "gtest_cases": 91,
+    "cp2_cases": 84,
     "cp1_regression_cases": 7,
     "failures": 0,
     "errors": 0,
     "disabled": 0,
-    "independent_reexecutions_passed": 14,
-    "independent_reexecutions_total": 14,
-    "independent_reexecution_cases": 77,
+    "independent_reexecutions_passed": 15,
+    "independent_reexecutions_total": 15,
+    "independent_reexecution_cases": 91,
     "independent_reexecution_inputs_unchanged": true
   },
   "cp2_case_counts": {
@@ -72,7 +75,25 @@
     "feature_gate": 13,
     "updater_msckf_preview_snapshot": 4,
     "shadow_math": 14,
-    "trace_codec": 8
+    "trace_codec": 8,
+    "composite_state": 14
+  },
+  "cp2_c1": {
+    "known_answer_payload_bytes": 19335,
+    "known_answer_payload_sha256": "6d6ab4536c957dd9eed060f7cc32cd03e2d2d270df77f24098e35823bebeed44",
+    "six_frame_state_file_bytes": 116286,
+    "identity_metadata_shape_and_list_mutations": 222,
+    "pointer_association_mutations": 45,
+    "binary64_coefficient_mutations": "every_serialized_coefficient_more_than_2000",
+    "nonfinite_scalar_roles": 64,
+    "nonfinite_encodings_per_role": 4,
+    "full_role_fixture_jpl_quaternion_fields": 14,
+    "phase3_fill_noexcept": true,
+    "phase3_fill_allocation_attempts": 0,
+    "detached_oracle_uses_production_type_updates": true,
+    "updater_integrated": false,
+    "cp2_c2_status": "not_run",
+    "cp2_c3_status": "not_run"
   },
   "cp2_a": {
     "accepted_fixtures": 1024,
@@ -104,5 +125,11 @@
   "host_scope": {
     "architecture": "x86_64",
     "jetson_nano_hardware_evidence": false
+  },
+  "metadata_scope": {
+    "relationship": "post_run_record_of_the_clean_tested_source_commit",
+    "runtime_tested_by_this_artifact": false,
+    "commit_identity": "the_git_commit_containing_this_record",
+    "reason": "A record cannot be included in the exact source artifact whose final manifest digest it records."
   }
 }

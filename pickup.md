@@ -6,18 +6,20 @@ Last updated: 2026-08-02 (America/Toronto)
 
 - Repository: `/home/moksh/newSlam variant`
 - Branch: `schurvio-lite/cp2-one-pass`
-- Current HEAD: `0ca7cb6a760f2a72b5d334587681dfc760aa1a37`
-- HEAD subject: `cp2: record composite clarification approval`
-- Known post-HEAD planning change: this `pickup.md` file. It is not an implementation checkpoint until reviewed and committed.
+- Last completed runtime implementation checkpoint: `fe00fc8a979bec8676d33961ef868ab9e64803e0` (`feat: complete CP2-C1 composite state checkpoint`).
+- Tested source tree: `dc6f9e1304debab4f00e769e6fc1514c7fbd3a21`.
+- Fresh unit artifact: `results/staging/cp2/unit/cp2_unit_20260802T152708655097400Z-gfe00fc8a979b-TAamaoSX`.
+- Artifact `SHA256SUMS` external anchor: `85deb80c2fe03e5379addc9609b7f73bdf90c61ea8412d4b7c7fdc169948d945`.
+- The checkpoint-documentation commit containing this file is necessarily post-run metadata and was not runtime-tested by that artifact.
 - Approved CP2-C clarification: `b37eff6e5baa035175e1dde3cae52ee496ca9e2d`
 - Approved CP1 mathematical contract: `952771e955fe3459f2fd43122a9c6f8ce57d1799`
 - Pinned OpenVINS upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 - Target architecture: NVIDIA Jetson Nano family, CPU-only for the claimed path.
-- Current gate state: CP2-A and CP2-B passed; CP2-C, CP2-D, and CP2-E remain pending.
+- Current gate state: CP2-A and CP2-B passed; CP2-C1 passed unit-only; CP2-C2, CP2-C3, CP2-C, CP2-D, and CP2-E remain pending/unexecuted.
 - The CP2 deadline has been missed without a waiver. Requirements remain unchanged and the CP3 schedule is compressed.
 
-Before resuming, require no unexplained worktree changes and verify the exact
-implementation baseline HEAD above. Read, in order:
+Before resuming, require no unexplained worktree changes and verify ancestry
+from the tested implementation checkpoint above. Read, in order:
 
 1. `docs/conventions.md`
 2. `docs/cp2_one_pass_contract.md`
@@ -38,7 +40,8 @@ The branch already contains a real estimator modification and an unusually stric
 - A read-only full-update preflight that computes the proposed state increment and posterior covariance before any live EKF write and suppresses invalid commits.
 - A shadow path that runs the baseline and candidate from the same raw feature systems without candidate writes.
 - Canonical binary64/SHA-256 encoding for raw systems and proposals, plus offline replay.
-- Seventy-seven CP1/CP2 unit tests at the last recorded unit checkpoint, including Schur equivalence, projection Jacobians, FEJ behavior, clone semantics, rank boundaries, end-to-end updater behavior, trace corruption, and replay.
+- An owning four-phase composite-state snapshot, exact pointer-graph token, canonical state-file codec, detached production-type commit oracle, and prepared nonthrowing/allocation-free phase-3 fill/handoff.
+- Ninety-one CP1/CP2 unit tests at the last recorded unit checkpoint, including Schur equivalence, projection Jacobians, FEJ behavior, clone semantics, rank boundaries, end-to-end updater behavior, trace corruption/replay, exhaustive composite mutation, detached update, and allocation-failure coverage.
 
 The default live mode remains `nullspace`. The current `schur` mode is intentionally required to reproduce the same one-pass EKF information as the OpenVINS nullspace update. CP2 is therefore a correctness and parity foundation, not by itself the final research contribution.
 
@@ -66,9 +69,16 @@ If the goal were only to obtain working VIO today, running pinned OpenVINS would
 
 ## Next hard checkpoints
 
-### CP2-C1 — composite snapshot and detached oracle
+### CP2-C1 — composite snapshot and detached oracle — completed unit-only
 
-Implement an isolated, owning composite-state layer before changing the updater commit path:
+Completed at source commit `fe00fc8a979bec8676d33961ef868ab9e64803e0`.
+The fresh serialized unit gate passed 91/91 cases across 15/15 executables,
+including the focused 14/14 composite tests; the verifier independently passed
+against the retained external manifest anchor and rejected 49 synthetic
+corruptions. This closes only CP2-C1. It does not integrate the updater,
+authorize recorded-data access, pass CP2-C, or establish Jetson behavior.
+
+The completed layer:
 
 - Capture state timestamp and full covariance.
 - Capture the exact ordered semantic error-state partition.
@@ -80,28 +90,58 @@ Implement an isolated, owning composite-state layer before changing the updater 
 - Implement the detached commit oracle by constructing one production-equivalent object per active top-level type and applying exactly one complete `dx` segment.
 - Preallocate the live phase-3 capture so the postcommit fill/handoff is nonthrowing and allocation-free.
 
-Hard gate: strict-FP known-answer, round-trip, corruption, one-field mutation, partition, identity, anchor, quaternion-boundary, detached-update, and allocation-failure tests all pass. Then run the complete CP1/CP2 unit suite and commit this checkpoint separately. No recorded bags are opened here.
+Hard gate result: strict-FP known-answer, round-trip, corruption, one-field
+mutation, partition, identity, anchor, quaternion-boundary, detached-update,
+and allocation-failure tests all passed. No recorded bags were opened.
 
-### CP2-C2 — updater phase ordering and failure atomicity
+### CP2-C2 — updater phase ordering and failure atomicity — immediate next checkpoint
 
 Integrate the composite layer into `UpdaterMSCKF` in the approved order:
 
 1. Take a tentative phase-0 capture after cleaning/triangulation and before raw assembly.
-2. When the first raw system becomes possible, fully validate and encode phase 0 before assembling or incrementing the raw counter.
+2. When the first raw system becomes possible, completely encode and validate phase 0 before assembling or incrementing the raw counter.
 3. Project every gate and preview prior from phase 0; never recapture the live prior.
-4. Finish traversal and both proposals.
-5. Build and validate detached expected phase 2 in unpublished storage.
-6. Capture phase 1 and require exact values plus the same pointer graph.
-7. With nothing intervening, enter the sole baseline `StateHelper::EKFUpdate` commit.
-8. Sample the steady-clock endpoint as the first postcommit operation.
-9. Fill phase 3 allocation-free as the next operation and compare it exactly with phase 2.
-10. Publish through a status-returning authoritative sink. Keep the existing diagnostic callback separate and nonauthoritative.
+4. Finish the complete traversal, both lifecycles, gamma totals, compressions,
+   and every available proposal before any commit decision; use checked
+   arithmetic for every population counter.
+5. For a baseline proposal otherwise commit-eligible, construct, validate, and
+   encode detached expected phase 2 into unpublished storage and prepare
+   phase-3 storage. Discard phase 2 if phase 1 or any later precommit condition
+   suppresses commit.
+6. Capture complete phase 1, compare its canonical bytes with phase 0 before
+   independent semantic validation, and prove the original owning pointer
+   graph. A complete value/pointer change is `snapshot_mismatch`; incomplete
+   capture or encoding is run-fatal.
+7. After final phase-1 verification, allow no live-state read, evidence
+   arithmetic, callback, logging, or estimator operation before the sole
+   baseline `StateHelper::EKFUpdate` commit.
+8. For a commit, sample the steady-clock endpoint as the first postcommit
+   operation and fill phase 3 allocation-free as the second. Then validate and
+   compare phase 3 exactly with phase 2. A capturable nonfinite/unequal phase 3
+   is committed failed evidence; an incomplete shape/inventory capture is
+   run-fatal and is never rolled back.
+9. For every raw-system noncommit terminal, perform the same complete phase-1
+   capture, value-before-validity canonical comparison, and original
+   pointer-graph proof from step 6; then sample the endpoint as the last timed
+   estimator operation and publish only phases `[0,1]`. Zero-raw terminals
+   publish no state phase; commits publish exactly `[0,1,2,3]`.
+10. Publish through a status-returning authoritative sink with an out-of-band
+    fatal latch. Keep the existing callback diagnostic-only. Sink failure,
+    incomplete trace, or postcommit pointer failure aborts the campaign.
+11. Record exactly `baseline_expected_type_update_calls`,
+    `baseline_verified_nominal_fields`, `baseline_nominal_mismatches`,
+    `baseline_covariance_mismatches` over the complete ordered `n*n`
+    covariance, and `baseline_fej_mismatches`. Structural failure makes the
+    verified-field and three mismatch counters zero. Campaign
+    `baseline_commit_mismatches` counts committed updater invocations, while
+    `state_blocks_expected/seen` and `covariance_blocks_expected/seen` count
+    complete rows as `B` and `B*B` independently of numeric availability.
 
 Hard gate: protecting tests prove exact operation order, zero raw count on failed phase-0 promotion, no precommit writes on ordinary failure, no candidate writes, no phase 2 for noncommitting records, exact counter units, correct committed-mismatch classification, and run-fatal behavior for incomplete traces or pointer-graph replacement.
 
 ### CP2-C3 — recorded-evidence runner readiness
 
-- Complete the state-snapshot binary file and artifact report plumbing.
+- Integrate the completed state-snapshot binary codec into artifact/report plumbing.
 - Implement the approved source-provenance/readiness barrier and its artifact-free self-tests.
 - Bind raw, proposal, state, feature, state-block, covariance-block, update, configuration, source, and command records one-to-one.
 - Run a fresh full unit gate at the exact clean runtime commit.
@@ -149,7 +189,9 @@ git rev-parse HEAD
 git log -5 --oneline --decorate
 ```
 
-Expected implementation baseline HEAD is `0ca7cb6a760f2a72b5d334587681dfc760aa1a37`.
-The only expected post-HEAD change at this handoff is `pickup.md`. If any other
-path is changed, or HEAD differs, inspect and reconcile it before starting
-CP2-C1. Do not reset or overwrite unexplained work.
+Require a clean HEAD that descends from the tested CP2-C1 implementation commit
+`fe00fc8a979bec8676d33961ef868ab9e64803e0`. A later checkpoint-metadata commit
+is expected; do not confuse it with the runtime-tested source commit. If the
+ancestry check fails or the worktree has unexplained changes, inspect and
+reconcile them before starting CP2-C2. Do not reset or overwrite unexplained
+work.
