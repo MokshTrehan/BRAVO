@@ -41,6 +41,7 @@
 namespace ov_msckf {
 
 class UpdaterMSCKFPreview;
+class CP2CompositeStateAdapter;
 
 /**
  * @brief State of our filter
@@ -189,6 +190,7 @@ private:
   // This prevents a developer from thinking that the "insert clone" will actually correctly add it to the covariance
   friend class StateHelper;
   friend class UpdaterMSCKFPreview;
+  friend class CP2CompositeStateAdapter;
 
   /// Covariance of all active variables
   Eigen::MatrixXd _Cov;

@@ -65,8 +65,10 @@ list(APPEND LIBRARY_SOURCES
         src/core/VioManager.cpp
         src/core/VioManagerHelper.cpp
         src/update/CP2Canonical.cpp
+        src/update/CP2CompositeState.cpp
         src/update/CP2FeatureGate.cpp
         src/update/CP2ShadowMath.cpp
+        src/update/CP2StateTraceCodec.cpp
         src/update/CP2TraceCodec.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
@@ -82,8 +84,10 @@ list(APPEND LIBRARY_SOURCES
 set_source_files_properties(
         src/state/StateHelper.cpp
         src/update/CP2Canonical.cpp
+        src/update/CP2CompositeState.cpp
         src/update/CP2FeatureGate.cpp
         src/update/CP2ShadowMath.cpp
+        src/update/CP2StateTraceCodec.cpp
         src/update/CP2TraceCodec.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp

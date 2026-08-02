@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# CP2-A/B unit evidence runner. This program deliberately has no bag/dataset path.
+# CP2-A/B plus CP2-C1 unit evidence runner. This program has no bag/dataset path.
 set -Eeuo pipefail
 umask 077
 export PATH=/usr/bin:/bin
@@ -39,6 +39,7 @@ readonly -a archive_roots=(
     docs/checkpoints.md
     docs/conventions.md
     docs/cp2_artifact_schema.md
+    docs/cp2_c_composite_and_readiness_clarification.md
     docs/cp2_math_implementation_audit.md
     docs/cp2_one_pass_contract.md
     docs/cp2_recorded_evidence_contract.md
@@ -46,6 +47,7 @@ readonly -a archive_roots=(
     docs/schurvio_lite_execution_plan.md
     project/cp0_baseline.json
     project/cp1_gate.yaml
+    project/cp2_c_clarification_approval.json
     project/cp2_gate.yaml
     project/cp2_serial.launch
 )
@@ -61,6 +63,7 @@ readonly -a cp2_tests=(
     test_cp2_state_update_semantics
     test_cp2_configuration_contract
     test_cp2_updater_msckf_end_to_end
+    test_cp2_composite_state
     test_cp2_canonical
     test_cp2_feature_gate
     test_cp2_updater_msckf_preview_snapshot
@@ -1422,11 +1425,11 @@ fi
 write_workspace_record "${source_read_only_after_build}" "${ceres_read_only_after_build}"
 write_source_snapshot "${run_dir}/source_after.json"
 
-# Assembly writes staging evidence only. It is never an eligible CP2 seal while
-# CP2-C/D/E entry points and their self-tests remain incomplete.
+# Assembly writes staging evidence only. CP2-C1 is a unit sub-gate, not CP2-C;
+# the CP2-C/D/E entry points and their self-tests remain incomplete.
 if ! /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 \
     /usr/bin/python3 "${verifier}" --assemble-unit "${run_dir}" "${repo_root}"; then
-    die "could not assemble the CP2-A/B staging report; partial artifacts were retained"
+    die "could not assemble the CP2-A/B plus CP2-C1 staging report; partial artifacts were retained"
 fi
 manifest_sha256="$(sha256_path "${run_dir}/SHA256SUMS")"
 
@@ -1445,15 +1448,16 @@ else
     verify_status=$?
 fi
 if [[ "${verify_status}" -ne 0 || "${build_failures}" -ne 0 || "${test_failures}" -ne 0 ]]; then
-    echo "CP2-A/B FAILED; diagnostic staging evidence is retained without overwrite:" >&2
+    echo "CP2-A/B plus CP2-C1 FAILED; diagnostic staging evidence is retained without overwrite:" >&2
     echo "  ${final_dir}" >&2
     exit 1
 fi
 
 run_succeeded=1
-echo "CP2-A/B unit evidence passed and is retained as staging pending the remaining CP2 gates:"
+echo "CP2-A/B plus CP2-C1 unit evidence passed and is retained as staging:"
 echo "  ${final_dir}"
 echo "SHA256SUMS SHA-256 external anchor: ${manifest_sha256}"
 echo "Evidence class: trusted_runner_local_staging; independent source-to-binary attestation: false."
 echo "Distribution status: internal_non_conveyable_staging."
-echo "This artifact is not an eligible CP2 seal. CP2-C, CP2-D, and CP2-E remain unexecuted and unpassed."
+echo "This artifact is not an eligible CP2 seal. CP2-C1 is unit-only;" \
+    "CP2-C2, CP2-C3, CP2-C, CP2-D, and CP2-E remain unexecuted and unpassed."

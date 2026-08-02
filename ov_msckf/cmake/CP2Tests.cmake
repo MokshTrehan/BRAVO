@@ -84,6 +84,25 @@ if (CATKIN_ENABLE_TESTING)
                 -fsigned-zeros)
     endif ()
 
+    # Keep the composite-state gate in its own executable: it interposes the C
+    # heap and all ordinary C++ new forms to prove that the prepared phase-3
+    # fill/handoff stays allocation-free under injected allocation failure.
+    catkin_add_gtest(test_cp2_composite_state
+            test/cp2/gtest_main.cpp
+            test/cp2/test_cp2_composite_state.cpp)
+
+    if (TARGET test_cp2_composite_state)
+        target_link_libraries(test_cp2_composite_state
+                ov_msckf_lib
+                ${thirdparty_libraries})
+        target_include_directories(test_cp2_composite_state PRIVATE
+                test/cp2)
+        target_compile_options(test_cp2_composite_state PRIVATE
+                -fno-fast-math
+                -ffp-contract=off
+                -fsigned-zeros)
+    endif ()
+
     set(CP2_VALUE_ONLY_TEST_SOURCES
             test_cp2_canonical;test/cp2/test_cp2_canonical.cpp
             test_cp2_feature_gate;test/cp2/test_cp2_feature_gate.cpp

@@ -172,6 +172,19 @@ public:
   /// Gets the height of the camera images
   int h() { return _height; }
 
+  /**
+   * @brief Direct read-only CP2 evidence access to the mutable camera cache.
+   *
+   * These accessors return references/scalars only. They perform no allocation,
+   * arithmetic, normalization, or mutation and are used by the pre-sized
+   * postcommit composite-state capture.
+   */
+  const Eigen::MatrixXd &cp2_cache_value() const noexcept { return camera_values; }
+  const cv::Matx33d &cp2_cache_K() const noexcept { return camera_k_OPENCV; }
+  const cv::Vec4d &cp2_cache_D() const noexcept { return camera_d_OPENCV; }
+  int cp2_cache_width() const noexcept { return _width; }
+  int cp2_cache_height() const noexcept { return _height; }
+
 protected:
   // Cannot construct the base camera class, needs a distortion model
   CamBase() = default;

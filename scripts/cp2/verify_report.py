@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Assemble and independently verify SchurVIO-Lite CP2-A/B unit evidence."""
+"""Assemble and verify CP2-A/B plus CP2-C1 composite-state unit evidence."""
 
 from __future__ import annotations
 
@@ -28,8 +28,13 @@ import xml.etree.ElementTree as ET
 REPORT_NAME = "cp2_report.json"
 MANIFEST_NAME = "SHA256SUMS"
 EXPECTED_BRANCH = "schurvio-lite/cp2-one-pass"
-EVIDENCE_SCOPE = "cp2_a_b_unit_math_with_complete_cp1_regression"
+EVIDENCE_SCOPE = (
+    "cp2_a_b_unit_math_and_cp2_c1_composite_state_codec_oracle_"
+    "with_complete_cp1_regression"
+)
 OVERALL_STATUS = "in_progress_cp2_c_cp2_d_cp2_e_unexecuted"
+UNIT_PASS_STATUS = "passed_cp2_a_b_cp2_c1_unit_only"
+UNIT_FAIL_STATUS = "failed_cp2_a_b_cp2_c1_unit"
 CP1_AUTHORIZATION_COMMIT = "8d80f483752411d34a3bc4c1ff6330b3a5c0fef3"
 CERES_COMMIT = "facb199f3eda902360f9e1d5271372b7e54febe1"
 CERES_TAG = "1.14.0"
@@ -50,6 +55,7 @@ CP2_TESTS = {
     "test_cp2_state_update_semantics": 2,
     "test_cp2_configuration_contract": 10,
     "test_cp2_updater_msckf_end_to_end": 8,
+    "test_cp2_composite_state": 14,
     "test_cp2_canonical": 5,
     "test_cp2_feature_gate": 13,
     "test_cp2_updater_msckf_preview_snapshot": 4,
@@ -69,6 +75,7 @@ TEST_SOURCE_BY_BINARY = {
     "test_cp2_state_update_semantics": "ov_msckf/test/cp2/test_state_update_semantics.cpp",
     "test_cp2_configuration_contract": "ov_msckf/test/cp2/test_configuration_contract.cpp",
     "test_cp2_updater_msckf_end_to_end": "ov_msckf/test/cp2/test_updater_msckf_end_to_end.cpp",
+    "test_cp2_composite_state": "ov_msckf/test/cp2/test_cp2_composite_state.cpp",
     "test_cp2_canonical": "ov_msckf/test/cp2/test_cp2_canonical.cpp",
     "test_cp2_feature_gate": "ov_msckf/test/cp2/test_cp2_feature_gate.cpp",
     "test_cp2_updater_msckf_preview_snapshot": (
@@ -86,6 +93,20 @@ EXPECTED_TEST_CASES = {
     "CP1Schur.BoundaryAndInvalidInputsHaveExplicitStatus",
     "CP1Schur.DegenerateLandmarksAreRejectedDeterministically",
     "CP1Schur.FullJointNullspaceAndReducedSystemsAgree",
+    "CP2CompositeDetachedOracle.AppliesExactlyOneProductionUpdatePerTopLevelType",
+    "CP2CompositeLiveCapture.ParentSubvariableInactiveCalibrationAndCameraInventoryFaultsAreRejected",
+    "CP2CompositeLiveCapture.ProductionStateProjectsOneOwningPriorAndIgnoresAddressesAndMapInsertion",
+    "CP2CompositePointerGraph.Phase1MatchesAndEveryPointerAssociationMutationIsDetected",
+    "CP2CompositePostcommit.LiveCacheReadAndPreparedOrPointerFailuresReturnExplicitStatus",
+    "CP2CompositePostcommit.PreparedPhase3FillIsNoexceptAllocationFreeAndMatchesProductionCommit",
+    "CP2CompositeStateCodec.EveryBinary64CoefficientMutationIsDetected",
+    "CP2CompositeStateCodec.FrozenFullRolePayloadRoundTripsBitExactly",
+    "CP2CompositeStateCodec.IdentityMetadataShapeAndKeyMutationsAreDetected",
+    "CP2CompositeStateCodec.NonfiniteRolesRoundTripLosslesslyButNeverValidate",
+    "CP2CompositeStateValidation.EveryLandmarkRepresentationIdentityRuleIsExact",
+    "CP2CompositeStateValidation.ExactPartitionsAndCloneIdentityFailClosed",
+    "CP2CompositeStateValidation.QuaternionSquaredNormBoundaryIsRoleComplete",
+    "CP2StateFileCodec.LegalPhasePopulationsRoundTripAndCorruptionFailsClosed",
     "CP2Configuration.InvalidEnumFailsStartupWithoutSelectingAStringMode",
     "CP2Configuration.InvalidSpellingsCannotMutateASelectedModeOrFallBack",
     "CP2Configuration.NonfiniteAndNonpositiveSigmaFailBeforeVarianceMaterialization",
@@ -181,6 +202,7 @@ SUMMARIES_BY_BINARY = {
     "test_cp2_state_update_semantics": {"CP2_B_PREVIEW_REJECTION", "CP2_B_STATE_UPDATE"},
     "test_cp2_configuration_contract": set(),
     "test_cp2_updater_msckf_end_to_end": set(),
+    "test_cp2_composite_state": set(),
     "test_cp2_canonical": set(),
     "test_cp2_feature_gate": set(),
     "test_cp2_updater_msckf_preview_snapshot": set(),
@@ -196,6 +218,7 @@ SOURCE_INPUTS = {
     "docs/checkpoints.md",
     "docs/conventions.md",
     "docs/cp2_artifact_schema.md",
+    "docs/cp2_c_composite_and_readiness_clarification.md",
     "docs/cp2_math_implementation_audit.md",
     "docs/cp2_one_pass_contract.md",
     "docs/cp2_recorded_evidence_contract.md",
@@ -204,8 +227,13 @@ SOURCE_INPUTS = {
     "ov_core/CMakeLists.txt",
     "ov_core/src/cam/CamBase.h",
     "ov_core/src/cam/CamRadtan.h",
+    "ov_core/src/types/IMU.h",
     "ov_core/src/types/JPLQuat.h",
+    "ov_core/src/types/Landmark.h",
+    "ov_core/src/types/LandmarkRepresentation.h",
     "ov_core/src/types/PoseJPL.h",
+    "ov_core/src/types/Type.h",
+    "ov_core/src/types/Vec.h",
     "ov_core/src/utils/quat_ops.h",
     "ov_init/CMakeLists.txt",
     "ov_msckf/CMakeLists.txt",
@@ -218,12 +246,17 @@ SOURCE_INPUTS = {
     "ov_msckf/src/state/State.h",
     "ov_msckf/src/state/StateHelper.cpp",
     "ov_msckf/src/state/StateHelper.h",
+    "ov_msckf/src/state/StateOptions.h",
     "ov_msckf/src/update/CP2Canonical.cpp",
     "ov_msckf/src/update/CP2Canonical.h",
+    "ov_msckf/src/update/CP2CompositeState.cpp",
+    "ov_msckf/src/update/CP2CompositeState.h",
     "ov_msckf/src/update/CP2FeatureGate.cpp",
     "ov_msckf/src/update/CP2FeatureGate.h",
     "ov_msckf/src/update/CP2ShadowMath.cpp",
     "ov_msckf/src/update/CP2ShadowMath.h",
+    "ov_msckf/src/update/CP2StateTraceCodec.cpp",
+    "ov_msckf/src/update/CP2StateTraceCodec.h",
     "ov_msckf/src/update/CP2TraceCodec.cpp",
     "ov_msckf/src/update/CP2TraceCodec.h",
     "ov_msckf/src/update/SchurUpdate.cpp",
@@ -244,6 +277,7 @@ SOURCE_INPUTS = {
     "ov_msckf/test/cp2/gtest_main.cpp",
     "ov_msckf/test/cp2/test_configuration_contract.cpp",
     "ov_msckf/test/cp2/test_cp2_canonical.cpp",
+    "ov_msckf/test/cp2/test_cp2_composite_state.cpp",
     "ov_msckf/test/cp2/test_cp2_feature_gate.cpp",
     "ov_msckf/test/cp2/test_cp2_shadow_math.cpp",
     "ov_msckf/test/cp2/test_cp2_trace_codec.cpp",
@@ -254,6 +288,7 @@ SOURCE_INPUTS = {
     "ov_msckf/test/cp2/test_updater_msckf_preview_snapshot.cpp",
     "project/cp0_baseline.json",
     "project/cp1_gate.yaml",
+    "project/cp2_c_clarification_approval.json",
     "project/cp2_gate.yaml",
     "project/cp2_serial.launch",
     "scripts/cp0/bootstrap_ceres_1_14.sh",
@@ -266,10 +301,12 @@ SOURCE_INPUTS = {
 
 CONTRACT_INPUTS = {
     "docs/cp2_artifact_schema.md",
+    "docs/cp2_c_composite_and_readiness_clarification.md",
     "docs/cp2_one_pass_contract.md",
     "docs/cp2_recorded_evidence_contract.md",
     "docs/iterated_update_spec.md",
     "project/cp1_gate.yaml",
+    "project/cp2_c_clarification_approval.json",
     "project/cp2_gate.yaml",
 }
 CONFIG_INPUTS = {
@@ -285,6 +322,16 @@ FROZEN_CONFIG_SHA256 = {
     "config/euroc_mav/kalibr_imucam_chain.yaml":
         "b9e11b7bcda102f7c8c384c97318d67f3916b58942f9073722f83c22bd7073f7",
 }
+FROZEN_CP2_C_APPROVAL_BINDING = {
+    "docs/cp2_c_composite_and_readiness_clarification.md": {
+        "git_blob": "90ac833f52ad8a8c6ea12ff86e3301a46b28d6e0",
+        "sha256": "dd2232ec8ee6536c78b5971858efbb22d9965f121205f83a613c5b0ad0f69e66",
+    },
+    "project/cp2_c_clarification_approval.json": {
+        "git_blob": "0307342411e06dff57d58d48bc4d829fca138686",
+        "sha256": "e6a8a4e55f1e39fafd35e57114668c26f15690d3b20d8d99c34fee1285a9a3e7",
+    },
+}
 
 BUILD_STEPS = (
     "ceres_configure",
@@ -298,8 +345,10 @@ STRICT_TARGETS = set(ALL_TESTS)
 STRICT_PRODUCTION_SOURCES = (
     "ov_msckf/src/update/SchurUpdate.cpp",
     "ov_msckf/src/update/CP2Canonical.cpp",
+    "ov_msckf/src/update/CP2CompositeState.cpp",
     "ov_msckf/src/update/CP2FeatureGate.cpp",
     "ov_msckf/src/update/CP2ShadowMath.cpp",
+    "ov_msckf/src/update/CP2StateTraceCodec.cpp",
     "ov_msckf/src/update/CP2TraceCodec.cpp",
     "ov_msckf/src/update/UpdaterHelper.cpp",
     "ov_msckf/src/update/UpdaterMSCKF.cpp",
@@ -368,6 +417,7 @@ ARCHIVE_ROOTS = [
     "docs/checkpoints.md",
     "docs/conventions.md",
     "docs/cp2_artifact_schema.md",
+    "docs/cp2_c_composite_and_readiness_clarification.md",
     "docs/cp2_math_implementation_audit.md",
     "docs/cp2_one_pass_contract.md",
     "docs/cp2_recorded_evidence_contract.md",
@@ -375,6 +425,7 @@ ARCHIVE_ROOTS = [
     "docs/schurvio_lite_execution_plan.md",
     "project/cp0_baseline.json",
     "project/cp1_gate.yaml",
+    "project/cp2_c_clarification_approval.json",
     "project/cp2_gate.yaml",
     "project/cp2_serial.launch",
 ]
@@ -440,6 +491,14 @@ def sha256_file(path):
 
 def sha256_bytes(content):
     return hashlib.sha256(content).hexdigest()
+
+
+def validate_cp2_c_approval_binding(input_hashes, git_blobs, errors):
+    for relative, expected in FROZEN_CP2_C_APPROVAL_BINDING.items():
+        if input_hashes.get(relative) != expected["sha256"]:
+            errors.append("CP2-C approval-binding SHA-256 mismatch: " + relative)
+        if git_blobs.get(relative) != expected["git_blob"]:
+            errors.append("CP2-C approval-binding Git blob mismatch: " + relative)
 
 
 def atomic_write_bytes(path, content):
@@ -2444,16 +2503,27 @@ def collect_source_metadata(artifact_dir, repo_root, errors, allow_synthetic=Fal
     except subprocess.CalledProcessError as exc:
         errors.append("recorded source commit is unavailable: " + str(exc))
     input_hashes = {}
+    approval_binding_git_blobs = {}
     if commit:
         for relative in sorted(SOURCE_INPUTS):
             try:
-                input_hashes[relative] = sha256_bytes(committed_blob(repo_root, commit, relative))
+                committed_bytes = committed_blob(repo_root, commit, relative)
+                input_hashes[relative] = sha256_bytes(committed_bytes)
+                if relative in FROZEN_CP2_C_APPROVAL_BINDING:
+                    git_header = b"blob " + str(len(committed_bytes)).encode("ascii") + b"\0"
+                    approval_binding_git_blobs[relative] = hashlib.sha1(
+                        git_header + committed_bytes
+                    ).hexdigest()
             except subprocess.CalledProcessError as exc:
                 errors.append("cannot hash committed source {}: {}".format(relative, exc))
     config_hashes = {name: input_hashes.get(name) for name in sorted(CONFIG_INPUTS)}
     for relative, expected in FROZEN_CONFIG_SHA256.items():
         if config_hashes.get(relative) != expected:
             errors.append("frozen configuration hash mismatch: " + relative)
+    if not allow_synthetic:
+        validate_cp2_c_approval_binding(
+            input_hashes, approval_binding_git_blobs, errors
+        )
     contract_hashes = {name: input_hashes.get(name) for name in sorted(CONTRACT_INPUTS)}
     archive_path = artifact_dir / SOURCE_ARCHIVE_NAME
     archive_record = {
@@ -2964,16 +3034,22 @@ def validate_record_timeline(source, build_records, test_records, self_test, err
         errors.append("source snapshot timeline is reversed")
 
 
-def artifact_policy():
+def artifact_policy(passed=True):
     return {
         "dataset_or_bag_accessed": False,
         "distribution_status": "internal_non_conveyable_staging",
         "eligible_for_cp2_seal": False,
         "finalization": "read_only_staging_finalization_only",
         "no_overwrite": True,
-        "scope": "cp2_a_b_unit_only",
+        "scope": "cp2_a_b_cp2_c1_unit_only",
         "serialized_build_and_tests": True,
-        "stage": "staging_pending_cp2_c_cp2_d_cp2_e",
+        "stage": (
+            (
+                "staging_cp2_c1_unit_passed_"
+                if passed else "staging_cp2_c1_unit_not_established_"
+            )
+            + "pending_cp2_c2_cp2_c3_cp2_c_cp2_d_cp2_e"
+        ),
         "trust_model": "trusted_committed_runner_not_malicious_forgery_resistant",
     }
 
@@ -2982,6 +3058,7 @@ def expected_checkpoint_status(passed=True):
     return {
         "CP2-A": "passed" if passed else "not_established",
         "CP2-B": "passed" if passed else "not_established",
+        "CP2-C1": "passed_unit_only" if passed else "not_established",
         "CP2-C": "not_run",
         "CP2-D": "not_run",
         "CP2-E": "not_run_blocked_pending_fixed_clock_profile",
@@ -3045,7 +3122,7 @@ def assemble_unit_report(artifact_dir, repo_root, allow_synthetic=False):
     validate_record_timeline(source, build_records, test_records, self_test, errors)
     passed = not errors
     report = {
-        "artifact_policy": artifact_policy(),
+        "artifact_policy": artifact_policy(passed),
         "binary_sha256": binaries,
         "build": {
             "cmake_cache_sha256": (
@@ -3077,7 +3154,7 @@ def assemble_unit_report(artifact_dir, repo_root, allow_synthetic=False):
         "production_library": production_library,
         "schema_version": 1,
         "source": source,
-        "status": "passed_cp2_a_b_unit_only" if passed else "failed_cp2_a_b_unit",
+        "status": UNIT_PASS_STATUS if passed else UNIT_FAIL_STATUS,
         "strict_floating_point": strict_fp,
         "summaries": summaries,
         "test_invocations": test_records,
@@ -3155,13 +3232,13 @@ def verify_unit_report(
     if report.get("checkpoint") != "CP2-A/B-unit":
         errors.append("report checkpoint is not the CP2-A/B unit sub-gate")
     if report.get("evidence_scope") != EVIDENCE_SCOPE:
-        errors.append("report evidence_scope is not the CP2-A/B unit scope")
+        errors.append("report evidence_scope is not the CP2-A/B plus CP2-C1 unit scope")
     if report.get("overall_checkpoint_status") != OVERALL_STATUS:
         errors.append("report incorrectly changes the overall CP2 status")
-    if report.get("status") != "passed_cp2_a_b_unit_only":
-        errors.append("report does not record a passed CP2-A/B unit run")
+    if report.get("status") != UNIT_PASS_STATUS:
+        errors.append("report does not record a passed CP2-A/B plus CP2-C1 unit run")
     if report.get("eligible_for_cp2_seal") is not False:
-        errors.append("CP2-A/B unit evidence must be ineligible for CP2 sealing")
+        errors.append("CP2-A/B plus CP2-C1 unit evidence must be ineligible for CP2 sealing")
     if report.get("evidence_class") != "trusted_runner_local_staging_evidence":
         errors.append("report evidence class overstates the local trusted-runner scope")
     if report.get("independent_source_to_binary_attestation") is not False:
@@ -3169,7 +3246,10 @@ def verify_unit_report(
     if report.get("validation_errors") != []:
         errors.append("report contains validation errors")
     if report.get("checkpoint_status") != expected_checkpoint_status(True):
-        errors.append("checkpoint status must pass only CP2-A/B and leave CP2-C/D/E unpassed")
+        errors.append(
+            "checkpoint status must pass CP2-A/B and CP2-C1 unit only while leaving "
+            "CP2-C/D/E unpassed"
+        )
     if report.get("artifact_policy") != artifact_policy():
         errors.append("artifact policy differs from the unit-only no-overwrite contract")
     if report.get("integrity") != {
@@ -3189,7 +3269,9 @@ def verify_unit_report(
     if source.get("dirty") is not False:
         errors.append("report source provenance is dirty")
     if set(source.get("input_sha256", {})) != SOURCE_INPUTS:
-        errors.append("source hash inventory differs from the frozen CP2-A/B inventory")
+        errors.append(
+            "source hash inventory differs from the frozen CP2-A/B plus CP2-C1 inventory"
+        )
     if source.get("configuration_sha256") != {
         name: FROZEN_CONFIG_SHA256[name] for name in sorted(CONFIG_INPUTS)
     }:
@@ -3324,7 +3406,7 @@ def verify_unit_report(
                 print("ERROR: " + error)
         return 1, errors
     if not quiet:
-        print("CP2-A/B unit evidence verified: " + str(artifact_dir))
+        print("CP2-A/B plus CP2-C1 unit evidence verified: " + str(artifact_dir))
         print("SHA256SUMS SHA-256: " + str(anchor["sha256"]))
         if anchor["claim"] == "external_sha256_anchor_matched":
             print("External SHA256SUMS digest anchor matched.")
@@ -3336,7 +3418,10 @@ def verify_unit_report(
             "attestation is false."
         )
         print("Distribution status: internal non-conveyable staging.")
-        print("CP2-C, CP2-D, and CP2-E remain unexecuted and unpassed.")
+        print(
+            "CP2-C1 is unit-only; CP2-C2, CP2-C3, CP2-C, CP2-D, and CP2-E "
+            "remain unexecuted and unpassed."
+        )
     return 0, []
 
 
@@ -3393,9 +3478,9 @@ def finalize_staging_noreplace(source, destination, repo_root=None, allow_synthe
     expected_parent = (repo_root / "results/staging/cp2/unit").resolve()
     if not allow_synthetic:
         if source.parent.absolute() != expected_parent or not source.parent.is_dir():
-            raise ValueError("source is outside the CP2-A/B staging parent")
+            raise ValueError("source is outside the CP2-A/B plus CP2-C1 staging parent")
         if destination.parent.absolute() != expected_parent or not destination.parent.is_dir():
-            raise ValueError("destination is outside the CP2-A/B staging parent")
+            raise ValueError("destination is outside the CP2-A/B plus CP2-C1 staging parent")
         if not source.name.startswith(".cp2_unit_") or ".partial." not in source.name:
             raise ValueError("source is not a CP2 partial staging directory")
         if not destination.name.startswith("cp2_unit_"):
@@ -3505,6 +3590,37 @@ TEST_CASES_BY_BINARY = {
         "CP2UpdaterMSCKFEndToEnd.SchurModeRejectsShadowEnableWithoutReplacingExistingObserver",
         "CP2UpdaterMSCKFEndToEnd.ObserverExceptionCannotVetoAnAcceptedBaselineCommit",
         "CP2UpdaterMSCKFEndToEnd.AllRejectedRawSystemHasExactTerminalTaxonomyAndNoBaselineWrite",
+    ],
+    "test_cp2_composite_state": [
+        "CP2CompositeStateCodec.FrozenFullRolePayloadRoundTripsBitExactly",
+        "CP2CompositeStateCodec.EveryBinary64CoefficientMutationIsDetected",
+        "CP2CompositeStateCodec.IdentityMetadataShapeAndKeyMutationsAreDetected",
+        "CP2CompositeStateValidation.ExactPartitionsAndCloneIdentityFailClosed",
+        "CP2CompositeStateValidation.EveryLandmarkRepresentationIdentityRuleIsExact",
+        "CP2CompositeStateValidation.QuaternionSquaredNormBoundaryIsRoleComplete",
+        "CP2CompositeStateCodec.NonfiniteRolesRoundTripLosslesslyButNeverValidate",
+        "CP2StateFileCodec.LegalPhasePopulationsRoundTripAndCorruptionFailsClosed",
+        (
+            "CP2CompositeLiveCapture.ProductionStateProjectsOneOwningPriorAndIgnores"
+            "AddressesAndMapInsertion"
+        ),
+        (
+            "CP2CompositePointerGraph.Phase1MatchesAndEveryPointerAssociationMutation"
+            "IsDetected"
+        ),
+        (
+            "CP2CompositeLiveCapture.ParentSubvariableInactiveCalibrationAndCamera"
+            "InventoryFaultsAreRejected"
+        ),
+        (
+            "CP2CompositePostcommit.PreparedPhase3FillIsNoexceptAllocationFreeAnd"
+            "MatchesProductionCommit"
+        ),
+        (
+            "CP2CompositePostcommit.LiveCacheReadAndPreparedOrPointerFailuresReturn"
+            "ExplicitStatus"
+        ),
+        "CP2CompositeDetachedOracle.AppliesExactlyOneProductionUpdatePerTopLevelType",
     ],
     "test_cp2_canonical": [
         "CP2CanonicalSha256.MatchesPublishedVectorsUnderIncrementalChunking",
@@ -4279,6 +4395,45 @@ def mutate_json(path, callback):
 
 
 def run_self_test():
+    frozen_sha256 = {
+        relative: expected["sha256"]
+        for relative, expected in FROZEN_CP2_C_APPROVAL_BINDING.items()
+    }
+    frozen_git_blobs = {
+        relative: expected["git_blob"]
+        for relative, expected in FROZEN_CP2_C_APPROVAL_BINDING.items()
+    }
+    binding_errors = []
+    validate_cp2_c_approval_binding(
+        frozen_sha256, frozen_git_blobs, binding_errors
+    )
+    if binding_errors:
+        raise RuntimeError("valid CP2-C approval binding was rejected")
+
+    clarification_path = "docs/cp2_c_composite_and_readiness_clarification.md"
+    wrong_sha256 = dict(frozen_sha256)
+    wrong_sha256[clarification_path] = "0" * 64
+    binding_errors = []
+    validate_cp2_c_approval_binding(
+        wrong_sha256, frozen_git_blobs, binding_errors
+    )
+    if binding_errors != [
+        "CP2-C approval-binding SHA-256 mismatch: " + clarification_path
+    ]:
+        raise RuntimeError("wrong CP2-C clarification SHA-256 was not rejected exactly")
+
+    approval_path = "project/cp2_c_clarification_approval.json"
+    wrong_git_blobs = dict(frozen_git_blobs)
+    wrong_git_blobs[approval_path] = "0" * 40
+    binding_errors = []
+    validate_cp2_c_approval_binding(
+        frozen_sha256, wrong_git_blobs, binding_errors
+    )
+    if binding_errors != [
+        "CP2-C approval-binding Git blob mismatch: " + approval_path
+    ]:
+        raise RuntimeError("wrong CP2-C approval Git blob was not rejected exactly")
+
     # Force all writes under /tmp. The self-test never creates, removes, or
     # changes anything under a repository results/ directory.
     with tempfile.TemporaryDirectory(prefix="cp2-verifier-self-test-", dir="/tmp") as temporary:
@@ -4358,26 +4513,53 @@ def run_self_test():
 
         corruption("missing-source-tree", remove_tree)
 
-        def remove_recorded_contract_from_archive(root):
+        def remove_archive_member(root, member_name, replacement_suffix):
             archive_path = root / SOURCE_ARCHIVE_NAME
-            replacement = root / ("." + SOURCE_ARCHIVE_NAME + ".without-contract")
+            replacement = root / ("." + SOURCE_ARCHIVE_NAME + replacement_suffix)
             removed = 0
             with tarfile.open(str(archive_path), mode="r:") as source_archive:
                 with tarfile.open(str(replacement), mode="w:") as target_archive:
                     for member in source_archive.getmembers():
-                        if member.name == "docs/cp2_recorded_evidence_contract.md":
+                        if member.name == member_name:
                             removed += 1
                             continue
                         stream = source_archive.extractfile(member) if member.isfile() else None
                         target_archive.addfile(member, stream)
             if removed != 1:
-                raise RuntimeError("synthetic source archive lost the recorded contract")
+                raise RuntimeError("synthetic source archive lacks exactly one " + member_name)
             os.replace(str(replacement), str(archive_path))
             archive_path.chmod(0o600)
+
+        def remove_recorded_contract_from_archive(root):
+            remove_archive_member(
+                root,
+                "docs/cp2_recorded_evidence_contract.md",
+                ".without-recorded-contract",
+            )
 
         corruption(
             "missing-recorded-contract-archive-member",
             remove_recorded_contract_from_archive,
+            expected_error="source archive does not contain every curated SOURCE_INPUTS file",
+        )
+
+        corruption(
+            "missing-composite-clarification-archive-member",
+            lambda root: remove_archive_member(
+                root,
+                "docs/cp2_c_composite_and_readiness_clarification.md",
+                ".without-composite-clarification",
+            ),
+            expected_error="source archive does not contain every curated SOURCE_INPUTS file",
+        )
+
+        corruption(
+            "missing-composite-approval-archive-member",
+            lambda root: remove_archive_member(
+                root,
+                "project/cp2_c_clarification_approval.json",
+                ".without-composite-approval",
+            ),
             expected_error="source archive does not contain every curated SOURCE_INPUTS file",
         )
 
@@ -4598,6 +4780,54 @@ def run_self_test():
                 raise RuntimeError("synthetic command lacks exactly one " + old)
             tokens[tokens.index(old)] = new
             return tokens
+
+        def remove_composite_state_fp_contract(root):
+            rewrite_synthetic_compile_tokens(
+                root,
+                "ov_msckf/src/update/CP2CompositeState.cpp",
+                lambda tokens: remove_exact_token(tokens, "-ffp-contract=off"),
+            )
+
+        corruption(
+            "composite-state-production-strict-fp",
+            remove_composite_state_fp_contract,
+            expected_error=(
+                "ov_msckf/src/update/CP2CompositeState.cpp compile command is not "
+                "effectively strict-FP"
+            ),
+        )
+
+        def remove_state_trace_codec_signed_zeros(root):
+            rewrite_synthetic_compile_tokens(
+                root,
+                "ov_msckf/src/update/CP2StateTraceCodec.cpp",
+                lambda tokens: remove_exact_token(tokens, "-fsigned-zeros"),
+            )
+
+        corruption(
+            "state-trace-codec-production-strict-fp",
+            remove_state_trace_codec_signed_zeros,
+            expected_error=(
+                "ov_msckf/src/update/CP2StateTraceCodec.cpp compile command is not "
+                "effectively strict-FP"
+            ),
+        )
+
+        def remove_composite_test_no_fast_math(root):
+            rewrite_synthetic_compile_tokens(
+                root,
+                "ov_msckf/test/cp2/test_cp2_composite_state.cpp",
+                lambda tokens: remove_exact_token(tokens, "-fno-fast-math"),
+            )
+
+        corruption(
+            "composite-state-test-strict-fp",
+            remove_composite_test_no_fast_math,
+            expected_error=(
+                "test_cp2_composite_state has a non-strict compile command for "
+                "ov_msckf/test/cp2/test_cp2_composite_state.cpp"
+            ),
+        )
 
         def remove_max_align_bytes(root):
             rewrite_synthetic_compile_tokens(
@@ -4922,6 +5152,25 @@ def run_self_test():
 
         corruption("same-count-xml-swap-coordinated", swap_same_count_xml)
 
+        def corrupt_composite_state_case(root):
+            test_name = "test_cp2_composite_state"
+            path = root / (test_name + ".xml")
+            tree = ET.parse(str(path))
+            case = tree.getroot().find(".//testcase")
+            if case is None:
+                raise RuntimeError("synthetic composite-state XML has no testcase")
+            case.set("name", "CorruptedCP2C1Case")
+            tree.write(str(path), encoding="utf-8", xml_declaration=True)
+            refresh_log_evidence(root, [test_name])
+
+        corruption(
+            "composite-state-testcase-ownership-coordinated",
+            corrupt_composite_state_case,
+            expected_error=(
+                "test_cp2_composite_state.xml testcase ownership mismatch"
+            ),
+        )
+
         def skipped_xml(root):
             test_name = "test_cp2_fej_golden"
             path = root / (test_name + ".xml")
@@ -4997,6 +5246,22 @@ def run_self_test():
             mutate_json(root / REPORT_NAME, edit)
 
         corruption("cp2-cde-status-escalation", escalate_checkpoint)
+
+        def erase_cp2_c1_unit_status(root):
+            mutate_json(
+                root / REPORT_NAME,
+                lambda report: report["checkpoint_status"].__setitem__(
+                    "CP2-C1", "not_run"
+                ),
+            )
+
+        corruption(
+            "cp2-c1-unit-status-erasure",
+            erase_cp2_c1_unit_status,
+            expected_error=(
+                "checkpoint status must pass CP2-A/B and CP2-C1 unit only"
+            ),
+        )
 
         def coordinated_binary_replacement(root, replacement):
             test_name = "test_cp2_fej_golden"
@@ -5136,7 +5401,10 @@ def parse_args():
     parser.add_argument(
         "--finalize-staging-noreplace", nargs=2,
         metavar=("SOURCE_DIR", "DESTINATION_DIR"), type=Path,
-        help="validate, freeze, fsync, and atomically finalize CP2-A/B staging only",
+        help=(
+            "validate, freeze, fsync, and atomically finalize CP2-A/B plus "
+            "CP2-C1 unit staging only"
+        ),
     )
     parser.add_argument(
         "--expected-manifest-sha256", metavar="HEX",
@@ -5169,7 +5437,8 @@ def main():
             args.finalize_staging_noreplace[0], args.finalize_staging_noreplace[1]
         )
         print(
-            "Read-only CP2-A/B staging finalized without overwrite (not a CP2 seal): "
+            "Read-only CP2-A/B plus CP2-C1 staging finalized without overwrite "
+            "(not a CP2 seal): "
             + str(args.finalize_staging_noreplace[1])
         )
         return 0
