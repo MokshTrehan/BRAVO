@@ -246,6 +246,12 @@ ARCHIVE_ROOTS = [
 WORKSPACE_RECORD_NAME = "workspace.json"
 DEPENDENCY_INVENTORY_NAME = "dependency_inventory.json"
 SOURCE_ARCHIVE_NAME = "source_snapshot.tar"
+CATKIN_PACKAGE_CMAKE_LOG_NAME = "catkin_ov_msckf_cmake.log"
+GOOGLETEST_DISCOVERY_PREFIX = "Found gtest sources under"
+GOOGLETEST_DISCOVERY_LINE = (
+    "-- Found gtest sources under '/usr/src/googletest': gtests will be built"
+)
+ANSI_SGR_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 CONTROLLED_TEST_ENVIRONMENT = {
     "CPATH": "unset",
     "CPLUS_INCLUDE_PATH": "unset",
@@ -948,6 +954,7 @@ def expected_artifact_files():
     files = {
         REPORT_NAME,
         "CMakeCache.txt",
+        CATKIN_PACKAGE_CMAKE_LOG_NAME,
         "compile_commands.json",
         DEPENDENCY_INVENTORY_NAME,
         "ceres_source_snapshot.tar",
@@ -1834,13 +1841,30 @@ def collect_dependency_inventory(
         cache_lines = cache_path.read_text(encoding="utf-8", errors="replace").splitlines()
         if cache_lines.count(expected_cache_line) != 1:
             errors.append("CMakeCache does not bind exactly once to /usr/src/googletest")
-    catkin_log = artifact_dir / "build_catkin_build.log"
-    expected_log_text = "Found gtest sources under '/usr/src/googletest'"
-    if (
-        not catkin_log.is_file()
-        or expected_log_text not in catkin_log.read_text(encoding="utf-8", errors="replace")
-    ):
-        errors.append("catkin build log lacks the controlled /usr/src/googletest binding")
+    catkin_log = artifact_dir / CATKIN_PACKAGE_CMAKE_LOG_NAME
+    if not catkin_log.is_file():
+        errors.append("missing dedicated Catkin package CMake log")
+    else:
+        catkin_log_text = catkin_log.read_text(encoding="utf-8", errors="replace")
+        normalized_lines = [
+            ANSI_SGR_PATTERN.sub("", line) for line in catkin_log_text.splitlines()
+        ]
+        discovery_lines = [
+            line for line in normalized_lines if GOOGLETEST_DISCOVERY_PREFIX in line
+        ]
+        if discovery_lines != [GOOGLETEST_DISCOVERY_LINE]:
+            errors.append(
+                "dedicated Catkin package CMake log GoogleTest discovery lines are not "
+                "the exact controlled binding"
+            )
+        retained_log = workspace_path / "logs/ov_msckf/build.cmake.log"
+        if workspace_path.is_dir():
+            if not retained_log.is_file() or retained_log.is_symlink():
+                errors.append("retained fresh workspace lacks its regular Catkin package CMake log")
+            elif catkin_log.read_bytes() != retained_log.read_bytes():
+                errors.append(
+                    "dedicated Catkin package CMake log is not the exact retained workspace log"
+                )
 
     expected_notices = {
         "ceres": {
@@ -3469,11 +3493,20 @@ def create_synthetic_artifact(artifact_dir, repo_root):
         }
         write_json_fixture(artifact_dir / ("build_" + step + ".json"), record)
         log_text = "synthetic serialized env-i ELF build: " + step + "\n"
-        if step == "catkin_build":
-            log_text += "Found gtest sources under '/usr/src/googletest'\n"
         (artifact_dir / ("build_" + step + ".log")).write_text(
             log_text, encoding="utf-8"
         )
+    synthetic_catkin_cmake_log = (
+        "synthetic package CMake output\n" + GOOGLETEST_DISCOVERY_LINE + "\n"
+    )
+    retained_catkin_cmake_log = workspace / "logs/ov_msckf/build.cmake.log"
+    retained_catkin_cmake_log.parent.mkdir(parents=True, exist_ok=True)
+    retained_catkin_cmake_log.write_text(
+        synthetic_catkin_cmake_log, encoding="utf-8"
+    )
+    (artifact_dir / CATKIN_PACKAGE_CMAKE_LOG_NAME).write_text(
+        synthetic_catkin_cmake_log, encoding="utf-8"
+    )
 
     linkage_errors = []
     linkage = collect_elf_linkage(artifact_dir, linkage_errors)
@@ -3649,7 +3682,7 @@ def run_self_test():
 
         corruptions = []
 
-        def corruption(name, edit, reseal=True):
+        def corruption(name, edit, reseal=True, expected_error=None):
             destination = temporary_root / ("corrupt-" + name)
             shutil.copytree(str(base), str(destination))
             set_synthetic_tree_modes(destination, writable=True)
@@ -3662,6 +3695,14 @@ def run_self_test():
             )
             if result == 0:
                 raise RuntimeError("corruption was accepted: " + name)
+            if expected_error is not None and not any(
+                expected_error in error for error in result_errors
+            ):
+                raise RuntimeError(
+                    "corruption {} lacked expected diagnostic: {}".format(
+                        name, expected_error
+                    )
+                )
             corruptions.append({"name": name, "detected_errors": len(result_errors)})
 
         corruption(
@@ -3670,6 +3711,25 @@ def run_self_test():
                 "corrupted without manifest update\n", encoding="utf-8"
             ),
             reseal=False,
+        )
+
+        def remove_dedicated_gtest_binding(root):
+            path = root / CATKIN_PACKAGE_CMAKE_LOG_NAME
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    GOOGLETEST_DISCOVERY_LINE,
+                    "synthetic GoogleTest discovery binding removed",
+                ),
+                encoding="utf-8",
+            )
+
+        corruption(
+            "dedicated-gtest-cmake-log-binding-coordinated",
+            remove_dedicated_gtest_binding,
+            expected_error=(
+                "dedicated Catkin package CMake log GoogleTest discovery lines are not "
+                "the exact controlled binding"
+            ),
         )
 
         def remove_tree(root):

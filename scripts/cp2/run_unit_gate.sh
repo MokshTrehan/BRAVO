@@ -22,6 +22,10 @@ readonly googletest_license="${googletest_source}/googlemock/LICENSE"
 readonly googletest_debian_copyright="/usr/share/doc/googletest/copyright"
 readonly expected_googletest_archive_sha256="53d536bbe4f5a4007a23ac1abdd58946fe0f0f30e70c2ddd24fd084a789a9b63"
 readonly expected_googletest_archive_size_bytes="4454400"
+readonly googletest_discovery_line="-- Found gtest sources under '/usr/src/googletest': gtests will be built"
+readonly googletest_discovery_stem="Found gtest sources under"
+readonly catkin_package_cmake_log_relative="logs/ov_msckf/build.cmake.log"
+readonly catkin_package_cmake_log_artifact="catkin_ov_msckf_cmake.log"
 readonly artifact_parent="${repo_root}/results/staging/cp2/unit"
 readonly lock_root="/tmp"
 
@@ -266,7 +270,7 @@ esac
 
 for tool in /usr/bin/git /usr/bin/cmake /usr/bin/catkin /usr/bin/python3 \
             /usr/bin/env /usr/bin/flock /usr/bin/tar /usr/bin/find \
-            /usr/bin/install /usr/bin/readelf /usr/bin/ldd /usr/bin/dpkg-query \
+            /usr/bin/install /usr/bin/cmp /usr/bin/readelf /usr/bin/ldd /usr/bin/dpkg-query \
             sha256sum awk; do
     if [[ "${tool}" == /* ]]; then
         [[ -x "${tool}" ]] || die "required tool is missing: ${tool}"
@@ -869,13 +873,31 @@ if ! run_build_step test_targets_build /usr/bin/cmake --build "${package_build}"
     build_failures=$((build_failures + 1))
 fi
 
+catkin_package_cmake_log_source="${workspace}/${catkin_package_cmake_log_relative}"
+catkin_package_cmake_log_destination="${run_dir}/${catkin_package_cmake_log_artifact}"
+[[ -f "${catkin_package_cmake_log_source}" && ! -L "${catkin_package_cmake_log_source}" ]] ||
+    die "Catkin package configure log is missing or nonregular: ${catkin_package_cmake_log_source}"
+[[ "$(grep -Fxc -- "${googletest_discovery_line}" \
+        "${catkin_package_cmake_log_source}")" == "1" &&
+   "$(grep -Fc -- "${googletest_discovery_stem}" \
+        "${catkin_package_cmake_log_source}")" == "1" ]] ||
+    die "Catkin package configure log does not contain exactly one exact GoogleTest discovery line"
+install -m 0444 -- "${catkin_package_cmake_log_source}" \
+    "${catkin_package_cmake_log_destination}"
+/usr/bin/cmp -s -- "${catkin_package_cmake_log_source}" \
+    "${catkin_package_cmake_log_destination}" ||
+    die "retained Catkin package configure log differs from the workspace source log"
+[[ "$(grep -Fxc -- "${googletest_discovery_line}" \
+        "${catkin_package_cmake_log_destination}")" == "1" &&
+   "$(grep -Fc -- "${googletest_discovery_stem}" \
+        "${catkin_package_cmake_log_destination}")" == "1" ]] ||
+    die "retained Catkin package configure log lost the exact GoogleTest discovery line"
+readonly catkin_package_cmake_log_source catkin_package_cmake_log_destination
+
 if [[ "${build_failures}" -eq 0 ]]; then
     expected_gtest_source="gtest_SOURCE_DIR:STATIC=/usr/src/googletest/googletest"
     grep -Fx -- "${expected_gtest_source}" "${package_build}/CMakeCache.txt" >/dev/null ||
         die "CMakeCache does not bind GoogleTest to the retained Debian source"
-    grep -F -- "Found gtest sources under '/usr/src/googletest'" \
-        "${run_dir}/build_catkin_build.log" >/dev/null ||
-        die "catkin log does not bind GoogleTest to the retained Debian source"
 fi
 
 if [[ -f "${package_build}/compile_commands.json" ]]; then
