@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "project": "SchurVIO-Lite",
+  "checkpoint": "CP2-A/B-unit",
+  "recorded_utc": "2026-08-02T01:53:34.432209Z",
+  "status": "passed_cp2_a_b_unit_only",
+  "overall_cp2_status": "in_progress_cp2_c_cp2_d_cp2_e_unexecuted",
+  "source": {
+    "branch": "schurvio-lite/cp2-one-pass",
+    "commit": "96e4b1efde8e368a51be49ea8bc0289d4163d88d",
+    "tree": "314b52f86d6ea403bbb91d1f1d15b24c955d5694",
+    "dirty": false
+  },
+  "artifact": {
+    "path": "results/staging/cp2/unit/cp2_unit_20260802T013548460245077Z-g96e4b1efde8e-o4ZF43BP",
+    "report": "results/staging/cp2/unit/cp2_unit_20260802T013548460245077Z-g96e4b1efde8e-o4ZF43BP/cp2_report.json",
+    "manifest": "results/staging/cp2/unit/cp2_unit_20260802T013548460245077Z-g96e4b1efde8e-o4ZF43BP/SHA256SUMS",
+    "generated_utc": "2026-08-02T01:48:25.976549Z",
+    "report_sha256": "25009bd98748694ddebde5b2d1a34ec0f622ccf57e8c8f8604fd00570e8195ab",
+    "sha256sums_sha256": "b19182a4771a3d177942315b6a5768fa791e6b923c35fb15bd46b735093b1d9f",
+    "manifest_entries": 68,
+    "finalization": "read_only_staging_finalization_only",
+    "no_overwrite": true,
+    "evidence_class": "trusted_runner_local_staging_evidence",
+    "distribution_status": "internal_non_conveyable_staging",
+    "eligible_for_cp2_seal": false,
+    "independent_source_to_binary_attestation": false,
+    "dataset_or_bag_accessed": false
+  },
+  "verification": {
+    "runner_command": "scripts/cp2/run_unit_gate.sh",
+    "runner_exit_status": 0,
+    "independent_verifier_command_template": "/usr/bin/python3 scripts/cp2/verify_report.py --expected-manifest-sha256 b19182a4771a3d177942315b6a5768fa791e6b923c35fb15bd46b735093b1d9f ARTIFACT REPO_ROOT",
+    "independent_verifier_exit_status": 0,
+    "external_manifest_anchor_matched": true,
+    "verifier_self_test_corruptions_rejected": 22,
+    "strict_floating_point_passed": true,
+    "validation_errors": []
+  },
+  "checkpoint_status": {
+    "CP2-A": "passed",
+    "CP2-B": "passed",
+    "CP2-C": "not_run",
+    "CP2-D": "not_run",
+    "CP2-E": "not_run_blocked_pending_fixed_clock_profile"
+  },
+  "counts": {
+    "build_commands_passed": 6,
+    "build_commands_total": 6,
+    "captured_executables_passed": 9,
+    "captured_executables_total": 9,
+    "cp2_executables": 5,
+    "cp1_regression_executables": 4,
+    "gtest_cases": 27,
+    "cp2_cases": 20,
+    "cp1_regression_cases": 7,
+    "failures": 0,
+    "errors": 0,
+    "disabled": 0,
+    "independent_reexecutions_passed": 9,
+    "independent_reexecutions_total": 9,
+    "independent_reexecution_cases": 27,
+    "independent_reexecution_inputs_unchanged": true
+  },
+  "cp2_case_counts": {
+    "production_schur_reducer": 5,
+    "fej_golden": 1,
+    "state_update_semantics": 2,
+    "configuration_contract": 9,
+    "updater_msckf_end_to_end": 3
+  },
+  "cp2_a": {
+    "accepted_fixtures": 1024,
+    "rejected_fixtures": 128,
+    "max_lambda_tolerance_ratio": 0.0112071,
+    "max_eta_tolerance_ratio": 0.0120046,
+    "max_gamma_tolerance_ratio": 0.00722678,
+    "max_nis_tolerance_ratio": 0.0000840391,
+    "max_increment_tolerance_ratio": 0.000128964,
+    "max_covariance_tolerance_ratio": 0.0000522418
+  },
+  "cp2_b": {
+    "fixtures": 128,
+    "accepted_previews": 256,
+    "live_commits": 256,
+    "max_clone_prior_error": 0.0,
+    "max_clone_nullspace_ratio": 0.0,
+    "max_preview_nominal_tolerance_ratio": 0.0,
+    "max_preview_covariance_tolerance_ratio": 0.0,
+    "max_identity_nominal_tolerance_ratio": 6.22794e-11,
+    "max_identity_covariance_tolerance_ratio": 4.85629e-10,
+    "max_mode_nominal_tolerance_ratio": 4.49103e-10,
+    "max_mode_covariance_block_tolerance_ratio": 9.43191e-10,
+    "minimum_unobserved_velocity_bias_increment": 0.0000109196,
+    "preview_rejection_cases": 5,
+    "state_mutations_on_rejection": 0,
+    "repair_or_fallback_count": 0
+  },
+  "host_scope": {
+    "architecture": "x86_64",
+    "jetson_nano_hardware_evidence": false
+  }
+}

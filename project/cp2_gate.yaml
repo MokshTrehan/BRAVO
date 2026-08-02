@@ -5,7 +5,7 @@ timezone: America/Toronto
 gate:
   id: CP2
   name: one_pass_baseline_parity
-  status: in_progress_contract_frozen
+  status: in_progress_cp2_c_cp2_d_cp2_e_unexecuted
   due: "2026-07-31T23:59:00-04:00"
   deadline_status: missed
   deadline_decision_recorded_at: "2026-08-01"
@@ -81,7 +81,7 @@ reduction:
 checkpoints:
   CP2-A:
     name: production_reducer
-    status: pending
+    status: passed
     minimum_fixtures: 1024
     statistics_tolerance:
       absolute: 1.0e-10
@@ -91,7 +91,7 @@ checkpoints:
       relative: 1.0e-6
   CP2-B:
     name: openvins_fej_and_clone_semantics
-    status: pending
+    status: passed
     minimum_clone_fixtures: 128
     clone_api: StateHelper_clone
   CP2-C:
@@ -182,7 +182,20 @@ evidence_policy:
     timing_pair: scripts/cp2/run_timing_pair.py
     verifier: scripts/cp2/verify_report.py
   commands_must_exist_and_pass_self_tests_before_evidence: true
-  current_artifact: null
+  current_artifact:
+    path: results/staging/cp2/unit/cp2_unit_20260802T013548460245077Z-g96e4b1efde8e-o4ZF43BP
+    report: results/staging/cp2/unit/cp2_unit_20260802T013548460245077Z-g96e4b1efde8e-o4ZF43BP/cp2_report.json
+    evidence_record: project/cp2_ab_unit_evidence.json
+    tested_commit: 96e4b1efde8e368a51be49ea8bc0289d4163d88d
+    result: passed_cp2_a_b_unit_only
+    sha256sums_sha256: b19182a4771a3d177942315b6a5768fa791e6b923c35fb15bd46b735093b1d9f
+    scope: cp2_a_b_unit_only
+    stage: staging_pending_cp2_c_cp2_d_cp2_e
+    evidence_class: trusted_runner_local_staging_evidence
+    finalization: read_only_staging_finalization_only
+    distribution_status: internal_non_conveyable_staging
+    eligible_for_cp2_seal: false
+    independent_source_to_binary_attestation: false
 
 protecting_configuration_tests:
   - absent_key_selects_nullspace
@@ -193,8 +206,6 @@ protecting_configuration_tests:
   - runtime_failure_zero_silent_fallback
 
 blockers:
-  - production_reducer_not_implemented
-  - production_semantics_tests_not_passed
   - recorded_updater_parity_not_collected
   - three_sequence_parity_not_collected
   - fixed_clock_timing_profile_not_established
