@@ -65,6 +65,7 @@ readonly -a cp2_tests=(
     test_cp2_feature_gate
     test_cp2_updater_msckf_preview_snapshot
     test_cp2_shadow_math
+    test_cp2_trace_codec
 )
 readonly -a all_tests=("${cp1_tests[@]}" "${cp2_tests[@]}")
 readonly -a eigen_abi_dependency_packages=(

@@ -48,12 +48,13 @@ CP2_TESTS = {
     "test_cp2_production_schur_reducer": 5,
     "test_cp2_fej_golden": 1,
     "test_cp2_state_update_semantics": 2,
-    "test_cp2_configuration_contract": 9,
-    "test_cp2_updater_msckf_end_to_end": 3,
+    "test_cp2_configuration_contract": 10,
+    "test_cp2_updater_msckf_end_to_end": 8,
     "test_cp2_canonical": 5,
     "test_cp2_feature_gate": 13,
     "test_cp2_updater_msckf_preview_snapshot": 4,
     "test_cp2_shadow_math": 14,
+    "test_cp2_trace_codec": 8,
 }
 ALL_TESTS = dict(CP1_TESTS)
 ALL_TESTS.update(CP2_TESTS)
@@ -74,6 +75,7 @@ TEST_SOURCE_BY_BINARY = {
         "ov_msckf/test/cp2/test_updater_msckf_preview_snapshot.cpp"
     ),
     "test_cp2_shadow_math": "ov_msckf/test/cp2/test_cp2_shadow_math.cpp",
+    "test_cp2_trace_codec": "ov_msckf/test/cp2/test_cp2_trace_codec.cpp",
 }
 
 EXPECTED_TEST_CASES = {
@@ -87,6 +89,7 @@ EXPECTED_TEST_CASES = {
     "CP2Configuration.InvalidEnumFailsStartupWithoutSelectingAStringMode",
     "CP2Configuration.InvalidSpellingsCannotMutateASelectedModeOrFallBack",
     "CP2Configuration.NonfiniteAndNonpositiveSigmaFailBeforeVarianceMaterialization",
+    "CP2Configuration.NonfiniteChi2MultiplierFailsEveryStartupSeam",
     "CP2Configuration.OptionalModeUsesDefaultAndExactExplicitSpellings",
     "CP2Configuration.PositiveRepresentableVarianceIsMaterializedExactly",
     "CP2Configuration.RuntimeInvalidSigmaNeverInvokesRepairOrSilentFallback",
@@ -104,6 +107,11 @@ EXPECTED_TEST_CASES = {
     "CP2UpdaterMSCKFEndToEnd.ActualNullspaceAndSchurModesCommitEquivalentFullStateUpdates",
     "CP2UpdaterMSCKFEndToEnd.SelectedReducersRejectNonfiniteProductionRowsWithoutSilentFallback",
     "CP2UpdaterMSCKFEndToEnd.SharedInvalidPreflightLeavesBothModeStatesBitwiseUnchanged",
+    "CP2UpdaterMSCKFEndToEnd.NullspaceShadowPublishesBothPrecommitProposalsThenOneCommittedEvent",
+    "CP2UpdaterMSCKFEndToEnd.NonfiniteGammaEvidenceCannotStopLiveTraversalOrBaselineCommit",
+    "CP2UpdaterMSCKFEndToEnd.SchurModeRejectsShadowEnableWithoutReplacingExistingObserver",
+    "CP2UpdaterMSCKFEndToEnd.ObserverExceptionCannotVetoAnAcceptedBaselineCommit",
+    "CP2UpdaterMSCKFEndToEnd.AllRejectedRawSystemHasExactTerminalTaxonomyAndNoBaselineWrite",
     "CP2CanonicalSha256.MatchesPublishedVectorsUnderIncrementalChunking",
     "CP2CanonicalBytes.IntegerBinary64AndUtf8EncodingIsExact",
     "CP2CanonicalBytes.MatrixAndVectorUseLogicalRowMajorBinary64Order",
@@ -140,6 +148,14 @@ EXPECTED_TEST_CASES = {
     "CP2ShadowMath.CandidateGammaOverflowStillTraversesAndStacksLaterFeatures",
     "CP2ShadowMath.EmptyAndAllRejectedGammaStatesAreExact",
     "CP2ShadowMath.StatisticComparisonFirstFailurePrecedenceIsExact",
+    "CP2TraceRawPayload.FrozenDomainRowMajorBitsAndLayoutRoundTripExactly",
+    "CP2TraceRawPayload.CorruptionAndAllocationBoundsFailClosed",
+    "CP2TraceAcceptedDigests.FrozenSetAndSequenceDomainsAreIndependent",
+    "CP2TraceRawFile.CompleteFrameAndHeaderMatchIndependentKnownAnswer",
+    "CP2TraceRawFile.FrameContextOffsetsOrderingAndFeatureIdentityAreExact",
+    "CP2TraceProposal.FrozenPayloadAndRoleFramingRejectAllStructuralCorruption",
+    "CP2TraceReplay.OwningDecodedFramesDriveTheSoleShadowMathKernel",
+    "CP2TraceReplay.ContextDigestAndPriorLayoutDisconnectsFailBeforeMath",
 }
 
 EXPECTED_SUMMARIES = {
@@ -169,6 +185,7 @@ SUMMARIES_BY_BINARY = {
     "test_cp2_feature_gate": set(),
     "test_cp2_updater_msckf_preview_snapshot": set(),
     "test_cp2_shadow_math": set(),
+    "test_cp2_trace_codec": set(),
 }
 
 SOURCE_INPUTS = {
@@ -207,6 +224,8 @@ SOURCE_INPUTS = {
     "ov_msckf/src/update/CP2FeatureGate.h",
     "ov_msckf/src/update/CP2ShadowMath.cpp",
     "ov_msckf/src/update/CP2ShadowMath.h",
+    "ov_msckf/src/update/CP2TraceCodec.cpp",
+    "ov_msckf/src/update/CP2TraceCodec.h",
     "ov_msckf/src/update/SchurUpdate.cpp",
     "ov_msckf/src/update/SchurUpdate.h",
     "ov_msckf/src/update/UpdaterHelper.cpp",
@@ -227,6 +246,7 @@ SOURCE_INPUTS = {
     "ov_msckf/test/cp2/test_cp2_canonical.cpp",
     "ov_msckf/test/cp2/test_cp2_feature_gate.cpp",
     "ov_msckf/test/cp2/test_cp2_shadow_math.cpp",
+    "ov_msckf/test/cp2/test_cp2_trace_codec.cpp",
     "ov_msckf/test/cp2/test_fej_golden.cpp",
     "ov_msckf/test/cp2/test_production_schur_reducer.cpp",
     "ov_msckf/test/cp2/test_state_update_semantics.cpp",
@@ -280,7 +300,9 @@ STRICT_PRODUCTION_SOURCES = (
     "ov_msckf/src/update/CP2Canonical.cpp",
     "ov_msckf/src/update/CP2FeatureGate.cpp",
     "ov_msckf/src/update/CP2ShadowMath.cpp",
+    "ov_msckf/src/update/CP2TraceCodec.cpp",
     "ov_msckf/src/update/UpdaterHelper.cpp",
+    "ov_msckf/src/update/UpdaterMSCKF.cpp",
     "ov_msckf/src/update/UpdaterMSCKFPreview.cpp",
     "ov_msckf/src/state/StateHelper.cpp",
 )
@@ -3213,7 +3235,9 @@ def verify_unit_report(
         independent_gtest.get("errors"),
         independent_gtest.get("disabled"),
     ) != (expected_total, 0, 0, 0):
-        errors.append("gtest totals do not prove a clean 63-test CP1+CP2 run")
+        errors.append(
+            f"gtest totals do not prove a clean {expected_total}-test CP1+CP2 run"
+        )
 
     independent_summaries = parse_summaries(artifact_dir, errors)
     if report.get("summaries") != independent_summaries:
@@ -3259,9 +3283,11 @@ def verify_unit_report(
     if report.get("test_invocations") != independent_tests:
         errors.append("reported per-test commands/status/log hashes differ from captured records")
     if report.get("binary_sha256") != independent_binaries:
-        errors.append("reported nine-CP2/four-CP1 binary SHA-256 inventory is wrong")
-    if len({name for name in independent_binaries if name in CP2_TESTS}) != 9:
-        errors.append("binary evidence does not contain exactly nine CP2 test executables")
+        errors.append("reported CP2/CP1 binary SHA-256 inventory is wrong")
+    if len({name for name in independent_binaries if name in CP2_TESTS}) != len(CP2_TESTS):
+        errors.append(
+            f"binary evidence does not contain exactly {len(CP2_TESTS)} CP2 test executables"
+        )
     if len({name for name in independent_binaries if name in CP1_TESTS}) != 4:
         errors.append("binary evidence does not contain exactly four CP1 test executables")
     if report.get("production_library") != independent_library:
@@ -3464,6 +3490,7 @@ TEST_CASES_BY_BINARY = {
         "CP2Configuration.UnknownAndFixedTwoPassSpellingsFailStartup",
         "CP2Configuration.SchurRequiresGlobal3DWhileNullspaceRetainsExistingRepresentations",
         "CP2Configuration.NonfiniteAndNonpositiveSigmaFailBeforeVarianceMaterialization",
+        "CP2Configuration.NonfiniteChi2MultiplierFailsEveryStartupSeam",
         "CP2Configuration.UnderflowingAndOverflowingVarianceFailStartup",
         "CP2Configuration.PositiveRepresentableVarianceIsMaterializedExactly",
         "CP2Configuration.InvalidEnumFailsStartupWithoutSelectingAStringMode",
@@ -3473,6 +3500,11 @@ TEST_CASES_BY_BINARY = {
         "CP2UpdaterMSCKFEndToEnd.ActualNullspaceAndSchurModesCommitEquivalentFullStateUpdates",
         "CP2UpdaterMSCKFEndToEnd.SelectedReducersRejectNonfiniteProductionRowsWithoutSilentFallback",
         "CP2UpdaterMSCKFEndToEnd.SharedInvalidPreflightLeavesBothModeStatesBitwiseUnchanged",
+        "CP2UpdaterMSCKFEndToEnd.NullspaceShadowPublishesBothPrecommitProposalsThenOneCommittedEvent",
+        "CP2UpdaterMSCKFEndToEnd.NonfiniteGammaEvidenceCannotStopLiveTraversalOrBaselineCommit",
+        "CP2UpdaterMSCKFEndToEnd.SchurModeRejectsShadowEnableWithoutReplacingExistingObserver",
+        "CP2UpdaterMSCKFEndToEnd.ObserverExceptionCannotVetoAnAcceptedBaselineCommit",
+        "CP2UpdaterMSCKFEndToEnd.AllRejectedRawSystemHasExactTerminalTaxonomyAndNoBaselineWrite",
     ],
     "test_cp2_canonical": [
         "CP2CanonicalSha256.MatchesPublishedVectorsUnderIncrementalChunking",
@@ -3517,6 +3549,16 @@ TEST_CASES_BY_BINARY = {
         "CP2ShadowMath.CandidateGammaOverflowStillTraversesAndStacksLaterFeatures",
         "CP2ShadowMath.EmptyAndAllRejectedGammaStatesAreExact",
         "CP2ShadowMath.StatisticComparisonFirstFailurePrecedenceIsExact",
+    ],
+    "test_cp2_trace_codec": [
+        "CP2TraceRawPayload.FrozenDomainRowMajorBitsAndLayoutRoundTripExactly",
+        "CP2TraceRawPayload.CorruptionAndAllocationBoundsFailClosed",
+        "CP2TraceAcceptedDigests.FrozenSetAndSequenceDomainsAreIndependent",
+        "CP2TraceRawFile.CompleteFrameAndHeaderMatchIndependentKnownAnswer",
+        "CP2TraceRawFile.FrameContextOffsetsOrderingAndFeatureIdentityAreExact",
+        "CP2TraceProposal.FrozenPayloadAndRoleFramingRejectAllStructuralCorruption",
+        "CP2TraceReplay.OwningDecodedFramesDriveTheSoleShadowMathKernel",
+        "CP2TraceReplay.ContextDigestAndPriorLayoutDisconnectsFailBeforeMath",
     ],
 }
 
@@ -3973,7 +4015,13 @@ def create_synthetic_artifact(artifact_dir, repo_root):
         )
 
     before = synthetic_source_snapshot(repo_root, "2030-01-01T00:00:01Z")
-    after = synthetic_source_snapshot(repo_root, "2030-01-01T00:00:40Z")
+    # Keep the synthetic source-after snapshot strictly after the complete
+    # serialized test inventory. The last test finishes at 14 + 2*N seconds.
+    synthetic_epoch = dt.datetime(2030, 1, 1, tzinfo=dt.timezone.utc)
+    source_after_utc = (
+        synthetic_epoch + dt.timedelta(seconds=16 + 2 * len(ALL_TESTS))
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    after = synthetic_source_snapshot(repo_root, source_after_utc)
     write_json_fixture(artifact_dir / "source_before.json", before)
     write_json_fixture(artifact_dir / "source_after.json", after)
     self_test = {

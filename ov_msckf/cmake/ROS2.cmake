@@ -67,6 +67,7 @@ list(APPEND LIBRARY_SOURCES
         src/update/CP2Canonical.cpp
         src/update/CP2FeatureGate.cpp
         src/update/CP2ShadowMath.cpp
+        src/update/CP2TraceCodec.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
@@ -83,8 +84,10 @@ set_source_files_properties(
         src/update/CP2Canonical.cpp
         src/update/CP2FeatureGate.cpp
         src/update/CP2ShadowMath.cpp
+        src/update/CP2TraceCodec.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
+        src/update/UpdaterMSCKF.cpp
         src/update/UpdaterMSCKFPreview.cpp
         PROPERTIES
         COMPILE_FLAGS "-fno-fast-math -ffp-contract=off -fsigned-zeros")

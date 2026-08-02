@@ -24,7 +24,6 @@
 #include "UpdaterMSCKFPreview.h"
 
 #include "state/State.h"
-#include "state/StateHelper.h"
 #include "types/Type.h"
 
 #include <Eigen/Cholesky>
@@ -101,16 +100,7 @@ MSCKFUpdatePreviewResult UpdaterMSCKFPreview::Compute(const std::shared_ptr<Stat
   // This adapter is the only live-object surface. It takes owning value
   // copies, records the exact StateHelper block orders, and delegates all
   // validation and arithmetic to the pointer-free kernel below.
-  MSCKFUpdatePreviewSnapshot snapshot;
-  snapshot.covariance = StateHelper::get_full_covariance(state);
-  snapshot.state_blocks.reserve(state->_variables.size());
-  for (const auto &variable : state->_variables) {
-    if (!variable) {
-      snapshot.state_blocks.push_back({-1, 0, -1});
-      continue;
-    }
-    snapshot.state_blocks.push_back({variable->id(), variable->size(), variable->id()});
-  }
+  const MSCKFUpdatePreviewSnapshot snapshot = CaptureSnapshot(state);
 
   std::vector<MSCKFUpdatePreviewBlock> jacobian_layout;
   jacobian_layout.reserve(H_order.size());
@@ -125,6 +115,24 @@ MSCKFUpdatePreviewResult UpdaterMSCKFPreview::Compute(const std::shared_ptr<Stat
   }
 
   return ComputeFromSnapshot(snapshot, jacobian_layout, H, residual, R);
+}
+
+MSCKFUpdatePreviewSnapshot
+UpdaterMSCKFPreview::CaptureSnapshot(const std::shared_ptr<State> &state) {
+  MSCKFUpdatePreviewSnapshot snapshot;
+  if (!state) {
+    return snapshot;
+  }
+  snapshot.covariance = state->_Cov;
+  snapshot.state_blocks.reserve(state->_variables.size());
+  for (const auto &variable : state->_variables) {
+    if (!variable) {
+      snapshot.state_blocks.push_back({-1, 0, -1});
+      continue;
+    }
+    snapshot.state_blocks.push_back({variable->id(), variable->size(), variable->id()});
+  }
+  return snapshot;
 }
 
 MSCKFUpdatePreviewResult UpdaterMSCKFPreview::ComputeFromSnapshot(

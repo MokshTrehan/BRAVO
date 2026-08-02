@@ -163,6 +163,15 @@ struct MSCKFUpdatePreviewSnapshot {
 class UpdaterMSCKFPreview {
 public:
   /**
+   * @brief Capture the exact owning full-prior value boundary from live State.
+   *
+   * This friend-owned adapter copies State::_Cov and the exact State::_variables
+   * top-level order. It performs no arithmetic and retains no live pointer.
+   * External serialization of State access is required, as for Compute().
+   */
+  static MSCKFUpdatePreviewSnapshot CaptureSnapshot(const std::shared_ptr<State> &state);
+
+  /**
    * @brief Compute a read-only proposal from owning value inputs only.
    *
    * The arithmetic and validation order after layout validation match

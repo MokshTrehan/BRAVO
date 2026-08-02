@@ -6,6 +6,7 @@
 #include "core/VioManagerOptions.h"
 #include "types/LandmarkRepresentation.h"
 #include "update/SchurUpdate.h"
+#include "update/UpdaterMSCKF.h"
 #include "update/UpdaterOptions.h"
 #include "utils/opencv_yaml_parse.h"
 
@@ -206,6 +207,42 @@ TEST(CP2Configuration, NonfiniteAndNonpositiveSigmaFailBeforeVarianceMaterializa
         },
         ::testing::ExitedWithCode(EXIT_FAILURE), "must be finite and strictly positive");
   }
+}
+
+TEST(CP2Configuration, NonfiniteChi2MultiplierFailsEveryStartupSeam) {
+  const std::array<double, 3> invalid_multiplier{{
+      std::numeric_limits<double>::infinity(),
+      -std::numeric_limits<double>::infinity(),
+      std::numeric_limits<double>::quiet_NaN(),
+  }};
+  for (double multiplier : invalid_multiplier) {
+    SCOPED_TRACE(::testing::Message() << "multiplier=" << multiplier);
+    EXPECT_EXIT(
+        {
+          route_openvins_output_to_death_test_stderr();
+          ov_msckf::VioManagerOptions options;
+          options.msckf_options.chi2_multipler = multiplier;
+          options.validate_msckf_update_configuration_or_exit();
+          std::exit(EXIT_SUCCESS);
+        },
+        ::testing::ExitedWithCode(EXIT_FAILURE), "chi2 multiplier");
+
+    EXPECT_EXIT(
+        {
+          route_openvins_output_to_death_test_stderr();
+          ov_msckf::UpdaterOptions options;
+          options.chi2_multipler = multiplier;
+          ov_core::FeatureInitializerOptions initializer_options;
+          ov_msckf::UpdaterMSCKF updater(options, initializer_options);
+          std::exit(EXIT_SUCCESS);
+        },
+        ::testing::ExitedWithCode(EXIT_FAILURE), "chi2_multiplier");
+  }
+
+  ov_msckf::VioManagerOptions finite_negative;
+  finite_negative.msckf_options.chi2_multipler = -1.0;
+  finite_negative.validate_msckf_update_configuration_or_exit();
+  EXPECT_DOUBLE_EQ(finite_negative.msckf_options.chi2_multipler, -1.0);
 }
 
 TEST(CP2Configuration, UnderflowingAndOverflowingVarianceFailStartup) {

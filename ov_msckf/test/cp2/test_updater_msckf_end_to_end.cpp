@@ -29,6 +29,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <unordered_map>
@@ -39,6 +40,13 @@ namespace {
 constexpr double kAbsoluteTolerance = 1.0e-8;
 constexpr double kRelativeTolerance = 1.0e-6;
 constexpr std::size_t kAcceptedFeatureCount = 6;
+
+std::uint64_t binary64_bits(double value) noexcept {
+  std::uint64_t bits = 0U;
+  static_assert(sizeof(bits) == sizeof(value), "CP2 requires IEEE-754 binary64");
+  std::memcpy(&bits, &value, sizeof(bits));
+  return bits;
+}
 
 Eigen::Matrix<double, 7, 1> pose_value(const Eigen::Vector4d &quaternion,
                                        const Eigen::Vector3d &position) {
@@ -245,6 +253,33 @@ make_accepted_features(const ProductionFixture &fixture, std::size_t first_featu
   return features;
 }
 
+std::vector<std::shared_ptr<ov_core::Feature>>
+make_large_residual_features(const ProductionFixture &fixture, std::size_t first_feature_id,
+                             std::size_t feature_count = kAcceptedFeatureCount) {
+  if (feature_count == 0U || feature_count > kAcceptedFeatureCount) {
+    throw std::invalid_argument("large-residual feature count is outside the frozen fixture");
+  }
+  std::vector<std::shared_ptr<ov_core::Feature>> features =
+      make_accepted_features(fixture, first_feature_id);
+  features.resize(feature_count);
+  constexpr float kLargePixelResidual = 1.0e38F;
+  for (std::size_t feature_index = 0; feature_index < features.size(); ++feature_index) {
+    for (std::size_t observation_index = 0;
+         observation_index < features.at(feature_index)->uvs.at(0).size();
+         ++observation_index) {
+      const float sign = ((feature_index + observation_index) % 2U == 0U) ? 1.0F : -1.0F;
+      // Keep the already-computed normalized track finite for triangulation,
+      // but drive the production raw-pixel residual seam with a large finite
+      // value whose nullspace gamma can be tuned to the binary64 sum boundary.
+      features.at(feature_index)->uvs.at(0).at(observation_index)(0) =
+          sign * kLargePixelResidual;
+      features.at(feature_index)->uvs.at(0).at(observation_index)(1) =
+          -0.5F * sign * kLargePixelResidual;
+    }
+  }
+  return features;
+}
+
 ov_core::FeatureInitializerOptions feature_initializer_options() {
   ov_core::FeatureInitializerOptions options;
   options.triangulate_1d = false;
@@ -415,20 +450,13 @@ StateSnapshot snapshot(const ProductionFixture &fixture) {
   return result;
 }
 
-std::uint64_t ieee_bits(double value) {
-  std::uint64_t bits = 0;
-  static_assert(sizeof(bits) == sizeof(value), "binary64 and uint64_t must have equal size");
-  std::memcpy(&bits, &value, sizeof(bits));
-  return bits;
-}
-
 bool bitwise_equal(const Eigen::MatrixXd &left, const Eigen::MatrixXd &right) {
   if (left.rows() != right.rows() || left.cols() != right.cols()) {
     return false;
   }
   for (Eigen::Index row = 0; row < left.rows(); ++row) {
     for (Eigen::Index column = 0; column < left.cols(); ++column) {
-      if (ieee_bits(left(row, column)) != ieee_bits(right(row, column))) {
+      if (binary64_bits(left(row, column)) != binary64_bits(right(row, column))) {
         return false;
       }
     }
@@ -458,12 +486,13 @@ void expect_fej_unchanged(const ProductionFixture &fixture, const StateSnapshot 
 }
 
 std::unique_ptr<ov_msckf::UpdaterMSCKF>
-make_updater(ov_msckf::UpdaterOptions::LandmarkElimination mode) {
+make_updater(ov_msckf::UpdaterOptions::LandmarkElimination mode,
+             double sigma_pix = 1.0, double chi2_multiplier = 5.0) {
   ov_msckf::UpdaterOptions updater_options;
   updater_options.landmark_elimination = mode;
-  updater_options.sigma_pix = 1.0;
-  updater_options.sigma_pix_sq = 1.0;
-  updater_options.chi2_multipler = 5.0;
+  updater_options.sigma_pix = sigma_pix;
+  updater_options.sigma_pix_sq = sigma_pix * sigma_pix;
+  updater_options.chi2_multipler = chi2_multiplier;
 
   ov_core::FeatureInitializerOptions initializer_options = feature_initializer_options();
   return std::unique_ptr<ov_msckf::UpdaterMSCKF>(
@@ -698,6 +727,14 @@ TEST(CP2UpdaterMSCKFEndToEnd,
     auto feature = make_feature(fixture, 0x4350324e414eULL, true);
     std::vector<std::shared_ptr<ov_core::Feature>> features{feature};
     auto updater = make_updater(mode);
+    std::size_t callback_count = 0;
+    ov_msckf::CP2LiveUpdateEvent observed;
+    ASSERT_TRUE(updater->set_cp2_update_callback(
+        [&](const ov_msckf::CP2LiveUpdateEvent &event) {
+          ++callback_count;
+          observed = event;
+        },
+        false));
 
     testing::internal::CaptureStdout();
     updater->update(fixture.state, features);
@@ -706,6 +743,23 @@ TEST(CP2UpdaterMSCKFEndToEnd,
     EXPECT_TRUE(features.empty());
     EXPECT_TRUE(feature->to_delete);
     expect_exact_state(fixture, before);
+    ASSERT_EQ(callback_count, 1U);
+    EXPECT_EQ(observed.terminal_status,
+              ov_msckf::CP2UpdateTerminalStatus::kAllRejected);
+    EXPECT_EQ(observed.terminal_subreason,
+              ov_msckf::CP2UpdateTerminalSubreason::kAllBaselineFeaturesRejected);
+    EXPECT_EQ(observed.input_feature_count, 1U);
+    EXPECT_EQ(observed.raw_system_count, 1U);
+    EXPECT_TRUE(observed.baseline_accepted_ids.empty());
+    EXPECT_EQ(observed.baseline_gamma_status, ov_msckf::CP2GammaStatus::kAvailable);
+    EXPECT_EQ(binary64_bits(observed.baseline_gamma), binary64_bits(0.0));
+    EXPECT_FALSE(observed.baseline_precompression_system_nonempty);
+    EXPECT_TRUE(observed.baseline_precompression_rows_available);
+    EXPECT_EQ(observed.baseline_precompression_rows, 0U);
+    EXPECT_FALSE(observed.baseline_compressed_rows_available);
+    EXPECT_FALSE(observed.baseline_preflight_attempted);
+    EXPECT_FALSE(observed.baseline_commit_occurred);
+    EXPECT_FALSE(observed.shadow_evidence_available);
     EXPECT_EQ(diagnostic.find("[MSCKF-PREFLIGHT]"), std::string::npos);
     EXPECT_EQ(diagnostic.find("accepted_gamma"), std::string::npos);
     if (mode == ov_msckf::UpdaterOptions::LandmarkElimination::SCHUR) {
@@ -748,6 +802,14 @@ TEST(CP2UpdaterMSCKFEndToEnd,
     auto feature = make_feature(fixture, 0x435032505246ULL);
     std::vector<std::shared_ptr<ov_core::Feature>> features{feature};
     auto updater = make_updater(mode);
+    std::size_t callback_count = 0;
+    ov_msckf::CP2LiveUpdateEvent observed;
+    ASSERT_TRUE(updater->set_cp2_update_callback(
+        [&](const ov_msckf::CP2LiveUpdateEvent &event) {
+          ++callback_count;
+          observed = event;
+        },
+        false));
 
     testing::internal::CaptureStdout();
     updater->update(fixture.state, features);
@@ -759,6 +821,30 @@ TEST(CP2UpdaterMSCKFEndToEnd,
     ASSERT_EQ(features.size(), 1U);
     EXPECT_TRUE(feature->to_delete);
     expect_exact_state(fixture, before);
+    ASSERT_EQ(callback_count, 1U);
+    EXPECT_EQ(observed.terminal_status,
+              ov_msckf::CP2UpdateTerminalStatus::kPreflightRejected);
+    EXPECT_EQ(observed.terminal_subreason,
+              ov_msckf::CP2UpdateTerminalSubreason::kBaselinePreflightRejected);
+    EXPECT_EQ(observed.input_feature_count, 1U);
+    EXPECT_EQ(observed.raw_system_count, 1U);
+    ASSERT_EQ(observed.baseline_accepted_ids.size(), 1U);
+    EXPECT_EQ(observed.baseline_accepted_ids.front(), feature->featid);
+    EXPECT_EQ(observed.baseline_gamma_status, ov_msckf::CP2GammaStatus::kAvailable);
+    EXPECT_TRUE(observed.baseline_precompression_system_nonempty);
+    EXPECT_TRUE(observed.baseline_precompression_rows_available);
+    EXPECT_GT(observed.baseline_precompression_rows, 0U);
+    EXPECT_TRUE(observed.baseline_compressed_system_nonempty);
+    EXPECT_TRUE(observed.baseline_compressed_rows_available);
+    EXPECT_GT(observed.baseline_compressed_rows, 0U);
+    EXPECT_TRUE(observed.baseline_preflight_attempted);
+    EXPECT_FALSE(observed.baseline_preflight_accepted);
+    EXPECT_FALSE(observed.baseline_commit_occurred);
+    EXPECT_FALSE(observed.shadow_evidence_available);
+    EXPECT_STREQ(ov_msckf::cp2_update_terminal_status_name(observed.terminal_status),
+                 "preflight_rejected");
+    EXPECT_STREQ(ov_msckf::cp2_update_terminal_subreason_name(observed.terminal_subreason),
+                 "baseline_preflight_rejected");
     EXPECT_NE(diagnostic.find("[MSCKF-PREFLIGHT]"), std::string::npos);
     EXPECT_NE(diagnostic.find("status=negative_diagonal"), std::string::npos);
     EXPECT_NE(diagnostic.find("stage=posterior_diagonal"), std::string::npos);
@@ -771,6 +857,422 @@ TEST(CP2UpdaterMSCKFEndToEnd,
     EXPECT_EQ(diagnostic.find("accepted_gamma"), std::string::npos);
   }
   ov_core::Printer::setPrintLevel(saved_level);
+}
+
+TEST(CP2UpdaterMSCKFEndToEnd,
+     NullspaceShadowPublishesBothPrecommitProposalsThenOneCommittedEvent) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  constexpr std::size_t first_feature_id = 0x435032534844ULL;
+  const auto preview_features = make_accepted_features(fixture, first_feature_id);
+  const PreviewExpectation expectation = make_preview_expectation(
+      fixture, preview_features,
+      ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  ASSERT_TRUE(expectation.preview.accepted());
+
+  auto features = make_accepted_features(fixture, first_feature_id);
+  auto updater = make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  std::size_t callback_count = 0;
+  bool callback_saw_committed_state = false;
+  ov_msckf::CP2LiveUpdateEvent observed;
+  ASSERT_TRUE(updater->set_cp2_update_callback(
+      [&](const ov_msckf::CP2LiveUpdateEvent &event) {
+        ++callback_count;
+        observed = event;
+        callback_saw_committed_state =
+            event.baseline_commit_occurred && event.shadow.baseline_preview_available &&
+            bitwise_equal(ov_msckf::StateHelper::get_full_covariance(fixture.state),
+                          event.shadow.live_nullspace_proposal.P_plus);
+      },
+      true));
+
+  updater->update(fixture.state, features);
+
+  ASSERT_EQ(callback_count, 1U);
+  EXPECT_TRUE(callback_saw_committed_state);
+  EXPECT_EQ(observed.terminal_status,
+            ov_msckf::CP2UpdateTerminalStatus::kCommittedCounted);
+  EXPECT_EQ(observed.terminal_subreason, ov_msckf::CP2UpdateTerminalSubreason::kNone);
+  EXPECT_STREQ(ov_msckf::cp2_update_terminal_status_name(observed.terminal_status),
+               "committed_counted");
+  EXPECT_STREQ(ov_msckf::cp2_update_terminal_subreason_name(observed.terminal_subreason),
+               "none");
+  EXPECT_EQ(observed.input_feature_count, kAcceptedFeatureCount);
+  EXPECT_EQ(observed.raw_system_count, kAcceptedFeatureCount);
+  ASSERT_EQ(observed.baseline_accepted_ids.size(), kAcceptedFeatureCount);
+  for (std::size_t index = 0; index < kAcceptedFeatureCount; ++index) {
+    EXPECT_EQ(observed.baseline_accepted_ids.at(index), first_feature_id + index);
+  }
+  EXPECT_EQ(observed.baseline_gamma_status, ov_msckf::CP2GammaStatus::kAvailable);
+  EXPECT_TRUE(observed.baseline_precompression_system_nonempty);
+  EXPECT_TRUE(observed.baseline_precompression_rows_available);
+  EXPECT_EQ(observed.baseline_precompression_rows,
+            static_cast<std::uint64_t>(expectation.precompression_rows));
+  EXPECT_TRUE(observed.baseline_compressed_system_nonempty);
+  EXPECT_TRUE(observed.baseline_compressed_rows_available);
+  EXPECT_EQ(observed.baseline_compressed_rows,
+            static_cast<std::uint64_t>(expectation.compressed_rows));
+  EXPECT_TRUE(observed.baseline_preflight_attempted);
+  EXPECT_TRUE(observed.baseline_preflight_accepted);
+  EXPECT_TRUE(observed.baseline_commit_occurred);
+  ASSERT_TRUE(observed.shadow_evidence_available);
+  EXPECT_TRUE(observed.shadow.shadow_math_completed);
+  EXPECT_TRUE(observed.shadow.baseline_preview_available);
+  EXPECT_TRUE(observed.shadow.baseline_commit_planned);
+  ASSERT_TRUE(observed.shadow.live_nullspace_proposal.accepted());
+
+  ASSERT_EQ(observed.shadow.input.raw_systems.size(), kAcceptedFeatureCount);
+  EXPECT_TRUE(bitwise_equal(observed.shadow.input.prior.covariance, before.covariance));
+  ASSERT_EQ(observed.shadow.input.prior.state_blocks.size(), fixture.top_level.size());
+  for (std::size_t index = 0; index < fixture.top_level.size(); ++index) {
+    const ov_msckf::MSCKFUpdatePreviewBlock &block =
+        observed.shadow.input.prior.state_blocks.at(index);
+    EXPECT_EQ(block.covariance_id, fixture.top_level.at(index)->id());
+    EXPECT_EQ(block.size, fixture.top_level.at(index)->size());
+    EXPECT_EQ(block.offset, fixture.top_level.at(index)->id());
+  }
+  for (std::size_t index = 0; index < kAcceptedFeatureCount; ++index) {
+    const ov_msckf::CP2RawFeatureSystem &raw = observed.shadow.input.raw_systems.at(index);
+    EXPECT_EQ(raw.feature_id, first_feature_id + index);
+    EXPECT_EQ(raw.H_x.rows(), raw.H_f.rows());
+    EXPECT_EQ(raw.residual.rows(), raw.H_f.rows());
+    EXPECT_EQ(raw.H_f.cols(), 3);
+    EXPECT_GT(raw.H_x.cols(), 0);
+  }
+
+  const ov_msckf::CP2ShadowMathResult &shadow = observed.shadow.result;
+  EXPECT_TRUE(shadow.input_valid);
+  EXPECT_FALSE(shadow.duplicate_feature_id);
+  ASSERT_EQ(shadow.features.size(), kAcceptedFeatureCount);
+  ASSERT_TRUE(shadow.nullspace.proposal_available);
+  ASSERT_TRUE(shadow.schur.proposal_available);
+  ASSERT_TRUE(shadow.nullspace.proposal.accepted());
+  ASSERT_TRUE(shadow.schur.proposal.accepted());
+  EXPECT_EQ(shadow.nullspace.accepted_ids.size(), kAcceptedFeatureCount);
+  EXPECT_EQ(shadow.schur.accepted_ids.size(), kAcceptedFeatureCount);
+  EXPECT_EQ(observed.baseline_accepted_ids, shadow.nullspace.accepted_ids);
+  EXPECT_EQ(binary64_bits(observed.baseline_gamma),
+            binary64_bits(shadow.nullspace.retained_gamma));
+  EXPECT_EQ(observed.baseline_precompression_rows,
+            static_cast<std::uint64_t>(shadow.nullspace.precompression_rows));
+  EXPECT_EQ(observed.baseline_compressed_rows,
+            static_cast<std::uint64_t>(shadow.nullspace.compressed_rows));
+
+  // The live preflight and the independently assembled shadow nullspace
+  // proposal consume the same immutable snapshot and are byte-exact here.
+  EXPECT_TRUE(bitwise_equal(observed.shadow.live_nullspace_proposal.dx,
+                            shadow.nullspace.proposal.dx));
+  EXPECT_TRUE(bitwise_equal(observed.shadow.live_nullspace_proposal.P_plus,
+                            shadow.nullspace.proposal.P_plus));
+  EXPECT_TRUE(bitwise_equal(observed.shadow.live_nullspace_proposal.dx,
+                            expectation.preview.dx));
+  EXPECT_TRUE(bitwise_equal(observed.shadow.live_nullspace_proposal.P_plus,
+                            expectation.preview.P_plus));
+  EXPECT_TRUE(bitwise_equal(ov_msckf::StateHelper::get_full_covariance(fixture.state),
+                            observed.shadow.live_nullspace_proposal.P_plus));
+
+  for (const ov_msckf::CP2FeaturePairResult &feature : shadow.features) {
+    EXPECT_EQ(feature.nullspace.counters.jitter_count, 0U);
+    EXPECT_EQ(feature.nullspace.counters.repair_count, 0U);
+    EXPECT_EQ(feature.nullspace.counters.alternate_solve_count, 0U);
+    EXPECT_EQ(feature.nullspace.counters.clamp_count, 0U);
+    EXPECT_EQ(feature.nullspace.counters.regularization_count, 0U);
+    EXPECT_EQ(feature.nullspace.counters.silent_fallback_count, 0U);
+    EXPECT_EQ(feature.nullspace.counters.fallback_count, 0U);
+    EXPECT_EQ(feature.schur.jitter_count, 0U);
+    EXPECT_EQ(feature.schur.clamp_count, 0U);
+    EXPECT_EQ(feature.schur.regularization_count, 0U);
+    EXPECT_EQ(feature.schur.fallback_count, 0U);
+  }
+
+  expect_fej_unchanged(fixture, before);
+  expect_commit_matches_preview(fixture, expectation);
+}
+
+TEST(CP2UpdaterMSCKFEndToEnd,
+     NonfiniteGammaEvidenceCannotStopLiveTraversalOrBaselineCommit) {
+  constexpr std::size_t first_feature_id = 0x43503247414dULL;
+  constexpr std::size_t gamma_overflow_feature_count = 2U;
+  const double accepting_multiplier = std::numeric_limits<double>::max();
+
+  // First obtain the exact production-nullspace residual vectors at sigma=1.
+  // The large finite raw pixels are installed only after their normalized
+  // triangulation tracks were formed, so every feature reaches the shared raw
+  // seam while retaining a residual-dominant, finite gate system.
+  ProductionFixture probe_fixture = make_production_fixture();
+  auto probe_features =
+      make_large_residual_features(probe_fixture, first_feature_id,
+                                   gamma_overflow_feature_count);
+  auto probe_updater = make_updater(
+      ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE, 1.0,
+      accepting_multiplier);
+  std::size_t probe_callback_count = 0;
+  ov_msckf::CP2LiveUpdateEvent probe_event;
+  ASSERT_TRUE(probe_updater->set_cp2_update_callback(
+      [&](const ov_msckf::CP2LiveUpdateEvent &event) {
+        ++probe_callback_count;
+        probe_event = event;
+      },
+      true));
+  probe_updater->update(probe_fixture.state, probe_features);
+  ASSERT_EQ(probe_callback_count, 1U);
+  ASSERT_TRUE(probe_event.shadow_evidence_available);
+  ASSERT_TRUE(probe_event.shadow.shadow_math_completed);
+  ASSERT_EQ(probe_event.shadow.result.features.size(), gamma_overflow_feature_count);
+
+  double raw_gamma_sum = 0.0;
+  for (const ov_msckf::CP2FeaturePairResult &feature :
+       probe_event.shadow.result.features) {
+    ASSERT_TRUE(feature.nullspace.emitted_system_available);
+    ASSERT_TRUE(feature.nullspace.residual_reduced.allFinite());
+    const double raw_gamma = feature.nullspace.residual_reduced.squaredNorm();
+    ASSERT_TRUE(std::isfinite(raw_gamma));
+    ASSERT_GT(raw_gamma, 0.0);
+    raw_gamma_sum += raw_gamma;
+  }
+  ASSERT_TRUE(std::isfinite(raw_gamma_sum));
+
+  // Select a representable sigma for which every individual ordered gamma is
+  // finite but their production-order binary64 sum overflows. The initial
+  // scale targets a total of 4/3*DBL_MAX; the bounded adjustment handles the
+  // exact divide/square rounding used by Eigen without changing production.
+  double sigma_pix =
+      std::sqrt(0.75 * (raw_gamma_sum / std::numeric_limits<double>::max()));
+  bool found_ordered_sum_overflow = false;
+  for (int attempt = 0; attempt < 64 && !found_ordered_sum_overflow; ++attempt) {
+    ASSERT_TRUE(std::isfinite(sigma_pix));
+    ASSERT_GT(sigma_pix, 0.0);
+    ASSERT_TRUE(std::isfinite(sigma_pix * sigma_pix));
+    ASSERT_GT(sigma_pix * sigma_pix, 0.0);
+
+    std::vector<double> ordered_gammas;
+    bool every_individual_gamma_finite = true;
+    for (const ov_msckf::CP2FeaturePairResult &feature :
+         probe_event.shadow.result.features) {
+      const Eigen::VectorXd whitened =
+          feature.nullspace.residual_reduced.array() / sigma_pix;
+      const double gamma = whitened.squaredNorm();
+      if (!whitened.allFinite() || !std::isfinite(gamma)) {
+        every_individual_gamma_finite = false;
+        break;
+      }
+      ordered_gammas.push_back(gamma);
+    }
+    if (!every_individual_gamma_finite) {
+      sigma_pix *= 1.05;
+      continue;
+    }
+
+    double ordered_sum = 0.0;
+    for (double gamma : ordered_gammas) {
+      const double next = ordered_sum + gamma;
+      if (!std::isfinite(next)) {
+        found_ordered_sum_overflow = true;
+        break;
+      }
+      ordered_sum = next;
+    }
+    if (!found_ordered_sum_overflow) {
+      sigma_pix *= 0.95;
+    }
+  }
+  ASSERT_TRUE(found_ordered_sum_overflow);
+
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto features = make_large_residual_features(fixture, first_feature_id,
+                                               gamma_overflow_feature_count);
+  auto updater = make_updater(
+      ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE, sigma_pix,
+      accepting_multiplier);
+  std::size_t callback_count = 0;
+  ov_msckf::CP2LiveUpdateEvent observed;
+  ASSERT_TRUE(updater->set_cp2_update_callback(
+      [&](const ov_msckf::CP2LiveUpdateEvent &event) {
+        ++callback_count;
+        observed = event;
+      },
+      true));
+
+  updater->update(fixture.state, features);
+
+  ASSERT_EQ(callback_count, 1U);
+  EXPECT_EQ(observed.terminal_status,
+            ov_msckf::CP2UpdateTerminalStatus::kCommittedCounted);
+  EXPECT_EQ(observed.terminal_subreason,
+            ov_msckf::CP2UpdateTerminalSubreason::kNone);
+  EXPECT_EQ(observed.raw_system_count, gamma_overflow_feature_count);
+  EXPECT_EQ(observed.baseline_accepted_ids.size(), gamma_overflow_feature_count);
+  EXPECT_EQ(observed.baseline_gamma_status, ov_msckf::CP2GammaStatus::kNonfinite);
+  EXPECT_TRUE(std::isnan(observed.baseline_gamma));
+  EXPECT_TRUE(observed.baseline_precompression_system_nonempty);
+  EXPECT_TRUE(observed.baseline_compressed_system_nonempty);
+  EXPECT_TRUE(observed.baseline_preflight_accepted);
+  EXPECT_TRUE(observed.baseline_commit_occurred);
+  ASSERT_TRUE(observed.shadow_evidence_available);
+  ASSERT_TRUE(observed.shadow.shadow_math_completed);
+  const ov_msckf::CP2ShadowMathResult &shadow = observed.shadow.result;
+  ASSERT_TRUE(shadow.input_valid);
+  EXPECT_EQ(observed.baseline_accepted_ids, shadow.nullspace.accepted_ids);
+  EXPECT_EQ(shadow.nullspace.gamma_status, ov_msckf::CP2GammaStatus::kNonfinite);
+  EXPECT_TRUE(shadow.nullspace.proposal_available);
+  EXPECT_EQ(shadow.schur.accepted_ids.size(), gamma_overflow_feature_count);
+  EXPECT_EQ(shadow.schur.gamma_status, ov_msckf::CP2GammaStatus::kNonfinite);
+  EXPECT_FALSE(shadow.schur.proposal_available);
+  EXPECT_EQ(shadow.features.size(), gamma_overflow_feature_count);
+  EXPECT_FALSE(bitwise_equal(before.covariance,
+                             ov_msckf::StateHelper::get_full_covariance(fixture.state)));
+}
+
+TEST(CP2UpdaterMSCKFEndToEnd,
+     SchurModeRejectsShadowEnableWithoutReplacingExistingObserver) {
+  EXPECT_STREQ(ov_msckf::cp2_update_terminal_status_name(
+                   ov_msckf::CP2UpdateTerminalStatus::kEmptyAfterCompression),
+               "empty_after_compression");
+  EXPECT_STREQ(ov_msckf::cp2_update_terminal_status_name(
+                   ov_msckf::CP2UpdateTerminalStatus::kInternalFailure),
+               "internal_failure");
+  EXPECT_STREQ(ov_msckf::cp2_update_terminal_subreason_name(
+                   ov_msckf::CP2UpdateTerminalSubreason::kMeasurementCompressionEmpty),
+               "measurement_compression_empty");
+  EXPECT_STREQ(ov_msckf::cp2_update_terminal_subreason_name(
+                   ov_msckf::CP2UpdateTerminalSubreason::kInvalidLiveMode),
+               "invalid_live_mode");
+  EXPECT_STREQ(ov_msckf::cp2_update_terminal_subreason_name(
+                   ov_msckf::CP2UpdateTerminalSubreason::kSnapshotMismatch),
+               "snapshot_mismatch");
+  EXPECT_STREQ(ov_msckf::cp2_update_terminal_subreason_name(
+                   ov_msckf::CP2UpdateTerminalSubreason::kTraceInvariantFailure),
+               "trace_invariant_failure");
+  auto updater = make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::SCHUR);
+  std::size_t retained_callback_count = 0;
+  std::size_t rejected_callback_count = 0;
+  bool reentry_rejected = false;
+  ov_msckf::CP2LiveUpdateEvent observed;
+  ASSERT_TRUE(updater->set_cp2_update_callback(
+      [&](const ov_msckf::CP2LiveUpdateEvent &event) {
+        ++retained_callback_count;
+        observed = event;
+        if (!reentry_rejected) {
+          std::vector<std::shared_ptr<ov_core::Feature>> nested_features;
+          try {
+            updater->update(std::shared_ptr<ov_msckf::State>(), nested_features);
+          } catch (const std::logic_error &) {
+            reentry_rejected = true;
+          }
+        }
+      },
+      false));
+  EXPECT_FALSE(updater->set_cp2_update_callback(
+      [&](const ov_msckf::CP2LiveUpdateEvent &) { ++rejected_callback_count; }, true));
+
+  std::vector<std::shared_ptr<ov_core::Feature>> features;
+  updater->update(std::shared_ptr<ov_msckf::State>(), features);
+
+  EXPECT_EQ(retained_callback_count, 1U);
+  EXPECT_EQ(rejected_callback_count, 0U);
+  EXPECT_TRUE(reentry_rejected);
+  EXPECT_EQ(observed.terminal_status, ov_msckf::CP2UpdateTerminalStatus::kEmptyInput);
+  EXPECT_EQ(observed.terminal_subreason,
+            ov_msckf::CP2UpdateTerminalSubreason::kInputEmpty);
+  EXPECT_STREQ(ov_msckf::cp2_update_terminal_status_name(observed.terminal_status),
+               "empty_input");
+  EXPECT_STREQ(ov_msckf::cp2_update_terminal_subreason_name(observed.terminal_subreason),
+               "input_empty");
+  EXPECT_EQ(observed.input_feature_count, 0U);
+  EXPECT_TRUE(observed.baseline_accepted_ids.empty());
+  EXPECT_EQ(observed.baseline_gamma_status, ov_msckf::CP2GammaStatus::kNotReached);
+  EXPECT_FALSE(observed.baseline_precompression_rows_available);
+  EXPECT_FALSE(observed.baseline_compressed_rows_available);
+  EXPECT_FALSE(observed.shadow_evidence_available);
+  EXPECT_FALSE(observed.baseline_commit_occurred);
+
+  EXPECT_FALSE(updater->set_cp2_update_callback(
+      [&](const ov_msckf::CP2LiveUpdateEvent &) { ++rejected_callback_count; }, false));
+  updater->update(std::shared_ptr<ov_msckf::State>(), features);
+  EXPECT_EQ(retained_callback_count, 2U);
+  EXPECT_EQ(rejected_callback_count, 0U);
+}
+
+TEST(CP2UpdaterMSCKFEndToEnd,
+     ObserverExceptionCannotVetoAnAcceptedBaselineCommit) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  constexpr std::size_t first_feature_id = 0x435032455843ULL;
+  const auto preview_features = make_accepted_features(fixture, first_feature_id);
+  const PreviewExpectation expectation = make_preview_expectation(
+      fixture, preview_features,
+      ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  ASSERT_TRUE(expectation.preview.accepted());
+  auto features = make_accepted_features(fixture, first_feature_id);
+  auto updater = make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  std::size_t callback_count = 0;
+  ASSERT_TRUE(updater->set_cp2_update_callback(
+      [&](const ov_msckf::CP2LiveUpdateEvent &event) {
+        ++callback_count;
+        EXPECT_TRUE(event.baseline_commit_occurred);
+        throw std::runtime_error("expected observer failure");
+      },
+      false));
+
+  EXPECT_NO_THROW(updater->update(fixture.state, features));
+
+  EXPECT_EQ(callback_count, 1U);
+  EXPECT_TRUE(bitwise_equal(ov_msckf::StateHelper::get_full_covariance(fixture.state),
+                            expectation.preview.P_plus));
+  EXPECT_FALSE(bitwise_equal(before.covariance, expectation.preview.P_plus));
+  expect_fej_unchanged(fixture, before);
+  expect_commit_matches_preview(fixture, expectation);
+}
+
+TEST(CP2UpdaterMSCKFEndToEnd,
+     AllRejectedRawSystemHasExactTerminalTaxonomyAndNoBaselineWrite) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto feature = make_feature(fixture, 0x435032414c4cULL, true);
+  std::vector<std::shared_ptr<ov_core::Feature>> features{feature};
+  auto updater = make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  std::size_t callback_count = 0;
+  ov_msckf::CP2LiveUpdateEvent observed;
+  ASSERT_TRUE(updater->set_cp2_update_callback(
+      [&](const ov_msckf::CP2LiveUpdateEvent &event) {
+        ++callback_count;
+        observed = event;
+      },
+      true));
+
+  updater->update(fixture.state, features);
+
+  ASSERT_EQ(callback_count, 1U);
+  EXPECT_EQ(observed.terminal_status, ov_msckf::CP2UpdateTerminalStatus::kAllRejected);
+  EXPECT_EQ(observed.terminal_subreason,
+            ov_msckf::CP2UpdateTerminalSubreason::kAllBaselineFeaturesRejected);
+  EXPECT_STREQ(ov_msckf::cp2_update_terminal_status_name(observed.terminal_status),
+               "all_rejected");
+  EXPECT_STREQ(ov_msckf::cp2_update_terminal_subreason_name(observed.terminal_subreason),
+               "all_baseline_features_rejected");
+  EXPECT_EQ(observed.input_feature_count, 1U);
+  EXPECT_EQ(observed.raw_system_count, 1U);
+  EXPECT_TRUE(observed.baseline_accepted_ids.empty());
+  EXPECT_EQ(observed.baseline_gamma_status, ov_msckf::CP2GammaStatus::kAvailable);
+  EXPECT_EQ(binary64_bits(observed.baseline_gamma), binary64_bits(0.0));
+  EXPECT_FALSE(observed.baseline_precompression_system_nonempty);
+  EXPECT_TRUE(observed.baseline_precompression_rows_available);
+  EXPECT_EQ(observed.baseline_precompression_rows, 0U);
+  EXPECT_FALSE(observed.baseline_compressed_rows_available);
+  EXPECT_FALSE(observed.baseline_compressed_system_nonempty);
+  EXPECT_FALSE(observed.baseline_preflight_attempted);
+  EXPECT_FALSE(observed.baseline_preflight_accepted);
+  EXPECT_FALSE(observed.baseline_commit_occurred);
+  ASSERT_TRUE(observed.shadow_evidence_available);
+  EXPECT_TRUE(observed.shadow.shadow_math_completed);
+  EXPECT_FALSE(observed.shadow.baseline_preview_available);
+  EXPECT_FALSE(observed.shadow.baseline_commit_planned);
+  ASSERT_EQ(observed.shadow.input.raw_systems.size(), 1U);
+  EXPECT_EQ(observed.shadow.input.raw_systems.front().feature_id, feature->featid);
+  EXPECT_TRUE(features.empty());
+  EXPECT_TRUE(feature->to_delete);
+  expect_exact_state(fixture, before);
 }
 
 } // namespace

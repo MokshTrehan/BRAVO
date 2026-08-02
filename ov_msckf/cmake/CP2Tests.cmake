@@ -88,7 +88,8 @@ if (CATKIN_ENABLE_TESTING)
             test_cp2_canonical;test/cp2/test_cp2_canonical.cpp
             test_cp2_feature_gate;test/cp2/test_cp2_feature_gate.cpp
             test_cp2_updater_msckf_preview_snapshot;test/cp2/test_updater_msckf_preview_snapshot.cpp
-            test_cp2_shadow_math;test/cp2/test_cp2_shadow_math.cpp)
+            test_cp2_shadow_math;test/cp2/test_cp2_shadow_math.cpp
+            test_cp2_trace_codec;test/cp2/test_cp2_trace_codec.cpp)
     list(LENGTH CP2_VALUE_ONLY_TEST_SOURCES CP2_VALUE_ONLY_TEST_SOURCE_COUNT)
     math(EXPR CP2_VALUE_ONLY_TEST_LAST "${CP2_VALUE_ONLY_TEST_SOURCE_COUNT} - 1")
     foreach (CP2_VALUE_ONLY_TEST_INDEX RANGE 0 ${CP2_VALUE_ONLY_TEST_LAST} 2)

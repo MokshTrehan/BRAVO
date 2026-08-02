@@ -179,6 +179,12 @@ struct VioManagerOptions {
       PRINT_ERROR(RED "up_msckf_sigma_px must be finite and strictly positive\n" RESET);
       std::exit(EXIT_FAILURE);
     }
+    if (!std::isfinite(msckf_options.chi2_multipler)) {
+      PRINT_ERROR(RED "invalid MSCKF chi2 multiplier: %.17g\n" RESET,
+                  msckf_options.chi2_multipler);
+      PRINT_ERROR(RED "up_msckf_chi2_multipler must be finite\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
     const double msckf_sigma_pix_sq = msckf_options.sigma_pix * msckf_options.sigma_pix;
     if (!std::isfinite(msckf_sigma_pix_sq) || !(msckf_sigma_pix_sq > 0.0)) {
       PRINT_ERROR(RED "unrepresentable MSCKF pixel variance for sigma %.17g\n" RESET, msckf_options.sigma_pix);
