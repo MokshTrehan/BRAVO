@@ -295,6 +295,7 @@ SOURCE_INPUTS = {
     "ov_msckf/src/state/StateOptions.h",
     "ov_msckf/src/update/CP2Canonical.cpp",
     "ov_msckf/src/update/CP2Canonical.h",
+    "ov_msckf/src/update/CP2CommitBoundary.cpp",
     "ov_msckf/src/update/CP2CommitBoundary.h",
     "ov_msckf/src/update/CP2CommitOracle.cpp",
     "ov_msckf/src/update/CP2CommitOracle.h",
@@ -402,6 +403,7 @@ RUNTIME_LIBRARY_SOURCES = (
     "ov_msckf/src/core/VioManager.cpp",
     "ov_msckf/src/core/VioManagerHelper.cpp",
     "ov_msckf/src/update/CP2Canonical.cpp",
+    "ov_msckf/src/update/CP2CommitBoundary.cpp",
     "ov_msckf/src/update/CP2CommitOracle.cpp",
     "ov_msckf/src/update/CP2CompositeState.cpp",
     "ov_msckf/src/update/CP2FeatureGate.cpp",
@@ -421,6 +423,7 @@ SOURCE_INPUTS.update(RUNTIME_LIBRARY_SOURCES)
 STRICT_PRODUCTION_SOURCES = (
     "ov_msckf/src/update/SchurUpdate.cpp",
     "ov_msckf/src/update/CP2Canonical.cpp",
+    "ov_msckf/src/update/CP2CommitBoundary.cpp",
     "ov_msckf/src/update/CP2CommitOracle.cpp",
     "ov_msckf/src/update/CP2CompositeState.cpp",
     "ov_msckf/src/update/CP2FeatureGate.cpp",
@@ -5310,6 +5313,8 @@ def run_self_test():
         raise RuntimeError("CP2-C2 executable test-count contract is inconsistent")
     if len(CP2_TESTS) != 14 or sum(ALL_TESTS.values()) != 139:
         raise RuntimeError("CP2-C2 exact executable/total testcase inventory is inconsistent")
+    if len(RUNTIME_LIBRARY_SOURCES) != 23:
+        raise RuntimeError("CP2-C2 exact production/fault runtime source inventory is not 23")
     if any(
         len(TEST_CASES_BY_BINARY.get(name, ())) != count
         for name, count in required_cp2_c2_counts.items()

@@ -99,17 +99,20 @@ public:
     sole_commit();
     const Endpoint endpoint = clock.now();
     const CP2PostcommitFillStatus fill_status = postcommit_fill();
+    const CP2CommitBoundaryStatus boundary_status =
+        StatusFromPostcommitFill(fill_status);
 
     output.endpoint = endpoint;
     output.endpoint_valid = true;
-    output.status =
-        fill_status == CP2PostcommitFillStatus::kSucceeded
-            ? CP2CommitBoundaryStatus::kCommittedFillSucceeded
-            : CP2CommitBoundaryStatus::kCommittedFillFailed;
+    output.status = boundary_status;
     return output.status;
   }
 
   CP2CommitBoundary() = delete;
+
+private:
+  static CP2CommitBoundaryStatus
+  StatusFromPostcommitFill(CP2PostcommitFillStatus status) noexcept;
 };
 
 } // namespace ov_msckf

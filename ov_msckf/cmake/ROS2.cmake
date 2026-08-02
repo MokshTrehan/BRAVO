@@ -65,6 +65,7 @@ list(APPEND LIBRARY_SOURCES
         src/core/VioManager.cpp
         src/core/VioManagerHelper.cpp
         src/update/CP2Canonical.cpp
+        src/update/CP2CommitBoundary.cpp
         src/update/CP2CommitOracle.cpp
         src/update/CP2CompositeState.cpp
         src/update/CP2FeatureGate.cpp
@@ -85,6 +86,7 @@ list(APPEND LIBRARY_SOURCES
 set_source_files_properties(
         src/state/StateHelper.cpp
         src/update/CP2Canonical.cpp
+        src/update/CP2CommitBoundary.cpp
         src/update/CP2CommitOracle.cpp
         src/update/CP2CompositeState.cpp
         src/update/CP2FeatureGate.cpp
