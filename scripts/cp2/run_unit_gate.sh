@@ -73,7 +73,7 @@ die() {
 }
 
 utc_now() {
-    date -u +%Y-%m-%dT%H:%M:%S.%NZ
+    date -u +%Y-%m-%dT%H:%M:%S.%6NZ
 }
 
 sha256_path() {
@@ -144,7 +144,7 @@ fi
 readonly lock_identity lock_path cp2_lock_fd
 
 runner_self_test() {
-    local self_log self_status=0
+    local self_log self_status=0 timestamp_sample
     local status_before status_after build_before build_after results_before results_after
     self_log="$(mktemp --tmpdir cp2-unit-runner-self-test.XXXXXXXX.log)" ||
         die "could not allocate runner self-test log"
@@ -155,6 +155,29 @@ runner_self_test() {
 
     if ! /bin/bash -n -- "${BASH_SOURCE[0]}"; then
         echo "runner shell syntax check failed" >&2
+        self_status=1
+    fi
+    timestamp_sample="$(utc_now)"
+    if ! /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 \
+        /usr/bin/python3 - "${timestamp_sample}" <<'PY'
+import datetime
+import re
+import sys
+
+sample = sys.argv[1]
+if re.fullmatch(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z",
+    sample,
+) is None:
+    raise SystemExit("utc_now timestamp is not canonical six-fraction UTC")
+parsed = datetime.datetime.fromisoformat(sample[:-1] + "+00:00")
+if parsed.tzinfo is None or parsed.utcoffset() != datetime.timedelta(0):
+    raise SystemExit("utc_now timestamp did not parse as UTC")
+if parsed.isoformat(timespec="microseconds").replace("+00:00", "Z") != sample:
+    raise SystemExit("utc_now timestamp does not round-trip canonically")
+PY
+    then
+        echo "runner utc_now timestamp contract check failed: ${timestamp_sample}" >&2
         self_status=1
     fi
     if ! /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC \
