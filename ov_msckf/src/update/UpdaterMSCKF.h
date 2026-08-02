@@ -24,15 +24,19 @@
 #ifndef OV_MSCKF_UPDATER_MSCKF_H
 #define OV_MSCKF_UPDATER_MSCKF_H
 
+#include "CP2CommitOracle.h"
 #include "CP2ShadowMath.h"
 
 #include <Eigen/Eigen>
+#include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <vector>
 
 #include "feat/FeatureInitializerOptions.h"
@@ -47,6 +51,33 @@ class FeatureInitializer;
 namespace ov_msckf {
 
 class State;
+
+#if defined(OV_MSCKF_CP2_TESTING)
+enum class CP2UpdaterTestFault : std::uint8_t {
+  kNone,
+  kCandidateAssemblyFailure,
+  kInvalidPhase2,
+  kPhase1ValueMismatch,
+  kFinalPointerMismatch,
+  kInvalidatePostcommitStorage,
+  kInvalidatePostcommitPointerToken,
+  kPhase3ValueMismatch,
+  kPhase3Nonfinite,
+  kNoncommitDurationArithmeticFailure,
+  kCommittedDurationArithmeticFailure,
+  kCommitOracleArithmeticOverflow,
+  kCommitOracleInvalidPhase,
+  kBaselineProvenanceMismatch,
+};
+enum class CP2UpdaterTestStage : std::uint8_t {
+  kPhase0Capture,
+  kLivePreviewCapture,
+  kPhase0Projection,
+  kPhase2Build,
+  kPhase1Capture,
+};
+class CP2UpdaterTestAccess;
+#endif
 
 /**
  * @brief Owning, value-only output from one opt-in CP2 live shadow invocation.
@@ -99,7 +130,8 @@ const char *cp2_update_terminal_subreason_name(CP2UpdateTerminalSubreason subrea
  * duration_ns ends before observer execution. On a committing invocation its
  * endpoint is sampled immediately after StateHelper::EKFUpdate returns. The
  * optional shadow payload was fully formed before that sole live commit. The
- * sink receives this event by value and may move it to longer-lived storage.
+ * diagnostic observer receives this value after the timing endpoint. In
+ * authoritative mode it is also embedded in the immutable owning record.
  */
 struct CP2LiveUpdateEvent {
   std::uint64_t duration_ns = 0;
@@ -121,6 +153,112 @@ struct CP2LiveUpdateEvent {
   bool baseline_commit_occurred = false;
   bool shadow_evidence_available = false;
   CP2LiveShadowEvidence shadow;
+};
+
+/// Explicit result from the authoritative, synchronous CP2 recorded sink.
+enum class CP2RecordedSinkStatus : std::uint8_t {
+  kPublished,
+  kRejected,
+};
+
+/// Sticky out-of-band reason why a complete recorded campaign is impossible.
+enum class CP2TraceFatalReason : std::uint8_t {
+  kNone,
+  kConfigurationInvariant,
+  kPhase0Promotion,
+  kRequiredEncoding,
+  kShadowTrace,
+  kPhase1Capture,
+  kPostcommitCapture,
+  kSinkRejected,
+  kArithmeticInvariant,
+  kPostcommitException,
+};
+
+const char *cp2_recorded_sink_status_name(CP2RecordedSinkStatus status) noexcept;
+const char *cp2_trace_fatal_reason_name(CP2TraceFatalReason reason) noexcept;
+
+/**
+ * Distinct stop signal for an incomplete authoritative trace.
+ *
+ * The sticky latch is set before this exception is thrown. The runner must
+ * stop the campaign and discard its hidden partial output; broad updater
+ * exception handling is forbidden from relabeling this as an ordinary update.
+ */
+class CP2TraceFatalError : public std::runtime_error {
+public:
+  CP2TraceFatalError(CP2TraceFatalReason reason, const char *message)
+      : std::runtime_error(message), reason_(reason) {}
+
+  CP2TraceFatalReason reason() const noexcept { return reason_; }
+
+private:
+  CP2TraceFatalReason reason_;
+};
+
+/// One exact, owning state phase and its already encoded canonical payload.
+struct CP2EncodedStatePhase {
+  CP2StatePhase phase = CP2StatePhase::kPhase0Prior;
+  std::unique_ptr<const CP2CompositeStateSnapshot> snapshot;
+  std::vector<std::uint8_t> payload;
+
+  CP2EncodedStatePhase() = default;
+  CP2EncodedStatePhase(const CP2EncodedStatePhase &) = delete;
+  CP2EncodedStatePhase &operator=(const CP2EncodedStatePhase &) = delete;
+  CP2EncodedStatePhase(CP2EncodedStatePhase &&) noexcept = default;
+  CP2EncodedStatePhase &operator=(CP2EncodedStatePhase &&) noexcept = default;
+};
+
+/**
+ * Complete value-owning result of one authoritative recorded invocation.
+ *
+ * state_phase_count is exactly 0, 2, or 4. The populated prefix is therefore
+ * exactly [], [0,1], or [0,1,2,3]. Pointer identity never enters this object.
+ */
+struct CP2RecordedUpdateEvent {
+  CP2LiveUpdateEvent update;
+  std::array<CP2EncodedStatePhase, 4> state_phases;
+  std::size_t state_phase_count = 0U;
+  std::vector<std::vector<std::uint8_t>> raw_system_payloads;
+  bool baseline_proposal_payload_available = false;
+  std::vector<std::uint8_t> baseline_proposal_payload;
+  bool candidate_proposal_payload_available = false;
+  std::vector<std::uint8_t> candidate_proposal_payload;
+  bool phase01_canonical_equal = false;
+  bool phase01_pointer_graph_equal = false;
+  bool baseline_commit_oracle_available = false;
+  CP2CommitOracleResult baseline_commit_oracle;
+  bool baseline_commit_mismatch = false;
+  /**
+   * Necessary online math invariant only; it is not the schema's
+   * updates.jsonl math_passed field. The C3 sink must additionally derive and
+   * conjoin every candidate state/covariance block comparison and row-
+   * completeness requirement before it may publish schema math_passed=true.
+   */
+  bool online_math_evidence_passed = false;
+  std::uint64_t baseline_commit_count = 0U;
+  std::uint64_t baseline_mean_commit_count = 0U;
+  std::uint64_t baseline_covariance_commit_count = 0U;
+  std::uint64_t candidate_ekf_update_call_count = 0U;
+  std::uint64_t candidate_mean_write_count = 0U;
+  std::uint64_t candidate_covariance_write_count = 0U;
+  std::uint64_t candidate_type_update_call_count = 0U;
+  std::uint64_t candidate_feature_write_count = 0U;
+
+  CP2RecordedUpdateEvent() = default;
+  CP2RecordedUpdateEvent(const CP2RecordedUpdateEvent &) = delete;
+  CP2RecordedUpdateEvent &operator=(const CP2RecordedUpdateEvent &) = delete;
+  CP2RecordedUpdateEvent(CP2RecordedUpdateEvent &&) noexcept = default;
+  CP2RecordedUpdateEvent &operator=(CP2RecordedUpdateEvent &&) noexcept =
+      default;
+};
+
+/** Status-returning authoritative sink, distinct from the diagnostic observer. */
+class CP2RecordedUpdateSink {
+public:
+  virtual ~CP2RecordedUpdateSink() = default;
+  virtual CP2RecordedSinkStatus
+  Publish(const std::shared_ptr<const CP2RecordedUpdateEvent> &record) noexcept = 0;
 };
 
 /**
@@ -168,6 +306,19 @@ public:
   bool set_cp2_update_callback(CP2UpdateCallback callback, bool enable_shadow = false);
 
   /**
+   * Install or clear the authoritative CP2 recorded sink before first update.
+   *
+   * A nonnull sink is legal only for the frozen nullspace live baseline and
+   * automatically enables the complete dual-path shadow. It may coexist with
+   * the diagnostic observer; successful authoritative publication always
+   * precedes observer execution. Configuration freezes at first update entry.
+   */
+  bool set_cp2_recorded_sink(std::shared_ptr<CP2RecordedUpdateSink> sink);
+
+  bool cp2_trace_fatal_latched() const noexcept;
+  CP2TraceFatalReason cp2_trace_fatal_reason() const noexcept;
+
+  /**
    * @brief Given tracked features, this will try to use them to update the state.
    *
    * @param state State of the filter
@@ -188,6 +339,9 @@ protected:
   /// Empty by default; therefore ordinary and CP2-E runs execute no shadow.
   std::shared_ptr<const CP2UpdateCallback> cp2_update_callback;
 
+  /// Empty by default; nonnull activates authoritative recorded mode.
+  std::shared_ptr<CP2RecordedUpdateSink> cp2_recorded_sink;
+
   /// Independent capability bit; false keeps raw copies and shadow math off.
   bool cp2_shadow_enabled = false;
 
@@ -197,6 +351,26 @@ protected:
 
   /// External state serialization is mandatory; reject accidental reentry.
   std::atomic<bool> cp2_update_active{false};
+
+  /// First fatal reason wins and cannot be cleared during this updater's life.
+  std::atomic<CP2TraceFatalReason> cp2_trace_fatal_reason_value{
+      CP2TraceFatalReason::kNone};
+
+private:
+  [[noreturn]] void latch_cp2_trace_fatal(CP2TraceFatalReason reason,
+                                          const char *message);
+#if defined(OV_MSCKF_CP2_TESTING)
+  friend class CP2UpdaterTestAccess;
+  void cp2_test_note_stage(CP2UpdaterTestStage stage) noexcept {
+    if (cp2_test_stage_count < cp2_test_stages.size()) {
+      cp2_test_stages[cp2_test_stage_count++] = stage;
+    }
+  }
+  CP2UpdaterTestFault cp2_test_fault = CP2UpdaterTestFault::kNone;
+  std::uint64_t cp2_test_raw_assembly_calls = 0U;
+  std::array<CP2UpdaterTestStage, 8U> cp2_test_stages{};
+  std::size_t cp2_test_stage_count = 0U;
+#endif
 };
 
 } // namespace ov_msckf

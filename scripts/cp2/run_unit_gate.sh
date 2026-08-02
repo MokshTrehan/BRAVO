@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# CP2-A/B plus CP2-C1 unit evidence runner. This program has no bag/dataset path.
+# CP2-A/B plus CP2-C2 unit evidence runner. This program has no bag/dataset path.
 set -Eeuo pipefail
 umask 077
 export PATH=/usr/bin:/bin
@@ -63,7 +63,10 @@ readonly -a cp2_tests=(
     test_cp2_state_update_semantics
     test_cp2_configuration_contract
     test_cp2_updater_msckf_end_to_end
+    test_cp2_updater_msckf_fault_injection
     test_cp2_composite_state
+    test_cp2_commit_oracle
+    test_cp2_commit_boundary
     test_cp2_canonical
     test_cp2_feature_gate
     test_cp2_updater_msckf_preview_snapshot
@@ -250,6 +253,20 @@ PY
     if ! grep -F -- 'THIRD_PARTY_NOTICES/Ceres-LICENSE' "${BASH_SOURCE[0]}" >/dev/null ||
        ! grep -F -- 'googletest_source_snapshot.tar' "${BASH_SOURCE[0]}" >/dev/null; then
         echo "runner static invariant is missing: dependency source/notices" >&2
+        self_status=1
+    fi
+    local cp2_c2_target
+    for cp2_c2_target in test_cp2_updater_msckf_fault_injection \
+                         test_cp2_commit_oracle test_cp2_commit_boundary; do
+        if ! grep -Fx -- "    ${cp2_c2_target}" "${BASH_SOURCE[0]}" >/dev/null; then
+            echo "runner static invariant is missing CP2-C2 target: ${cp2_c2_target}" >&2
+            self_status=1
+        fi
+    done
+    if ! grep -F -- 'link_ov_msckf_cp2_fault_lib.txt' "${BASH_SOURCE[0]}" >/dev/null ||
+       ! grep -F -- 'link_test_cp2_updater_msckf_fault_injection.txt' \
+           "${BASH_SOURCE[0]}" >/dev/null; then
+        echo "runner static invariant is missing: CP2-C2 link-isolation evidence" >&2
         self_status=1
     fi
     local eligibility_phrase='eligible CP2 '"seal"
@@ -942,6 +959,19 @@ fi
 if [[ -f "${package_build}/compile_commands.json" ]]; then
     install -m 0444 -- "${package_build}/compile_commands.json" "${run_dir}/compile_commands.json"
 fi
+declare -A cp2_link_command_sources=(
+    [link_ov_msckf_lib.txt]="${package_build}/CMakeFiles/ov_msckf_lib.dir/link.txt"
+    [link_ov_msckf_cp2_fault_lib.txt]="${package_build}/CMakeFiles/ov_msckf_cp2_fault_lib.dir/link.txt"
+    [link_test_cp2_updater_msckf_end_to_end.txt]="${package_build}/CMakeFiles/test_cp2_updater_msckf_end_to_end.dir/link.txt"
+    [link_test_cp2_updater_msckf_fault_injection.txt]="${package_build}/CMakeFiles/test_cp2_updater_msckf_fault_injection.dir/link.txt"
+)
+for link_artifact in "${!cp2_link_command_sources[@]}"; do
+    link_source="${cp2_link_command_sources[${link_artifact}]}"
+    if [[ -f "${link_source}" && ! -L "${link_source}" ]]; then
+        install -m 0444 -- "${link_source}" "${run_dir}/${link_artifact}"
+    fi
+done
+unset link_artifact link_source
 for dependency_package in "${eigen_abi_dependency_packages[@]}"; do
     dependency_compile_commands="${workspace_build_root}/${dependency_package}/compile_commands.json"
     if [[ -f "${dependency_compile_commands}" && ! -L "${dependency_compile_commands}" ]]; then
@@ -1425,11 +1455,11 @@ fi
 write_workspace_record "${source_read_only_after_build}" "${ceres_read_only_after_build}"
 write_source_snapshot "${run_dir}/source_after.json"
 
-# Assembly writes staging evidence only. CP2-C1 is a unit sub-gate, not CP2-C;
-# the CP2-C/D/E entry points and their self-tests remain incomplete.
+# Assembly writes staging evidence only. CP2-C2 is a unit sub-gate, not CP2-C;
+# the CP2-C3/C/D/E entry points and their self-tests remain incomplete.
 if ! /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 \
     /usr/bin/python3 "${verifier}" --assemble-unit "${run_dir}" "${repo_root}"; then
-    die "could not assemble the CP2-A/B plus CP2-C1 staging report; partial artifacts were retained"
+    die "could not assemble the CP2-A/B plus CP2-C2 staging report; partial artifacts were retained"
 fi
 manifest_sha256="$(sha256_path "${run_dir}/SHA256SUMS")"
 
@@ -1448,16 +1478,16 @@ else
     verify_status=$?
 fi
 if [[ "${verify_status}" -ne 0 || "${build_failures}" -ne 0 || "${test_failures}" -ne 0 ]]; then
-    echo "CP2-A/B plus CP2-C1 FAILED; diagnostic staging evidence is retained without overwrite:" >&2
+    echo "CP2-A/B plus CP2-C2 FAILED; diagnostic staging evidence is retained without overwrite:" >&2
     echo "  ${final_dir}" >&2
     exit 1
 fi
 
 run_succeeded=1
-echo "CP2-A/B plus CP2-C1 unit evidence passed and is retained as staging:"
+echo "CP2-A/B plus CP2-C2 unit evidence passed and is retained as staging:"
 echo "  ${final_dir}"
 echo "SHA256SUMS SHA-256 external anchor: ${manifest_sha256}"
 echo "Evidence class: trusted_runner_local_staging; independent source-to-binary attestation: false."
 echo "Distribution status: internal_non_conveyable_staging."
-echo "This artifact is not an eligible CP2 seal. CP2-C1 is unit-only;" \
-    "CP2-C2, CP2-C3, CP2-C, CP2-D, and CP2-E remain unexecuted and unpassed."
+echo "This artifact is not an eligible CP2 seal. CP2-C2 is unit-only;" \
+    "CP2-C3, CP2-C, CP2-D, and CP2-E remain unexecuted and unpassed."

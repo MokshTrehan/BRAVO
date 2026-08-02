@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Assemble and verify CP2-A/B plus CP2-C1 composite-state unit evidence."""
+"""Assemble and verify CP2-A/B plus CP2-C2 updater-integration unit evidence."""
 
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import ctypes
 import datetime as dt
 import errno
@@ -29,12 +30,12 @@ REPORT_NAME = "cp2_report.json"
 MANIFEST_NAME = "SHA256SUMS"
 EXPECTED_BRANCH = "schurvio-lite/cp2-one-pass"
 EVIDENCE_SCOPE = (
-    "cp2_a_b_unit_math_and_cp2_c1_composite_state_codec_oracle_"
-    "with_complete_cp1_regression"
+    "cp2_a_b_unit_math_and_cp2_c2_updater_transaction_commit_oracle_"
+    "with_complete_cp2_c1_and_cp1_regression"
 )
-OVERALL_STATUS = "in_progress_cp2_c_cp2_d_cp2_e_unexecuted"
-UNIT_PASS_STATUS = "passed_cp2_a_b_cp2_c1_unit_only"
-UNIT_FAIL_STATUS = "failed_cp2_a_b_cp2_c1_unit"
+OVERALL_STATUS = "in_progress_cp2_c3_cp2_c_cp2_d_cp2_e_unexecuted"
+UNIT_PASS_STATUS = "passed_cp2_a_b_cp2_c2_unit_only"
+UNIT_FAIL_STATUS = "failed_cp2_a_b_cp2_c2_unit"
 CP1_AUTHORIZATION_COMMIT = "8d80f483752411d34a3bc4c1ff6330b3a5c0fef3"
 CERES_COMMIT = "facb199f3eda902360f9e1d5271372b7e54febe1"
 CERES_TAG = "1.14.0"
@@ -54,8 +55,11 @@ CP2_TESTS = {
     "test_cp2_fej_golden": 1,
     "test_cp2_state_update_semantics": 2,
     "test_cp2_configuration_contract": 10,
-    "test_cp2_updater_msckf_end_to_end": 8,
+    "test_cp2_updater_msckf_end_to_end": 14,
+    "test_cp2_updater_msckf_fault_injection": 28,
     "test_cp2_composite_state": 14,
+    "test_cp2_commit_oracle": 10,
+    "test_cp2_commit_boundary": 4,
     "test_cp2_canonical": 5,
     "test_cp2_feature_gate": 13,
     "test_cp2_updater_msckf_preview_snapshot": 4,
@@ -75,7 +79,12 @@ TEST_SOURCE_BY_BINARY = {
     "test_cp2_state_update_semantics": "ov_msckf/test/cp2/test_state_update_semantics.cpp",
     "test_cp2_configuration_contract": "ov_msckf/test/cp2/test_configuration_contract.cpp",
     "test_cp2_updater_msckf_end_to_end": "ov_msckf/test/cp2/test_updater_msckf_end_to_end.cpp",
+    "test_cp2_updater_msckf_fault_injection": (
+        "ov_msckf/test/cp2/test_updater_msckf_end_to_end.cpp"
+    ),
     "test_cp2_composite_state": "ov_msckf/test/cp2/test_cp2_composite_state.cpp",
+    "test_cp2_commit_oracle": "ov_msckf/test/cp2/test_cp2_commit_oracle.cpp",
+    "test_cp2_commit_boundary": "ov_msckf/test/cp2/test_cp2_commit_boundary.cpp",
     "test_cp2_canonical": "ov_msckf/test/cp2/test_cp2_canonical.cpp",
     "test_cp2_feature_gate": "ov_msckf/test/cp2/test_cp2_feature_gate.cpp",
     "test_cp2_updater_msckf_preview_snapshot": (
@@ -106,6 +115,20 @@ EXPECTED_TEST_CASES = {
     "CP2CompositeStateValidation.EveryLandmarkRepresentationIdentityRuleIsExact",
     "CP2CompositeStateValidation.ExactPartitionsAndCloneIdentityFailClosed",
     "CP2CompositeStateValidation.QuaternionSquaredNormBoundaryIsRoleComplete",
+    "CP2CommitBoundary.AcceptedPathHasExactProofCommitClockFillOrder",
+    "CP2CommitBoundary.FailedFillRetainsCommittedStatusAndExactEndpoint",
+    "CP2CommitBoundary.RejectedProofSuppressesEveryPostproofOperation",
+    "CP2CommitBoundary.ThrowingCommitPropagatesBeforeClockAndPreservesOutput",
+    "CP2CommitOracle.CheckedIntegerHelpersNeverWrapOrClobberOnFailure",
+    "CP2CommitOracle.CountsEachCoefficientMismatchClassByExactBits",
+    "CP2CommitOracle.DetachedTypeUpdateCallMismatchIsUpdateLevelFailure",
+    "CP2CommitOracle.EqualNonfiniteBitsStillFailTheCompleteOracle",
+    "CP2CommitOracle.EverySnapshotMustBeFiniteIndependently",
+    "CP2CommitOracle.InvalidPhaseRetainsExpectedAndRowCountsButNoPopulation",
+    "CP2CommitOracle.InventoryIdentityAndShapeFailuresZeroOnlyCoefficientPopulations",
+    "CP2CommitOracle.MatchingCompositeHasExactPopulationsAndPasses",
+    "CP2CommitOracle.NonCoefficientCanonicalMismatchRetainsPopulations",
+    "CP2CommitOracle.SignedZeroIsOneNominalBitMismatch",
     "CP2StateFileCodec.LegalPhasePopulationsRoundTripAndCorruptionFailsClosed",
     "CP2Configuration.InvalidEnumFailsStartupWithoutSelectingAStringMode",
     "CP2Configuration.InvalidSpellingsCannotMutateASelectedModeOrFallBack",
@@ -133,6 +156,26 @@ EXPECTED_TEST_CASES = {
     "CP2UpdaterMSCKFEndToEnd.SchurModeRejectsShadowEnableWithoutReplacingExistingObserver",
     "CP2UpdaterMSCKFEndToEnd.ObserverExceptionCannotVetoAnAcceptedBaselineCommit",
     "CP2UpdaterMSCKFEndToEnd.AllRejectedRawSystemHasExactTerminalTaxonomyAndNoBaselineWrite",
+    "CP2UpdaterMSCKFTransaction.CandidateAssemblyFailureCannotVetoBaselineCommit",
+    "CP2UpdaterMSCKFTransaction.BaselineProvenanceMismatchSuppressesCommitBeforePhase2",
+    "CP2UpdaterMSCKFTransaction.CleanCommitPublishesExactCompositeAndCommitOracle",
+    "CP2UpdaterMSCKFTransaction.CommitOracleInvalidPhaseRemainsDistinctPostcommitFatal",
+    "CP2UpdaterMSCKFTransaction.CommitOracleOverflowIsArithmeticFatalWithoutPublicationOrRollback",
+    "CP2UpdaterMSCKFTransaction.CommittedDurationFailureIsArithmeticFatalWithoutPublicationOrRollback",
+    "CP2UpdaterMSCKFTransaction.CompleteNonfinitePhase3RemainsCountedFailedEvidence",
+    "CP2UpdaterMSCKFTransaction.CompletePhase3ValueMismatchRemainsCountedFailedEvidence",
+    "CP2UpdaterMSCKFTransaction.FinalPointerRejectionDiscardsInstalledPhase2",
+    "CP2UpdaterMSCKFTransaction.IncompletePostcommitStorageIsFatalAfterCommitWithoutPublication",
+    "CP2UpdaterMSCKFTransaction.InvalidPhase2IsDiscardedAndCannotCommit",
+    "CP2UpdaterMSCKFTransaction.NonfinitePhase1IsSnapshotMismatchAndDiscardsPhase2",
+    "CP2UpdaterMSCKFTransaction.PhasePairDurationFailureIsArithmeticFatalWithoutPublicationOrWrite",
+    "CP2UpdaterMSCKFTransaction.PostcommitPointerTokenFailureIsFatalAfterCommitWithoutPublication",
+    "CP2UpdaterMSCKFTransaction.PromotionFailureIsFatalBeforeAnyPublishOrBaselineWrite",
+    "CP2UpdaterMSCKFTransaction.RawNoncommitPublishesOnlyEqualPhaseZeroAndOne",
+    "CP2UpdaterMSCKFTransaction.RecordedSinkConfigurationIsNullspaceOnlyAndFreezesAtFirstUpdate",
+    "CP2UpdaterMSCKFTransaction.SinkRejectionAfterCommitLatchesFatalWithoutRollbackOrObserver",
+    "CP2UpdaterMSCKFTransaction.ZeroRawDiscardsTentativeWithoutValidationOrPhases",
+    "CP2UpdaterMSCKFTransaction.ZeroRawDurationFailureIsArithmeticFatalWithoutPublication",
     "CP2CanonicalSha256.MatchesPublishedVectorsUnderIncrementalChunking",
     "CP2CanonicalBytes.IntegerBinary64AndUtf8EncodingIsExact",
     "CP2CanonicalBytes.MatrixAndVectorUseLogicalRowMajorBinary64Order",
@@ -202,7 +245,10 @@ SUMMARIES_BY_BINARY = {
     "test_cp2_state_update_semantics": {"CP2_B_PREVIEW_REJECTION", "CP2_B_STATE_UPDATE"},
     "test_cp2_configuration_contract": set(),
     "test_cp2_updater_msckf_end_to_end": set(),
+    "test_cp2_updater_msckf_fault_injection": set(),
     "test_cp2_composite_state": set(),
+    "test_cp2_commit_oracle": set(),
+    "test_cp2_commit_boundary": set(),
     "test_cp2_canonical": set(),
     "test_cp2_feature_gate": set(),
     "test_cp2_updater_msckf_preview_snapshot": set(),
@@ -249,6 +295,9 @@ SOURCE_INPUTS = {
     "ov_msckf/src/state/StateOptions.h",
     "ov_msckf/src/update/CP2Canonical.cpp",
     "ov_msckf/src/update/CP2Canonical.h",
+    "ov_msckf/src/update/CP2CommitBoundary.h",
+    "ov_msckf/src/update/CP2CommitOracle.cpp",
+    "ov_msckf/src/update/CP2CommitOracle.h",
     "ov_msckf/src/update/CP2CompositeState.cpp",
     "ov_msckf/src/update/CP2CompositeState.h",
     "ov_msckf/src/update/CP2FeatureGate.cpp",
@@ -277,6 +326,8 @@ SOURCE_INPUTS = {
     "ov_msckf/test/cp2/gtest_main.cpp",
     "ov_msckf/test/cp2/test_configuration_contract.cpp",
     "ov_msckf/test/cp2/test_cp2_canonical.cpp",
+    "ov_msckf/test/cp2/test_cp2_commit_boundary.cpp",
+    "ov_msckf/test/cp2/test_cp2_commit_oracle.cpp",
     "ov_msckf/test/cp2/test_cp2_composite_state.cpp",
     "ov_msckf/test/cp2/test_cp2_feature_gate.cpp",
     "ov_msckf/test/cp2/test_cp2_shadow_math.cpp",
@@ -342,9 +393,35 @@ BUILD_STEPS = (
     "test_targets_build",
 )
 STRICT_TARGETS = set(ALL_TESTS)
+RUNTIME_LIBRARY_SOURCES = (
+    "ov_msckf/src/dummy.cpp",
+    "ov_msckf/src/sim/Simulator.cpp",
+    "ov_msckf/src/state/State.cpp",
+    "ov_msckf/src/state/StateHelper.cpp",
+    "ov_msckf/src/state/Propagator.cpp",
+    "ov_msckf/src/core/VioManager.cpp",
+    "ov_msckf/src/core/VioManagerHelper.cpp",
+    "ov_msckf/src/update/CP2Canonical.cpp",
+    "ov_msckf/src/update/CP2CommitOracle.cpp",
+    "ov_msckf/src/update/CP2CompositeState.cpp",
+    "ov_msckf/src/update/CP2FeatureGate.cpp",
+    "ov_msckf/src/update/CP2ShadowMath.cpp",
+    "ov_msckf/src/update/CP2StateTraceCodec.cpp",
+    "ov_msckf/src/update/CP2TraceCodec.cpp",
+    "ov_msckf/src/update/SchurUpdate.cpp",
+    "ov_msckf/src/update/UpdaterHelper.cpp",
+    "ov_msckf/src/update/UpdaterMSCKF.cpp",
+    "ov_msckf/src/update/UpdaterMSCKFPreview.cpp",
+    "ov_msckf/src/update/UpdaterSLAM.cpp",
+    "ov_msckf/src/update/UpdaterZeroVelocity.cpp",
+    "ov_msckf/src/ros/ROS1Visualizer.cpp",
+    "ov_msckf/src/ros/ROSVisualizerHelper.cpp",
+)
+SOURCE_INPUTS.update(RUNTIME_LIBRARY_SOURCES)
 STRICT_PRODUCTION_SOURCES = (
     "ov_msckf/src/update/SchurUpdate.cpp",
     "ov_msckf/src/update/CP2Canonical.cpp",
+    "ov_msckf/src/update/CP2CommitOracle.cpp",
     "ov_msckf/src/update/CP2CompositeState.cpp",
     "ov_msckf/src/update/CP2FeatureGate.cpp",
     "ov_msckf/src/update/CP2ShadowMath.cpp",
@@ -403,9 +480,18 @@ SNAPSHOTTED_LIBRARIES = {
     "libov_init_lib.so",
     "libov_msckf_lib.so",
 }
+LINK_COMMAND_ARTIFACTS = {
+    "production_library": "link_ov_msckf_lib.txt",
+    "fault_library": "link_ov_msckf_cp2_fault_lib.txt",
+    "production_updater_test": "link_test_cp2_updater_msckf_end_to_end.txt",
+    "fault_updater_test": "link_test_cp2_updater_msckf_fault_injection.txt",
+}
+FAULT_LIBRARY_TARGET = "ov_msckf_cp2_fault_lib"
+FAULT_INJECTION_TEST = "test_cp2_updater_msckf_fault_injection"
 TESTS_REQUIRING_PRODUCTION = set(ALL_TESTS) - {
     "test_cp1_rank_rejection",
     "test_cp1_schur_equivalence",
+    FAULT_INJECTION_TEST,
 }
 ARCHIVE_ROOTS = [
     "LICENSE",
@@ -501,16 +587,65 @@ def validate_cp2_c_approval_binding(input_hashes, git_blobs, errors):
             errors.append("CP2-C approval-binding Git blob mismatch: " + relative)
 
 
+def rename_path_noreplace(source, destination):
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise OSError(errno.ENOSYS, "renameat2 is required for atomic no-replace publication")
+    renameat2.argtypes = [
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        -100,
+        os.fsencode(str(source)),
+        -100,
+        os.fsencode(str(destination)),
+        1,
+    )
+    if result != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), str(destination))
+
+
 def atomic_write_bytes(path, content):
-    if path.exists():
-        raise ValueError("refusing to overwrite: " + str(path))
-    temporary = path.with_name("." + path.name + ".tmp." + str(os.getpid()))
-    with temporary.open("xb") as stream:
-        os.fchmod(stream.fileno(), 0o600)
-        stream.write(content)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(str(temporary), str(path))
+    path = path.absolute()
+    parent = path.parent.resolve(strict=True)
+    destination = parent / path.name
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix="." + path.name + ".tmp.", dir=str(parent)
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        stream = os.fdopen(descriptor, "wb")
+        descriptor = None
+        with stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            rename_path_noreplace(temporary, destination)
+        except OSError as exc:
+            if exc.errno == errno.EEXIST:
+                raise ValueError("refusing to overwrite: " + str(destination)) from exc
+            raise
+        directory_flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            directory_flags |= os.O_DIRECTORY
+        directory_descriptor = os.open(str(parent), directory_flags)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def atomic_write_json(path, value):
@@ -889,15 +1024,20 @@ def parse_gtest_xml(artifact_dir, errors):
             "test_cases": sorted(file_cases),
             "tests": values["tests"],
         }
-    duplicates = sorted({name for name in cases if cases.count(name) > 1})
-    if duplicates:
-        errors.append("duplicate gtest cases: " + repr(duplicates))
-    if set(cases) != EXPECTED_TEST_CASES:
+    actual_case_counts = Counter(cases)
+    expected_case_counts = Counter(
+        case_name
+        for owned_cases in TEST_CASES_BY_BINARY.values()
+        for case_name in owned_cases
+    )
+    if actual_case_counts != expected_case_counts:
         errors.append(
-            "gtest case inventory mismatch: expected {} got {}".format(
-                sorted(EXPECTED_TEST_CASES), sorted(cases)
+            "gtest testcase multiset mismatch: expected {} got {}".format(
+                sorted(expected_case_counts.items()), sorted(actual_case_counts.items())
             )
         )
+    if set(expected_case_counts) != EXPECTED_TEST_CASES:
+        errors.append("internal expected testcase inventory disagrees with ownership mapping")
     return {
         "disabled": totals["disabled"],
         "errors": totals["errors"],
@@ -1002,10 +1142,138 @@ def required_macro_record(tokens):
     }
 
 
+def cp2_testing_macro_record(tokens, expected_enabled):
+    macro = "OV_MSCKF_CP2_TESTING"
+    accepted = "-DOV_MSCKF_CP2_TESTING=1"
+    events = []
+    unsupported = []
+    for index, token in enumerate(tokens):
+        if token == accepted:
+            events.append({"index": index, "state": "enabled", "token": token})
+        elif token == "-U" + macro:
+            events.append({"index": index, "state": "undefined", "token": token})
+        elif token == "-D" + macro or token.startswith("-D" + macro + "="):
+            events.append({"index": index, "state": "rejected", "token": token})
+        elif macro in token:
+            unsupported.append({"index": index, "token": token})
+    effective = events[-1]["state"] if events else "absent"
+    expected = "enabled" if expected_enabled else "absent"
+    return {
+        "effective": effective,
+        "events": events,
+        "expected": expected,
+        "passed": bool(
+            effective == expected
+            and not unsupported
+            and (len(events) == 1 if expected_enabled else not events)
+        ),
+        "unsupported_tokens": unsupported,
+    }
+
+
+def forced_include_record(tokens):
+    events = []
+    for index, token in enumerate(tokens):
+        if (
+            token in {"-specs", "--specs"}
+            or token.startswith("-specs=")
+            or token.startswith("--specs=")
+        ):
+            events.append({
+                "index": index,
+                "payload": (
+                    tokens[index + 1]
+                    if token in {"-specs", "--specs"} and index + 1 < len(tokens)
+                    else token.split("=", 1)[1] if "=" in token else None
+                ),
+                "spelling": "compiler_specs_file",
+                "token": token,
+            })
+        elif token in {"-include", "-imacros"}:
+            payload = tokens[index + 1] if index + 1 < len(tokens) else None
+            events.append({
+                "index": index,
+                "payload": payload,
+                "spelling": "split",
+                "token": token,
+            })
+        elif token.startswith("-include=") or token.startswith("-imacros="):
+            events.append({
+                "index": index,
+                "payload": token.split("=", 1)[1],
+                "spelling": "equals",
+                "token": token,
+            })
+        elif (
+            token.startswith("-include") and token != "-include"
+        ) or (
+            token.startswith("-imacros") and token != "-imacros"
+        ):
+            prefix = "-include" if token.startswith("-include") else "-imacros"
+            events.append({
+                "index": index,
+                "payload": token[len(prefix):],
+                "spelling": "joined",
+                "token": token,
+            })
+        elif token == "-Wp":
+            events.append({
+                "index": index,
+                "payload": tokens[index + 1] if index + 1 < len(tokens) else None,
+                "spelling": "opaque_preprocessor_forwarding",
+                "token": token,
+            })
+        elif token.startswith("-Wp,"):
+            forwarded = token[4:].split(",")
+            if any(value.startswith("@") for value in forwarded):
+                events.append({
+                    "index": index,
+                    "payload": next(
+                        value for value in forwarded if value.startswith("@")
+                    ),
+                    "spelling": "preprocessor_response_file",
+                    "token": token,
+                })
+                continue
+            for forwarded_index, value in enumerate(forwarded):
+                if (
+                    value in {"-include", "-imacros"}
+                    or value.startswith("-include=")
+                    or value.startswith("-imacros=")
+                    or (value.startswith("-include") and value != "-include")
+                    or (value.startswith("-imacros") and value != "-imacros")
+                ):
+                    payload = (
+                        forwarded[forwarded_index + 1]
+                        if value in {"-include", "-imacros"}
+                        and forwarded_index + 1 < len(forwarded)
+                        else None
+                    )
+                    events.append({
+                        "index": index,
+                        "payload": payload,
+                        "spelling": "preprocessor_forwarded",
+                        "token": token,
+                    })
+                    break
+        elif token == "-Xpreprocessor" or token.startswith("-Xpreprocessor="):
+            # Forwarded preprocessor options are opaque to this proof. Reject
+            # the mechanism rather than trying to infer whether its payload
+            # can force a header or macro file.
+            events.append({
+                "index": index,
+                "payload": tokens[index + 1] if index + 1 < len(tokens) else None,
+                "spelling": "opaque_preprocessor_forwarding",
+                "token": token,
+            })
+    return {"events": events, "passed": not events}
+
+
 def strict_flag_record(tokens, workspace=None):
     positions = {flag: [index for index, token in enumerate(tokens) if token == flag]
                  for flag in STRICT_REQUIRED_FLAGS}
     macro_record = required_macro_record(tokens)
+    forced_includes = forced_include_record(tokens)
     conflicts = {
         flag: [index for index, token in enumerate(tokens) if token == flag]
         for flag in sorted(STRICT_FORBIDDEN_FLAGS)
@@ -1061,6 +1329,7 @@ def strict_flag_record(tokens, workspace=None):
         and effective["signed_zeros"] == "-fsigned-zeros"
         and effective["fp_contract"] == "-ffp-contract=off"
         and macro_record["passed"]
+        and forced_includes["passed"]
         and not any(conflicts.values())
         and not hidden_or_shell_tokens
         and all(prefix_map_positions.get(flag) for flag in expected_prefix_maps)
@@ -1071,6 +1340,7 @@ def strict_flag_record(tokens, workspace=None):
         "conflict_positions": conflicts,
         "definition_positions": macro_record["definition_positions"],
         "effective": effective,
+        "forced_include_mechanisms": forced_includes,
         "hidden_or_shell_tokens": hidden_or_shell_tokens,
         "macro_events": macro_record["macro_events"],
         "passed": bool(passed),
@@ -1098,6 +1368,9 @@ def analyze_compile_commands(path, repo_root, errors, compiler_record=None):
         errors.append("missing compile_commands.json")
         return {
             "compile_commands_sha256": None,
+            "fault_injection_translation_units": {
+                source: [] for source in STRICT_PRODUCTION_SOURCES
+            },
             "passed": False,
             "production_translation_units": {
                 source: [] for source in STRICT_PRODUCTION_SOURCES
@@ -1108,6 +1381,7 @@ def analyze_compile_commands(path, repo_root, errors, compiler_record=None):
                 for macro, accepted_definitions
                 in STRICT_REQUIRED_MACRO_DEFINITIONS.items()
             },
+            "runtime_source_inventory": {},
             "unit_test_targets": {},
         }
     try:
@@ -1119,6 +1393,14 @@ def analyze_compile_commands(path, repo_root, errors, compiler_record=None):
         errors.append("compile_commands.json root must be an array")
         entries = []
     production = {source: [] for source in STRICT_PRODUCTION_SOURCES}
+    fault_injection = {source: [] for source in STRICT_PRODUCTION_SOURCES}
+    runtime_records = {
+        target: {source: [] for source in RUNTIME_LIBRARY_SOURCES}
+        for target in ("ov_msckf_lib", FAULT_LIBRARY_TARGET)
+    }
+    runtime_actual_sources = {
+        target: [] for target in ("ov_msckf_lib", FAULT_LIBRARY_TARGET)
+    }
     targets = {name: [] for name in sorted(STRICT_TARGETS)}
     for entry in entries:
         if not isinstance(entry, dict):
@@ -1179,10 +1461,21 @@ def analyze_compile_commands(path, repo_root, errors, compiler_record=None):
 
         if record["hidden_or_shell_tokens"]:
             structure_errors.append("response-file or shell-control token is forbidden")
-        record["passed"] = bool(record["passed"] and not structure_errors)
+        if not record["forced_include_mechanisms"]["passed"]:
+            structure_errors.append("forced include/macro-file mechanism is forbidden")
+        tracked_target = target in runtime_records or target in targets
+        macro_expected = target in {FAULT_LIBRARY_TARGET, FAULT_INJECTION_TEST}
+        cp2_macro = cp2_testing_macro_record(tokens, macro_expected)
+        if tracked_target and not cp2_macro["passed"]:
+            structure_errors.append("OV_MSCKF_CP2_TESTING isolation contract failed")
+        strict_passed = record["passed"]
+        structure_passed = not structure_errors
+        record["passed"] = bool(strict_passed and structure_passed)
         record.update({
             "actual_compiler": actual_compiler,
             "command_source": command_source,
+            "compile_structure_passed": structure_passed,
+            "cp2_testing_macro": cp2_macro,
             "output": output,
             "source": source,
             "structure_errors": structure_errors,
@@ -1190,6 +1483,12 @@ def analyze_compile_commands(path, repo_root, errors, compiler_record=None):
         })
         if source in production and target == "ov_msckf_lib":
             production[source].append(record)
+        if source in fault_injection and target == FAULT_LIBRARY_TARGET:
+            fault_injection[source].append(record)
+        if target in runtime_records:
+            runtime_actual_sources[target].append(source)
+            if source in runtime_records[target]:
+                runtime_records[target][source].append(record)
         if target in targets:
             targets[target].append(record)
     for source, records in production.items():
@@ -1199,44 +1498,102 @@ def analyze_compile_commands(path, repo_root, errors, compiler_record=None):
             )
         elif not records[0]["passed"]:
             errors.append(source + " compile command is not effectively strict-FP")
-    expected_target_sources = {
-        name: {
+    for source, records in fault_injection.items():
+        if len(records) != 1:
+            errors.append(
+                "strict-FP evidence requires exactly one fault-library command for " + source
+            )
+        elif not records[0]["passed"]:
+            errors.append(
+                source + " fault-library compile command is not strict-FP/macro-isolated"
+            )
+    runtime_inventory = {}
+    expected_runtime_sources = set(RUNTIME_LIBRARY_SOURCES)
+    for target, source_records in runtime_records.items():
+        actual_sources = runtime_actual_sources[target]
+        source_inventory_passed = (
+            len(actual_sources) == len(RUNTIME_LIBRARY_SOURCES)
+            and set(actual_sources) == expected_runtime_sources
+            and all(len(source_records[source]) == 1 for source in RUNTIME_LIBRARY_SOURCES)
+        )
+        macro_isolation_passed = all(
+            len(source_records[source]) == 1
+            and source_records[source][0]["compile_structure_passed"]
+            and source_records[source][0]["cp2_testing_macro"]["passed"]
+            for source in RUNTIME_LIBRARY_SOURCES
+        )
+        if not source_inventory_passed:
+            errors.append(target + " runtime source inventory mismatch")
+        if not macro_isolation_passed:
+            errors.append(target + " OV_MSCKF_CP2_TESTING macro isolation failed")
+        runtime_inventory[target] = {
+            "actual_sources": sorted(str(source) for source in actual_sources),
+            "expected_sources": list(RUNTIME_LIBRARY_SOURCES),
+            "macro_isolation_passed": bool(macro_isolation_passed),
+            "source_inventory_passed": bool(source_inventory_passed),
+            "translation_units": source_records,
+        }
+    expected_target_source_counts = {
+        name: Counter((
             "ov_msckf/test/cp1/gtest_main.cpp",
             TEST_SOURCE_BY_BINARY[name],
-        }
+        ))
         for name in CP1_TESTS
     }
-    expected_target_sources.update({
-        name: {
+    expected_target_source_counts.update({
+        name: Counter((
             "ov_msckf/test/cp2/gtest_main.cpp",
             TEST_SOURCE_BY_BINARY[name],
-        }
+        ))
         for name in CP2_TESTS
     })
     for target, records in targets.items():
-        actual_sources = {record["source"] for record in records}
-        if actual_sources != expected_target_sources[target]:
+        actual_source_counts = Counter(record["source"] for record in records)
+        if actual_source_counts != expected_target_source_counts[target]:
             errors.append(
                 "{} strict-FP source inventory mismatch: expected {} got {}".format(
-                    target, sorted(expected_target_sources[target]), sorted(str(v) for v in actual_sources)
+                    target,
+                    sorted(
+                        (str(source), count)
+                        for source, count in expected_target_source_counts[target].items()
+                    ),
+                    sorted(
+                        (str(source), count)
+                        for source, count in actual_source_counts.items()
+                    ),
                 )
             )
         for record in records:
             if not record["passed"]:
-                errors.append("{} has a non-strict compile command for {}".format(target, record["source"]))
+                errors.append(
+                    "{} has a non-strict compile command for {} (or CP2 test macro mismatch)".format(
+                        target, record["source"]
+                    )
+                )
     passed = (
         all(
             len(records) == 1 and records[0].get("passed") is True
             for records in production.values()
         )
         and all(
-            {record["source"] for record in targets[target]} == expected_target_sources[target]
+            len(records) == 1 and records[0].get("passed") is True
+            for records in fault_injection.values()
+        )
+        and all(
+            record["source_inventory_passed"]
+            and record["macro_isolation_passed"]
+            for record in runtime_inventory.values()
+        )
+        and all(
+            Counter(record["source"] for record in targets[target])
+            == expected_target_source_counts[target]
             and all(record["passed"] for record in targets[target])
             for target in targets
         )
     )
     return {
         "compile_commands_sha256": sha256_file(path),
+        "fault_injection_translation_units": fault_injection,
         "passed": bool(passed),
         "production_translation_units": production,
         "required_flags": list(STRICT_REQUIRED_FLAGS),
@@ -1245,7 +1602,423 @@ def analyze_compile_commands(path, repo_root, errors, compiler_record=None):
             for macro, accepted_definitions
             in STRICT_REQUIRED_MACRO_DEFINITIONS.items()
         },
+        "runtime_source_inventory": runtime_inventory,
         "unit_test_targets": targets,
+    }
+
+
+def collect_link_isolation(artifact_dir, errors, workspace_record=None):
+    parsed = {}
+    metadata = {}
+    for label, artifact_name in LINK_COMMAND_ARTIFACTS.items():
+        path = artifact_dir / artifact_name
+        lines = []
+        if not path.is_file():
+            errors.append("missing retained link command: " + artifact_name)
+        else:
+            try:
+                raw_lines = path.read_text(
+                    encoding="utf-8", errors="strict"
+                ).splitlines()
+            except (OSError, UnicodeError) as exc:
+                errors.append(
+                    "cannot read retained link command {}: {}".format(
+                        artifact_name, exc
+                    )
+                )
+                raw_lines = []
+            for number, raw in enumerate(raw_lines, 1):
+                if not raw.strip():
+                    continue
+                try:
+                    tokens = shlex.split(raw)
+                except ValueError as exc:
+                    errors.append(
+                        "cannot parse retained link command {}:{}: {}".format(
+                            artifact_name, number, exc
+                        )
+                    )
+                    tokens = []
+                if any(
+                    token.startswith("@")
+                    or any(marker in token for marker in (";", "&&", "||", "`", "$(", "\n", "\r"))
+                    or token in {"|", "<", ">", "2>", "2>&1"}
+                    for token in tokens
+                ):
+                    errors.append(artifact_name + " contains an opaque/shell-control link token")
+                lines.append(tokens)
+        parsed[label] = lines
+        metadata[label] = {
+            "artifact": artifact_name,
+            "line_count": len(lines),
+            "sha256": sha256_file(path) if path.is_file() else None,
+            "token_sha256": [
+                sha256_bytes("\0".join(tokens).encode("utf-8")) for tokens in lines
+            ],
+        }
+
+    def flattened(label):
+        return [token for line in parsed[label] for token in line]
+
+    def allowed_workspace_paths(relative):
+        allowed = {relative}
+        workspace = (
+            workspace_record.get("workspace")
+            if isinstance(workspace_record, dict) else None
+        )
+        if isinstance(workspace, str) and Path(workspace).is_absolute():
+            allowed.add(str(Path(workspace) / relative))
+        return allowed
+
+    def object_sources(label, target):
+        sources = []
+        pattern = re.compile(
+            r"(?:^|/)CMakeFiles/" + re.escape(target) + r"\.dir/(.+\.cpp)\.o$"
+        )
+        for token in flattened(label):
+            match = pattern.search(token)
+            if match:
+                sources.append("ov_msckf/" + match.group(1).replace("__/", ""))
+        return sources
+
+    def linker_control_record(tokens):
+        events = []
+        for index, token in enumerate(tokens):
+            if token.startswith("@"):
+                events.append({
+                    "index": index,
+                    "kind": "driver_response_file",
+                    "token": token,
+                })
+            elif token == "-Xlinker" or token.startswith("-Xlinker="):
+                events.append({
+                    "index": index,
+                    "kind": "opaque_xlinker_forwarding",
+                    "token": token,
+                })
+            elif token == "-Wl":
+                events.append({
+                    "index": index,
+                    "kind": "opaque_split_wl_forwarding",
+                    "token": token,
+                })
+            elif token.startswith("-Wl,"):
+                forwarded = token[4:].split(",")
+                if any(value.startswith("@") for value in forwarded):
+                    events.append({
+                        "index": index,
+                        "kind": "linker_response_file",
+                        "token": token,
+                    })
+            elif (
+                token in {"-specs", "--specs"}
+                or token.startswith("-specs=")
+                or token.startswith("--specs=")
+            ):
+                events.append({
+                    "index": index,
+                    "kind": "compiler_specs_file",
+                    "token": token,
+                })
+        return {"events": events, "passed": not events}
+
+    def compiler_output_binding(label, expected_relative_output):
+        tokens = flattened(label)
+        expected_outputs = allowed_workspace_paths(expected_relative_output)
+        exact = []
+        alternatives = []
+        for index, token in enumerate(tokens):
+            if token == "-o":
+                exact.append({
+                    "index": index,
+                    "output": tokens[index + 1] if index + 1 < len(tokens) else None,
+                })
+            elif token.startswith("-o") and token != "-o":
+                alternatives.append({
+                    "index": index,
+                    "kind": "joined_driver_output",
+                    "token": token,
+                })
+            elif token == "--output" or token.startswith("--output="):
+                alternatives.append({
+                    "index": index,
+                    "kind": "long_driver_output",
+                    "token": token,
+                })
+            elif token.startswith("-Wl,"):
+                forwarded = token[4:].split(",")
+                for forwarded_index, value in enumerate(forwarded):
+                    if (
+                        value in {"-o", "--output"}
+                        or value.startswith("-o=")
+                        or value.startswith("--output=")
+                        or (value.startswith("-o") and value != "-o")
+                    ):
+                        alternatives.append({
+                            "index": index,
+                            "kind": "forwarded_linker_output",
+                            "token": token,
+                        })
+                        break
+        passed = bool(
+            len(parsed[label]) == 1
+            and len(exact) == 1
+            and exact[0]["output"] in expected_outputs
+        )
+        passed = bool(passed and not alternatives)
+        return {
+            "alternative_selectors": alternatives,
+            "exact_selectors": exact,
+            "expected_outputs": sorted(expected_outputs),
+            "passed": passed,
+        }
+
+    library_names = {
+        "production": {
+            "logical": "ov_msckf_lib",
+            "files": {"libov_msckf_lib.a", "libov_msckf_lib.so"},
+        },
+        "fault": {
+            "logical": "ov_msckf_cp2_fault_lib",
+            "files": {
+                "libov_msckf_cp2_fault_lib.a",
+                "libov_msckf_cp2_fault_lib.so",
+            },
+        },
+    }
+
+    def library_identity(value):
+        candidate = value[1:] if value.startswith(":") else value
+        basename = Path(candidate).name
+        for identity, names in library_names.items():
+            if candidate == names["logical"]:
+                return identity
+            if any(
+                basename == filename or basename.startswith(filename + ".")
+                for filename in names["files"]
+            ):
+                return identity
+        return None
+
+    def scan_library_values(values, origin, token_index, references):
+        index = 0
+        while index < len(values):
+            value = values[index]
+            identity = None
+            spelling = None
+            selected = None
+            if value in {"-l", "--library"}:
+                selected = values[index + 1] if index + 1 < len(values) else None
+                identity = library_identity(selected) if selected is not None else None
+                spelling = "split_library_option"
+                index += 1
+            elif value.startswith("-l:"):
+                selected = value[2:]
+                identity = library_identity(selected)
+                spelling = "exact_filename_library_option"
+            elif value.startswith("-l") and value != "-l":
+                selected = value[2:]
+                identity = library_identity(selected)
+                spelling = "joined_library_option"
+            elif value.startswith("--library="):
+                selected = value.split("=", 1)[1]
+                identity = library_identity(selected)
+                spelling = "long_library_option"
+            else:
+                selected = value
+                identity = library_identity(selected)
+                spelling = "direct_library_path"
+            if identity is not None:
+                references.append({
+                    "identity": identity,
+                    "origin": origin,
+                    "selected": selected,
+                    "spelling": spelling,
+                    "token_index": token_index,
+                })
+            index += 1
+
+    def library_references(tokens):
+        references = []
+        for index, token in enumerate(tokens):
+            if token.startswith("-Wl,"):
+                scan_library_values(
+                    token[4:].split(","), "linker_forwarded", index, references
+                )
+            else:
+                scan_library_values([token], "driver", index, references)
+                if token in {"-l", "--library"} and index + 1 < len(tokens):
+                    # The one-token call above cannot see the split payload.
+                    scan_library_values(
+                        [token, tokens[index + 1]], "driver", index, references
+                    )
+        unique = []
+        for reference in references:
+            if reference not in unique:
+                unique.append(reference)
+        return unique
+
+    production_sources = object_sources("production_library", "ov_msckf_lib")
+    fault_sources = object_sources("fault_library", FAULT_LIBRARY_TARGET)
+    expected_runtime = list(RUNTIME_LIBRARY_SOURCES)
+    production_tokens = flattened("production_library")
+    fault_tokens = flattened("fault_library")
+    production_test_tokens = flattened("production_updater_test")
+    fault_test_tokens = flattened("fault_updater_test")
+
+    link_controls = {
+        label: linker_control_record(flattened(label))
+        for label in LINK_COMMAND_ARTIFACTS
+    }
+    output_bindings = {
+        "production_library": compiler_output_binding(
+            "production_library", "devel/lib/libov_msckf_lib.so"
+        ),
+        "production_updater_test": compiler_output_binding(
+            "production_updater_test",
+            "devel/lib/ov_msckf/test_cp2_updater_msckf_end_to_end",
+        ),
+        "fault_updater_test": compiler_output_binding(
+            "fault_updater_test",
+            "devel/lib/ov_msckf/test_cp2_updater_msckf_fault_injection",
+        ),
+    }
+    library_reference_records = {
+        label: library_references(flattened(label))
+        for label in LINK_COMMAND_ARTIFACTS
+    }
+
+    def object_token_count(tokens):
+        return sum(token.endswith(".o") for token in tokens)
+
+    expected_fault_archives = allowed_workspace_paths(
+        "devel/lib/libov_msckf_cp2_fault_lib.a"
+    )
+    fault_archive_binding_ok = bool(
+        len(parsed["fault_library"]) == 2
+        and parsed["fault_library"][0]
+        and Path(parsed["fault_library"][0][0]).name == "ar"
+        and len(parsed["fault_library"][0]) == 3 + len(expected_runtime)
+        and parsed["fault_library"][0][1] == "qc"
+        and parsed["fault_library"][0][2] in expected_fault_archives
+        and len(parsed["fault_library"][1]) == 2
+        and Path(parsed["fault_library"][1][0]).name == "ranlib"
+        and parsed["fault_library"][1][1]
+        == parsed["fault_library"][0][2]
+    )
+    output_bindings["fault_library"] = {
+        "archive_selectors": (
+            [parsed["fault_library"][0][2]]
+            if len(parsed["fault_library"]) >= 1
+            and len(parsed["fault_library"][0]) >= 3
+            else []
+        ),
+        "expected_outputs": sorted(expected_fault_archives),
+        "passed": fault_archive_binding_ok,
+    }
+
+    def exact_test_library_reference(label, identity, selected_relative):
+        if len(library_reference_records[label]) != 1:
+            return False
+        reference = library_reference_records[label][0]
+        return (
+            reference["identity"] == identity
+            and reference["origin"] == "driver"
+            and reference["selected"] in allowed_workspace_paths(selected_relative)
+            and reference["spelling"] == "direct_library_path"
+        )
+
+    production_library_ok = bool(
+        len(parsed["production_library"]) == 1
+        and "-shared" in production_tokens
+        and output_bindings["production_library"]["passed"]
+        and link_controls["production_library"]["passed"]
+        and production_sources == expected_runtime
+        and object_token_count(production_tokens) == len(production_sources)
+        and not any(
+            reference["identity"] == "fault"
+            for reference in library_reference_records["production_library"]
+        )
+    )
+    fault_library_ok = bool(
+        fault_archive_binding_ok
+        and link_controls["fault_library"]["passed"]
+        and fault_sources == expected_runtime
+        and object_token_count(fault_tokens) == len(fault_sources)
+        and not any(
+            reference["identity"] == "production"
+            for reference in library_reference_records["fault_library"]
+        )
+    )
+    expected_test_objects = {
+        "ov_msckf/test/cp2/gtest_main.cpp",
+        "ov_msckf/test/cp2/test_updater_msckf_end_to_end.cpp",
+    }
+    production_test_sources = object_sources(
+        "production_updater_test", "test_cp2_updater_msckf_end_to_end"
+    )
+    fault_test_sources = object_sources(
+        "fault_updater_test", "test_cp2_updater_msckf_fault_injection"
+    )
+    production_test_ok = bool(
+        len(parsed["production_updater_test"]) == 1
+        and output_bindings["production_updater_test"]["passed"]
+        and link_controls["production_updater_test"]["passed"]
+        and set(production_test_sources) == expected_test_objects
+        and len(production_test_sources) == len(expected_test_objects)
+        and object_token_count(production_test_tokens) == len(production_test_sources)
+        and exact_test_library_reference(
+            "production_updater_test", "production",
+            "devel/lib/libov_msckf_lib.so"
+        )
+    )
+    fault_test_ok = bool(
+        len(parsed["fault_updater_test"]) == 1
+        and output_bindings["fault_updater_test"]["passed"]
+        and link_controls["fault_updater_test"]["passed"]
+        and set(fault_test_sources) == expected_test_objects
+        and len(fault_test_sources) == len(expected_test_objects)
+        and object_token_count(fault_test_tokens) == len(fault_test_sources)
+        and exact_test_library_reference(
+            "fault_updater_test", "fault",
+            "devel/lib/libov_msckf_cp2_fault_lib.a"
+        )
+    )
+    if not production_library_ok:
+        errors.append("production runtime link/source inventory is not exact")
+    if not fault_library_ok:
+        errors.append("fault runtime archive link/source inventory is not exact")
+    if not production_test_ok:
+        errors.append("production updater test does not link only the production runtime")
+    if not fault_test_ok:
+        errors.append("fault updater test does not link only the isolated fault runtime")
+    return {
+        "artifacts": metadata,
+        "fault_library": {
+            "passed": fault_library_ok,
+            "runtime_sources": fault_sources,
+        },
+        "fault_updater_test": {
+            "passed": fault_test_ok,
+            "test_sources": fault_test_sources,
+        },
+        "passed": bool(
+            production_library_ok
+            and fault_library_ok
+            and production_test_ok
+            and fault_test_ok
+        ),
+        "library_references": library_reference_records,
+        "linker_controls": link_controls,
+        "output_bindings": output_bindings,
+        "production_library": {
+            "passed": production_library_ok,
+            "runtime_sources": production_sources,
+        },
+        "production_updater_test": {
+            "passed": production_test_ok,
+            "test_sources": production_test_sources,
+        },
     }
 
 
@@ -1501,6 +2274,7 @@ def expected_artifact_files():
         "THIRD_PARTY_NOTICES/GoogleTest-LICENSE",
     }
     files.update(DEPENDENCY_COMPILE_COMMAND_ARTIFACTS.values())
+    files.update(LINK_COMMAND_ARTIFACTS.values())
     files.update("binaries/" + name for name in SNAPSHOTTED_LIBRARIES)
     for step in BUILD_STEPS:
         files.add("build_" + step + ".json")
@@ -1569,7 +2343,7 @@ def regular_artifact_files(artifact_dir, errors=None, finalized=False):
 
 def generate_manifest(artifact_dir):
     destination = artifact_dir / MANIFEST_NAME
-    if destination.exists():
+    if os.path.lexists(str(destination)):
         raise ValueError("refusing to overwrite " + str(destination))
     errors = []
     files = regular_artifact_files(artifact_dir, errors)
@@ -2301,7 +3075,11 @@ def collect_dependency_inventory(
 
     copied_tests = record.get("copied_test_executables")
     if not isinstance(copied_tests, list) or len(copied_tests) != len(ALL_TESTS):
-        errors.append("copied test executable inventory does not contain exactly thirteen entries")
+        errors.append(
+            "copied test executable inventory does not contain exactly {} entries".format(
+                len(ALL_TESTS)
+            )
+        )
         copied_tests = []
     for index, name in enumerate(ALL_TESTS):
         entry = (
@@ -2866,6 +3644,10 @@ def collect_elf_linkage(artifact_dir, errors):
             errors.append(test_name + " does not load the snapshotted libgtest.so")
         if test_name in TESTS_REQUIRING_PRODUCTION and "libov_msckf_lib.so" not in resolved_names:
             errors.append(test_name + " does not load the snapshotted production library")
+        if test_name == FAULT_INJECTION_TEST and "libov_msckf_lib.so" in resolved_names:
+            errors.append(
+                test_name + " loads the production library instead of remaining fault-isolated"
+            )
         executables[test_name] = {"elf": elf, "loader": loader}
     if aggregate_resolved != SNAPSHOTTED_LIBRARIES:
         errors.append(
@@ -3041,14 +3823,14 @@ def artifact_policy(passed=True):
         "eligible_for_cp2_seal": False,
         "finalization": "read_only_staging_finalization_only",
         "no_overwrite": True,
-        "scope": "cp2_a_b_cp2_c1_unit_only",
+        "scope": "cp2_a_b_cp2_c2_unit_only",
         "serialized_build_and_tests": True,
         "stage": (
             (
-                "staging_cp2_c1_unit_passed_"
-                if passed else "staging_cp2_c1_unit_not_established_"
+                "staging_cp2_c2_unit_passed_"
+                if passed else "staging_cp2_c2_unit_not_established_"
             )
-            + "pending_cp2_c2_cp2_c3_cp2_c_cp2_d_cp2_e"
+            + "pending_cp2_c3_cp2_c_cp2_d_cp2_e"
         ),
         "trust_model": "trusted_committed_runner_not_malicious_forgery_resistant",
     }
@@ -3059,6 +3841,8 @@ def expected_checkpoint_status(passed=True):
         "CP2-A": "passed" if passed else "not_established",
         "CP2-B": "passed" if passed else "not_established",
         "CP2-C1": "passed_unit_only" if passed else "not_established",
+        "CP2-C2": "passed_unit_only" if passed else "not_established",
+        "CP2-C3": "not_run",
         "CP2-C": "not_run",
         "CP2-D": "not_run",
         "CP2-E": "not_run_blocked_pending_fixed_clock_profile",
@@ -3070,7 +3854,10 @@ def assemble_unit_report(artifact_dir, repo_root, allow_synthetic=False):
     repo_root = repo_root.resolve()
     if not artifact_dir.is_dir():
         raise ValueError("artifact directory does not exist: " + str(artifact_dir))
-    if (artifact_dir / REPORT_NAME).exists() or (artifact_dir / MANIFEST_NAME).exists():
+    if (
+        os.path.lexists(str(artifact_dir / REPORT_NAME))
+        or os.path.lexists(str(artifact_dir / MANIFEST_NAME))
+    ):
         raise ValueError("report/manifest already exists; refusing overwrite")
     errors = []
     actual_before_report = regular_artifact_files(artifact_dir, errors)
@@ -3100,6 +3887,7 @@ def assemble_unit_report(artifact_dir, repo_root, allow_synthetic=False):
         artifact_dir / "compile_commands.json", Path(workspace.get("source_root", repo_root)),
         errors, host.get("compiler")
     )
+    link_isolation = collect_link_isolation(artifact_dir, errors, workspace)
     dependency_eigen_abi = analyze_dependency_eigen_abi(
         artifact_dir,
         Path(workspace.get("source_root", repo_root)),
@@ -3132,7 +3920,7 @@ def assemble_unit_report(artifact_dir, repo_root, allow_synthetic=False):
             "commands": build_records,
             "serialized": True,
         },
-        "checkpoint": "CP2-A/B-unit",
+        "checkpoint": "CP2-A/B/C2-unit",
         "checkpoint_status": expected_checkpoint_status(passed),
         "dependency_eigen_abi": dependency_eigen_abi,
         "dependency_inventory": dependency_inventory,
@@ -3150,6 +3938,7 @@ def assemble_unit_report(artifact_dir, repo_root, allow_synthetic=False):
                 "internal_consistency_only_until_external_digest_is_retained_and_supplied"
             )
         },
+        "link_isolation": link_isolation,
         "overall_checkpoint_status": OVERALL_STATUS,
         "production_library": production_library,
         "schema_version": 1,
@@ -3188,6 +3977,7 @@ def require_report_fields(report, errors):
         "independent_source_to_binary_attestation",
         "independent_reexecution",
         "integrity",
+        "link_isolation",
         "overall_checkpoint_status",
         "production_library",
         "schema_version",
@@ -3229,16 +4019,16 @@ def verify_unit_report(
     require_report_fields(report, errors)
     if report.get("schema_version") != 1:
         errors.append("unsupported CP2 report schema (expected 1)")
-    if report.get("checkpoint") != "CP2-A/B-unit":
-        errors.append("report checkpoint is not the CP2-A/B unit sub-gate")
+    if report.get("checkpoint") != "CP2-A/B/C2-unit":
+        errors.append("report checkpoint is not the CP2-A/B/C2 unit sub-gate")
     if report.get("evidence_scope") != EVIDENCE_SCOPE:
-        errors.append("report evidence_scope is not the CP2-A/B plus CP2-C1 unit scope")
+        errors.append("report evidence_scope is not the CP2-A/B plus CP2-C2 unit scope")
     if report.get("overall_checkpoint_status") != OVERALL_STATUS:
         errors.append("report incorrectly changes the overall CP2 status")
     if report.get("status") != UNIT_PASS_STATUS:
-        errors.append("report does not record a passed CP2-A/B plus CP2-C1 unit run")
+        errors.append("report does not record a passed CP2-A/B plus CP2-C2 unit run")
     if report.get("eligible_for_cp2_seal") is not False:
-        errors.append("CP2-A/B plus CP2-C1 unit evidence must be ineligible for CP2 sealing")
+        errors.append("CP2-A/B plus CP2-C2 unit evidence must be ineligible for CP2 sealing")
     if report.get("evidence_class") != "trusted_runner_local_staging_evidence":
         errors.append("report evidence class overstates the local trusted-runner scope")
     if report.get("independent_source_to_binary_attestation") is not False:
@@ -3247,8 +4037,8 @@ def verify_unit_report(
         errors.append("report contains validation errors")
     if report.get("checkpoint_status") != expected_checkpoint_status(True):
         errors.append(
-            "checkpoint status must pass CP2-A/B and CP2-C1 unit only while leaving "
-            "CP2-C/D/E unpassed"
+            "checkpoint status must pass CP2-A/B and CP2-C1/C2 unit only while leaving "
+            "CP2-C3/C/D/E unpassed"
         )
     if report.get("artifact_policy") != artifact_policy():
         errors.append("artifact policy differs from the unit-only no-overwrite contract")
@@ -3270,7 +4060,7 @@ def verify_unit_report(
         errors.append("report source provenance is dirty")
     if set(source.get("input_sha256", {})) != SOURCE_INPUTS:
         errors.append(
-            "source hash inventory differs from the frozen CP2-A/B plus CP2-C1 inventory"
+            "source hash inventory differs from the frozen CP2-A/B plus CP2-C2 inventory"
         )
     if source.get("configuration_sha256") != {
         name: FROZEN_CONFIG_SHA256[name] for name in sorted(CONFIG_INPUTS)
@@ -3336,6 +4126,14 @@ def verify_unit_report(
         errors.append("reported strict-FP evidence differs from compile_commands.json")
     if independent_fp.get("passed") is not True:
         errors.append("effective strict-FP evidence did not pass")
+
+    independent_link_isolation = collect_link_isolation(
+        artifact_dir, errors, independent_workspace
+    )
+    if report.get("link_isolation") != independent_link_isolation:
+        errors.append("reported target link isolation differs from retained link commands")
+    if independent_link_isolation.get("passed") is not True:
+        errors.append("production/fault target link isolation did not pass")
 
     independent_dependency_eigen_abi = analyze_dependency_eigen_abi(
         artifact_dir,
@@ -3406,7 +4204,7 @@ def verify_unit_report(
                 print("ERROR: " + error)
         return 1, errors
     if not quiet:
-        print("CP2-A/B plus CP2-C1 unit evidence verified: " + str(artifact_dir))
+        print("CP2-A/B plus CP2-C2 unit evidence verified: " + str(artifact_dir))
         print("SHA256SUMS SHA-256: " + str(anchor["sha256"]))
         if anchor["claim"] == "external_sha256_anchor_matched":
             print("External SHA256SUMS digest anchor matched.")
@@ -3419,7 +4217,7 @@ def verify_unit_report(
         )
         print("Distribution status: internal non-conveyable staging.")
         print(
-            "CP2-C1 is unit-only; CP2-C2, CP2-C3, CP2-C, CP2-D, and CP2-E "
+            "CP2-C2 is unit-only; CP2-C3, CP2-C, CP2-D, and CP2-E "
             "remain unexecuted and unpassed."
         )
     return 0, []
@@ -3440,24 +4238,7 @@ def atomic_rename_noreplace(source, destination):
     destination = destination_parent / destination.name
     if os.path.lexists(str(destination)):
         raise OSError(errno.EEXIST, "destination already exists", str(destination))
-    libc = ctypes.CDLL(None, use_errno=True)
-    renameat2 = getattr(libc, "renameat2", None)
-    if renameat2 is None:
-        raise OSError(errno.ENOSYS, "renameat2 is required for atomic no-overwrite finalization")
-    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-    renameat2.restype = ctypes.c_int
-    at_fdcwd = -100
-    rename_noreplace = 1
-    result = renameat2(
-        at_fdcwd,
-        os.fsencode(str(canonical_source)),
-        at_fdcwd,
-        os.fsencode(str(destination)),
-        rename_noreplace,
-    )
-    if result != 0:
-        code = ctypes.get_errno()
-        raise OSError(code, os.strerror(code), str(destination))
+    rename_path_noreplace(canonical_source, destination)
 
 
 def fsync_path(path, directory=False):
@@ -3478,9 +4259,9 @@ def finalize_staging_noreplace(source, destination, repo_root=None, allow_synthe
     expected_parent = (repo_root / "results/staging/cp2/unit").resolve()
     if not allow_synthetic:
         if source.parent.absolute() != expected_parent or not source.parent.is_dir():
-            raise ValueError("source is outside the CP2-A/B plus CP2-C1 staging parent")
+            raise ValueError("source is outside the CP2-A/B plus CP2-C2 staging parent")
         if destination.parent.absolute() != expected_parent or not destination.parent.is_dir():
-            raise ValueError("destination is outside the CP2-A/B plus CP2-C1 staging parent")
+            raise ValueError("destination is outside the CP2-A/B plus CP2-C2 staging parent")
         if not source.name.startswith(".cp2_unit_") or ".partial." not in source.name:
             raise ValueError("source is not a CP2 partial staging directory")
         if not destination.name.startswith("cp2_unit_"):
@@ -3590,6 +4371,42 @@ TEST_CASES_BY_BINARY = {
         "CP2UpdaterMSCKFEndToEnd.SchurModeRejectsShadowEnableWithoutReplacingExistingObserver",
         "CP2UpdaterMSCKFEndToEnd.ObserverExceptionCannotVetoAnAcceptedBaselineCommit",
         "CP2UpdaterMSCKFEndToEnd.AllRejectedRawSystemHasExactTerminalTaxonomyAndNoBaselineWrite",
+        "CP2UpdaterMSCKFTransaction.ZeroRawDiscardsTentativeWithoutValidationOrPhases",
+        "CP2UpdaterMSCKFTransaction.CleanCommitPublishesExactCompositeAndCommitOracle",
+        "CP2UpdaterMSCKFTransaction.RawNoncommitPublishesOnlyEqualPhaseZeroAndOne",
+        "CP2UpdaterMSCKFTransaction.PromotionFailureIsFatalBeforeAnyPublishOrBaselineWrite",
+        "CP2UpdaterMSCKFTransaction.SinkRejectionAfterCommitLatchesFatalWithoutRollbackOrObserver",
+        "CP2UpdaterMSCKFTransaction.RecordedSinkConfigurationIsNullspaceOnlyAndFreezesAtFirstUpdate",
+    ],
+    "test_cp2_updater_msckf_fault_injection": [
+        "CP2UpdaterMSCKFEndToEnd.ActualNullspaceAndSchurModesCommitEquivalentFullStateUpdates",
+        "CP2UpdaterMSCKFEndToEnd.SelectedReducersRejectNonfiniteProductionRowsWithoutSilentFallback",
+        "CP2UpdaterMSCKFEndToEnd.SharedInvalidPreflightLeavesBothModeStatesBitwiseUnchanged",
+        "CP2UpdaterMSCKFEndToEnd.NullspaceShadowPublishesBothPrecommitProposalsThenOneCommittedEvent",
+        "CP2UpdaterMSCKFEndToEnd.NonfiniteGammaEvidenceCannotStopLiveTraversalOrBaselineCommit",
+        "CP2UpdaterMSCKFEndToEnd.SchurModeRejectsShadowEnableWithoutReplacingExistingObserver",
+        "CP2UpdaterMSCKFEndToEnd.ObserverExceptionCannotVetoAnAcceptedBaselineCommit",
+        "CP2UpdaterMSCKFEndToEnd.AllRejectedRawSystemHasExactTerminalTaxonomyAndNoBaselineWrite",
+        "CP2UpdaterMSCKFTransaction.ZeroRawDiscardsTentativeWithoutValidationOrPhases",
+        "CP2UpdaterMSCKFTransaction.CleanCommitPublishesExactCompositeAndCommitOracle",
+        "CP2UpdaterMSCKFTransaction.RawNoncommitPublishesOnlyEqualPhaseZeroAndOne",
+        "CP2UpdaterMSCKFTransaction.PromotionFailureIsFatalBeforeAnyPublishOrBaselineWrite",
+        "CP2UpdaterMSCKFTransaction.SinkRejectionAfterCommitLatchesFatalWithoutRollbackOrObserver",
+        "CP2UpdaterMSCKFTransaction.CandidateAssemblyFailureCannotVetoBaselineCommit",
+        "CP2UpdaterMSCKFTransaction.BaselineProvenanceMismatchSuppressesCommitBeforePhase2",
+        "CP2UpdaterMSCKFTransaction.InvalidPhase2IsDiscardedAndCannotCommit",
+        "CP2UpdaterMSCKFTransaction.NonfinitePhase1IsSnapshotMismatchAndDiscardsPhase2",
+        "CP2UpdaterMSCKFTransaction.FinalPointerRejectionDiscardsInstalledPhase2",
+        "CP2UpdaterMSCKFTransaction.IncompletePostcommitStorageIsFatalAfterCommitWithoutPublication",
+        "CP2UpdaterMSCKFTransaction.PostcommitPointerTokenFailureIsFatalAfterCommitWithoutPublication",
+        "CP2UpdaterMSCKFTransaction.CompletePhase3ValueMismatchRemainsCountedFailedEvidence",
+        "CP2UpdaterMSCKFTransaction.CompleteNonfinitePhase3RemainsCountedFailedEvidence",
+        "CP2UpdaterMSCKFTransaction.ZeroRawDurationFailureIsArithmeticFatalWithoutPublication",
+        "CP2UpdaterMSCKFTransaction.PhasePairDurationFailureIsArithmeticFatalWithoutPublicationOrWrite",
+        "CP2UpdaterMSCKFTransaction.CommittedDurationFailureIsArithmeticFatalWithoutPublicationOrRollback",
+        "CP2UpdaterMSCKFTransaction.CommitOracleOverflowIsArithmeticFatalWithoutPublicationOrRollback",
+        "CP2UpdaterMSCKFTransaction.CommitOracleInvalidPhaseRemainsDistinctPostcommitFatal",
+        "CP2UpdaterMSCKFTransaction.RecordedSinkConfigurationIsNullspaceOnlyAndFreezesAtFirstUpdate",
     ],
     "test_cp2_composite_state": [
         "CP2CompositeStateCodec.FrozenFullRolePayloadRoundTripsBitExactly",
@@ -3621,6 +4438,24 @@ TEST_CASES_BY_BINARY = {
             "ExplicitStatus"
         ),
         "CP2CompositeDetachedOracle.AppliesExactlyOneProductionUpdatePerTopLevelType",
+    ],
+    "test_cp2_commit_oracle": [
+        "CP2CommitOracle.MatchingCompositeHasExactPopulationsAndPasses",
+        "CP2CommitOracle.CountsEachCoefficientMismatchClassByExactBits",
+        "CP2CommitOracle.InventoryIdentityAndShapeFailuresZeroOnlyCoefficientPopulations",
+        "CP2CommitOracle.EqualNonfiniteBitsStillFailTheCompleteOracle",
+        "CP2CommitOracle.EverySnapshotMustBeFiniteIndependently",
+        "CP2CommitOracle.NonCoefficientCanonicalMismatchRetainsPopulations",
+        "CP2CommitOracle.SignedZeroIsOneNominalBitMismatch",
+        "CP2CommitOracle.DetachedTypeUpdateCallMismatchIsUpdateLevelFailure",
+        "CP2CommitOracle.InvalidPhaseRetainsExpectedAndRowCountsButNoPopulation",
+        "CP2CommitOracle.CheckedIntegerHelpersNeverWrapOrClobberOnFailure",
+    ],
+    "test_cp2_commit_boundary": [
+        "CP2CommitBoundary.AcceptedPathHasExactProofCommitClockFillOrder",
+        "CP2CommitBoundary.RejectedProofSuppressesEveryPostproofOperation",
+        "CP2CommitBoundary.ThrowingCommitPropagatesBeforeClockAndPreservesOutput",
+        "CP2CommitBoundary.FailedFillRetainsCommittedStatusAndExactEndpoint",
     ],
     "test_cp2_canonical": [
         "CP2CanonicalSha256.MatchesPublishedVectorsUnderIncrementalChunking",
@@ -3814,7 +4649,7 @@ def create_synthetic_repo(repo_root):
 def create_synthetic_compile_commands(path, source_root, workspace_build_root):
     entries = []
 
-    def add(source, target):
+    def add(source, target, cp2_testing=False):
         output = str(workspace_build_root / "ov_msckf/CMakeFiles" / (
             target + ".dir") / (Path(source).name + ".o"))
         vectorization_definition = STRICT_REQUIRED_MACRO_DEFINITIONS[
@@ -3832,8 +4667,10 @@ def create_synthetic_compile_commands(path, source_root, workspace_build_root):
             "-ffile-prefix-map={}=/cp2/reproducible-root".format(source_root.parent),
             "-fdebug-prefix-map={}=/cp2/reproducible-root".format(source_root.parent),
             "-fmacro-prefix-map={}=/cp2/reproducible-root".format(source_root.parent),
-            "-o", output, "-c", str(source_root / source),
         ]
+        if cp2_testing:
+            tokens.append("-DOV_MSCKF_CP2_TESTING=1")
+        tokens.extend(["-o", output, "-c", str(source_root / source)])
         entries.append({
             "command": " ".join(shlex.quote(token) for token in tokens),
             "directory": str(workspace_build_root / "ov_msckf"),
@@ -3841,15 +4678,73 @@ def create_synthetic_compile_commands(path, source_root, workspace_build_root):
             "output": output,
         })
 
-    for source in STRICT_PRODUCTION_SOURCES:
+    for source in RUNTIME_LIBRARY_SOURCES:
         add(source, "ov_msckf_lib")
+        add(source, FAULT_LIBRARY_TARGET, cp2_testing=True)
     for target in CP1_TESTS:
         add("ov_msckf/test/cp1/gtest_main.cpp", target)
         add(TEST_SOURCE_BY_BINARY[target], target)
     for target in CP2_TESTS:
-        add("ov_msckf/test/cp2/gtest_main.cpp", target)
-        add(TEST_SOURCE_BY_BINARY[target], target)
+        cp2_testing = target == FAULT_INJECTION_TEST
+        add("ov_msckf/test/cp2/gtest_main.cpp", target, cp2_testing=cp2_testing)
+        add(TEST_SOURCE_BY_BINARY[target], target, cp2_testing=cp2_testing)
     path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
+
+
+def create_synthetic_link_commands(artifact_dir):
+    def objects(target, sources):
+        return [
+            "CMakeFiles/{}.dir/{}.o".format(
+                target, source[len("ov_msckf/"):]
+            )
+            for source in sources
+        ]
+
+    production_objects = objects("ov_msckf_lib", RUNTIME_LIBRARY_SOURCES)
+    fault_objects = objects(FAULT_LIBRARY_TARGET, RUNTIME_LIBRARY_SOURCES)
+    test_sources = (
+        "ov_msckf/test/cp2/gtest_main.cpp",
+        "ov_msckf/test/cp2/test_updater_msckf_end_to_end.cpp",
+    )
+    production_test_objects = objects(
+        "test_cp2_updater_msckf_end_to_end", test_sources
+    )
+    fault_test_objects = objects(FAULT_INJECTION_TEST, test_sources)
+    commands = {
+        LINK_COMMAND_ARTIFACTS["production_library"]: [
+            [
+                "/usr/bin/c++", "-shared", *production_objects,
+                "-o", "devel/lib/libov_msckf_lib.so",
+            ]
+        ],
+        LINK_COMMAND_ARTIFACTS["fault_library"]: [
+            [
+                "/usr/bin/ar", "qc", "devel/lib/libov_msckf_cp2_fault_lib.a",
+                *fault_objects,
+            ],
+            ["/usr/bin/ranlib", "devel/lib/libov_msckf_cp2_fault_lib.a"],
+        ],
+        LINK_COMMAND_ARTIFACTS["production_updater_test"]: [
+            [
+                "/usr/bin/c++", *production_test_objects,
+                "-o", "devel/lib/ov_msckf/test_cp2_updater_msckf_end_to_end",
+                "devel/lib/libov_msckf_lib.so",
+            ]
+        ],
+        LINK_COMMAND_ARTIFACTS["fault_updater_test"]: [
+            [
+                "/usr/bin/c++", *fault_test_objects,
+                "-o", "devel/lib/ov_msckf/test_cp2_updater_msckf_fault_injection",
+                "devel/lib/libov_msckf_cp2_fault_lib.a",
+            ]
+        ],
+    }
+    for artifact_name, command_lines in commands.items():
+        text = "".join(
+            " ".join(shlex.quote(token) for token in tokens) + "\n"
+            for tokens in command_lines
+        )
+        (artifact_dir / artifact_name).write_text(text, encoding="utf-8")
 
 
 def create_synthetic_dependency_compile_commands(
@@ -3995,6 +4890,14 @@ int main(int argc, char **argv) {
          str(ceres_version), *deterministic_link, "-o", str(generic)],
         env=clean_env,
     )
+    fault_generic = binary_output / "cp2_synthetic_fault_gtest"
+    subprocess.check_call(
+        [compiler, str(build_dir / "main.c"), str(build_dir / "msckf.c"),
+         "-Wl,--no-as-needed", str(project_lib / "libov_init_lib.so"),
+         str(project_lib / "libov_core_lib.so"), str(gtest_lib / "libgtest.so"),
+         str(ceres_version), *deterministic_link, "-o", str(fault_generic)],
+        env=clean_env,
+    )
     source_paths = {
         "libov_msckf_lib.so": project_lib / "libov_msckf_lib.so",
         "libov_core_lib.so": project_lib / "libov_core_lib.so",
@@ -4009,7 +4912,8 @@ int main(int argc, char **argv) {
     test_source_paths = {}
     for test_name in ALL_TESTS:
         source = binary_output / test_name
-        shutil.copyfile(str(generic), str(source))
+        template = fault_generic if test_name == FAULT_INJECTION_TEST else generic
+        shutil.copyfile(str(template), str(source))
         source.chmod(0o555)
         destination = artifact_dir / "binaries" / test_name
         shutil.copyfile(str(source), str(destination))
@@ -4122,6 +5026,7 @@ def create_synthetic_artifact(artifact_dir, repo_root):
     create_synthetic_compile_commands(
         artifact_dir / "compile_commands.json", source_root, workspace_build_root
     )
+    create_synthetic_link_commands(artifact_dir)
     for package, artifact in DEPENDENCY_COMPILE_COMMAND_ARTIFACTS.items():
         create_synthetic_dependency_compile_commands(
             artifact_dir / artifact,
@@ -4395,6 +5300,38 @@ def mutate_json(path, callback):
 
 
 def run_self_test():
+    required_cp2_c2_counts = {
+        "test_cp2_updater_msckf_end_to_end": 14,
+        "test_cp2_updater_msckf_fault_injection": 28,
+        "test_cp2_commit_oracle": 10,
+        "test_cp2_commit_boundary": 4,
+    }
+    if any(CP2_TESTS.get(name) != count for name, count in required_cp2_c2_counts.items()):
+        raise RuntimeError("CP2-C2 executable test-count contract is inconsistent")
+    if len(CP2_TESTS) != 14 or sum(ALL_TESTS.values()) != 139:
+        raise RuntimeError("CP2-C2 exact executable/total testcase inventory is inconsistent")
+    if any(
+        len(TEST_CASES_BY_BINARY.get(name, ())) != count
+        for name, count in required_cp2_c2_counts.items()
+    ):
+        raise RuntimeError("CP2-C2 testcase ownership/count mapping is inconsistent")
+    mapped_testcase_names = {
+        case
+        for cases in TEST_CASES_BY_BINARY.values()
+        for case in cases
+    }
+    if (
+        sum(len(cases) for cases in TEST_CASES_BY_BINARY.values()) != 139
+        or mapped_testcase_names != EXPECTED_TEST_CASES
+    ):
+        raise RuntimeError("CP1 plus CP2 exact testcase execution inventory is not 139")
+    if set(TEST_CASES_BY_BINARY) != set(ALL_TESTS):
+        raise RuntimeError("testcase ownership does not cover the exact executable inventory")
+    if set(SUMMARIES_BY_BINARY) != set(ALL_TESTS):
+        raise RuntimeError("summary ownership does not cover the exact executable inventory")
+    if set(TEST_SOURCE_BY_BINARY) != set(ALL_TESTS):
+        raise RuntimeError("test source mapping does not cover the exact executable inventory")
+
     frozen_sha256 = {
         relative: expected["sha256"]
         for relative, expected in FROZEN_CP2_C_APPROVAL_BINDING.items()
@@ -4457,6 +5394,48 @@ def run_self_test():
             raise RuntimeError("valid synthetic artifact was rejected: " + "; ".join(errors))
 
         corruptions = []
+
+        publication_root = temporary_root / "publication-no-replace"
+        publication_root.mkdir()
+        existing_report = publication_root / REPORT_NAME
+        original_report = b"pre-existing-report\n"
+        existing_report.write_bytes(original_report)
+        try:
+            atomic_write_json(existing_report, {"replacement": True})
+        except ValueError:
+            pass
+        else:
+            raise RuntimeError("atomic report publication replaced an existing file")
+        if existing_report.read_bytes() != original_report:
+            raise RuntimeError("failed report publication changed the existing file")
+        if list(publication_root.glob("." + REPORT_NAME + ".tmp.*")):
+            raise RuntimeError("failed report publication retained a temporary file")
+        corruptions.append({
+            "name": "publication-existing-report",
+            "detected_errors": 1,
+        })
+
+        broken_manifest = publication_root / MANIFEST_NAME
+        broken_target = publication_root / "missing-manifest-target"
+        broken_manifest.symlink_to(broken_target.name)
+        try:
+            atomic_write_bytes(broken_manifest, b"forged manifest\n")
+        except ValueError:
+            pass
+        else:
+            raise RuntimeError("atomic manifest publication replaced a broken symlink")
+        if (
+            not broken_manifest.is_symlink()
+            or os.readlink(str(broken_manifest)) != broken_target.name
+            or os.path.lexists(str(broken_target))
+        ):
+            raise RuntimeError("failed manifest publication changed a broken symlink target")
+        if list(publication_root.glob("." + MANIFEST_NAME + ".tmp.*")):
+            raise RuntimeError("failed manifest publication retained a temporary file")
+        corruptions.append({
+            "name": "publication-broken-manifest-symlink",
+            "detected_errors": 1,
+        })
 
         def corruption(name, edit, reseal=True, expected_error=None):
             destination = temporary_root / ("corrupt-" + name)
@@ -4584,7 +5563,8 @@ def run_self_test():
             entries = json.loads(path.read_text(encoding="utf-8"))
             matching = [
                 entry for entry in entries
-                if str(entry.get("file", "")).endswith(
+                if "CMakeFiles/ov_msckf_lib.dir/" in str(entry.get("output", ""))
+                and str(entry.get("file", "")).endswith(
                     "/ov_msckf/src/update/UpdaterMSCKFPreview.cpp"
                 )
             ]
@@ -4609,7 +5589,8 @@ def run_self_test():
             entries = json.loads(path.read_text(encoding="utf-8"))
             matching = [
                 entry for entry in entries
-                if str(entry.get("file", "")).endswith(
+                if "CMakeFiles/ov_msckf_lib.dir/" in str(entry.get("output", ""))
+                and str(entry.get("file", "")).endswith(
                     "/ov_msckf/src/update/UpdaterHelper.cpp"
                 )
             ]
@@ -4634,8 +5615,11 @@ def run_self_test():
             entries = json.loads(path.read_text(encoding="utf-8"))
             retained = [
                 entry for entry in entries
-                if not str(entry.get("file", "")).endswith(
-                    "/ov_msckf/src/state/StateHelper.cpp"
+                if not (
+                    "CMakeFiles/ov_msckf_lib.dir/" in str(entry.get("output", ""))
+                    and str(entry.get("file", "")).endswith(
+                        "/ov_msckf/src/state/StateHelper.cpp"
+                    )
                 )
             ]
             if len(retained) != len(entries) - 1:
@@ -4656,7 +5640,8 @@ def run_self_test():
             entries = json.loads(path.read_text(encoding="utf-8"))
             matching = [
                 entry for entry in entries
-                if str(entry.get("file", "")).endswith(
+                if "CMakeFiles/ov_msckf_lib.dir/" in str(entry.get("output", ""))
+                and str(entry.get("file", "")).endswith(
                     "/ov_msckf/src/update/CP2Canonical.cpp"
                 )
             ]
@@ -4690,7 +5675,8 @@ def run_self_test():
             entries = json.loads(path.read_text(encoding="utf-8"))
             matching = [
                 entry for entry in entries
-                if str(entry.get("file", "")).endswith(
+                if "CMakeFiles/ov_msckf_lib.dir/" in str(entry.get("output", ""))
+                and str(entry.get("file", "")).endswith(
                     "/ov_msckf/src/state/StateHelper.cpp"
                 )
             ]
@@ -4740,12 +5726,29 @@ def run_self_test():
             ),
         )
 
-        def rewrite_synthetic_compile_tokens(root, source_suffix, transform):
+        def rewrite_synthetic_compile_tokens(
+            root, source_suffix, transform, target=None
+        ):
             path = root / "compile_commands.json"
             entries = json.loads(path.read_text(encoding="utf-8"))
+            if target is None:
+                if source_suffix in RUNTIME_LIBRARY_SOURCES:
+                    target = "ov_msckf_lib"
+                else:
+                    owning_targets = [
+                        name for name, source in TEST_SOURCE_BY_BINARY.items()
+                        if source == source_suffix
+                    ]
+                    if len(owning_targets) != 1:
+                        raise RuntimeError(
+                            "synthetic source has ambiguous target ownership: "
+                            + source_suffix
+                        )
+                    target = owning_targets[0]
             matching = [
                 entry for entry in entries
-                if str(entry.get("file", "")).endswith("/" + source_suffix)
+                if "CMakeFiles/{}.dir/".format(target) in str(entry.get("output", ""))
+                and str(entry.get("file", "")).endswith("/" + source_suffix)
             ]
             if len(matching) != 1:
                 raise RuntimeError(
@@ -4775,11 +5778,329 @@ def run_self_test():
             tokens.insert(output_positions[0], token)
             return tokens
 
+        def insert_tokens_before_output(tokens, inserted):
+            output_positions = [
+                index for index, value in enumerate(tokens) if value == "-o"
+            ]
+            if len(output_positions) != 1:
+                raise RuntimeError("synthetic command lacks exactly one -o")
+            position = output_positions[0]
+            tokens[position:position] = list(inserted)
+            return tokens
+
         def replace_exact_token(tokens, old, new):
             if tokens.count(old) != 1:
                 raise RuntimeError("synthetic command lacks exactly one " + old)
             tokens[tokens.index(old)] = new
             return tokens
+
+        def rewrite_synthetic_link_tokens(
+            root, label, transform, line_index=0
+        ):
+            path = root / LINK_COMMAND_ARTIFACTS[label]
+            raw_lines = path.read_text(encoding="utf-8").splitlines()
+            if line_index < 0 or line_index >= len(raw_lines):
+                raise RuntimeError("synthetic link command line index is invalid")
+            original = shlex.split(raw_lines[line_index])
+            changed = transform(list(original))
+            if changed == original:
+                raise RuntimeError("synthetic link-command transform made no change")
+            raw_lines[line_index] = " ".join(
+                shlex.quote(token) for token in changed
+            )
+            path.write_text("\n".join(raw_lines) + "\n", encoding="utf-8")
+
+        def insert_before_exact_token(tokens, marker, inserted):
+            if tokens.count(marker) != 1:
+                raise RuntimeError(
+                    "synthetic link command lacks exactly one " + marker
+                )
+            position = tokens.index(marker)
+            tokens[position:position] = list(inserted)
+            return tokens
+
+        def replace_link_output(tokens, expected, replacement):
+            output_positions = [
+                index for index, token in enumerate(tokens) if token == "-o"
+            ]
+            if len(output_positions) != 1:
+                raise RuntimeError("synthetic link command lacks exactly one -o")
+            output_index = output_positions[0] + 1
+            if output_index >= len(tokens) or tokens[output_index] != expected:
+                raise RuntimeError("synthetic link command has an unexpected output")
+            tokens[output_index] = replacement
+            return tokens
+
+        forced_include_spellings = {
+            "include-split": ["-include", "/tmp/defines-cp2-test.h"],
+            "include-joined": ["-include/tmp/defines-cp2-test.h"],
+            "include-equals": ["-include=/tmp/defines-cp2-test.h"],
+            "imacros-split": ["-imacros", "/tmp/defines-cp2-test.h"],
+            "imacros-joined": ["-imacros/tmp/defines-cp2-test.h"],
+            "imacros-equals": ["-imacros=/tmp/defines-cp2-test.h"],
+            "wp-include": ["-Wp,-include,/tmp/defines-cp2-test.h"],
+            "wp-imacros": ["-Wp,-imacros,/tmp/defines-cp2-test.h"],
+            "wp-response": ["-Wp,@/tmp/preprocessor.rsp"],
+            "compiler-specs": ["-specs=/tmp/cp2-test.specs"],
+        }
+
+        def forced_include_corruption(inserted):
+            def edit(root):
+                rewrite_synthetic_compile_tokens(
+                    root,
+                    "ov_msckf/src/update/UpdaterMSCKF.cpp",
+                    lambda tokens: insert_tokens_before_output(tokens, inserted),
+                    target="ov_msckf_lib",
+                )
+            return edit
+
+        for spelling, inserted in forced_include_spellings.items():
+            corruption(
+                "forced-include-" + spelling,
+                forced_include_corruption(inserted),
+                expected_error=(
+                    "ov_msckf/src/update/UpdaterMSCKF.cpp compile command is not "
+                    "effectively strict-FP"
+                ),
+            )
+
+        def duplicate_commit_boundary_test_source(root):
+            path = root / "compile_commands.json"
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            matching = [
+                entry for entry in entries
+                if (
+                    "CMakeFiles/test_cp2_commit_boundary.dir/"
+                    in str(entry.get("output", ""))
+                    and str(entry.get("file", "")).endswith(
+                        "/ov_msckf/test/cp2/test_cp2_commit_boundary.cpp"
+                    )
+                )
+            ]
+            if len(matching) != 1:
+                raise RuntimeError("synthetic fixture lost commit-boundary test source")
+            entries.append(dict(matching[0]))
+            write_json_fixture(path, entries)
+
+        corruption(
+            "duplicate-test-translation-unit",
+            duplicate_commit_boundary_test_source,
+            expected_error=(
+                "test_cp2_commit_boundary strict-FP source inventory mismatch"
+            ),
+        )
+
+        def leak_cp2_testing_into_production(root):
+            rewrite_synthetic_compile_tokens(
+                root,
+                "ov_msckf/src/update/UpdaterMSCKF.cpp",
+                lambda tokens: insert_before_output(
+                    tokens, "-DOV_MSCKF_CP2_TESTING=1"
+                ),
+                target="ov_msckf_lib",
+            )
+
+        corruption(
+            "cp2-testing-production-macro-leak",
+            leak_cp2_testing_into_production,
+            expected_error="ov_msckf_lib OV_MSCKF_CP2_TESTING macro isolation failed",
+        )
+
+        def remove_cp2_testing_from_fault_runtime(root):
+            rewrite_synthetic_compile_tokens(
+                root,
+                "ov_msckf/src/update/UpdaterMSCKF.cpp",
+                lambda tokens: remove_exact_token(
+                    tokens, "-DOV_MSCKF_CP2_TESTING=1"
+                ),
+                target=FAULT_LIBRARY_TARGET,
+            )
+
+        corruption(
+            "cp2-testing-fault-macro-removal",
+            remove_cp2_testing_from_fault_runtime,
+            expected_error=(
+                FAULT_LIBRARY_TARGET
+                + " OV_MSCKF_CP2_TESTING macro isolation failed"
+            ),
+        )
+
+        def remove_commit_oracle_fp_contract(root):
+            rewrite_synthetic_compile_tokens(
+                root,
+                "ov_msckf/src/update/CP2CommitOracle.cpp",
+                lambda tokens: remove_exact_token(tokens, "-ffp-contract=off"),
+            )
+
+        corruption(
+            "commit-oracle-production-strict-fp",
+            remove_commit_oracle_fp_contract,
+            expected_error=(
+                "ov_msckf/src/update/CP2CommitOracle.cpp compile command is not "
+                "effectively strict-FP"
+            ),
+        )
+
+        def cross_link_fault_test_to_production(root):
+            path = root / LINK_COMMAND_ARTIFACTS["fault_updater_test"]
+            text = path.read_text(encoding="utf-8")
+            old = "devel/lib/libov_msckf_cp2_fault_lib.a"
+            if text.count(old) != 1:
+                raise RuntimeError("synthetic fault link lacks one isolated archive")
+            path.write_text(
+                text.replace(old, "devel/lib/libov_msckf_lib.so"),
+                encoding="utf-8",
+            )
+
+        corruption(
+            "fault-test-production-cross-link",
+            cross_link_fault_test_to_production,
+            expected_error=(
+                "fault updater test does not link only the isolated fault runtime"
+            ),
+        )
+
+        alternate_fault_library_spellings = {
+            "driver-joined-l": (
+                "-Ldevel/lib", "-lov_msckf_cp2_fault_lib",
+            ),
+            "driver-split-l": (
+                "-L", "devel/lib", "-l", "ov_msckf_cp2_fault_lib",
+            ),
+            "forwarded-joined-l": (
+                "-Wl,-L,devel/lib,-lov_msckf_cp2_fault_lib",
+            ),
+            "forwarded-split-l": (
+                "-Wl,-L,devel/lib,-l,ov_msckf_cp2_fault_lib",
+            ),
+            "driver-exact-filename": (
+                "-l:libov_msckf_cp2_fault_lib.a",
+            ),
+            "forwarded-exact-filename": (
+                "-Wl,-l:libov_msckf_cp2_fault_lib.a",
+            ),
+            "driver-long-library": (
+                "--library=ov_msckf_cp2_fault_lib",
+            ),
+            "forwarded-long-library": (
+                "-Wl,--library=ov_msckf_cp2_fault_lib",
+            ),
+            "absolute-library-path": (
+                "/tmp/libov_msckf_cp2_fault_lib.a",
+            ),
+            "relative-library-path": (
+                "alternate/lib/libov_msckf_cp2_fault_lib.so",
+            ),
+            "forwarded-library-path": (
+                "-Wl,/tmp/libov_msckf_cp2_fault_lib.a",
+            ),
+            "xlinker-forwarding": (
+                "-Xlinker=-lov_msckf_cp2_fault_lib",
+            ),
+            "driver-response-file": (
+                "@/tmp/cp2-linker.rsp",
+            ),
+            "forwarded-response-file": (
+                "-Wl,@/tmp/cp2-linker.rsp",
+            ),
+            "compiler-specs": (
+                "-specs=/tmp/cp2-link.specs",
+            ),
+        }
+
+        def alternate_fault_library_corruption(inserted):
+            def edit(root):
+                rewrite_synthetic_link_tokens(
+                    root,
+                    "production_updater_test",
+                    lambda tokens: insert_before_exact_token(
+                        tokens,
+                        "devel/lib/libov_msckf_lib.so",
+                        inserted,
+                    ),
+                )
+            return edit
+
+        for spelling, inserted in alternate_fault_library_spellings.items():
+            corruption(
+                "production-test-alternate-fault-library-" + spelling,
+                alternate_fault_library_corruption(inserted),
+                expected_error=(
+                    "production updater test does not link only the production runtime"
+                ),
+            )
+
+        def rename_fault_test_output(root):
+            rewrite_synthetic_link_tokens(
+                root,
+                "fault_updater_test",
+                lambda tokens: replace_link_output(
+                    tokens,
+                    "devel/lib/ov_msckf/test_cp2_updater_msckf_fault_injection",
+                    "devel/lib/ov_msckf/not_the_fault_test",
+                ),
+            )
+
+        corruption(
+            "fault-test-output-binding",
+            rename_fault_test_output,
+            expected_error=(
+                "fault updater test does not link only the isolated fault runtime"
+            ),
+        )
+
+        def inject_forwarded_production_test_output(root):
+            rewrite_synthetic_link_tokens(
+                root,
+                "production_updater_test",
+                lambda tokens: insert_before_exact_token(
+                    tokens,
+                    "devel/lib/libov_msckf_lib.so",
+                    ("-Wl,-o,/tmp/forged-cp2-production-test",),
+                ),
+            )
+
+        corruption(
+            "production-test-forwarded-output-binding",
+            inject_forwarded_production_test_output,
+            expected_error=(
+                "production updater test does not link only the production runtime"
+            ),
+        )
+
+        def rename_production_library_output(root):
+            rewrite_synthetic_link_tokens(
+                root,
+                "production_library",
+                lambda tokens: replace_link_output(
+                    tokens,
+                    "devel/lib/libov_msckf_lib.so",
+                    "devel/lib/libnot_ov_msckf_lib.so",
+                ),
+            )
+
+        corruption(
+            "production-library-output-binding",
+            rename_production_library_output,
+            expected_error="production runtime link/source inventory is not exact",
+        )
+
+        def remove_fault_runtime_object(root):
+            path = root / LINK_COMMAND_ARTIFACTS["fault_library"]
+            text = path.read_text(encoding="utf-8")
+            token = (
+                " CMakeFiles/ov_msckf_cp2_fault_lib.dir/"
+                "src/update/CP2CommitOracle.cpp.o"
+            )
+            if text.count(token) != 1:
+                raise RuntimeError("synthetic fault archive lacks commit-oracle object")
+            path.write_text(text.replace(token, "", 1), encoding="utf-8")
+
+        corruption(
+            "fault-runtime-link-source-inventory",
+            remove_fault_runtime_object,
+            expected_error="fault runtime archive link/source inventory is not exact",
+        )
 
         def remove_composite_state_fp_contract(root):
             rewrite_synthetic_compile_tokens(
@@ -5247,19 +6568,19 @@ def run_self_test():
 
         corruption("cp2-cde-status-escalation", escalate_checkpoint)
 
-        def erase_cp2_c1_unit_status(root):
+        def erase_cp2_c2_unit_status(root):
             mutate_json(
                 root / REPORT_NAME,
                 lambda report: report["checkpoint_status"].__setitem__(
-                    "CP2-C1", "not_run"
+                    "CP2-C2", "not_run"
                 ),
             )
 
         corruption(
-            "cp2-c1-unit-status-erasure",
-            erase_cp2_c1_unit_status,
+            "cp2-c2-unit-status-erasure",
+            erase_cp2_c2_unit_status,
             expected_error=(
-                "checkpoint status must pass CP2-A/B and CP2-C1 unit only"
+                "checkpoint status must pass CP2-A/B and CP2-C1/C2 unit only"
             ),
         )
 
@@ -5403,7 +6724,7 @@ def parse_args():
         metavar=("SOURCE_DIR", "DESTINATION_DIR"), type=Path,
         help=(
             "validate, freeze, fsync, and atomically finalize CP2-A/B plus "
-            "CP2-C1 unit staging only"
+            "CP2-C2 unit staging only"
         ),
     )
     parser.add_argument(
@@ -5437,7 +6758,7 @@ def main():
             args.finalize_staging_noreplace[0], args.finalize_staging_noreplace[1]
         )
         print(
-            "Read-only CP2-A/B plus CP2-C1 staging finalized without overwrite "
+            "Read-only CP2-A/B plus CP2-C2 staging finalized without overwrite "
             "(not a CP2 seal): "
             + str(args.finalize_staging_noreplace[1])
         )

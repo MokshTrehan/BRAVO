@@ -14,6 +14,8 @@
 #include "types/LandmarkRepresentation.h"
 #include "types/Type.h"
 #include "update/SchurUpdate.h"
+#include "update/CP2CompositeState.h"
+#include "update/CP2StateTraceCodec.h"
 #include "update/UpdaterHelper.h"
 #include "update/UpdaterMSCKF.h"
 #include "update/UpdaterMSCKFPreview.h"
@@ -24,6 +26,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -34,6 +37,31 @@
 #include <utility>
 #include <unordered_map>
 #include <vector>
+
+#if defined(OV_MSCKF_CP2_TESTING)
+namespace ov_msckf {
+
+class CP2UpdaterTestAccess final {
+public:
+  static void SetFault(UpdaterMSCKF &updater, CP2UpdaterTestFault fault) {
+    updater.cp2_test_fault = fault;
+  }
+
+  static std::uint64_t RawAssemblyCalls(const UpdaterMSCKF &updater) {
+    return updater.cp2_test_raw_assembly_calls;
+  }
+
+  static std::vector<CP2UpdaterTestStage>
+  Stages(const UpdaterMSCKF &updater) {
+    return std::vector<CP2UpdaterTestStage>(
+        updater.cp2_test_stages.begin(),
+        updater.cp2_test_stages.begin() +
+            static_cast<std::ptrdiff_t>(updater.cp2_test_stage_count));
+  }
+};
+
+} // namespace ov_msckf
+#endif
 
 namespace {
 
@@ -497,6 +525,43 @@ make_updater(ov_msckf::UpdaterOptions::LandmarkElimination mode,
   ov_core::FeatureInitializerOptions initializer_options = feature_initializer_options();
   return std::unique_ptr<ov_msckf::UpdaterMSCKF>(
       new ov_msckf::UpdaterMSCKF(updater_options, initializer_options));
+}
+
+class RecordingUpdateSink final : public ov_msckf::CP2RecordedUpdateSink {
+public:
+  ov_msckf::CP2RecordedSinkStatus status =
+      ov_msckf::CP2RecordedSinkStatus::kPublished;
+  std::size_t call_count = 0U;
+  std::shared_ptr<const ov_msckf::CP2RecordedUpdateEvent> record;
+
+  ov_msckf::CP2RecordedSinkStatus Publish(
+      const std::shared_ptr<const ov_msckf::CP2RecordedUpdateEvent> &input)
+      noexcept override {
+    ++call_count;
+    record = input;
+    return status;
+  }
+};
+
+void expect_recorded_phase_population(
+    const ov_msckf::CP2RecordedUpdateEvent &record,
+    const std::vector<ov_msckf::CP2StatePhase> &expected) {
+  ASSERT_EQ(record.state_phase_count, expected.size());
+  for (std::size_t index = 0U; index < expected.size(); ++index) {
+    SCOPED_TRACE(::testing::Message() << "phase_index=" << index);
+    ASSERT_TRUE(record.state_phases.at(index).snapshot);
+    EXPECT_EQ(record.state_phases.at(index).phase, expected.at(index));
+    EXPECT_EQ(record.state_phases.at(index).snapshot->phase,
+              expected.at(index));
+    EXPECT_EQ(record.state_phases.at(index).payload,
+              ov_msckf::CP2StateTraceCodec::EncodeSnapshotPayload(
+                  *record.state_phases.at(index).snapshot));
+  }
+  for (std::size_t index = expected.size();
+       index < record.state_phases.size(); ++index) {
+    EXPECT_FALSE(record.state_phases.at(index).snapshot);
+    EXPECT_TRUE(record.state_phases.at(index).payload.empty());
+  }
 }
 
 double mixed_tolerance(double reference_norm) {
@@ -1085,8 +1150,10 @@ TEST(CP2UpdaterMSCKFEndToEnd,
   auto updater = make_updater(
       ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE, sigma_pix,
       accepting_multiplier);
+  auto recorded_sink = std::make_shared<RecordingUpdateSink>();
   std::size_t callback_count = 0;
   ov_msckf::CP2LiveUpdateEvent observed;
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(recorded_sink));
   ASSERT_TRUE(updater->set_cp2_update_callback(
       [&](const ov_msckf::CP2LiveUpdateEvent &event) {
         ++callback_count;
@@ -1120,6 +1187,14 @@ TEST(CP2UpdaterMSCKFEndToEnd,
   EXPECT_EQ(shadow.schur.gamma_status, ov_msckf::CP2GammaStatus::kNonfinite);
   EXPECT_FALSE(shadow.schur.proposal_available);
   EXPECT_EQ(shadow.features.size(), gamma_overflow_feature_count);
+  ASSERT_EQ(recorded_sink->call_count, 1U);
+  ASSERT_TRUE(recorded_sink->record);
+  EXPECT_EQ(recorded_sink->record->update.terminal_status,
+            ov_msckf::CP2UpdateTerminalStatus::kCommittedCounted);
+  EXPECT_TRUE(recorded_sink->record->baseline_commit_oracle_available);
+  EXPECT_TRUE(recorded_sink->record->baseline_commit_oracle.passed);
+  EXPECT_FALSE(recorded_sink->record->candidate_proposal_payload_available);
+  EXPECT_FALSE(recorded_sink->record->online_math_evidence_passed);
   EXPECT_FALSE(bitwise_equal(before.covariance,
                              ov_msckf::StateHelper::get_full_covariance(fixture.state)));
 }
@@ -1273,6 +1348,827 @@ TEST(CP2UpdaterMSCKFEndToEnd,
   EXPECT_TRUE(features.empty());
   EXPECT_TRUE(feature->to_delete);
   expect_exact_state(fixture, before);
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     ZeroRawDiscardsTentativeWithoutValidationOrPhases) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+
+  Eigen::MatrixXd invalid_time_offset =
+      fixture.state->_calib_dt_CAMtoIMU->value();
+  ASSERT_EQ(invalid_time_offset.size(), 1);
+  invalid_time_offset(0, 0) = std::numeric_limits<double>::infinity();
+  fixture.state->_calib_dt_CAMtoIMU->set_value(invalid_time_offset);
+  ov_msckf::CP2CompositeStateCapture complete_before_update;
+  ASSERT_EQ(ov_msckf::CP2CompositeStateAdapter::Capture(
+                fixture.state, ov_msckf::CP2StatePhase::kPhase0Prior,
+                complete_before_update),
+            ov_msckf::CP2CompositeStateStatus::kAccepted);
+  const std::vector<std::uint8_t> complete_before_payload =
+      ov_msckf::CP2StateTraceCodec::EncodeSnapshotPayload(
+          complete_before_update.snapshot);
+
+  auto feature = make_feature(fixture, 0x4350325a4552ULL);
+  feature->timestamps.at(0).resize(1U);
+  feature->uvs.at(0).resize(1U);
+  feature->uvs_norm.at(0).resize(1U);
+  std::vector<std::shared_ptr<ov_core::Feature>> features{feature};
+
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  std::size_t observer_count = 0U;
+  bool observer_saw_published_record = false;
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_update_callback(
+      [&](const ov_msckf::CP2LiveUpdateEvent &) {
+        ++observer_count;
+        observer_saw_published_record = sink->call_count == 1U;
+        throw std::runtime_error("expected diagnostic observer failure");
+      },
+      false));
+
+  EXPECT_NO_THROW(updater->update(fixture.state, features));
+
+  ASSERT_EQ(sink->call_count, 1U);
+  ASSERT_TRUE(sink->record);
+  EXPECT_EQ(observer_count, 1U);
+  EXPECT_TRUE(observer_saw_published_record);
+  EXPECT_FALSE(updater->cp2_trace_fatal_latched());
+  EXPECT_EQ(sink->record->update.terminal_status,
+            ov_msckf::CP2UpdateTerminalStatus::kAllRejected);
+  EXPECT_EQ(sink->record->update.terminal_subreason,
+            ov_msckf::CP2UpdateTerminalSubreason::kNoFeaturesAfterCleaning);
+  EXPECT_EQ(sink->record->update.raw_system_count, 0U);
+  EXPECT_TRUE(sink->record->raw_system_payloads.empty());
+  expect_recorded_phase_population(*sink->record, {});
+  EXPECT_FALSE(sink->record->baseline_commit_oracle_available);
+  EXPECT_EQ(sink->record->baseline_mean_commit_count, 0U);
+  EXPECT_EQ(sink->record->baseline_covariance_commit_count, 0U);
+#if defined(OV_MSCKF_CP2_TESTING)
+  EXPECT_EQ(ov_msckf::CP2UpdaterTestAccess::RawAssemblyCalls(*updater), 0U);
+#endif
+  ov_msckf::CP2CompositeStateCapture complete_after_update;
+  ASSERT_EQ(ov_msckf::CP2CompositeStateAdapter::Capture(
+                fixture.state, ov_msckf::CP2StatePhase::kPhase0Prior,
+                complete_after_update),
+            ov_msckf::CP2CompositeStateStatus::kAccepted);
+  EXPECT_EQ(complete_before_payload,
+            ov_msckf::CP2StateTraceCodec::EncodeSnapshotPayload(
+                complete_after_update.snapshot));
+  EXPECT_TRUE(ov_msckf::CP2CompositeStateAdapter::PointerGraphMatches(
+      fixture.state, complete_before_update.pointer_graph));
+  EXPECT_TRUE(features.empty());
+  EXPECT_TRUE(feature->to_delete);
+  expect_exact_state(fixture, before);
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     CleanCommitPublishesExactCompositeAndCommitOracle) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  constexpr std::size_t first_feature_id = 0x435032433243ULL;
+  auto features = make_accepted_features(fixture, first_feature_id);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  EXPECT_NO_THROW(updater->update(fixture.state, features));
+
+  ASSERT_EQ(sink->call_count, 1U);
+  ASSERT_TRUE(sink->record);
+  const ov_msckf::CP2RecordedUpdateEvent &record = *sink->record;
+  expect_recorded_phase_population(
+      record, {ov_msckf::CP2StatePhase::kPhase0Prior,
+               ov_msckf::CP2StatePhase::kPhase1Precommit,
+               ov_msckf::CP2StatePhase::kPhase2ExpectedPostcommit,
+               ov_msckf::CP2StatePhase::kPhase3LivePostcommit});
+  EXPECT_EQ(record.update.terminal_status,
+            ov_msckf::CP2UpdateTerminalStatus::kCommittedCounted);
+  EXPECT_EQ(record.update.terminal_subreason,
+            ov_msckf::CP2UpdateTerminalSubreason::kNone);
+  EXPECT_TRUE(record.update.baseline_commit_occurred);
+  EXPECT_TRUE(record.phase01_canonical_equal);
+  EXPECT_TRUE(record.phase01_pointer_graph_equal);
+  EXPECT_EQ(record.state_phases[0].payload, record.state_phases[1].payload);
+  EXPECT_EQ(record.state_phases[2].payload, record.state_phases[3].payload);
+  EXPECT_TRUE(record.baseline_proposal_payload_available);
+  EXPECT_TRUE(record.candidate_proposal_payload_available);
+  EXPECT_EQ(record.raw_system_payloads.size(), kAcceptedFeatureCount);
+  EXPECT_TRUE(record.baseline_commit_oracle_available);
+  EXPECT_FALSE(record.baseline_commit_mismatch);
+  EXPECT_TRUE(record.baseline_commit_oracle.passed);
+  EXPECT_EQ(record.baseline_commit_oracle.baseline_expected_type_update_calls,
+            5U);
+  EXPECT_EQ(record.baseline_commit_oracle.observed_type_update_calls, 5U);
+  EXPECT_EQ(record.baseline_commit_oracle.baseline_verified_nominal_fields,
+            44U);
+  EXPECT_EQ(record.baseline_commit_oracle.baseline_nominal_mismatches, 0U);
+  EXPECT_EQ(record.baseline_commit_oracle.baseline_covariance_mismatches, 0U);
+  EXPECT_EQ(record.baseline_commit_oracle.baseline_fej_mismatches, 0U);
+  EXPECT_EQ(record.baseline_commit_oracle.state_blocks_expected, 13U);
+  EXPECT_EQ(record.baseline_commit_oracle.state_blocks_seen, 13U);
+  EXPECT_EQ(record.baseline_commit_oracle.covariance_blocks_expected, 169U);
+  EXPECT_EQ(record.baseline_commit_oracle.covariance_blocks_seen, 169U);
+  EXPECT_EQ(record.baseline_mean_commit_count, 1U);
+  EXPECT_EQ(record.baseline_covariance_commit_count, 1U);
+  EXPECT_EQ(record.baseline_commit_count, 1U);
+  EXPECT_EQ(record.candidate_ekf_update_call_count, 0U);
+  EXPECT_EQ(record.candidate_mean_write_count, 0U);
+  EXPECT_EQ(record.candidate_covariance_write_count, 0U);
+  EXPECT_EQ(record.candidate_type_update_call_count, 0U);
+  EXPECT_EQ(record.candidate_feature_write_count, 0U);
+  EXPECT_TRUE(record.online_math_evidence_passed);
+  EXPECT_FALSE(updater->cp2_trace_fatal_latched());
+#if defined(OV_MSCKF_CP2_TESTING)
+  EXPECT_EQ(ov_msckf::CP2UpdaterTestAccess::RawAssemblyCalls(*updater),
+            kAcceptedFeatureCount);
+  EXPECT_EQ(
+      ov_msckf::CP2UpdaterTestAccess::Stages(*updater),
+      (std::vector<ov_msckf::CP2UpdaterTestStage>{
+          ov_msckf::CP2UpdaterTestStage::kPhase0Capture,
+          ov_msckf::CP2UpdaterTestStage::kPhase0Projection,
+          ov_msckf::CP2UpdaterTestStage::kPhase2Build,
+          ov_msckf::CP2UpdaterTestStage::kPhase1Capture}));
+#endif
+
+  ASSERT_TRUE(record.update.shadow_evidence_available);
+  ASSERT_TRUE(record.update.shadow.shadow_math_completed);
+  ov_msckf::MSCKFUpdatePreviewSnapshot projected_phase0;
+  ASSERT_EQ(ov_msckf::CP2CompositeStateAdapter::ProjectPreview(
+                *record.state_phases[0].snapshot, projected_phase0),
+            ov_msckf::CP2CompositeStateStatus::kAccepted);
+  EXPECT_TRUE(bitwise_equal(projected_phase0.covariance,
+                            record.update.shadow.input.prior.covariance));
+  EXPECT_TRUE(bitwise_equal(
+      ov_msckf::StateHelper::get_full_covariance(fixture.state),
+      record.state_phases[3].snapshot->covariance));
+  EXPECT_FALSE(bitwise_equal(before.covariance,
+                             record.state_phases[3].snapshot->covariance));
+  expect_fej_unchanged(fixture, before);
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     RawNoncommitPublishesOnlyEqualPhaseZeroAndOne) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto feature = make_feature(fixture, 0x43503243324eULL, true);
+  std::vector<std::shared_ptr<ov_core::Feature>> features{feature};
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  EXPECT_NO_THROW(updater->update(fixture.state, features));
+
+  ASSERT_EQ(sink->call_count, 1U);
+  ASSERT_TRUE(sink->record);
+  const ov_msckf::CP2RecordedUpdateEvent &record = *sink->record;
+  expect_recorded_phase_population(
+      record, {ov_msckf::CP2StatePhase::kPhase0Prior,
+               ov_msckf::CP2StatePhase::kPhase1Precommit});
+  EXPECT_EQ(record.update.terminal_status,
+            ov_msckf::CP2UpdateTerminalStatus::kAllRejected);
+  EXPECT_EQ(record.update.terminal_subreason,
+            ov_msckf::CP2UpdateTerminalSubreason::kAllBaselineFeaturesRejected);
+  EXPECT_EQ(record.update.raw_system_count, 1U);
+  EXPECT_EQ(record.raw_system_payloads.size(), 1U);
+  EXPECT_TRUE(record.phase01_canonical_equal);
+  EXPECT_TRUE(record.phase01_pointer_graph_equal);
+  EXPECT_EQ(record.state_phases[0].payload, record.state_phases[1].payload);
+  EXPECT_FALSE(record.baseline_commit_oracle_available);
+  EXPECT_EQ(record.baseline_commit_oracle.baseline_expected_type_update_calls,
+            0U);
+  EXPECT_EQ(record.baseline_commit_oracle.baseline_verified_nominal_fields,
+            0U);
+  EXPECT_EQ(record.baseline_mean_commit_count, 0U);
+  EXPECT_EQ(record.baseline_covariance_commit_count, 0U);
+  EXPECT_FALSE(record.update.baseline_commit_occurred);
+  EXPECT_FALSE(updater->cp2_trace_fatal_latched());
+  expect_exact_state(fixture, before);
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     PromotionFailureIsFatalBeforeAnyPublishOrBaselineWrite) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  Eigen::MatrixXd invalid_time_offset =
+      fixture.state->_calib_dt_CAMtoIMU->value();
+  invalid_time_offset(0, 0) = std::numeric_limits<double>::quiet_NaN();
+  fixture.state->_calib_dt_CAMtoIMU->set_value(invalid_time_offset);
+  ov_msckf::CP2CompositeStateCapture complete_before_failure;
+  ASSERT_EQ(ov_msckf::CP2CompositeStateAdapter::Capture(
+                fixture.state, ov_msckf::CP2StatePhase::kPhase0Prior,
+                complete_before_failure),
+            ov_msckf::CP2CompositeStateStatus::kAccepted);
+  const std::vector<std::uint8_t> complete_before_payload =
+      ov_msckf::CP2StateTraceCodec::EncodeSnapshotPayload(
+          complete_before_failure.snapshot);
+  auto features = make_accepted_features(fixture, 0x435032503046ULL);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  try {
+    updater->update(fixture.state, features);
+    FAIL() << "invalid tentative phase 0 did not stop recorded mode";
+  } catch (const ov_msckf::CP2TraceFatalError &error) {
+    EXPECT_EQ(error.reason(), ov_msckf::CP2TraceFatalReason::kPhase0Promotion);
+  }
+
+  EXPECT_EQ(sink->call_count, 0U);
+  EXPECT_FALSE(sink->record);
+  EXPECT_TRUE(updater->cp2_trace_fatal_latched());
+  EXPECT_EQ(updater->cp2_trace_fatal_reason(),
+            ov_msckf::CP2TraceFatalReason::kPhase0Promotion);
+#if defined(OV_MSCKF_CP2_TESTING)
+  EXPECT_EQ(ov_msckf::CP2UpdaterTestAccess::RawAssemblyCalls(*updater), 0U);
+#endif
+  ov_msckf::CP2CompositeStateCapture complete_after_failure;
+  ASSERT_EQ(ov_msckf::CP2CompositeStateAdapter::Capture(
+                fixture.state, ov_msckf::CP2StatePhase::kPhase0Prior,
+                complete_after_failure),
+            ov_msckf::CP2CompositeStateStatus::kAccepted);
+  EXPECT_EQ(complete_before_payload,
+            ov_msckf::CP2StateTraceCodec::EncodeSnapshotPayload(
+                complete_after_failure.snapshot));
+  EXPECT_TRUE(ov_msckf::CP2CompositeStateAdapter::PointerGraphMatches(
+      fixture.state, complete_before_failure.pointer_graph));
+  expect_exact_state(fixture, before);
+  std::vector<std::shared_ptr<ov_core::Feature>> empty_features;
+  EXPECT_THROW(updater->update(fixture.state, empty_features),
+               ov_msckf::CP2TraceFatalError);
+  EXPECT_EQ(sink->call_count, 0U);
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     SinkRejectionAfterCommitLatchesFatalWithoutRollbackOrObserver) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto features = make_accepted_features(fixture, 0x435032534e4bULL);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  sink->status = ov_msckf::CP2RecordedSinkStatus::kRejected;
+  std::size_t observer_count = 0U;
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_update_callback(
+      [&](const ov_msckf::CP2LiveUpdateEvent &) { ++observer_count; }, false));
+
+  try {
+    updater->update(fixture.state, features);
+    FAIL() << "rejected authoritative publication did not stop the campaign";
+  } catch (const ov_msckf::CP2TraceFatalError &error) {
+    EXPECT_EQ(error.reason(), ov_msckf::CP2TraceFatalReason::kSinkRejected);
+  }
+
+  ASSERT_EQ(sink->call_count, 1U);
+  ASSERT_TRUE(sink->record);
+  EXPECT_EQ(observer_count, 0U);
+  EXPECT_TRUE(sink->record->update.baseline_commit_occurred);
+  EXPECT_EQ(sink->record->update.terminal_status,
+            ov_msckf::CP2UpdateTerminalStatus::kCommittedCounted);
+  EXPECT_TRUE(sink->record->baseline_commit_oracle_available);
+  EXPECT_TRUE(sink->record->baseline_commit_oracle.passed);
+  EXPECT_TRUE(updater->cp2_trace_fatal_latched());
+  EXPECT_EQ(updater->cp2_trace_fatal_reason(),
+            ov_msckf::CP2TraceFatalReason::kSinkRejected);
+  EXPECT_FALSE(bitwise_equal(
+      before.covariance,
+      ov_msckf::StateHelper::get_full_covariance(fixture.state)));
+  EXPECT_TRUE(bitwise_equal(
+      sink->record->state_phases[3].snapshot->covariance,
+      ov_msckf::StateHelper::get_full_covariance(fixture.state)));
+}
+
+#if defined(OV_MSCKF_CP2_TESTING)
+TEST(CP2UpdaterMSCKFTransaction,
+     CandidateAssemblyFailureCannotVetoBaselineCommit) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto features = make_accepted_features(fixture, 0x435032434146ULL);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ov_msckf::CP2UpdaterTestAccess::SetFault(
+      *updater, ov_msckf::CP2UpdaterTestFault::kCandidateAssemblyFailure);
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  EXPECT_NO_THROW(updater->update(fixture.state, features));
+
+  ASSERT_EQ(sink->call_count, 1U);
+  ASSERT_TRUE(sink->record);
+  const ov_msckf::CP2RecordedUpdateEvent &record = *sink->record;
+  expect_recorded_phase_population(
+      record, {ov_msckf::CP2StatePhase::kPhase0Prior,
+               ov_msckf::CP2StatePhase::kPhase1Precommit,
+               ov_msckf::CP2StatePhase::kPhase2ExpectedPostcommit,
+               ov_msckf::CP2StatePhase::kPhase3LivePostcommit});
+  EXPECT_EQ(record.update.terminal_status,
+            ov_msckf::CP2UpdateTerminalStatus::kCommittedCounted);
+  EXPECT_TRUE(record.update.baseline_commit_occurred);
+  EXPECT_TRUE(record.update.shadow.result.traversal_complete);
+  EXPECT_TRUE(record.update.shadow.result.nullspace_assembly_valid);
+  EXPECT_FALSE(record.update.shadow.result.schur_assembly_valid);
+  EXPECT_TRUE(record.baseline_proposal_payload_available);
+  EXPECT_FALSE(record.candidate_proposal_payload_available);
+  EXPECT_TRUE(record.baseline_commit_oracle.passed);
+  EXPECT_FALSE(record.online_math_evidence_passed);
+  EXPECT_FALSE(updater->cp2_trace_fatal_latched());
+  EXPECT_FALSE(bitwise_equal(
+      before.covariance,
+      ov_msckf::StateHelper::get_full_covariance(fixture.state)));
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     BaselineProvenanceMismatchSuppressesCommitBeforePhase2) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto features = make_accepted_features(fixture, 0x435032505256ULL);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ov_msckf::CP2UpdaterTestAccess::SetFault(
+      *updater,
+      ov_msckf::CP2UpdaterTestFault::kBaselineProvenanceMismatch);
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  EXPECT_NO_THROW(updater->update(fixture.state, features));
+
+  ASSERT_EQ(sink->call_count, 1U);
+  ASSERT_TRUE(sink->record);
+  const ov_msckf::CP2RecordedUpdateEvent &record = *sink->record;
+  expect_recorded_phase_population(
+      record, {ov_msckf::CP2StatePhase::kPhase0Prior,
+               ov_msckf::CP2StatePhase::kPhase1Precommit});
+  EXPECT_EQ(record.update.terminal_status,
+            ov_msckf::CP2UpdateTerminalStatus::kInternalFailure);
+  EXPECT_EQ(record.update.terminal_subreason,
+            ov_msckf::CP2UpdateTerminalSubreason::kTraceInvariantFailure);
+  EXPECT_FALSE(record.update.baseline_commit_occurred);
+  EXPECT_FALSE(record.update.shadow.baseline_commit_planned);
+  EXPECT_TRUE(record.update.shadow.result.traversal_complete);
+  EXPECT_TRUE(record.update.shadow.result.nullspace_assembly_valid);
+  EXPECT_TRUE(record.phase01_canonical_equal);
+  EXPECT_TRUE(record.phase01_pointer_graph_equal);
+  EXPECT_TRUE(record.baseline_proposal_payload_available);
+  EXPECT_TRUE(record.candidate_proposal_payload_available);
+  EXPECT_FALSE(record.baseline_commit_oracle_available);
+  EXPECT_EQ(record.baseline_mean_commit_count, 0U);
+  EXPECT_EQ(record.baseline_covariance_commit_count, 0U);
+  EXPECT_EQ(record.baseline_commit_count, 0U);
+  EXPECT_EQ(record.candidate_ekf_update_call_count, 0U);
+  EXPECT_EQ(record.candidate_mean_write_count, 0U);
+  EXPECT_EQ(record.candidate_covariance_write_count, 0U);
+  EXPECT_EQ(record.candidate_type_update_call_count, 0U);
+  EXPECT_EQ(record.candidate_feature_write_count, 0U);
+  EXPECT_FALSE(record.online_math_evidence_passed);
+  EXPECT_FALSE(updater->cp2_trace_fatal_latched());
+  EXPECT_EQ(
+      ov_msckf::CP2UpdaterTestAccess::Stages(*updater),
+      (std::vector<ov_msckf::CP2UpdaterTestStage>{
+          ov_msckf::CP2UpdaterTestStage::kPhase0Capture,
+          ov_msckf::CP2UpdaterTestStage::kPhase0Projection,
+          ov_msckf::CP2UpdaterTestStage::kPhase1Capture}));
+  expect_exact_state(fixture, before);
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     InvalidPhase2IsDiscardedAndCannotCommit) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  ov_msckf::CP2CompositeStateCapture complete_before;
+  ASSERT_EQ(ov_msckf::CP2CompositeStateAdapter::Capture(
+                fixture.state, ov_msckf::CP2StatePhase::kPhase0Prior,
+                complete_before),
+            ov_msckf::CP2CompositeStateStatus::kAccepted);
+  const std::vector<std::uint8_t> complete_before_payload =
+      ov_msckf::CP2StateTraceCodec::EncodeSnapshotPayload(
+          complete_before.snapshot);
+  auto features = make_accepted_features(fixture, 0x435032493250ULL);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ov_msckf::CP2UpdaterTestAccess::SetFault(
+      *updater, ov_msckf::CP2UpdaterTestFault::kInvalidPhase2);
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  EXPECT_NO_THROW(updater->update(fixture.state, features));
+
+  ASSERT_EQ(sink->call_count, 1U);
+  ASSERT_TRUE(sink->record);
+  const ov_msckf::CP2RecordedUpdateEvent &record = *sink->record;
+  expect_recorded_phase_population(
+      record, {ov_msckf::CP2StatePhase::kPhase0Prior,
+               ov_msckf::CP2StatePhase::kPhase1Precommit});
+  EXPECT_EQ(record.update.terminal_status,
+            ov_msckf::CP2UpdateTerminalStatus::kInternalFailure);
+  EXPECT_EQ(record.update.terminal_subreason,
+            ov_msckf::CP2UpdateTerminalSubreason::kTraceInvariantFailure);
+  EXPECT_FALSE(record.update.baseline_commit_occurred);
+  EXPECT_FALSE(record.baseline_commit_oracle_available);
+  EXPECT_EQ(record.baseline_commit_count, 0U);
+  EXPECT_FALSE(record.online_math_evidence_passed);
+  ov_msckf::CP2CompositeStateCapture complete_after;
+  ASSERT_EQ(ov_msckf::CP2CompositeStateAdapter::Capture(
+                fixture.state, ov_msckf::CP2StatePhase::kPhase0Prior,
+                complete_after),
+            ov_msckf::CP2CompositeStateStatus::kAccepted);
+  EXPECT_EQ(complete_before_payload,
+            ov_msckf::CP2StateTraceCodec::EncodeSnapshotPayload(
+                complete_after.snapshot));
+  EXPECT_TRUE(ov_msckf::CP2CompositeStateAdapter::PointerGraphMatches(
+      fixture.state, complete_before.pointer_graph));
+  expect_exact_state(fixture, before);
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     NonfinitePhase1IsSnapshotMismatchAndDiscardsPhase2) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto features = make_accepted_features(fixture, 0x43503250314eULL);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ov_msckf::CP2UpdaterTestAccess::SetFault(
+      *updater, ov_msckf::CP2UpdaterTestFault::kPhase1ValueMismatch);
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  EXPECT_NO_THROW(updater->update(fixture.state, features));
+
+  ASSERT_EQ(sink->call_count, 1U);
+  ASSERT_TRUE(sink->record);
+  const ov_msckf::CP2RecordedUpdateEvent &record = *sink->record;
+  expect_recorded_phase_population(
+      record, {ov_msckf::CP2StatePhase::kPhase0Prior,
+               ov_msckf::CP2StatePhase::kPhase1Precommit});
+  EXPECT_EQ(record.update.terminal_status,
+            ov_msckf::CP2UpdateTerminalStatus::kInternalFailure);
+  EXPECT_EQ(record.update.terminal_subreason,
+            ov_msckf::CP2UpdateTerminalSubreason::kSnapshotMismatch);
+  EXPECT_FALSE(record.phase01_canonical_equal);
+  EXPECT_TRUE(record.phase01_pointer_graph_equal);
+  EXPECT_NE(record.state_phases[0].payload, record.state_phases[1].payload);
+  EXPECT_EQ(ov_msckf::CP2CompositeStateAdapter::Validate(
+                *record.state_phases[1].snapshot),
+            ov_msckf::CP2CompositeStateStatus::kNonfinite);
+  EXPECT_FALSE(record.update.baseline_commit_occurred);
+  EXPECT_FALSE(record.baseline_commit_oracle_available);
+  EXPECT_FALSE(record.online_math_evidence_passed);
+  EXPECT_TRUE(std::isnan(fixture.state->_timestamp));
+  expect_exact_state(fixture, before);
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     FinalPointerRejectionDiscardsInstalledPhase2) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto features = make_accepted_features(fixture, 0x435032503152ULL);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ov_msckf::CP2UpdaterTestAccess::SetFault(
+      *updater, ov_msckf::CP2UpdaterTestFault::kFinalPointerMismatch);
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  EXPECT_NO_THROW(updater->update(fixture.state, features));
+
+  ASSERT_EQ(sink->call_count, 1U);
+  ASSERT_TRUE(sink->record);
+  const ov_msckf::CP2RecordedUpdateEvent &record = *sink->record;
+  expect_recorded_phase_population(
+      record, {ov_msckf::CP2StatePhase::kPhase0Prior,
+               ov_msckf::CP2StatePhase::kPhase1Precommit});
+  EXPECT_EQ(record.update.terminal_status,
+            ov_msckf::CP2UpdateTerminalStatus::kInternalFailure);
+  EXPECT_EQ(record.update.terminal_subreason,
+            ov_msckf::CP2UpdateTerminalSubreason::kSnapshotMismatch);
+  EXPECT_TRUE(record.phase01_canonical_equal);
+  EXPECT_FALSE(record.phase01_pointer_graph_equal);
+  EXPECT_EQ(record.state_phases[0].payload, record.state_phases[1].payload);
+  EXPECT_FALSE(record.update.baseline_commit_occurred);
+  EXPECT_FALSE(record.baseline_commit_oracle_available);
+  EXPECT_FALSE(record.online_math_evidence_passed);
+  EXPECT_FALSE(fixture.state->_cam_intrinsics_cameras.at(0));
+  expect_exact_state(fixture, before);
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     IncompletePostcommitStorageIsFatalAfterCommitWithoutPublication) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto features = make_accepted_features(fixture, 0x435032503346ULL);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ov_msckf::CP2UpdaterTestAccess::SetFault(
+      *updater, ov_msckf::CP2UpdaterTestFault::kInvalidatePostcommitStorage);
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  try {
+    updater->update(fixture.state, features);
+    FAIL() << "incomplete committed phase-3 storage was published";
+  } catch (const ov_msckf::CP2TraceFatalError &error) {
+    EXPECT_EQ(error.reason(),
+              ov_msckf::CP2TraceFatalReason::kPostcommitCapture);
+  }
+
+  EXPECT_EQ(sink->call_count, 0U);
+  EXPECT_FALSE(sink->record);
+  EXPECT_TRUE(updater->cp2_trace_fatal_latched());
+  EXPECT_EQ(updater->cp2_trace_fatal_reason(),
+            ov_msckf::CP2TraceFatalReason::kPostcommitCapture);
+  EXPECT_FALSE(bitwise_equal(
+      before.covariance,
+      ov_msckf::StateHelper::get_full_covariance(fixture.state)));
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     PostcommitPointerTokenFailureIsFatalAfterCommitWithoutPublication) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto features = make_accepted_features(fixture, 0x435032503350ULL);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ov_msckf::CP2UpdaterTestAccess::SetFault(
+      *updater,
+      ov_msckf::CP2UpdaterTestFault::kInvalidatePostcommitPointerToken);
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  try {
+    updater->update(fixture.state, features);
+    FAIL() << "postcommit pointer-token failure was published";
+  } catch (const ov_msckf::CP2TraceFatalError &error) {
+    EXPECT_EQ(error.reason(),
+              ov_msckf::CP2TraceFatalReason::kPostcommitCapture);
+  }
+
+  EXPECT_EQ(sink->call_count, 0U);
+  EXPECT_FALSE(sink->record);
+  EXPECT_TRUE(updater->cp2_trace_fatal_latched());
+  EXPECT_EQ(updater->cp2_trace_fatal_reason(),
+            ov_msckf::CP2TraceFatalReason::kPostcommitCapture);
+  EXPECT_FALSE(bitwise_equal(
+      before.covariance,
+      ov_msckf::StateHelper::get_full_covariance(fixture.state)));
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     CompletePhase3ValueMismatchRemainsCountedFailedEvidence) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto features = make_accepted_features(fixture, 0x43503250334dULL);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ov_msckf::CP2UpdaterTestAccess::SetFault(
+      *updater, ov_msckf::CP2UpdaterTestFault::kPhase3ValueMismatch);
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  EXPECT_NO_THROW(updater->update(fixture.state, features));
+
+  ASSERT_EQ(sink->call_count, 1U);
+  ASSERT_TRUE(sink->record);
+  const ov_msckf::CP2RecordedUpdateEvent &record = *sink->record;
+  expect_recorded_phase_population(
+      record, {ov_msckf::CP2StatePhase::kPhase0Prior,
+               ov_msckf::CP2StatePhase::kPhase1Precommit,
+               ov_msckf::CP2StatePhase::kPhase2ExpectedPostcommit,
+               ov_msckf::CP2StatePhase::kPhase3LivePostcommit});
+  EXPECT_EQ(record.update.terminal_status,
+            ov_msckf::CP2UpdateTerminalStatus::kCommittedCounted);
+  EXPECT_TRUE(record.update.baseline_commit_occurred);
+  EXPECT_TRUE(record.baseline_commit_oracle_available);
+  EXPECT_EQ(record.baseline_commit_oracle.status,
+            ov_msckf::CP2CommitOracleStatus::kComplete);
+  EXPECT_TRUE(record.baseline_commit_oracle.phase3_valid);
+  EXPECT_FALSE(record.baseline_commit_oracle.passed);
+  EXPECT_EQ(record.baseline_commit_oracle.baseline_covariance_mismatches, 1U);
+  EXPECT_TRUE(record.baseline_commit_mismatch);
+  EXPECT_FALSE(record.online_math_evidence_passed);
+  EXPECT_NE(record.state_phases[2].payload, record.state_phases[3].payload);
+  EXPECT_TRUE(bitwise_equal(
+      record.state_phases[2].snapshot->covariance,
+      ov_msckf::StateHelper::get_full_covariance(fixture.state)));
+  EXPECT_FALSE(bitwise_equal(
+      record.state_phases[3].snapshot->covariance,
+      ov_msckf::StateHelper::get_full_covariance(fixture.state)));
+  EXPECT_FALSE(bitwise_equal(
+      before.covariance,
+      ov_msckf::StateHelper::get_full_covariance(fixture.state)));
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     CompleteNonfinitePhase3RemainsCountedFailedEvidence) {
+  ProductionFixture fixture = make_production_fixture();
+  auto features = make_accepted_features(fixture, 0x43503250334eULL);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ov_msckf::CP2UpdaterTestAccess::SetFault(
+      *updater, ov_msckf::CP2UpdaterTestFault::kPhase3Nonfinite);
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  EXPECT_NO_THROW(updater->update(fixture.state, features));
+
+  ASSERT_EQ(sink->call_count, 1U);
+  ASSERT_TRUE(sink->record);
+  const ov_msckf::CP2RecordedUpdateEvent &record = *sink->record;
+  expect_recorded_phase_population(
+      record, {ov_msckf::CP2StatePhase::kPhase0Prior,
+               ov_msckf::CP2StatePhase::kPhase1Precommit,
+               ov_msckf::CP2StatePhase::kPhase2ExpectedPostcommit,
+               ov_msckf::CP2StatePhase::kPhase3LivePostcommit});
+  EXPECT_EQ(record.update.terminal_status,
+            ov_msckf::CP2UpdateTerminalStatus::kCommittedCounted);
+  EXPECT_TRUE(record.update.baseline_commit_occurred);
+  EXPECT_EQ(record.baseline_commit_oracle.status,
+            ov_msckf::CP2CommitOracleStatus::kComplete);
+  EXPECT_FALSE(record.baseline_commit_oracle.phase3_valid);
+  EXPECT_FALSE(record.baseline_commit_oracle.complete_finite);
+  EXPECT_FALSE(record.baseline_commit_oracle.passed);
+  EXPECT_EQ(record.baseline_commit_oracle.baseline_covariance_mismatches, 1U);
+  EXPECT_TRUE(record.baseline_commit_mismatch);
+  EXPECT_FALSE(record.online_math_evidence_passed);
+  EXPECT_TRUE(std::isnan(
+      record.state_phases[3].snapshot->covariance(0, 0)));
+  EXPECT_FALSE(updater->cp2_trace_fatal_latched());
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     ZeroRawDurationFailureIsArithmeticFatalWithoutPublication) {
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ov_msckf::CP2UpdaterTestAccess::SetFault(
+      *updater,
+      ov_msckf::CP2UpdaterTestFault::kNoncommitDurationArithmeticFailure);
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  std::vector<std::shared_ptr<ov_core::Feature>> features;
+
+  try {
+    updater->update(std::shared_ptr<ov_msckf::State>(), features);
+    FAIL() << "unrepresentable zero-raw duration was published";
+  } catch (const ov_msckf::CP2TraceFatalError &error) {
+    EXPECT_EQ(error.reason(),
+              ov_msckf::CP2TraceFatalReason::kArithmeticInvariant);
+  }
+
+  EXPECT_STREQ(ov_msckf::cp2_trace_fatal_reason_name(
+                   ov_msckf::CP2TraceFatalReason::kArithmeticInvariant),
+               "arithmetic_invariant");
+  EXPECT_EQ(sink->call_count, 0U);
+  EXPECT_FALSE(sink->record);
+  EXPECT_TRUE(updater->cp2_trace_fatal_latched());
+  EXPECT_EQ(updater->cp2_trace_fatal_reason(),
+            ov_msckf::CP2TraceFatalReason::kArithmeticInvariant);
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     PhasePairDurationFailureIsArithmeticFatalWithoutPublicationOrWrite) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto feature = make_feature(fixture, 0x43503244324eULL, true);
+  std::vector<std::shared_ptr<ov_core::Feature>> features{feature};
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ov_msckf::CP2UpdaterTestAccess::SetFault(
+      *updater,
+      ov_msckf::CP2UpdaterTestFault::kNoncommitDurationArithmeticFailure);
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  try {
+    updater->update(fixture.state, features);
+    FAIL() << "unrepresentable phase-pair duration was published";
+  } catch (const ov_msckf::CP2TraceFatalError &error) {
+    EXPECT_EQ(error.reason(),
+              ov_msckf::CP2TraceFatalReason::kArithmeticInvariant);
+  }
+
+  EXPECT_EQ(sink->call_count, 0U);
+  EXPECT_FALSE(sink->record);
+  EXPECT_TRUE(updater->cp2_trace_fatal_latched());
+  EXPECT_EQ(updater->cp2_trace_fatal_reason(),
+            ov_msckf::CP2TraceFatalReason::kArithmeticInvariant);
+  expect_exact_state(fixture, before);
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     CommittedDurationFailureIsArithmeticFatalWithoutPublicationOrRollback) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto features = make_accepted_features(fixture, 0x435032443343ULL);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ov_msckf::CP2UpdaterTestAccess::SetFault(
+      *updater,
+      ov_msckf::CP2UpdaterTestFault::kCommittedDurationArithmeticFailure);
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  try {
+    updater->update(fixture.state, features);
+    FAIL() << "unrepresentable committed duration was published";
+  } catch (const ov_msckf::CP2TraceFatalError &error) {
+    EXPECT_EQ(error.reason(),
+              ov_msckf::CP2TraceFatalReason::kArithmeticInvariant);
+  }
+
+  EXPECT_EQ(sink->call_count, 0U);
+  EXPECT_FALSE(sink->record);
+  EXPECT_TRUE(updater->cp2_trace_fatal_latched());
+  EXPECT_EQ(updater->cp2_trace_fatal_reason(),
+            ov_msckf::CP2TraceFatalReason::kArithmeticInvariant);
+  EXPECT_FALSE(bitwise_equal(
+      before.covariance,
+      ov_msckf::StateHelper::get_full_covariance(fixture.state)));
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     CommitOracleOverflowIsArithmeticFatalWithoutPublicationOrRollback) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto features = make_accepted_features(fixture, 0x4350324f5646ULL);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ov_msckf::CP2UpdaterTestAccess::SetFault(
+      *updater,
+      ov_msckf::CP2UpdaterTestFault::kCommitOracleArithmeticOverflow);
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  try {
+    updater->update(fixture.state, features);
+    FAIL() << "overflowed commit oracle was published";
+  } catch (const ov_msckf::CP2TraceFatalError &error) {
+    EXPECT_EQ(error.reason(),
+              ov_msckf::CP2TraceFatalReason::kArithmeticInvariant);
+  }
+
+  EXPECT_EQ(sink->call_count, 0U);
+  EXPECT_FALSE(sink->record);
+  EXPECT_TRUE(updater->cp2_trace_fatal_latched());
+  EXPECT_EQ(updater->cp2_trace_fatal_reason(),
+            ov_msckf::CP2TraceFatalReason::kArithmeticInvariant);
+  EXPECT_FALSE(bitwise_equal(
+      before.covariance,
+      ov_msckf::StateHelper::get_full_covariance(fixture.state)));
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     CommitOracleInvalidPhaseRemainsDistinctPostcommitFatal) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto features = make_accepted_features(fixture, 0x4350324f4950ULL);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ov_msckf::CP2UpdaterTestAccess::SetFault(
+      *updater, ov_msckf::CP2UpdaterTestFault::kCommitOracleInvalidPhase);
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+
+  try {
+    updater->update(fixture.state, features);
+    FAIL() << "invalid-phase commit oracle was published";
+  } catch (const ov_msckf::CP2TraceFatalError &error) {
+    EXPECT_EQ(error.reason(),
+              ov_msckf::CP2TraceFatalReason::kPostcommitException);
+  }
+
+  EXPECT_EQ(sink->call_count, 0U);
+  EXPECT_FALSE(sink->record);
+  EXPECT_TRUE(updater->cp2_trace_fatal_latched());
+  EXPECT_EQ(updater->cp2_trace_fatal_reason(),
+            ov_msckf::CP2TraceFatalReason::kPostcommitException);
+  EXPECT_FALSE(bitwise_equal(
+      before.covariance,
+      ov_msckf::StateHelper::get_full_covariance(fixture.state)));
+}
+#endif
+
+TEST(CP2UpdaterMSCKFTransaction,
+     RecordedSinkConfigurationIsNullspaceOnlyAndFreezesAtFirstUpdate) {
+  auto schur_updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::SCHUR);
+  auto rejected_sink = std::make_shared<RecordingUpdateSink>();
+  EXPECT_FALSE(schur_updater->set_cp2_recorded_sink(rejected_sink));
+  EXPECT_FALSE(schur_updater->cp2_trace_fatal_latched());
+
+  auto nullspace_updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto installed_sink = std::make_shared<RecordingUpdateSink>();
+  ASSERT_TRUE(nullspace_updater->set_cp2_recorded_sink(installed_sink));
+  std::vector<std::shared_ptr<ov_core::Feature>> features;
+  nullspace_updater->update(std::shared_ptr<ov_msckf::State>(), features);
+  EXPECT_EQ(installed_sink->call_count, 1U);
+  EXPECT_FALSE(nullspace_updater->set_cp2_recorded_sink(nullptr));
+  EXPECT_FALSE(nullspace_updater->set_cp2_recorded_sink(
+      std::make_shared<RecordingUpdateSink>()));
 }
 
 } // namespace

@@ -2,6 +2,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 if (CATKIN_ENABLE_TESTING)
+    # A fully separate, non-installed test library carries closed fault
+    # controls. The production ov_msckf_lib remains macro-clean, and no test
+    # executable links both definitions.
+    add_library(ov_msckf_cp2_fault_lib STATIC
+            ${LIBRARY_SOURCES}
+            ${LIBRARY_HEADERS})
+    target_compile_definitions(ov_msckf_cp2_fault_lib PRIVATE
+            OV_MSCKF_CP2_TESTING=1)
+    target_link_libraries(ov_msckf_cp2_fault_lib ${thirdparty_libraries})
+    target_include_directories(ov_msckf_cp2_fault_lib PUBLIC src/)
+
     catkin_add_gtest(test_cp2_production_schur_reducer
             test/cp2/gtest_main.cpp
             test/cp2/test_production_schur_reducer.cpp)
@@ -84,6 +95,24 @@ if (CATKIN_ENABLE_TESTING)
                 -fsigned-zeros)
     endif ()
 
+    catkin_add_gtest(test_cp2_updater_msckf_fault_injection
+            test/cp2/gtest_main.cpp
+            test/cp2/test_updater_msckf_end_to_end.cpp)
+
+    if (TARGET test_cp2_updater_msckf_fault_injection)
+        target_link_libraries(test_cp2_updater_msckf_fault_injection
+                ov_msckf_cp2_fault_lib
+                ${thirdparty_libraries})
+        target_include_directories(test_cp2_updater_msckf_fault_injection PRIVATE
+                test/cp2)
+        target_compile_options(test_cp2_updater_msckf_fault_injection PRIVATE
+                -fno-fast-math
+                -ffp-contract=off
+                -fsigned-zeros)
+        target_compile_definitions(test_cp2_updater_msckf_fault_injection PRIVATE
+                OV_MSCKF_CP2_TESTING=1)
+    endif ()
+
     # Keep the composite-state gate in its own executable: it interposes the C
     # heap and all ordinary C++ new forms to prove that the prepared phase-3
     # fill/handoff stays allocation-free under injected allocation failure.
@@ -98,6 +127,38 @@ if (CATKIN_ENABLE_TESTING)
         target_include_directories(test_cp2_composite_state PRIVATE
                 test/cp2)
         target_compile_options(test_cp2_composite_state PRIVATE
+                -fno-fast-math
+                -ffp-contract=off
+                -fsigned-zeros)
+    endif ()
+
+    catkin_add_gtest(test_cp2_commit_oracle
+            test/cp2/gtest_main.cpp
+            test/cp2/test_cp2_commit_oracle.cpp)
+
+    if (TARGET test_cp2_commit_oracle)
+        target_link_libraries(test_cp2_commit_oracle
+                ov_msckf_lib
+                ${thirdparty_libraries})
+        target_include_directories(test_cp2_commit_oracle PRIVATE
+                test/cp2)
+        target_compile_options(test_cp2_commit_oracle PRIVATE
+                -fno-fast-math
+                -ffp-contract=off
+                -fsigned-zeros)
+    endif ()
+
+    catkin_add_gtest(test_cp2_commit_boundary
+            test/cp2/gtest_main.cpp
+            test/cp2/test_cp2_commit_boundary.cpp)
+
+    if (TARGET test_cp2_commit_boundary)
+        target_link_libraries(test_cp2_commit_boundary
+                ov_msckf_lib
+                ${thirdparty_libraries})
+        target_include_directories(test_cp2_commit_boundary PRIVATE
+                test/cp2)
+        target_compile_options(test_cp2_commit_boundary PRIVATE
                 -fno-fast-math
                 -ffp-contract=off
                 -fsigned-zeros)

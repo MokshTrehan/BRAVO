@@ -281,6 +281,14 @@ public:
   static CP2CompositeStateStatus HandoffPostcommitNoAlloc(
       CP2PreparedPostcommitCapture &prepared,
       std::unique_ptr<CP2CompositeStateSnapshot> &output) noexcept;
+
+#if defined(OV_MSCKF_CP2_TESTING)
+  /// Closed, non-production controls for updater failure-wiring tests.
+  static void TestInvalidatePreparedStorage(
+      CP2PreparedPostcommitCapture &prepared) noexcept;
+  static void TestInvalidatePreparedPointerToken(
+      CP2PreparedPostcommitCapture &prepared) noexcept;
+#endif
 };
 
 } // namespace ov_msckf

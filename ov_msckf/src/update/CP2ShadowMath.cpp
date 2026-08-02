@@ -16,12 +16,43 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <set>
+#include <type_traits>
 #include <utility>
 
 namespace ov_msckf {
 namespace {
+
+bool checked_add_index(Eigen::Index left, Eigen::Index right,
+                       Eigen::Index &output) noexcept {
+  if (left < 0 || right < 0 ||
+      right > std::numeric_limits<Eigen::Index>::max() - left) {
+    output = 0;
+    return false;
+  }
+  output = left + right;
+  return true;
+}
+
+bool checked_index_to_u64(Eigen::Index value,
+                          std::uint64_t &output) noexcept {
+  output = 0U;
+  if (value < 0) {
+    return false;
+  }
+  using UnsignedIndex = typename std::make_unsigned<Eigen::Index>::type;
+  const UnsignedIndex unsigned_value = static_cast<UnsignedIndex>(value);
+  if (std::numeric_limits<UnsignedIndex>::digits >
+          std::numeric_limits<std::uint64_t>::digits &&
+      unsigned_value > static_cast<UnsignedIndex>(
+                           std::numeric_limits<std::uint64_t>::max())) {
+    return false;
+  }
+  output = static_cast<std::uint64_t>(unsigned_value);
+  return true;
+}
 
 CP2NullspaceReductionResult reduce_nullspace(const CP2RawFeatureSystem &raw, double sigma_px) {
   CP2NullspaceReductionResult result;
@@ -268,7 +299,12 @@ struct GlobalAssembler {
           block.size > local_H.cols() - expected_local_offset) {
         return false;
       }
-      expected_local_offset += block.size;
+      Eigen::Index updated_local_offset = 0;
+      if (!checked_add_index(expected_local_offset, block.size,
+                             updated_local_offset)) {
+        return false;
+      }
+      expected_local_offset = updated_local_offset;
     }
     if (expected_local_offset != local_H.cols()) {
       return false;
@@ -286,24 +322,38 @@ struct GlobalAssembler {
         continue;
       }
 
-      const Eigen::Index block_end = block.covariance_id + block.size;
+      Eigen::Index block_end = 0;
+      if (!checked_add_index(block.covariance_id, block.size, block_end)) {
+        return false;
+      }
       for (const MSCKFUpdatePreviewBlock &known : layout) {
-        const Eigen::Index known_end = known.covariance_id + known.size;
+        Eigen::Index known_end = 0;
+        if (!checked_add_index(known.covariance_id, known.size, known_end)) {
+          return false;
+        }
         if (block.covariance_id < known_end && known.covariance_id < block_end) {
           return false;
         }
       }
       covariance_id_to_layout.emplace(block.covariance_id, layout.size());
       layout.push_back({block.covariance_id, block.size, new_columns});
-      new_columns += block.size;
+      Eigen::Index updated_columns = 0;
+      if (!checked_add_index(new_columns, block.size, updated_columns)) {
+        return false;
+      }
+      new_columns = updated_columns;
     }
 
-    H.conservativeResize(old_rows + local_H.rows(), new_columns);
+    Eigen::Index new_rows = 0;
+    if (!checked_add_index(old_rows, local_H.rows(), new_rows)) {
+      return false;
+    }
+    H.conservativeResize(new_rows, new_columns);
     if (new_columns > old_columns && old_rows > 0) {
       H.block(0, old_columns, old_rows, new_columns - old_columns).setZero();
     }
     H.bottomRows(local_H.rows()).setZero();
-    residual.conservativeResize(old_rows + local_residual.rows());
+    residual.conservativeResize(new_rows);
     residual.tail(local_residual.rows()) = local_residual;
 
     for (const CP2FeatureGateLayoutBlock &block : local_layout) {
@@ -340,7 +390,11 @@ bool startup_input_is_valid(const CP2ShadowMathInput &input) {
         block.size > state_dimension - expected_offset) {
       return false;
     }
-    expected_offset += block.size;
+    Eigen::Index updated_offset = 0;
+    if (!checked_add_index(expected_offset, block.size, updated_offset)) {
+      return false;
+    }
+    expected_offset = updated_offset;
   }
   return expected_offset == state_dimension;
 }
@@ -367,15 +421,26 @@ bool raw_layout_is_valid(const CP2RawFeatureSystem &raw,
       return false;
     }
 
-    const Eigen::Index block_end = block.covariance_id + block.size;
+    Eigen::Index block_end = 0;
+    if (!checked_add_index(block.covariance_id, block.size, block_end)) {
+      return false;
+    }
     for (std::size_t previous_index = 0; previous_index < index; ++previous_index) {
       const CP2FeatureGateLayoutBlock &previous = raw.jacobian_layout[previous_index];
-      const Eigen::Index previous_end = previous.covariance_id + previous.size;
+      Eigen::Index previous_end = 0;
+      if (!checked_add_index(previous.covariance_id, previous.size,
+                             previous_end)) {
+        return false;
+      }
       if (block.covariance_id < previous_end && previous.covariance_id < block_end) {
         return false;
       }
     }
-    expected_H_offset += block.size;
+    Eigen::Index updated_H_offset = 0;
+    if (!checked_add_index(expected_H_offset, block.size, updated_H_offset)) {
+      return false;
+    }
+    expected_H_offset = updated_H_offset;
   }
   return expected_H_offset == raw.H_x.cols();
 }
@@ -394,6 +459,8 @@ void accumulate_gamma(CP2GlobalModeResult &global, double feature_gamma) {
 }
 
 bool build_global_modes(const CP2ShadowMathInput &input, CP2ShadowMathResult &result) {
+  result.nullspace_assembly_valid = true;
+  result.schur_assembly_valid = true;
   if (input.raw_systems.empty()) {
     return true;
   }
@@ -413,10 +480,11 @@ bool build_global_modes(const CP2ShadowMathInput &input, CP2ShadowMathResult &re
         feature.nullspace_gate.lifecycle_accept) {
       result.nullspace.accepted_ids.push_back(feature.feature_id);
       accumulate_gamma(result.nullspace, feature.nullspace.mode_gamma);
-      if (!nullspace_assembler.append(feature.nullspace.H_reduced,
+      if (result.nullspace_assembly_valid &&
+          !nullspace_assembler.append(feature.nullspace.H_reduced,
                                       feature.nullspace.residual_reduced,
                                       raw.jacobian_layout)) {
-        return false;
+        result.nullspace_assembly_valid = false;
       }
     }
 
@@ -424,9 +492,11 @@ bool build_global_modes(const CP2ShadowMathInput &input, CP2ShadowMathResult &re
         feature.schur_gate.lifecycle_accept) {
       result.schur.accepted_ids.push_back(feature.feature_id);
       accumulate_gamma(result.schur, feature.schur.gamma);
-      if (!schur_assembler.append(feature.schur.H_reduced, feature.schur.residual_reduced,
+      if (result.schur_assembly_valid &&
+          !schur_assembler.append(feature.schur.H_reduced,
+                                  feature.schur.residual_reduced,
                                   raw.jacobian_layout)) {
-        return false;
+        result.schur_assembly_valid = false;
       }
     }
   }
@@ -454,10 +524,15 @@ bool build_global_modes(const CP2ShadowMathInput &input, CP2ShadowMathResult &re
     global.proposal_available = global.proposal.accepted();
   };
 
-  finalize(std::move(nullspace_assembler), false, result.nullspace);
-  finalize(std::move(schur_assembler), result.schur.gamma_status == CP2GammaStatus::kNonfinite,
-           result.schur);
-  return true;
+  if (result.nullspace_assembly_valid) {
+    finalize(std::move(nullspace_assembler), false, result.nullspace);
+  }
+  if (result.schur_assembly_valid) {
+    finalize(std::move(schur_assembler),
+             result.schur.gamma_status == CP2GammaStatus::kNonfinite,
+             result.schur);
+  }
+  return result.nullspace_assembly_valid && result.schur_assembly_valid;
 }
 
 } // namespace
@@ -637,15 +712,25 @@ CP2ShadowMathResult CP2ShadowMath::Process(CP2ShadowMathInput input) {
     }
 
     feature.agreement_class = classify_agreement(feature.nullspace_gate, feature.schur_gate);
-    feature.raw_row_match_weight =
-        matching_agreement(feature.agreement_class) && feature.raw_rows >= 0
-            ? static_cast<std::uint64_t>(feature.raw_rows)
-            : 0;
+    if (matching_agreement(feature.agreement_class) &&
+        !checked_index_to_u64(feature.raw_rows,
+                              feature.raw_row_match_weight)) {
+      // A row population that cannot be represented by the evidence schema
+      // is not valid partial evidence. Suppress both global assemblies and
+      // make the complete invocation fail closed.
+      feature.raw_layout_valid = false;
+      every_raw_layout_valid = false;
+    }
     result.features.push_back(std::move(feature));
   }
 
+  result.traversal_complete =
+      result.features.size() == input.raw_systems.size();
+  result.raw_layouts_valid = every_raw_layout_valid;
   const bool assembly_valid = build_global_modes(input, result);
-  result.input_valid = assembly_valid && every_raw_layout_valid && !result.duplicate_feature_id;
+  result.input_valid = result.traversal_complete && assembly_valid &&
+                       result.raw_layouts_valid &&
+                       !result.duplicate_feature_id;
   return result;
 }
 

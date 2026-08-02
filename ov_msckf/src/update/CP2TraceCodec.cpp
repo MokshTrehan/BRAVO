@@ -808,8 +808,18 @@ CP2TraceCodec::ReplayInvocation(const CP2TraceReplayInput &input) {
   }
 
   result.math = CP2ShadowMath::Process(std::move(math_input));
-  if (!result.math.input_valid || result.math.features.size() != input.raw_frames.size()) {
-    throw CP2TraceCodecError("decoded invocation failed the value-only replay input contract");
+  // Do not fold per-mode assembly success into structural replay
+  // completeness. With the bounded decoder, exact prior-block layouts, and
+  // shape-preserving reducers above, a complete valid-layout input proves
+  // both assembler appends are representable. The separate flags remain
+  // evidence outcomes so a future defensive per-mode failure is retained,
+  // with proposal presence bound independently below, rather than mislabeled
+  // as truncated or corrupt trace input.
+  if (!result.math.traversal_complete || !result.math.raw_layouts_valid ||
+      result.math.duplicate_feature_id ||
+      result.math.features.size() != input.raw_frames.size()) {
+    throw CP2TraceCodecError(
+        "decoded invocation failed the complete value-only replay contract");
   }
   result.baseline_accepted = AcceptedFeatureDigests(result.math.nullspace.accepted_ids);
   result.candidate_accepted = AcceptedFeatureDigests(result.math.schur.accepted_ids);

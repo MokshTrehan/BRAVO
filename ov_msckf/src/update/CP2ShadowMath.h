@@ -166,6 +166,14 @@ struct CP2ShadowMathInput {
 
 /// Complete value-only raw-to-proposal output for both independent paths.
 struct CP2ShadowMathResult {
+  /// True only after every shared raw system produced one feature result.
+  bool traversal_complete = false;
+  /// Conjunction of every raw-to-prior layout check; independent of reducers.
+  bool raw_layouts_valid = false;
+  /// Per-mode global assembly outcomes. Candidate failure cannot erase or veto
+  /// an independently valid baseline assembly/proposal.
+  bool nullspace_assembly_valid = false;
+  bool schur_assembly_valid = false;
   bool input_valid = false;
   bool duplicate_feature_id = false;
   std::vector<CP2FeaturePairResult> features;

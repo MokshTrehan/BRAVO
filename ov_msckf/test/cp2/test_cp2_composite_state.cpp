@@ -565,12 +565,19 @@ void initialize_live_landmark(
     const std::shared_ptr<ov_msckf::State> &state,
     const std::shared_ptr<ov_type::Landmark> &landmark) {
   const Eigen::Index dimension = landmark->size();
-  const std::vector<std::shared_ptr<ov_type::Type>> empty_order;
-  const Eigen::MatrixXd H_R = Eigen::MatrixXd::Zero(dimension, 0);
+  // Use an explicit zero Jacobian against a real active type. Eigen 3.3's
+  // triangular-product kernel dereferences a null coefficient for a dynamic
+  // matrix product with a zero-width inner dimension under UBSan, even though
+  // that product is mathematically zero. This production initializer call is
+  // equivalent, keeps every cross-covariance exactly zero, and avoids relying
+  // on that undefined library edge.
+  const std::vector<std::shared_ptr<ov_type::Type>> zero_order{state->_imu};
+  const Eigen::MatrixXd H_R =
+      Eigen::MatrixXd::Zero(dimension, state->_imu->size());
   const Eigen::MatrixXd H_L = Eigen::MatrixXd::Identity(dimension, dimension);
   const Eigen::MatrixXd R = 0.25 * Eigen::MatrixXd::Identity(dimension, dimension);
   const Eigen::VectorXd residual = Eigen::VectorXd::Zero(dimension);
-  ov_msckf::StateHelper::initialize_invertible(state, landmark, empty_order, H_R,
+  ov_msckf::StateHelper::initialize_invertible(state, landmark, zero_order, H_R,
                                                H_L, R, residual);
   state->_features_SLAM.emplace(landmark->_featid, landmark);
 }

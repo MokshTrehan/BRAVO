@@ -131,6 +131,15 @@ bool checked_multiply_size(std::size_t left, std::size_t right,
   return true;
 }
 
+bool checked_add_u64(std::uint64_t left, std::uint64_t right,
+                     std::uint64_t &output) noexcept {
+  if (right > std::numeric_limits<std::uint64_t>::max() - left) {
+    return false;
+  }
+  output = left + right;
+  return true;
+}
+
 template <typename Derived> bool matrix_finite(const Eigen::MatrixBase<Derived> &matrix) noexcept {
   for (Eigen::Index row = 0; row < matrix.rows(); ++row) {
     for (Eigen::Index column = 0; column < matrix.cols(); ++column) {
@@ -392,11 +401,14 @@ CP2CompositeStateAdapter::Validate(const CP2CompositeStateSnapshot &snapshot) no
   bool have_previous_clone = false;
   for (std::size_t index = 0; index < snapshot.active_types.size(); ++index) {
     const CP2ActiveStateType &active = snapshot.active_types[index];
+    std::uint64_t updated_offset = 0;
     if (active.error_size == 0 || active.covariance_id != expected_offset ||
-        active.error_size > covariance_dimension - expected_offset) {
+        expected_offset > covariance_dimension ||
+        !checked_add_u64(expected_offset, active.error_size, updated_offset) ||
+        updated_offset > covariance_dimension) {
       return CP2CompositeStateStatus::kInvalidActivePartition;
     }
-    expected_offset += active.error_size;
+    expected_offset = updated_offset;
 
     if (active.nominal.cols() != 1 || active.fej.cols() != 1 ||
         active.nominal.rows() != active.fej.rows()) {
@@ -452,11 +464,14 @@ CP2CompositeStateAdapter::Validate(const CP2CompositeStateSnapshot &snapshot) no
     return CP2CompositeStateStatus::kInvalidActivePartition;
   }
 
-  if (clone_count > (std::numeric_limits<std::size_t>::max() - 5U) / 2U ||
-      landmark_count > std::numeric_limits<std::size_t>::max() - 5U - 2U * clone_count) {
+  std::size_t twice_clone_count = 0;
+  std::size_t expected_semantic_count = 0;
+  if (!checked_multiply_size(2U, clone_count, twice_clone_count) ||
+      !checked_add_size(5U, twice_clone_count, expected_semantic_count) ||
+      !checked_add_size(expected_semantic_count, landmark_count,
+                        expected_semantic_count)) {
     return CP2CompositeStateStatus::kInvalidSemanticPartition;
   }
-  const std::size_t expected_semantic_count = 5U + 2U * clone_count + landmark_count;
   if (snapshot.semantic_blocks.size() != expected_semantic_count) {
     return CP2CompositeStateStatus::kInvalidSemanticPartition;
   }
@@ -968,12 +983,15 @@ CP2CompositeStateAdapter::Capture(const std::shared_ptr<State> &state, CP2StateP
       }
       std::uint64_t covariance_id = 0;
       std::uint64_t error_size = 0;
+      std::uint64_t updated_offset = 0;
       if (!eigen_index_to_u64(variable->id(), covariance_id) ||
           !eigen_index_to_u64(variable->size(), error_size) ||
-          covariance_id != expected_offset || error_size > covariance_dimension - expected_offset) {
+          covariance_id != expected_offset ||
+          !checked_add_u64(expected_offset, error_size, updated_offset) ||
+          updated_offset > covariance_dimension) {
         return CP2CompositeStateStatus::kInvalidActivePartition;
       }
-      expected_offset += error_size;
+      expected_offset = updated_offset;
       graph->variables.push_back(variable);
 
       CP2ActiveStateType active;
@@ -1399,14 +1417,17 @@ CP2CompositeStateStatus CP2CompositeStateAdapter::FillPostcommitNoAlloc(
       }
       std::uint64_t covariance_id = 0;
       std::uint64_t error_size = 0;
+      std::uint64_t updated_offset = 0;
       if (!eigen_index_to_u64(variable->id(), covariance_id) ||
           !eigen_index_to_u64(variable->size(), error_size) || covariance_id != expected_offset ||
-          error_size > static_cast<std::uint64_t>(snapshot.covariance.rows()) - expected_offset ||
+          !checked_add_u64(expected_offset, error_size, updated_offset) ||
+          updated_offset >
+              static_cast<std::uint64_t>(snapshot.covariance.rows()) ||
           !copy_matrix_noalloc(variable->value(), destination.nominal) ||
           !copy_matrix_noalloc(variable->fej(), destination.fej)) {
         return CP2CompositeStateStatus::kInvalidShape;
       }
-      expected_offset += error_size;
+      expected_offset = updated_offset;
       destination.covariance_id = covariance_id;
       destination.error_size = error_size;
       destination.clone_timestamp = 0.0;
@@ -1632,5 +1653,18 @@ CP2CompositeStateStatus CP2CompositeStateAdapter::HandoffPostcommitNoAlloc(
   prepared.state_ = CP2PreparedPostcommitState::kHandedOff;
   return CP2CompositeStateStatus::kAccepted;
 }
+
+#if defined(OV_MSCKF_CP2_TESTING)
+void CP2CompositeStateAdapter::TestInvalidatePreparedStorage(
+    CP2PreparedPostcommitCapture &prepared) noexcept {
+  prepared.snapshot_.reset();
+  prepared.state_ = CP2PreparedPostcommitState::kFailed;
+}
+
+void CP2CompositeStateAdapter::TestInvalidatePreparedPointerToken(
+    CP2PreparedPostcommitCapture &prepared) noexcept {
+  prepared.pointer_graph_.data_.reset();
+}
+#endif
 
 } // namespace ov_msckf
