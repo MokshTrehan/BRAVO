@@ -8,6 +8,7 @@ Last updated: 2026-08-02 (America/Toronto)
 - Branch: `schurvio-lite/cp2-one-pass`
 - Last completed runtime implementation checkpoint: `162ed140cb3fee301cf3f2e212c9afa28829798a` (`fix: bind CP2 commit boundary to production library`).
 - Tested source tree: `46935c58e7a7184f659a6f67fcd33896ebe02d46`.
+- CP2-C2 evidence-record commit: `2af6150c1f96378580d9a8b7406922f93b86821d` (`docs: record CP2-C2 unit evidence`).
 - Fresh unit artifact: `results/staging/cp2/unit/cp2_unit_20260802T185623152114466Z-g162ed140cb3f-WtrFa1xv`.
 - Artifact `SHA256SUMS` external anchor: `58bc351d513bb093a6e355a808fcf62a7d952e01dee5902594ed74946d76f579`.
 - The checkpoint-documentation commit containing this file is necessarily post-run metadata and was not runtime-tested by that artifact.
@@ -29,6 +30,188 @@ from the tested implementation checkpoint above. Read, in order:
 6. `project/cp2_gate.yaml`
 
 Do not inspect dataset registry contents, bags, ground truth, or payload data until the frozen CP2 readiness barrier permits it. Mathematical correctness remains the first priority; a build or run is not evidence of correctness by itself.
+
+## Overnight CP2-C/D/E pickup contract
+
+This section is the handoff for a later explicit overnight work request. It is
+a plan, not authorization to open recorded inputs now. The technical order is
+strictly serialized:
+
+1. CP2-C3 readiness;
+2. CP2-C recorded updater parity;
+3. CP2-D sequence/trajectory parity; and
+4. CP2-E fixed-clock desktop timing.
+
+Do not start C, D, and E in parallel. CP2-C3 is a hard prerequisite for all
+recorded input. CP2-C is a hard prerequisite for crediting D or E. A failure at
+one stage stops later stages. A pre-data readiness failure leaves no result
+directory; only the separately permitted external diagnostic/status may be
+retained. A post-access failure retains its immutable failed staging evidence.
+Neither kind of failure triggers threshold changes, baseline changes,
+dataset-driven tuning, or a silent retry with altered source/configuration.
+
+Every actual CP2-C, CP2-D, and CP2-E runner invocation must execute the full
+nine-step readiness barrier again. Its supplied unit artifact must test the
+exact current clean commit and tree. Any tracked source, runner, schema,
+profile, configuration, or checkpoint-metadata commit invalidates the prior
+unit anchor for later runner invocations and requires a new complete unit gate
+and external manifest anchor. Defer post-run checkpoint-metadata commits while
+C and D share one runtime/unit identity; otherwise rerun the full unit gate
+after each such commit.
+
+### Stage 0 — immutable preflight
+
+- Require branch `schurvio-lite/cp2-one-pass`, a clean worktree including
+  untracked files, and ancestry from runtime-tested commit
+  `162ed140cb3fee301cf3f2e212c9afa28829798a`.
+- Re-read the six contract/source-of-truth files listed above. Treat their
+  exact counter units, operation order, CLI, artifact schema, and failure
+  taxonomy as locked.
+- Confirm the retained CP2-C2 unit artifact exists and its `SHA256SUMS` hashes
+  to `58bc351d513bb093a6e355a808fcf62a7d952e01dee5902594ed74946d76f579`.
+- Do not semantically parse `project/datasets.yaml`, resolve a bag, import
+  `rosbag`, inspect ground truth, or open payload bytes during preflight.
+- If the tree is dirty, ancestry is wrong, an anchor mismatches, or a contract
+  is internally inconsistent, stop before implementation or data access.
+
+### Stage 1 — finish CP2-C3 before recorded data
+
+- Implement the three missing runners, the recorded verifier modes, exact
+  artifact joins, state payload assembly, detached-replay plumbing, and the
+  approved nine-step opaque source-provenance/readiness barrier.
+- Each of the five preregistered entry points must have an exclusive,
+  artifact-free `--self-test` mode with its exact nonempty case inventory and
+  every mandatory negative/corruption case. Missing, extra, reordered,
+  duplicate, skipped, or no-op cases fail readiness.
+- Commit the completed runtime source at one clean commit. At that exact
+  commit/tree, run all final entry-point self-tests with
+  `CP2_FORBID_BAG_ACCESS=1`, zero bag-provider calls, fresh `/tmp` roots,
+  process-group timeouts, and byte-identical before/after
+  source/build/results/Testing snapshots.
+- Run a fresh complete unit gate at that same commit/tree, retain the new
+  external manifest anchor, and independently verify the finalized artifact
+  from a checkout of the exact tested source.
+- Only a completely passing readiness barrier at that same commit/tree and
+  unit-artifact identity may authorize semantic registry access. CP2-C3 itself
+  produces no dataset-derived artifact and does not pass CP2-C.
+
+### Stage 2 — CP2-C recorded updater parity
+
+- After Stage 1 passes, execute the frozen serial campaign on `MH_01_easy`,
+  `MH_03_medium`, and `V1_01_easy` to completion using only the committed
+  offsets, hashes, configuration, launch file, and exact CLI. Keep the live
+  estimator in `nullspace` mode and the orthogonal shadow comparison enabled.
+- Require at least 1,000 counted visual updates, at least 99.9% unweighted gate
+  agreement, and at least 99.9% raw-row-weighted gate agreement using the
+  approved exact-integer cross products.
+- Require complete one-to-one raw/proposal/state/feature/block/update/source/
+  command/readiness joins, exact baseline commit-oracle agreement, zero
+  candidate live writes, complete terminal populations, finite approved
+  comparisons, and passing detached offline replay.
+- For every shared raw system in every invocation where both reductions are
+  mode-valid, including noncounted updates, require lambda/eta/gamma diagnostics
+  to be available, finite, and to satisfy `1e-10 + 1e-8*||reference||`.
+  Unavailable required diagnostics are failures. Every required
+  proposal/state/covariance block comparison must satisfy
+  `1e-8 + 1e-6*||reference||`, using the frozen evaluation order and without
+  repair or fallback.
+- Any baseline-counted update missing the candidate proposal is a hard failure.
+  Retain the required unavailable state/covariance block rows and their exact
+  expected/seen units rather than dropping them from the population.
+- Any unexplained gate/rank/accepted-set difference, incomplete trace,
+  nonfinite required quantity, pointer/provenance disconnect, sink failure,
+  counter overflow, silent repair, or fallback fails CP2-C.
+- Finalize without overwrite, retain an external `SHA256SUMS` anchor, and run
+  the detached verifier before marking CP2-C passed. Do not change source or
+  configuration after seeing campaign results; a necessary code change creates
+  a new commit and restarts readiness and CP2-C from the beginning.
+
+### Stage 3 — CP2-D sequence and trajectory parity
+
+- Start only after CP2-C passes. Run independent `nullspace` and `schur` modes
+  on all three frozen sequences with shadow disabled and identical inputs,
+  calibration, initialization, offsets, and frontend configuration.
+- Require both `time_coverage` and `processing_fraction` to be at least `0.995`
+  independently for each mode on every run, with positive pair counts and
+  strictly positive selected/processed durations.
+- Require the two resolved parameter maps to be byte-identical after deleting
+  exactly `/cp2_vio/up_msckf_landmark_elimination`,
+  `/cp2_vio/filepath_est`, `/cp2_vio/filepath_std`,
+  `/cp2_vio/record_timing_filepath`, `/cp2_vio/cp2_trace_directory`, and
+  `/cp2_vio/cp2_context_path`, and no other key. Missing an allowlisted key or
+  finding any other difference fails CP2-D.
+- Use the baseline's shared timestamps to compute one SE(3) alignment and apply
+  that same transform to both trajectories for direct mode-to-mode parity;
+  independently aligned mode-to-mode comparisons are forbidden.
+- Require a shared population of at least three poses, a complete finite and
+  nondegenerate baseline position spectrum at the frozen rank boundary, a
+  proper finite alignment, and a finite strictly positive baseline ATE before
+  evaluating the relative ATE ratio.
+- Require position difference at most `0.01 m` at p95, orientation difference
+  at most `0.05 deg` at p95, and relative ATE difference at most `0.01` on each
+  sequence, with every sample/population count retained.
+- Finalize and independently verify one immutable artifact per sequence and the
+  complete three-sequence set before marking CP2-D passed.
+
+### Stage 4 — CP2-E fixed-clock desktop timing
+
+CP2-E is currently `blocked_pending_fixed_clock_profile`; the observed
+host governor is `ondemand`. Do not treat ordinary desktop timing as official
+evidence. The existing CP2-E section is a non-authorizing preregistration, not
+a complete machine/artifact schema.
+
+- Before actual mode exists, separately commit both
+  `project/cp2_timing_profile.yaml` and a replacement of the draft CP2-E
+  preregistration with exact schemas for the profile, report, runs, pair
+  results, clock snapshots, common payloads, and every artifact file. The
+  profile must freeze sequence/offset/input hash, CPU IDs, affinity, governor,
+  driver, min/max/current frequencies, boost/turbo state, thermal policy, and
+  sampling/preflight commands.
+- The runner validates but never changes clock, governor, boost, affinity, or
+  thermal controls. Do not silently choose or mutate host-wide settings. If the
+  frozen profile cannot be established with available authority, stop with
+  CP2-E blocked while retaining completed C/D evidence.
+- Because the timing-profile/schema commit changes `HEAD` and the tree, run a
+  new complete unit gate at that exact clean commit, retain its external
+  manifest anchor, and require the full nine-step readiness barrier to verify
+  that new unit artifact before the CP2-E runner may resolve or open a bag.
+- Once frozen, use shadow-disabled builds and exactly three ordered pairs/six
+  runs in the order `[nullspace_schur, schur_nullspace, nullspace_schur]`, the
+  declared 60-second post-offset warm-up, and only the intersection of
+  post-warm-up committing camera timestamps.
+- Use integer nanoseconds from `std::chrono::steady_clock`, starting at the
+  first operation in `UpdaterMSCKF::update` and ending immediately after the
+  sole `StateHelper::EKFUpdate` returns. The primary population is only
+  nonempty MSCKF invocations that reach and commit the global update; compute
+  quantiles with the frozen `numpy_linear` method.
+- Require every pair and the median-of-three summary to satisfy candidate
+  median-time ratio `<= 1.10` and p95-time ratio `<= 1.15`. Record sample counts,
+  clocks, affinity, frequency/governor, temperature, commands, and failures.
+- Finalize without overwrite and independently verify the timing artifact
+  before marking CP2-E passed. Desktop CP2-E is not Jetson evidence.
+
+### Failure and morning handoff rules
+
+- A readiness-barrier failure stops before data access and leaves no result
+  directory. Retain only diagnostics/status explicitly permitted outside the
+  result tree. Once actual-mode staging begins after readiness, preserve every
+  failed partial/staging directory and its primary validation error. Never
+  overwrite or relabel a failed artifact as passed.
+- Keep the first fatal reason, exact source commit/tree, command, environment,
+  external digest, test/run counts, and the last successfully completed stage.
+- Leave the worktree clean at a named checkpoint commit whenever a stage is
+  genuinely complete. Do not commit a pass record for a failed or incomplete
+  stage.
+- The morning report must state separately: CP2-C3 readiness, CP2-C, CP2-D,
+  CP2-E, source commit/tree, artifact paths and external anchors, verifier
+  results, any retained failure, whether any recorded input was accessed, and
+  whether the fixed-clock profile was available.
+- Never claim final one-pass parity unless CP2-C, CP2-D, and CP2-E all pass.
+  Never claim AArch64/Jetson, accuracy improvement, speedup, energy benefit, or
+  deadline guarantees from these desktop gates.
+- If CP2-C, D, or E fails, keep `nullspace` as the default, block CP3/two-pass
+  work, and record branch rollback as a user decision. Do not silently revert,
+  reset, or continue two-pass implementation overnight.
 
 ## What exists now
 
