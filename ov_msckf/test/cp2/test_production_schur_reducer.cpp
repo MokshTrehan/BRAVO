@@ -189,6 +189,12 @@ TEST(CP2ProductionSchurReducer, DeterministicGivensStatisticsNisAndPosteriorPari
   double worst_nis_error = 0.0;
   double worst_increment_error = 0.0;
   double worst_covariance_error = 0.0;
+  double worst_lambda_tolerance_ratio = 0.0;
+  double worst_eta_tolerance_ratio = 0.0;
+  double worst_gamma_tolerance_ratio = 0.0;
+  double worst_nis_tolerance_ratio = 0.0;
+  double worst_increment_tolerance_ratio = 0.0;
+  double worst_covariance_tolerance_ratio = 0.0;
 
   for (int fixture = 0; fixture < kAcceptedFixtureCount; ++fixture) {
     SCOPED_TRACE(::testing::Message() << "fixture=" << fixture);
@@ -255,15 +261,21 @@ TEST(CP2ProductionSchurReducer, DeterministicGivensStatisticsNisAndPosteriorPari
     const double lambda_error = (schur.lambda - lambda_reference).norm();
     const double eta_error = (schur.eta - eta_reference).norm();
     const double gamma_error = std::abs(schur.gamma - gamma_reference);
+    const double lambda_tolerance =
+        mixed_tolerance(kStatisticsAbsoluteTolerance, kStatisticsRelativeTolerance, lambda_reference.norm());
+    const double eta_tolerance =
+        mixed_tolerance(kStatisticsAbsoluteTolerance, kStatisticsRelativeTolerance, eta_reference.norm());
+    const double gamma_tolerance =
+        mixed_tolerance(kStatisticsAbsoluteTolerance, kStatisticsRelativeTolerance, std::abs(gamma_reference));
     worst_lambda_error = std::max(worst_lambda_error, lambda_error);
     worst_eta_error = std::max(worst_eta_error, eta_error);
     worst_gamma_error = std::max(worst_gamma_error, gamma_error);
-    EXPECT_LE(lambda_error, mixed_tolerance(kStatisticsAbsoluteTolerance, kStatisticsRelativeTolerance,
-                                            lambda_reference.norm()));
-    EXPECT_LE(eta_error,
-              mixed_tolerance(kStatisticsAbsoluteTolerance, kStatisticsRelativeTolerance, eta_reference.norm()));
-    EXPECT_LE(gamma_error,
-              mixed_tolerance(kStatisticsAbsoluteTolerance, kStatisticsRelativeTolerance, std::abs(gamma_reference)));
+    worst_lambda_tolerance_ratio = std::max(worst_lambda_tolerance_ratio, lambda_error / lambda_tolerance);
+    worst_eta_tolerance_ratio = std::max(worst_eta_tolerance_ratio, eta_error / eta_tolerance);
+    worst_gamma_tolerance_ratio = std::max(worst_gamma_tolerance_ratio, gamma_error / gamma_tolerance);
+    EXPECT_LE(lambda_error, lambda_tolerance);
+    EXPECT_LE(eta_error, eta_tolerance);
+    EXPECT_LE(gamma_error, gamma_tolerance);
 
     const PosteriorProposal schur_proposal =
         covariance_form_proposal(prior_covariance, schur.H_reduced, schur.residual_reduced, schur.noise_variance);
@@ -279,15 +291,21 @@ TEST(CP2ProductionSchurReducer, DeterministicGivensStatisticsNisAndPosteriorPari
     const double nis_error = std::abs(schur_proposal.nis - givens_proposal.nis);
     const double increment_error = (schur_proposal.increment - givens_proposal.increment).norm();
     const double covariance_error = (schur_proposal.covariance - givens_proposal.covariance).norm();
+    const double nis_tolerance =
+        mixed_tolerance(kPosteriorAbsoluteTolerance, kPosteriorRelativeTolerance, std::abs(givens_proposal.nis));
+    const double increment_tolerance =
+        mixed_tolerance(kPosteriorAbsoluteTolerance, kPosteriorRelativeTolerance, givens_proposal.increment.norm());
+    const double covariance_tolerance =
+        mixed_tolerance(kPosteriorAbsoluteTolerance, kPosteriorRelativeTolerance, givens_proposal.covariance.norm());
     worst_nis_error = std::max(worst_nis_error, nis_error);
     worst_increment_error = std::max(worst_increment_error, increment_error);
     worst_covariance_error = std::max(worst_covariance_error, covariance_error);
-    EXPECT_LE(nis_error, mixed_tolerance(kPosteriorAbsoluteTolerance, kPosteriorRelativeTolerance,
-                                         std::abs(givens_proposal.nis)));
-    EXPECT_LE(increment_error, mixed_tolerance(kPosteriorAbsoluteTolerance, kPosteriorRelativeTolerance,
-                                               givens_proposal.increment.norm()));
-    EXPECT_LE(covariance_error, mixed_tolerance(kPosteriorAbsoluteTolerance, kPosteriorRelativeTolerance,
-                                                givens_proposal.covariance.norm()));
+    worst_nis_tolerance_ratio = std::max(worst_nis_tolerance_ratio, nis_error / nis_tolerance);
+    worst_increment_tolerance_ratio = std::max(worst_increment_tolerance_ratio, increment_error / increment_tolerance);
+    worst_covariance_tolerance_ratio = std::max(worst_covariance_tolerance_ratio, covariance_error / covariance_tolerance);
+    EXPECT_LE(nis_error, nis_tolerance);
+    EXPECT_LE(increment_error, increment_tolerance);
+    EXPECT_LE(covariance_error, covariance_tolerance);
   }
 
   EXPECT_EQ(near_column_space_fixtures, 128);
@@ -303,7 +321,13 @@ TEST(CP2ProductionSchurReducer, DeterministicGivensStatisticsNisAndPosteriorPari
             << " max_lambda_error=" << worst_lambda_error << " max_eta_error=" << worst_eta_error
             << " max_gamma_error=" << worst_gamma_error << " max_nis_error=" << worst_nis_error
             << " max_increment_error=" << worst_increment_error
-            << " max_covariance_error=" << worst_covariance_error << std::endl;
+            << " max_covariance_error=" << worst_covariance_error
+            << " max_lambda_tolerance_ratio=" << worst_lambda_tolerance_ratio
+            << " max_eta_tolerance_ratio=" << worst_eta_tolerance_ratio
+            << " max_gamma_tolerance_ratio=" << worst_gamma_tolerance_ratio
+            << " max_nis_tolerance_ratio=" << worst_nis_tolerance_ratio
+            << " max_increment_tolerance_ratio=" << worst_increment_tolerance_ratio
+            << " max_covariance_tolerance_ratio=" << worst_covariance_tolerance_ratio << std::endl;
 }
 
 TEST(CP2ProductionSchurReducer, DeterministicRejectedCorpusHasNoPublishedOutputs) {
