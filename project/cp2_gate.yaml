@@ -268,12 +268,12 @@ evidence_policy:
     verifier: scripts/cp2/verify_report.py
   commands_must_exist_and_pass_self_tests_before_evidence: true
   current_artifact:
-    path: results/staging/cp2/unit/cp2_unit_20260802T013548460245077Z-g96e4b1efde8e-o4ZF43BP
-    report: results/staging/cp2/unit/cp2_unit_20260802T013548460245077Z-g96e4b1efde8e-o4ZF43BP/cp2_report.json
+    path: results/staging/cp2/unit/cp2_unit_20260802T055303006017260Z-g3f1c19696a7e-bpoSEGYv
+    report: results/staging/cp2/unit/cp2_unit_20260802T055303006017260Z-g3f1c19696a7e-bpoSEGYv/cp2_report.json
     evidence_record: project/cp2_ab_unit_evidence.json
-    tested_commit: 96e4b1efde8e368a51be49ea8bc0289d4163d88d
+    tested_commit: 3f1c19696a7e93a3b09b00aff8525be7394f769b
     result: passed_cp2_a_b_unit_only
-    sha256sums_sha256: b19182a4771a3d177942315b6a5768fa791e6b923c35fb15bd46b735093b1d9f
+    sha256sums_sha256: e1b20240409dd1f3a82b00c6a156d9d1d30041aae925e5b9e4a83349d8c54b76
     scope: cp2_a_b_unit_only
     stage: staging_pending_cp2_c_cp2_d_cp2_e
     evidence_class: trusted_runner_local_staging_evidence
