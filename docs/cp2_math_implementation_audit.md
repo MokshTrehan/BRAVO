@@ -1,8 +1,18 @@
 # CP2 prerequisite-math implementation audit
 
-Date: 2026-08-01 (America/Toronto)
+Date: 2026-08-01; current addendum: 2026-08-02 (America/Toronto)
 
-## Decision
+## Current decision
+
+CP2-C2 updater transaction integration is **GO for CP2-C3 implementation** at
+x86_64 strict-FP unit scope and is **not yet GO for recorded-data execution**.
+The current hard stop is CP2-C3 artifact/report plumbing, opaque
+source-provenance readiness, all five artifact-free entry-point self-tests,
+one-to-one joins, and artifact-bound detached-replay plumbing/self-tests at one
+exact clean commit. Actual recorded replay remains part of CP2-C after the
+readiness barrier authorizes data access.
+
+## Historical 2026-08-01 decision
 
 The value-only CP2 prerequisite kernel is **GO for live integration** and is
 **not yet GO for CP2-C recorded-data execution**.
@@ -97,7 +107,7 @@ target execution remains a later required checkpoint.
 ## Historical hard stop before recorded data (2026-08-01)
 
 The following were blockers at the 2026-08-01 audit. Their current status is
-superseded by the 2026-08-02 addendum below; this historical list is retained
+superseded by the 2026-08-02 addenda below; this historical list is retained
 to preserve the review trail:
 
 - live nullspace gamma checks still alter lifecycle in `UpdaterMSCKF.cpp`;
@@ -157,8 +167,9 @@ dependency Eigen-ABI checks passed, and the verifier rejected all 49 synthetic
 corruptions. The artifact is x86_64 trusted-runner staging evidence, is not an
 independent source-to-binary attestation, and is ineligible for a CP2 seal.
 
-The prior missing-fresh-artifact blocker is therefore closed only for the
-isolated CP2-C1 primitives. The current hard stop is CP2-C2 updater integration:
+The prior missing-fresh-artifact blocker was therefore closed only for the
+isolated CP2-C1 primitives. At that CP2-C1 checkpoint, the hard stop was CP2-C2
+updater integration:
 phase-0 promotion and sole-prior provenance, complete dual-proposal traversal,
 unpublished phase 2, value-before-validity phase-1 comparison and pointer
 proof, zero-intervening-operation commit ordering, endpoint-first/allocation-
@@ -167,6 +178,104 @@ the full protecting-test matrix. CP2-C3 must then close provenance/report
 binding, one-to-one artifact joins, detached replay, and all five artifact-free
 readiness entrypoint self-tests. CP2-C/D/E, recorded-data execution, and
 AArch64/Jetson evidence remain unpassed and unauthorized.
+
+This addendum is post-run checkpoint metadata. It records, but was not itself
+included in, the exact source tree tested by the artifact.
+
+## 2026-08-02 CP2-C2 addendum
+
+This addendum supersedes the CP2-C2 hard stop above, but not the recorded-data
+prohibition. Clean source commit
+`162ed140cb3fee301cf3f2e212c9afa28829798a` (tree
+`46935c58e7a7184f659a6f67fcd33896ebe02d46`) completes updater integration at
+strict-FP unit scope only. CP2-C3 and the complete recorded CP2-C/D/E campaigns
+remain unexecuted and unpassed.
+
+The mathematical and transaction re-audit found no remaining CP2-C2 blocker:
+
+- Tentative phase 0 is captured after feature cleanup/triangulation and before
+  raw-system assembly. Its canonical bytes and semantics must validate before
+  the first raw row or raw counter exists; failed promotion is run-fatal with
+  zero raw count.
+- Every raw layout is captured from production ordering, then validated and
+  resolved against phase 0. Every gate covariance and proposal is derived from
+  the one owning projected phase-0 prior. Baseline and candidate traverse the
+  complete shared population before a commit decision, while every
+  population/product uses checked arithmetic.
+- Baseline and candidate retain the exact raw/proposal bytes and first-failure
+  provenance. Gamma is copied from the production lifecycle whenever it is
+  available; evidence arithmetic cannot invent a second acceptance path or
+  veto a valid baseline proposal.
+- A commit-eligible baseline constructs and validates detached expected phase
+  2 and prepares phase-3 storage before final phase-1 verification. Any later
+  suppression discards unpublished phase 2. Phase 1 is compared byte-for-byte
+  with phase 0 before its independent semantic validation, then proves the
+  original owning pointer graph.
+- After the final phase-1 value, semantic, and pointer-graph proof, the literal
+  production boundary is the sole `StateHelper::EKFUpdate`, followed
+  immediately by the steady-clock endpoint and the allocation-free/nonthrowing
+  phase-3 fill and handoff. The out-of-line production status mapper runs only
+  after fill and before boundary-output publication; it both preserves that
+  adjacency and makes the boundary test load the snapshotted production DSO.
+- Phase 3 is independently validated and compared exactly with detached phase
+  2. A complete encodable nonfinite or unequal phase 3 remains
+  `committed_counted` failed evidence; incomplete shape/inventory,
+  checked-arithmetic failure, pointer replacement, or sink rejection sets the
+  sticky first fatal reason. No rollback is claimed after the live commit.
+- Zero-raw terminals emit no state phase; raw noncommit terminals emit exactly
+  `[0,1]`; commits emit exactly `[0,1,2,3]`. The authoritative status-returning
+  sink publishes before the diagnostic observer, and observer behavior cannot
+  determine evidence acceptance.
+- Baseline expected-update, verified nominal, nominal mismatch, full ordered
+  covariance mismatch, FEJ mismatch, block-row, and campaign commit-mismatch
+  counters retain their approved units. Structural failure zeros the numeric
+  comparison counters. Candidate live-write count is identically zero.
+- `online_math_evidence_passed` remains a necessary online condition only; it
+  is not represented as the final CP2-C schema's `math_passed`, which also
+  depends on complete recorded joins and detached replay during CP2-C after
+  CP2-C3 readiness passes.
+- Production and fault-injection runtimes are separate link products with an
+  exact 23-source inventory. The private test macro does not enter the
+  production DSO, and production/fault updater tests cannot cross-link or
+  redirect their declared output libraries.
+
+The protecting matrix contains 139 successful executions across 18 binaries:
+7 CP1 regressions and 132 CP2 executions. Focused CP2-C2 coverage includes 14
+production updater cases, the same 14 updater cases against the fault runtime
+plus 14 additional fault cases (28 total in that binary), 14 composite cases,
+10 detached-oracle cases, 4 literal-boundary cases, and 8 trace-codec cases.
+All 139 executions independently re-ran under the retained loader environment
+with zero failures, errors, or disabled cases. Strict floating-point,
+dependency Eigen-ABI, exact source/link/output binding, no-fast-math, and
+production/fault isolation checks passed.
+
+The first fresh gate at `fa350bf5caccc9789c70d0f69660881608963c0c`
+correctly failed closed: all 139 executions passed, but the commit-boundary
+implementation was header-only, so the boundary executable had no `DT_NEEDED`
+reference to `libov_msckf_lib.so` and production-library provenance was
+unproven. Commit `162ed140...` moved the post-fill status mapping to one
+out-of-line production symbol. The corrected boundary executable then loaded
+the snapshotted DSO, and the complete fresh gate passed.
+
+The retained staging artifact is
+`results/staging/cp2/unit/cp2_unit_20260802T185623152114466Z-g162ed140cb3f-WtrFa1xv`.
+Its externally retained `SHA256SUMS` SHA-256 is
+`58bc351d513bb093a6e355a808fcf62a7d952e01dee5902594ed74946d76f579`;
+the report SHA-256 is
+`b1eda70bc3fab8f73dc060deb8654d72d9967774ae664ab5e8f7bd641bb16a33`.
+All 6/6 build commands and 18/18 executables passed, the manifest contains 110
+entries, the verifier rejected all 85 synthetic corruptions, and a separate
+minimal-environment verification matched the external manifest anchor.
+
+This remains x86_64 trusted-runner, internal non-conveyable staging evidence.
+It is not an independent source-to-binary attestation, is ineligible for a CP2
+seal, and provides no AArch64/Jetson result. No dataset registry content,
+EuRoC bag, ground-truth file, or payload was accessed. The next hard stop is
+CP2-C3: all five artifact-free entry-point self-tests, the opaque
+source-provenance/readiness barrier, one-to-one artifact joins, and
+detached-replay plumbing plus its artifact-free self-tests must pass at one
+exact clean commit before data access can be authorized. Actual recorded replay
+remains part of CP2-C after authorization.
 
 This addendum is post-run checkpoint metadata. It records, but was not itself
 included in, the exact source tree tested by the artifact.

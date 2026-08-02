@@ -5,7 +5,7 @@ timezone: America/Toronto
 gate:
   id: CP2
   name: one_pass_baseline_parity
-  status: in_progress_cp2_c_cp2_d_cp2_e_unexecuted
+  status: in_progress_cp2_c3_cp2_c_cp2_d_cp2_e_unexecuted
   due: "2026-07-31T23:59:00-04:00"
   deadline_status: missed
   deadline_decision_recorded_at: "2026-08-01"
@@ -106,9 +106,9 @@ checkpoints:
     name: recorded_updater_parity
     status: pending
     implementation_readiness:
-      status: cp2_c1_unit_passed_cp2_c2_cp2_c3_unexecuted_not_cp2_c
-      source_commit: fe00fc8a979bec8676d33961ef868ab9e64803e0
-      source_tree: dc6f9e1304debab4f00e769e6fc1514c7fbd3a21
+      status: cp2_c1_and_cp2_c2_unit_passed_cp2_c3_unexecuted_not_cp2_c
+      source_commit: 162ed140cb3fee301cf3f2e212c9afa28829798a
+      source_tree: 46935c58e7a7184f659a6f67fcd33896ebe02d46
       unit_evidence_record: project/cp2_ab_unit_evidence.json
       metadata_record_is_post_run_and_not_runtime_tested: true
       clarification_document: docs/cp2_c_composite_and_readiness_clarification.md
@@ -118,10 +118,16 @@ checkpoints:
       live_shadow_and_raw_proposal_codec: passed
       composite_state_snapshot: passed_unit_only
       detached_commit_oracle: passed_unit_only
-      state_snapshot_file: codec_passed_unit_only_not_updater_integrated
-      updater_phase_ordering_and_failure_atomicity: not_run
+      state_snapshot_file: codec_and_updater_phase_payload_integration_passed_unit_only_not_recorded_artifact_joined
+      updater_phase_ordering_and_failure_atomicity: passed_unit_only
+      updater_commit_oracle_and_commit_boundary: passed_unit_only
+      production_fault_link_isolation: passed_unit_only
+      authoritative_sink_and_fatal_latch: passed_unit_only
+      literal_commit_clock_fill_boundary: passed_unit_only
+      exact_checked_counters_and_retained_gamma: passed_unit_only
+      candidate_live_writes_required_and_observed_in_unit_fixtures: 0
       recorded_readiness_barrier: not_run
-      recorded_artifact_reporting: pending
+      recorded_artifact_reporting: not_run
       cp2_c_recorded_evidence: not_run
     minimum_visual_updates: 1000
     counted_record: accepted_nonempty_global_system_preflight_passed_and_baseline_committed
@@ -286,20 +292,29 @@ evidence_policy:
     verifier: scripts/cp2/verify_report.py
   commands_must_exist_and_pass_self_tests_before_evidence: true
   current_artifact:
-    path: results/staging/cp2/unit/cp2_unit_20260802T152708655097400Z-gfe00fc8a979b-TAamaoSX
-    report: results/staging/cp2/unit/cp2_unit_20260802T152708655097400Z-gfe00fc8a979b-TAamaoSX/cp2_report.json
+    path: results/staging/cp2/unit/cp2_unit_20260802T185623152114466Z-g162ed140cb3f-WtrFa1xv
+    report: results/staging/cp2/unit/cp2_unit_20260802T185623152114466Z-g162ed140cb3f-WtrFa1xv/cp2_report.json
+    manifest: results/staging/cp2/unit/cp2_unit_20260802T185623152114466Z-g162ed140cb3f-WtrFa1xv/SHA256SUMS
     evidence_record: project/cp2_ab_unit_evidence.json
-    tested_commit: fe00fc8a979bec8676d33961ef868ab9e64803e0
-    tested_tree: dc6f9e1304debab4f00e769e6fc1514c7fbd3a21
-    result: passed_cp2_a_b_cp2_c1_unit_only
-    sha256sums_sha256: 85deb80c2fe03e5379addc9609b7f73bdf90c61ea8412d4b7c7fdc169948d945
-    scope: cp2_a_b_cp2_c1_unit_only
-    stage: staging_cp2_c1_unit_passed_pending_cp2_c2_cp2_c3_cp2_c_cp2_d_cp2_e
+    tested_commit: 162ed140cb3fee301cf3f2e212c9afa28829798a
+    tested_tree: 46935c58e7a7184f659a6f67fcd33896ebe02d46
+    result: passed_cp2_a_b_cp2_c2_unit_only
+    generated_utc: "2026-08-02T19:12:51.622333Z"
+    sha256sums_sha256: 58bc351d513bb093a6e355a808fcf62a7d952e01dee5902594ed74946d76f579
+    report_sha256: b1eda70bc3fab8f73dc060deb8654d72d9967774ae664ab5e8f7bd641bb16a33
+    manifest_entries: 110
+    external_manifest_anchor_matched: true
+    independent_verifier_exit_status: 0
+    verifier_self_test_corruptions_rejected: 85
+    scope: cp2_a_b_cp2_c2_unit_only
+    stage: staging_cp2_c2_unit_passed_pending_cp2_c3_cp2_c_cp2_d_cp2_e
     evidence_class: trusted_runner_local_staging_evidence
     finalization: read_only_staging_finalization_only
+    no_overwrite: true
     distribution_status: internal_non_conveyable_staging
     eligible_for_cp2_seal: false
     independent_source_to_binary_attestation: false
+    dataset_or_bag_accessed: false
 
 protecting_configuration_tests:
   - absent_key_selects_nullspace
@@ -310,7 +325,6 @@ protecting_configuration_tests:
   - runtime_failure_zero_silent_fallback
 
 blockers:
-  - cp2_c2_updater_phase_ordering_and_failure_atomicity_not_implemented
   - cp2_c3_recorded_readiness_barrier_not_passed
   - recorded_updater_parity_not_collected
   - three_sequence_parity_not_collected

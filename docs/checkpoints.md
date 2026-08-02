@@ -134,9 +134,43 @@ prepared allocation-free phase-3 capture passed at clean source commit
 The clean serialized build and all 15 captured executables passed, covering
 91/91 CP1/CP2 cases, and independent re-execution and verification passed.
 This is a unit-only implementation sub-gate: it does not pass CP2-C, authorize
-recorded-data access, or establish AArch64/Jetson behavior. CP2-C2, CP2-C3,
-CP2-C, CP2-D, and CP2-E remain unexecuted and unpassed. This paragraph is
-post-run metadata and is not part of the tested source tree above.
+recorded-data access, or establish AArch64/Jetson behavior. At that CP2-C1
+checkpoint, CP2-C2, CP2-C3, CP2-C, CP2-D, and CP2-E remained unexecuted and
+unpassed. This paragraph is post-run metadata and is not part of the tested
+source tree above.
+
+CP2-C2 implementation sub-gate record (2026-08-02): updater phase ordering,
+failure atomicity, exact counters, retained gamma, production-library/source-
+inventory provenance, the detached postcommit oracle, and the authoritative
+fatal-latching evidence sink passed at clean source commit
+`162ed140cb3fee301cf3f2e212c9afa28829798a` (tree
+`46935c58e7a7184f659a6f67fcd33896ebe02d46`). The retained staging artifact is
+`results/staging/cp2/unit/cp2_unit_20260802T185623152114466Z-g162ed140cb3f-WtrFa1xv`;
+its external `SHA256SUMS` SHA-256 is
+`58bc351d513bb093a6e355a808fcf62a7d952e01dee5902594ed74946d76f579`.
+All 6/6 serialized build commands and 18/18 captured executables passed,
+covering 139/139 executions (132 CP2 and 7 CP1; 125 unique names with 14
+updater names intentionally executed against both production and fault
+runtimes). All 139 executions passed independent re-execution, both exact
+23-source runtime inventories passed linkage isolation, and the verifier
+rejected all 85 synthetic corruptions. The first fresh attempt at
+`fa350bf5caccc9789c70d0f69660881608963c0c` failed closed solely because the
+commit-boundary implementation was header-only, so the boundary test did not
+load the production DSO despite all 139 executions passing. The corrected
+commit adds an out-of-line production boundary symbol, and its fresh gate and
+independent verification both passed.
+
+This closes CP2-C2 only at x86_64 unit scope. It is trusted-runner internal
+non-conveyable staging evidence, not an independent source-to-binary
+attestation, and is ineligible for a CP2 seal. CP2-C3 must still implement and
+pass the five artifact-free entry-point self-tests, opaque source/readiness
+barrier, exact artifact joins, and detached-replay plumbing/self-tests before
+semantic access to the dataset registry or inspection of any bag, ground
+truth, or payload is permitted; actual recorded replay occurs only during
+CP2-C after authorization. CP2-C/D/E and
+AArch64/Jetson evidence remain unexecuted and unpassed; CP2-E is specifically
+blocked pending a fixed-clock profile. This paragraph is post-run metadata and
+is not part of the tested source tree above.
 
 Required evidence:
 
