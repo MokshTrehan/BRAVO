@@ -105,6 +105,16 @@ checkpoints:
   CP2-C:
     name: recorded_updater_parity
     status: pending
+    implementation_readiness:
+      status: partial_unit_verified_not_cp2_c
+      source_commit: e91f60f2e1f4c11f8b79a7f4601f414313ad9316
+      unit_evidence_record: project/cp2_ab_unit_evidence.json
+      live_shadow_and_raw_proposal_codec: passed
+      composite_state_snapshot: pending
+      detached_commit_oracle: pending
+      state_snapshot_file: pending
+      recorded_artifact_reporting: pending
+      cp2_c_recorded_evidence: not_run
     minimum_visual_updates: 1000
     counted_record: accepted_nonempty_global_system_preflight_passed_and_baseline_committed
     noncounted_records_reported: [empty_input, all_rejected, empty_after_compression, preflight_rejected, internal_failure]
@@ -268,12 +278,12 @@ evidence_policy:
     verifier: scripts/cp2/verify_report.py
   commands_must_exist_and_pass_self_tests_before_evidence: true
   current_artifact:
-    path: results/staging/cp2/unit/cp2_unit_20260802T055303006017260Z-g3f1c19696a7e-bpoSEGYv
-    report: results/staging/cp2/unit/cp2_unit_20260802T055303006017260Z-g3f1c19696a7e-bpoSEGYv/cp2_report.json
+    path: results/staging/cp2/unit/cp2_unit_20260802T073706096250910Z-ge91f60f2e1f4-Max1zy8D
+    report: results/staging/cp2/unit/cp2_unit_20260802T073706096250910Z-ge91f60f2e1f4-Max1zy8D/cp2_report.json
     evidence_record: project/cp2_ab_unit_evidence.json
-    tested_commit: 3f1c19696a7e93a3b09b00aff8525be7394f769b
+    tested_commit: e91f60f2e1f4c11f8b79a7f4601f414313ad9316
     result: passed_cp2_a_b_unit_only
-    sha256sums_sha256: e1b20240409dd1f3a82b00c6a156d9d1d30041aae925e5b9e4a83349d8c54b76
+    sha256sums_sha256: 11d182e1064db2adb833aa87d1e14bf915d5cb0d0264d8b6ed9f15b5f6fe7212
     scope: cp2_a_b_unit_only
     stage: staging_pending_cp2_c_cp2_d_cp2_e
     evidence_class: trusted_runner_local_staging_evidence
