@@ -110,7 +110,9 @@ checkpoints:
       source_commit: e91f60f2e1f4c11f8b79a7f4601f414313ad9316
       unit_evidence_record: project/cp2_ab_unit_evidence.json
       clarification_document: docs/cp2_c_composite_and_readiness_clarification.md
-      clarification_status: pending_user_approval
+      clarification_status: approved
+      clarification_reviewed_commit: b37eff6e5baa035175e1dde3cae52ee496ca9e2d
+      clarification_approval_record: project/cp2_c_clarification_approval.json
       live_shadow_and_raw_proposal_codec: passed
       composite_state_snapshot: pending
       detached_commit_oracle: pending
@@ -303,7 +305,6 @@ protecting_configuration_tests:
   - runtime_failure_zero_silent_fallback
 
 blockers:
-  - cp2_c_composite_and_readiness_clarification_pending_user_approval
   - recorded_updater_parity_not_collected
   - three_sequence_parity_not_collected
   - fixed_clock_timing_profile_not_established

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "record_type": "cp2_c_clarification_approval",
+  "reviewer": "Moksh Trehan",
+  "approved_utc": "2026-08-02T13:55:04Z",
+  "reviewed_commit": "b37eff6e5baa035175e1dde3cae52ee496ca9e2d",
+  "document_path": "docs/cp2_c_composite_and_readiness_clarification.md",
+  "document_git_blob": "90ac833f52ad8a8c6ea12ff86e3301a46b28d6e0",
+  "document_sha256": "dd2232ec8ee6536c78b5971858efbb22d9965f121205f83a613c5b0ad0f69e66",
+  "approval_statement": "jI, Moksh Trehan, approve the CP2-C composite, detached-commit, failure-atomicity, exact-counter, finite-state, retained-gamma, checked-arithmetic, opaque source-provenance, approval-binding, and protecting-test clarification recorded at commit b37eff6e5baa035175e1dde3cae52ee496ca9e2d in docs/cp2_c_composite_and_readiness_clarification.md; no exceptions.",
+  "exceptions": []
+}
