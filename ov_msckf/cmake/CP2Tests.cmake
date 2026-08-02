@@ -83,4 +83,31 @@ if (CATKIN_ENABLE_TESTING)
                 -ffp-contract=off
                 -fsigned-zeros)
     endif ()
+
+    set(CP2_VALUE_ONLY_TEST_SOURCES
+            test_cp2_canonical;test/cp2/test_cp2_canonical.cpp
+            test_cp2_feature_gate;test/cp2/test_cp2_feature_gate.cpp
+            test_cp2_updater_msckf_preview_snapshot;test/cp2/test_updater_msckf_preview_snapshot.cpp
+            test_cp2_shadow_math;test/cp2/test_cp2_shadow_math.cpp)
+    list(LENGTH CP2_VALUE_ONLY_TEST_SOURCES CP2_VALUE_ONLY_TEST_SOURCE_COUNT)
+    math(EXPR CP2_VALUE_ONLY_TEST_LAST "${CP2_VALUE_ONLY_TEST_SOURCE_COUNT} - 1")
+    foreach (CP2_VALUE_ONLY_TEST_INDEX RANGE 0 ${CP2_VALUE_ONLY_TEST_LAST} 2)
+        math(EXPR CP2_VALUE_ONLY_SOURCE_INDEX "${CP2_VALUE_ONLY_TEST_INDEX} + 1")
+        list(GET CP2_VALUE_ONLY_TEST_SOURCES ${CP2_VALUE_ONLY_TEST_INDEX} CP2_VALUE_ONLY_TARGET)
+        list(GET CP2_VALUE_ONLY_TEST_SOURCES ${CP2_VALUE_ONLY_SOURCE_INDEX} CP2_VALUE_ONLY_SOURCE)
+        catkin_add_gtest(${CP2_VALUE_ONLY_TARGET}
+                test/cp2/gtest_main.cpp
+                ${CP2_VALUE_ONLY_SOURCE})
+        if (TARGET ${CP2_VALUE_ONLY_TARGET})
+            target_link_libraries(${CP2_VALUE_ONLY_TARGET}
+                    ov_msckf_lib
+                    ${thirdparty_libraries})
+            target_include_directories(${CP2_VALUE_ONLY_TARGET} PRIVATE
+                    test/cp2)
+            target_compile_options(${CP2_VALUE_ONLY_TARGET} PRIVATE
+                    -fno-fast-math
+                    -ffp-contract=off
+                    -fsigned-zeros)
+        endif ()
+    endforeach ()
 endif ()

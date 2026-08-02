@@ -85,6 +85,9 @@ list(APPEND LIBRARY_SOURCES
         src/state/Propagator.cpp
         src/core/VioManager.cpp
         src/core/VioManagerHelper.cpp
+        src/update/CP2Canonical.cpp
+        src/update/CP2FeatureGate.cpp
+        src/update/CP2ShadowMath.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
@@ -93,11 +96,19 @@ list(APPEND LIBRARY_SOURCES
         src/update/UpdaterZeroVelocity.cpp
 )
 
-# The CP2 reducer has exact binary64 boundary semantics (finite direct
-# whitening, strict numerical-rank floor, and signed conditioning boundary).
-# Override the repository-wide relaxed signed-zero setting for the production
-# translation unit itself, not only for the tests that call it.
-set_source_files_properties(src/update/SchurUpdate.cpp PROPERTIES
+# CP2 evidence and the preview/live-commit oracle have exact binary64
+# semantics. Override the repository-wide relaxed signed-zero setting on every
+# production translation unit that owns contracted arithmetic, including the
+# actual Givens/compression and EKF implementations called by strict wrappers.
+set_source_files_properties(
+        src/state/StateHelper.cpp
+        src/update/CP2Canonical.cpp
+        src/update/CP2FeatureGate.cpp
+        src/update/CP2ShadowMath.cpp
+        src/update/SchurUpdate.cpp
+        src/update/UpdaterHelper.cpp
+        src/update/UpdaterMSCKFPreview.cpp
+        PROPERTIES
         COMPILE_FLAGS "-fno-fast-math -ffp-contract=off -fsigned-zeros")
 
 if (catkin_FOUND AND ENABLE_ROS)

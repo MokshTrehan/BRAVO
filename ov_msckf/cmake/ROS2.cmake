@@ -64,6 +64,9 @@ list(APPEND LIBRARY_SOURCES
         src/state/Propagator.cpp
         src/core/VioManager.cpp
         src/core/VioManagerHelper.cpp
+        src/update/CP2Canonical.cpp
+        src/update/CP2FeatureGate.cpp
+        src/update/CP2ShadowMath.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
@@ -72,10 +75,18 @@ list(APPEND LIBRARY_SOURCES
         src/update/UpdaterZeroVelocity.cpp
 )
 
-# Keep the production CP2 reducer on the same strict binary64 contract as its
-# exact validity/rank boundary tests, despite the project-wide optimization
-# flags inherited above.
-set_source_files_properties(src/update/SchurUpdate.cpp PROPERTIES
+# Keep every CP2 evidence/preview/commit arithmetic owner on the same strict
+# binary64 contract, despite the project-wide optimization flags inherited
+# above. This includes the Givens/compression and live EKF implementations.
+set_source_files_properties(
+        src/state/StateHelper.cpp
+        src/update/CP2Canonical.cpp
+        src/update/CP2FeatureGate.cpp
+        src/update/CP2ShadowMath.cpp
+        src/update/SchurUpdate.cpp
+        src/update/UpdaterHelper.cpp
+        src/update/UpdaterMSCKFPreview.cpp
+        PROPERTIES
         COMPILE_FLAGS "-fno-fast-math -ffp-contract=off -fsigned-zeros")
 
 list(APPEND LIBRARY_SOURCES src/ros/ROS2Visualizer.cpp src/ros/ROSVisualizerHelper.cpp)

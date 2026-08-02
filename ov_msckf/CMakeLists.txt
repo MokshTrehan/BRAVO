@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.3)
 project(ov_msckf)
 
+# Keep Eigen scalar throughout the estimator target. Eigen 3.3's AArch64 NEON
+# packet implementation can use explicit fused multiply-add intrinsics that
+# -ffp-contract=off cannot disable; a per-source definition would also create
+# inconsistent Eigen alignment and inline definitions within the shared ABI.
+add_definitions(
+        -DEIGEN_DONT_VECTORIZE=1
+        -DEIGEN_MAX_ALIGN_BYTES=16
+        -DEIGEN_MAX_STATIC_ALIGN_BYTES=16)
+
 # Include libraries (if we don't have opencv 4, then fallback to opencv 3)
 # The OpenCV version needs to match the one used by cv_bridge otherwise you will get a segmentation fault!
 find_package(Eigen3 REQUIRED)
@@ -51,6 +60,4 @@ else ()
     message(STATUS "No ROS versions found or building with ROS disabled, building ROS1.cmake without ROS")
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ROS1.cmake)
 endif ()
-
-
 

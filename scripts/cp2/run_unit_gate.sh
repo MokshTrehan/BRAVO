@@ -38,12 +38,16 @@ readonly -a archive_roots=(
     config/euroc_mav
     docs/checkpoints.md
     docs/conventions.md
+    docs/cp2_artifact_schema.md
+    docs/cp2_math_implementation_audit.md
     docs/cp2_one_pass_contract.md
+    docs/cp2_recorded_evidence_contract.md
     docs/iterated_update_spec.md
     docs/schurvio_lite_execution_plan.md
     project/cp0_baseline.json
     project/cp1_gate.yaml
     project/cp2_gate.yaml
+    project/cp2_serial.launch
 )
 readonly -a cp1_tests=(
     test_cp1_schur_equivalence
@@ -57,8 +61,16 @@ readonly -a cp2_tests=(
     test_cp2_state_update_semantics
     test_cp2_configuration_contract
     test_cp2_updater_msckf_end_to_end
+    test_cp2_canonical
+    test_cp2_feature_gate
+    test_cp2_updater_msckf_preview_snapshot
+    test_cp2_shadow_math
 )
 readonly -a all_tests=("${cp1_tests[@]}" "${cp2_tests[@]}")
+readonly -a eigen_abi_dependency_packages=(
+    ov_core
+    ov_init
+)
 readonly -a required_copied_dsos=(
     libov_msckf_lib.so
     libov_core_lib.so
@@ -926,6 +938,14 @@ fi
 if [[ -f "${package_build}/compile_commands.json" ]]; then
     install -m 0444 -- "${package_build}/compile_commands.json" "${run_dir}/compile_commands.json"
 fi
+for dependency_package in "${eigen_abi_dependency_packages[@]}"; do
+    dependency_compile_commands="${workspace_build_root}/${dependency_package}/compile_commands.json"
+    if [[ -f "${dependency_compile_commands}" && ! -L "${dependency_compile_commands}" ]]; then
+        install -m 0444 -- "${dependency_compile_commands}" \
+            "${run_dir}/compile_commands_${dependency_package}.json"
+    fi
+done
+unset dependency_package dependency_compile_commands
 if [[ -f "${package_build}/CMakeCache.txt" ]]; then
     install -m 0444 -- "${package_build}/CMakeCache.txt" "${run_dir}/CMakeCache.txt"
 fi

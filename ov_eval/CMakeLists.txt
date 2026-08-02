@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.3)
 project(ov_eval)
 
+# Match ov_core's public Eigen ABI when evaluation tools are built in the same
+# workspace as the strict SchurVIO-Lite estimator.
+add_definitions(
+        -DEIGEN_DONT_VECTORIZE=1
+        -DEIGEN_MAX_ALIGN_BYTES=16
+        -DEIGEN_MAX_STATIC_ALIGN_BYTES=16)
+
 # Include libraries
 find_package(Eigen3 REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system filesystem thread date_time)
@@ -49,4 +56,3 @@ else ()
     message(STATUS "No ROS versions found or building with ROS disabled, building ROS1.cmake without ROS")
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ROS1.cmake)
 endif ()
-

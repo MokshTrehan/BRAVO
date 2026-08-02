@@ -50,9 +50,31 @@ CP2_TESTS = {
     "test_cp2_state_update_semantics": 2,
     "test_cp2_configuration_contract": 9,
     "test_cp2_updater_msckf_end_to_end": 3,
+    "test_cp2_canonical": 5,
+    "test_cp2_feature_gate": 13,
+    "test_cp2_updater_msckf_preview_snapshot": 4,
+    "test_cp2_shadow_math": 14,
 }
 ALL_TESTS = dict(CP1_TESTS)
 ALL_TESTS.update(CP2_TESTS)
+
+TEST_SOURCE_BY_BINARY = {
+    "test_cp1_schur_equivalence": "ov_msckf/test/cp1/test_schur_equivalence.cpp",
+    "test_cp1_rank_rejection": "ov_msckf/test/cp1/test_rank_rejection.cpp",
+    "test_cp1_projection_jacobian": "ov_msckf/test/cp1/test_projection_jacobian.cpp",
+    "test_cp1_prior_and_compression": "ov_msckf/test/cp1/test_prior_and_compression.cpp",
+    "test_cp2_production_schur_reducer": "ov_msckf/test/cp2/test_production_schur_reducer.cpp",
+    "test_cp2_fej_golden": "ov_msckf/test/cp2/test_fej_golden.cpp",
+    "test_cp2_state_update_semantics": "ov_msckf/test/cp2/test_state_update_semantics.cpp",
+    "test_cp2_configuration_contract": "ov_msckf/test/cp2/test_configuration_contract.cpp",
+    "test_cp2_updater_msckf_end_to_end": "ov_msckf/test/cp2/test_updater_msckf_end_to_end.cpp",
+    "test_cp2_canonical": "ov_msckf/test/cp2/test_cp2_canonical.cpp",
+    "test_cp2_feature_gate": "ov_msckf/test/cp2/test_cp2_feature_gate.cpp",
+    "test_cp2_updater_msckf_preview_snapshot": (
+        "ov_msckf/test/cp2/test_updater_msckf_preview_snapshot.cpp"
+    ),
+    "test_cp2_shadow_math": "ov_msckf/test/cp2/test_cp2_shadow_math.cpp",
+}
 
 EXPECTED_TEST_CASES = {
     "CP1Compression.ProductionTruncationPreservesLambdaEtaButNotGamma",
@@ -82,6 +104,42 @@ EXPECTED_TEST_CASES = {
     "CP2UpdaterMSCKFEndToEnd.ActualNullspaceAndSchurModesCommitEquivalentFullStateUpdates",
     "CP2UpdaterMSCKFEndToEnd.SelectedReducersRejectNonfiniteProductionRowsWithoutSilentFallback",
     "CP2UpdaterMSCKFEndToEnd.SharedInvalidPreflightLeavesBothModeStatesBitwiseUnchanged",
+    "CP2CanonicalSha256.MatchesPublishedVectorsUnderIncrementalChunking",
+    "CP2CanonicalBytes.IntegerBinary64AndUtf8EncodingIsExact",
+    "CP2CanonicalBytes.MatrixAndVectorUseLogicalRowMajorBinary64Order",
+    "CP2CanonicalBytes.Utf8ValidationRejectsMalformedSequencesWithoutAppending",
+    "CP2CanonicalBytes.SelfAppendStagesAliasedStorageBeforeGrowth",
+    "CP2FeatureGate.StageNamesAreFrozen",
+    "CP2FeatureGate.ReductionUnavailablePublishesNoNumericOrDecisionEvidence",
+    "CP2FeatureGate.GammaOverflowCanInvalidateEvidenceWithoutChangingBaselineLifecycleGate",
+    "CP2FeatureGate.EvidenceUnavailableEmittedSystemRetainsTheNormalLifecycleDecision",
+    "CP2FeatureGate.MarginalIsCopiedFromImmutablePriorInDeclaredLayoutOrder",
+    "CP2FeatureGate.InvalidOrOverlappingLayoutCannotFormInnovation",
+    "CP2FeatureGate.NonfiniteInnovationPrecedesFactorization",
+    "CP2FeatureGate.NonPositiveDefiniteInnovationFailsDefaultLowerLLT",
+    "CP2FeatureGate.NonfiniteDotIsSolveOrNISFailure",
+    "CP2FeatureGate.EqualityIsAcceptedAndStrictExcessRejected",
+    "CP2FeatureGate.NonfiniteThresholdNullsEvidenceButPreservesIEEEComparison",
+    "CP2FeatureGate.MissingConstructorTableEntryIsUnavailableNotSubstituted",
+    "CP2FeatureGate.FiveHundredRowsUseDynamicBoostQuantile",
+    "CP2PreviewSnapshot.ExactAdapterParityAndInputImmutability",
+    "CP2PreviewSnapshot.RejectsMalformedOwningStateLayout",
+    "CP2PreviewSnapshot.RejectsMalformedValueOnlyJacobianLayout",
+    "CP2PreviewSnapshot.FiniteAndLLTBoundariesAreOrdered",
+    "CP2ShadowMath.FullRankPathsAgreeAndProduceIndependentGlobalProposals",
+    "CP2ShadowMath.CandidateRankFailureIsAOneSidedGateAttempt",
+    "CP2ShadowMath.DuplicateFeatureIdentityInvalidatesButDoesNotShortCircuitMath",
+    "CP2ShadowMath.RawAndPriorLayoutDisconnectsAreStructurallyInvalid",
+    "CP2ShadowMath.NullspaceStatisticsFailureCannotChangeLiveLifecycleAcceptance",
+    "CP2ShadowMath.CandidateGammaOverflowSuppressesOnlyCandidateProposal",
+    "CP2ShadowMath.LambdaDiagnosticOverflowCannotRemoveBaselineGateAttempt",
+    "CP2ShadowMath.WhitenedJacobianOverflowCannotRemoveFiniteGammaBaselineGate",
+    "CP2ShadowMath.NonfiniteWhitenedResidualStopsDiagnosticPipelineInOrder",
+    "CP2ShadowMath.RawLambdaOverflowStopsEtaButFiniteGammaDefinesModeValidity",
+    "CP2ShadowMath.DifferentLocalBlockOrdersUseFirstSeenGlobalLayoutExactly",
+    "CP2ShadowMath.CandidateGammaOverflowStillTraversesAndStacksLaterFeatures",
+    "CP2ShadowMath.EmptyAndAllRejectedGammaStatesAreExact",
+    "CP2ShadowMath.StatisticComparisonFirstFailurePrecedenceIsExact",
 }
 
 EXPECTED_SUMMARIES = {
@@ -107,6 +165,10 @@ SUMMARIES_BY_BINARY = {
     "test_cp2_state_update_semantics": {"CP2_B_PREVIEW_REJECTION", "CP2_B_STATE_UPDATE"},
     "test_cp2_configuration_contract": set(),
     "test_cp2_updater_msckf_end_to_end": set(),
+    "test_cp2_canonical": set(),
+    "test_cp2_feature_gate": set(),
+    "test_cp2_updater_msckf_preview_snapshot": set(),
+    "test_cp2_shadow_math": set(),
 }
 
 SOURCE_INPUTS = {
@@ -116,14 +178,19 @@ SOURCE_INPUTS = {
     "config/euroc_mav/kalibr_imucam_chain.yaml",
     "docs/checkpoints.md",
     "docs/conventions.md",
+    "docs/cp2_artifact_schema.md",
+    "docs/cp2_math_implementation_audit.md",
     "docs/cp2_one_pass_contract.md",
+    "docs/cp2_recorded_evidence_contract.md",
     "docs/iterated_update_spec.md",
     "docs/schurvio_lite_execution_plan.md",
+    "ov_core/CMakeLists.txt",
     "ov_core/src/cam/CamBase.h",
     "ov_core/src/cam/CamRadtan.h",
     "ov_core/src/types/JPLQuat.h",
     "ov_core/src/types/PoseJPL.h",
     "ov_core/src/utils/quat_ops.h",
+    "ov_init/CMakeLists.txt",
     "ov_msckf/CMakeLists.txt",
     "ov_msckf/cmake/CP2Tests.cmake",
     "ov_msckf/cmake/ROS1.cmake",
@@ -134,6 +201,12 @@ SOURCE_INPUTS = {
     "ov_msckf/src/state/State.h",
     "ov_msckf/src/state/StateHelper.cpp",
     "ov_msckf/src/state/StateHelper.h",
+    "ov_msckf/src/update/CP2Canonical.cpp",
+    "ov_msckf/src/update/CP2Canonical.h",
+    "ov_msckf/src/update/CP2FeatureGate.cpp",
+    "ov_msckf/src/update/CP2FeatureGate.h",
+    "ov_msckf/src/update/CP2ShadowMath.cpp",
+    "ov_msckf/src/update/CP2ShadowMath.h",
     "ov_msckf/src/update/SchurUpdate.cpp",
     "ov_msckf/src/update/SchurUpdate.h",
     "ov_msckf/src/update/UpdaterHelper.cpp",
@@ -151,13 +224,18 @@ SOURCE_INPUTS = {
     "ov_msckf/test/cp1/test_schur_equivalence.cpp",
     "ov_msckf/test/cp2/gtest_main.cpp",
     "ov_msckf/test/cp2/test_configuration_contract.cpp",
+    "ov_msckf/test/cp2/test_cp2_canonical.cpp",
+    "ov_msckf/test/cp2/test_cp2_feature_gate.cpp",
+    "ov_msckf/test/cp2/test_cp2_shadow_math.cpp",
     "ov_msckf/test/cp2/test_fej_golden.cpp",
     "ov_msckf/test/cp2/test_production_schur_reducer.cpp",
     "ov_msckf/test/cp2/test_state_update_semantics.cpp",
     "ov_msckf/test/cp2/test_updater_msckf_end_to_end.cpp",
+    "ov_msckf/test/cp2/test_updater_msckf_preview_snapshot.cpp",
     "project/cp0_baseline.json",
     "project/cp1_gate.yaml",
     "project/cp2_gate.yaml",
+    "project/cp2_serial.launch",
     "scripts/cp0/bootstrap_ceres_1_14.sh",
     "scripts/cp1/make_report.py",
     "scripts/cp1/run_cp1.sh",
@@ -167,7 +245,9 @@ SOURCE_INPUTS = {
 }
 
 CONTRACT_INPUTS = {
+    "docs/cp2_artifact_schema.md",
     "docs/cp2_one_pass_contract.md",
+    "docs/cp2_recorded_evidence_contract.md",
     "docs/iterated_update_spec.md",
     "project/cp1_gate.yaml",
     "project/cp2_gate.yaml",
@@ -195,8 +275,37 @@ BUILD_STEPS = (
     "test_targets_build",
 )
 STRICT_TARGETS = set(ALL_TESTS)
-STRICT_PRODUCTION_SOURCE = "ov_msckf/src/update/SchurUpdate.cpp"
+STRICT_PRODUCTION_SOURCES = (
+    "ov_msckf/src/update/SchurUpdate.cpp",
+    "ov_msckf/src/update/CP2Canonical.cpp",
+    "ov_msckf/src/update/CP2FeatureGate.cpp",
+    "ov_msckf/src/update/CP2ShadowMath.cpp",
+    "ov_msckf/src/update/UpdaterHelper.cpp",
+    "ov_msckf/src/update/UpdaterMSCKFPreview.cpp",
+    "ov_msckf/src/state/StateHelper.cpp",
+)
 STRICT_REQUIRED_FLAGS = ("-fno-fast-math", "-ffp-contract=off", "-fsigned-zeros")
+STRICT_REQUIRED_MACRO_DEFINITIONS = {
+    "EIGEN_DONT_VECTORIZE": (
+        "-DEIGEN_DONT_VECTORIZE",
+        "-DEIGEN_DONT_VECTORIZE=1",
+    ),
+    "EIGEN_MAX_ALIGN_BYTES": ("-DEIGEN_MAX_ALIGN_BYTES=16",),
+    "EIGEN_MAX_STATIC_ALIGN_BYTES": ("-DEIGEN_MAX_STATIC_ALIGN_BYTES=16",),
+}
+DEPENDENCY_COMPILE_COMMAND_ARTIFACTS = {
+    "ov_core": "compile_commands_ov_core.json",
+    "ov_init": "compile_commands_ov_init.json",
+}
+DEPENDENCY_EXPECTED_COMMAND_COUNTS = {
+    "ov_core": 21,
+    "ov_init": 16,
+}
+DEPENDENCY_REQUIRED_MACRO_DEFINITIONS = {
+    "EIGEN_DONT_VECTORIZE": "-DEIGEN_DONT_VECTORIZE=1",
+    "EIGEN_MAX_ALIGN_BYTES": "-DEIGEN_MAX_ALIGN_BYTES=16",
+    "EIGEN_MAX_STATIC_ALIGN_BYTES": "-DEIGEN_MAX_STATIC_ALIGN_BYTES=16",
+}
 STRICT_FORBIDDEN_FLAGS = {
     "-Ofast",
     "-fassociative-math",
@@ -236,12 +345,16 @@ ARCHIVE_ROOTS = [
     "config/euroc_mav",
     "docs/checkpoints.md",
     "docs/conventions.md",
+    "docs/cp2_artifact_schema.md",
+    "docs/cp2_math_implementation_audit.md",
     "docs/cp2_one_pass_contract.md",
+    "docs/cp2_recorded_evidence_contract.md",
     "docs/iterated_update_spec.md",
     "docs/schurvio_lite_execution_plan.md",
     "project/cp0_baseline.json",
     "project/cp1_gate.yaml",
     "project/cp2_gate.yaml",
+    "project/cp2_serial.launch",
 ]
 WORKSPACE_RECORD_NAME = "workspace.json"
 DEPENDENCY_INVENTORY_NAME = "dependency_inventory.json"
@@ -727,9 +840,91 @@ def command_tokens(entry):
     return []
 
 
+def required_macro_record(tokens):
+    definition_positions = {
+        macro: {
+            definition: [
+                index for index, token in enumerate(tokens) if token == definition
+            ]
+            for definition in accepted_definitions
+        }
+        for macro, accepted_definitions in STRICT_REQUIRED_MACRO_DEFINITIONS.items()
+    }
+    macro_events = {macro: [] for macro in STRICT_REQUIRED_MACRO_DEFINITIONS}
+    unsupported_macro_tokens = {
+        macro: [] for macro in STRICT_REQUIRED_MACRO_DEFINITIONS
+    }
+    for index, token in enumerate(tokens):
+        for macro, accepted_definitions in STRICT_REQUIRED_MACRO_DEFINITIONS.items():
+            if token in accepted_definitions:
+                macro_events[macro].append({
+                    "index": index,
+                    "state": "defined_accepted",
+                    "token": token,
+                })
+            elif token == "-U" + macro:
+                macro_events[macro].append({
+                    "index": index,
+                    "state": "undefined",
+                    "token": token,
+                })
+            elif (
+                token == "-D" + macro
+                or token.startswith("-D" + macro + "=")
+                or token.startswith("-D" + macro + "(")
+            ):
+                macro_events[macro].append({
+                    "index": index,
+                    "state": "defined_rejected",
+                    "token": token,
+                })
+            elif macro in token:
+                # Reject split, driver-forwarded, and otherwise opaque spellings.
+                # Their ordering/effect cannot be proved from compiler argv.
+                unsupported_macro_tokens[macro].append({
+                    "index": index,
+                    "token": token,
+                })
+    effective_macro_definitions = {}
+    for macro, accepted_definitions in STRICT_REQUIRED_MACRO_DEFINITIONS.items():
+        events = macro_events[macro]
+        effective_macro = events[-1] if events else None
+        effective_macro_definitions[macro] = (
+            effective_macro["token"]
+            if effective_macro is not None
+            and effective_macro["state"] == "defined_accepted"
+            and effective_macro["token"] in accepted_definitions
+            else None
+        )
+    hidden_or_shell_tokens = [
+        {"index": index, "token": token}
+        for index, token in enumerate(tokens)
+        if token.startswith("@")
+        or any(marker in token for marker in (";", "&&", "||", "`", "$(", "\n", "\r"))
+        or token in {"|", "<", ">", "2>", "2>&1"}
+    ]
+    passed = (
+        all(
+            effective_macro_definitions[macro] in accepted_definitions
+            for macro, accepted_definitions in STRICT_REQUIRED_MACRO_DEFINITIONS.items()
+        )
+        and not any(unsupported_macro_tokens.values())
+        and not hidden_or_shell_tokens
+    )
+    return {
+        "definition_positions": definition_positions,
+        "effective_definitions": effective_macro_definitions,
+        "hidden_or_shell_tokens": hidden_or_shell_tokens,
+        "macro_events": macro_events,
+        "passed": bool(passed),
+        "unsupported_macro_tokens": unsupported_macro_tokens,
+    }
+
+
 def strict_flag_record(tokens, workspace=None):
     positions = {flag: [index for index, token in enumerate(tokens) if token == flag]
                  for flag in STRICT_REQUIRED_FLAGS}
+    macro_record = required_macro_record(tokens)
     conflicts = {
         flag: [index for index, token in enumerate(tokens) if token == flag]
         for flag in sorted(STRICT_FORBIDDEN_FLAGS)
@@ -756,6 +951,7 @@ def strict_flag_record(tokens, workspace=None):
     fp_contract = [(index, token) for index, token in enumerate(tokens)
                    if token.startswith("-ffp-contract=")]
     effective["fp_contract"] = max(fp_contract)[1] if fp_contract else None
+    effective["required_macro_definitions"] = macro_record["effective_definitions"]
     expected_prefix_maps = []
     prefix_map_positions = {}
     unexpected_prefix_maps = []
@@ -783,6 +979,7 @@ def strict_flag_record(tokens, workspace=None):
         and effective["fast_math"] == "-fno-fast-math"
         and effective["signed_zeros"] == "-fsigned-zeros"
         and effective["fp_contract"] == "-ffp-contract=off"
+        and macro_record["passed"]
         and not any(conflicts.values())
         and not hidden_or_shell_tokens
         and all(prefix_map_positions.get(flag) for flag in expected_prefix_maps)
@@ -791,11 +988,14 @@ def strict_flag_record(tokens, workspace=None):
     return {
         "command_sha256": sha256_bytes("\0".join(tokens).encode("utf-8")),
         "conflict_positions": conflicts,
+        "definition_positions": macro_record["definition_positions"],
         "effective": effective,
         "hidden_or_shell_tokens": hidden_or_shell_tokens,
+        "macro_events": macro_record["macro_events"],
         "passed": bool(passed),
         "prefix_map_positions": prefix_map_positions,
         "required_flag_positions": positions,
+        "unsupported_macro_tokens": macro_record["unsupported_macro_tokens"],
         "unexpected_prefix_maps": unexpected_prefix_maps,
     }
 
@@ -818,7 +1018,15 @@ def analyze_compile_commands(path, repo_root, errors, compiler_record=None):
         return {
             "compile_commands_sha256": None,
             "passed": False,
-            "production_schur_translation_unit": [],
+            "production_translation_units": {
+                source: [] for source in STRICT_PRODUCTION_SOURCES
+            },
+            "required_flags": list(STRICT_REQUIRED_FLAGS),
+            "required_macro_definitions": {
+                macro: list(accepted_definitions)
+                for macro, accepted_definitions
+                in STRICT_REQUIRED_MACRO_DEFINITIONS.items()
+            },
             "unit_test_targets": {},
         }
     try:
@@ -829,7 +1037,7 @@ def analyze_compile_commands(path, repo_root, errors, compiler_record=None):
     if not isinstance(entries, list):
         errors.append("compile_commands.json root must be an array")
         entries = []
-    production = []
+    production = {source: [] for source in STRICT_PRODUCTION_SOURCES}
     targets = {name: [] for name in sorted(STRICT_TARGETS)}
     for entry in entries:
         if not isinstance(entry, dict):
@@ -899,25 +1107,28 @@ def analyze_compile_commands(path, repo_root, errors, compiler_record=None):
             "structure_errors": structure_errors,
             "target": target,
         })
-        if source == STRICT_PRODUCTION_SOURCE and target == "ov_msckf_lib":
-            production.append(record)
+        if source in production and target == "ov_msckf_lib":
+            production[source].append(record)
         if target in targets:
             targets[target].append(record)
-    if len(production) != 1:
-        errors.append("strict-FP evidence requires exactly one production SchurUpdate.cpp command")
-    elif not production[0]["passed"]:
-        errors.append("production SchurUpdate.cpp compile command is not effectively strict-FP")
+    for source, records in production.items():
+        if len(records) != 1:
+            errors.append(
+                "strict-FP evidence requires exactly one production command for " + source
+            )
+        elif not records[0]["passed"]:
+            errors.append(source + " compile command is not effectively strict-FP")
     expected_target_sources = {
         name: {
             "ov_msckf/test/cp1/gtest_main.cpp",
-            "ov_msckf/test/cp1/" + name.replace("test_cp1_", "test_") + ".cpp",
+            TEST_SOURCE_BY_BINARY[name],
         }
         for name in CP1_TESTS
     }
     expected_target_sources.update({
         name: {
             "ov_msckf/test/cp2/gtest_main.cpp",
-            "ov_msckf/test/cp2/" + name.replace("test_cp2_", "test_") + ".cpp",
+            TEST_SOURCE_BY_BINARY[name],
         }
         for name in CP2_TESTS
     })
@@ -933,8 +1144,10 @@ def analyze_compile_commands(path, repo_root, errors, compiler_record=None):
             if not record["passed"]:
                 errors.append("{} has a non-strict compile command for {}".format(target, record["source"]))
     passed = (
-        len(production) == 1
-        and production[0].get("passed") is True
+        all(
+            len(records) == 1 and records[0].get("passed") is True
+            for records in production.values()
+        )
         and all(
             {record["source"] for record in targets[target]} == expected_target_sources[target]
             and all(record["passed"] for record in targets[target])
@@ -944,9 +1157,247 @@ def analyze_compile_commands(path, repo_root, errors, compiler_record=None):
     return {
         "compile_commands_sha256": sha256_file(path),
         "passed": bool(passed),
-        "production_schur_translation_unit": production,
+        "production_translation_units": production,
         "required_flags": list(STRICT_REQUIRED_FLAGS),
+        "required_macro_definitions": {
+            macro: list(accepted_definitions)
+            for macro, accepted_definitions
+            in STRICT_REQUIRED_MACRO_DEFINITIONS.items()
+        },
         "unit_test_targets": targets,
+    }
+
+
+def analyze_dependency_compile_commands(
+    path, package, repo_root, workspace_build_root, errors
+):
+    label = package + " compile_commands.json"
+    expected_count = DEPENDENCY_EXPECTED_COMMAND_COUNTS[package]
+    if not path.is_file():
+        errors.append("missing " + label)
+        return {
+            "artifact": path.name,
+            "command_count": 0,
+            "commands": [],
+            "compile_commands_sha256": None,
+            "expected_command_count": expected_count,
+            "passed": False,
+            "unique_source_count": 0,
+        }
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        errors.append("cannot parse {}: {}".format(label, exc))
+        entries = []
+    if not isinstance(entries, list):
+        errors.append(label + " root must be an array")
+        entries = []
+    if len(entries) != expected_count:
+        errors.append(
+            "{} must contain exactly {} compile commands, got {}".format(
+                label, expected_count, len(entries)
+            )
+        )
+
+    records = []
+    expected_build_directory = (workspace_build_root / package).resolve()
+    workspace_source_root = repo_root.resolve()
+    googletest_source_root = Path("/usr/src/googletest").resolve()
+    for index, entry in enumerate(entries):
+        structure_errors = []
+        output = None
+        source_binding = None
+        target = None
+        if not isinstance(entry, dict):
+            tokens = []
+            source = None
+            structure_errors.append("entry is not an object")
+        else:
+            tokens = command_tokens(entry)
+            source = relative_source(entry.get("file"), entry.get("directory"), repo_root)
+            if not tokens:
+                structure_errors.append("entry has no parseable compiler argv")
+
+            directory_value = entry.get("directory")
+            if not isinstance(directory_value, str):
+                structure_errors.append("entry has no build directory")
+                command_directory = None
+            else:
+                command_directory = Path(directory_value).resolve()
+                try:
+                    command_directory.relative_to(expected_build_directory)
+                except ValueError:
+                    structure_errors.append("entry directory is outside the package build root")
+
+            declared_source = entry.get("file")
+            canonical_source = None
+            if isinstance(declared_source, str):
+                declared_path = Path(declared_source)
+                if not declared_path.is_absolute() and command_directory is not None:
+                    declared_path = command_directory / declared_path
+                try:
+                    canonical_source = declared_path.resolve(strict=True)
+                except OSError:
+                    structure_errors.append("declared source is not an existing regular file")
+            else:
+                structure_errors.append("entry has no declared source")
+            if canonical_source is not None:
+                if not canonical_source.is_file():
+                    structure_errors.append("declared source is not a regular file")
+                else:
+                    try:
+                        package_relative = canonical_source.relative_to(workspace_source_root)
+                        if not package_relative.parts or package_relative.parts[0] != package:
+                            structure_errors.append(
+                                "workspace source is outside the dependency package"
+                            )
+                        else:
+                            source_binding = "workspace_source"
+                    except ValueError:
+                        try:
+                            canonical_source.relative_to(googletest_source_root)
+                            source_binding = "controlled_googletest_source"
+                        except ValueError:
+                            structure_errors.append(
+                                "source is outside workspace and controlled GoogleTest roots"
+                            )
+
+            compile_positions = [
+                position for position, token in enumerate(tokens) if token == "-c"
+            ]
+            if len(compile_positions) != 1 or compile_positions[0] + 1 >= len(tokens):
+                structure_errors.append("command does not contain exactly one -c source")
+            else:
+                command_source_value = tokens[compile_positions[0] + 1]
+                command_source = relative_source(
+                    command_source_value, entry.get("directory"), repo_root
+                )
+                command_source_path = Path(command_source_value)
+                if not command_source_path.is_absolute() and command_directory is not None:
+                    command_source_path = command_directory / command_source_path
+                try:
+                    canonical_command_source = command_source_path.resolve(strict=True)
+                except OSError:
+                    canonical_command_source = None
+                if command_source != source or canonical_command_source != canonical_source:
+                    structure_errors.append("entry file differs from actual -c source")
+
+            output_positions = [
+                position for position, token in enumerate(tokens) if token == "-o"
+            ]
+            if len(output_positions) != 1 or output_positions[0] + 1 >= len(tokens):
+                structure_errors.append("command does not contain exactly one -o output")
+            elif command_directory is not None:
+                output_value = tokens[output_positions[0] + 1]
+                output_path = Path(output_value)
+                if not output_path.is_absolute():
+                    output_path = command_directory / output_path
+                try:
+                    output_relative = output_path.resolve().relative_to(
+                        expected_build_directory
+                    )
+                    output = output_relative.as_posix()
+                except ValueError:
+                    output_relative = None
+                    structure_errors.append("object output is outside the package build root")
+                if output_relative is not None:
+                    parts = output_relative.parts
+                    cmake_positions = [
+                        position for position, part in enumerate(parts)
+                        if part == "CMakeFiles"
+                    ]
+                    if len(cmake_positions) != 1:
+                        structure_errors.append(
+                            "object output does not have CMakeFiles/<target>.dir structure"
+                        )
+                    else:
+                        cmake_position = cmake_positions[0]
+                        if (
+                            cmake_position + 2 >= len(parts)
+                            or not parts[cmake_position + 1].endswith(".dir")
+                        ):
+                            structure_errors.append(
+                                "object output does not have CMakeFiles/<target>.dir structure"
+                            )
+                        else:
+                            target = parts[cmake_position + 1][:-4]
+                declared_output = entry.get("output")
+                if isinstance(declared_output, str):
+                    declared_output_path = Path(declared_output)
+                    if not declared_output_path.is_absolute():
+                        declared_output_path = command_directory / declared_output_path
+                    if declared_output_path.resolve() != output_path.resolve():
+                        structure_errors.append("entry output differs from actual -o output")
+        macro_record = required_macro_record(tokens)
+        exact_definitions = all(
+            macro_record["effective_definitions"].get(macro) == definition
+            for macro, definition in DEPENDENCY_REQUIRED_MACRO_DEFINITIONS.items()
+        )
+        passed = bool(
+            macro_record["passed"] and exact_definitions and not structure_errors
+        )
+        record = {
+            "command_sha256": sha256_bytes("\0".join(tokens).encode("utf-8")),
+            "index": index,
+            "macro_contract": macro_record,
+            "output": output,
+            "passed": passed,
+            "source": source,
+            "source_binding": source_binding,
+            "structure_errors": structure_errors,
+            "target": target,
+        }
+        records.append(record)
+        if not passed:
+            errors.append(
+                "{} command {} for {} fails dependency ABI/source/output proof".format(
+                    package, index, source
+                )
+            )
+    normalized_sources = [record["source"] for record in records]
+    unique_source_count = len(set(normalized_sources))
+    unique_sources = (
+        None not in normalized_sources and unique_source_count == len(normalized_sources)
+    )
+    if not unique_sources:
+        errors.append(package + " compile commands do not have unique normalized sources")
+    return {
+        "artifact": path.name,
+        "command_count": len(entries),
+        "commands": records,
+        "compile_commands_sha256": sha256_file(path),
+        "expected_command_count": expected_count,
+        "passed": bool(
+            len(entries) == expected_count
+            and unique_sources
+            and all(record["passed"] for record in records)
+        ),
+        "unique_source_count": unique_source_count,
+    }
+
+
+def analyze_dependency_eigen_abi(
+    artifact_dir, repo_root, workspace_build_root, errors
+):
+    packages = {
+        package: analyze_dependency_compile_commands(
+            artifact_dir / artifact,
+            package,
+            repo_root,
+            workspace_build_root,
+            errors,
+        )
+        for package, artifact in DEPENDENCY_COMPILE_COMMAND_ARTIFACTS.items()
+    }
+    return {
+        "packages": packages,
+        "passed": bool(
+            all(record.get("passed") is True for record in packages.values())
+        ),
+        "required_macro_definitions": {
+            macro: [definition]
+            for macro, definition in DEPENDENCY_REQUIRED_MACRO_DEFINITIONS.items()
+        },
     }
 
 
@@ -968,6 +1419,7 @@ def expected_artifact_files():
         "THIRD_PARTY_NOTICES/Ceres-LICENSE",
         "THIRD_PARTY_NOTICES/GoogleTest-LICENSE",
     }
+    files.update(DEPENDENCY_COMPILE_COMMAND_ARTIFACTS.values())
     files.update("binaries/" + name for name in SNAPSHOTTED_LIBRARIES)
     for step in BUILD_STEPS:
         files.add("build_" + step + ".json")
@@ -1768,7 +2220,7 @@ def collect_dependency_inventory(
 
     copied_tests = record.get("copied_test_executables")
     if not isinstance(copied_tests, list) or len(copied_tests) != len(ALL_TESTS):
-        errors.append("copied test executable inventory does not contain exactly nine entries")
+        errors.append("copied test executable inventory does not contain exactly thirteen entries")
         copied_tests = []
     for index, name in enumerate(ALL_TESTS):
         entry = (
@@ -2549,6 +3001,12 @@ def assemble_unit_report(artifact_dir, repo_root, allow_synthetic=False):
         artifact_dir / "compile_commands.json", Path(workspace.get("source_root", repo_root)),
         errors, host.get("compiler")
     )
+    dependency_eigen_abi = analyze_dependency_eigen_abi(
+        artifact_dir,
+        Path(workspace.get("source_root", repo_root)),
+        Path(workspace.get("workspace_build_root", "")),
+        errors,
+    )
     linkage = collect_elf_linkage(artifact_dir, errors)
     dependency_inventory = collect_dependency_inventory(
         artifact_dir, repo_root, workspace, linkage, errors,
@@ -2577,6 +3035,7 @@ def assemble_unit_report(artifact_dir, repo_root, allow_synthetic=False):
         },
         "checkpoint": "CP2-A/B-unit",
         "checkpoint_status": expected_checkpoint_status(passed),
+        "dependency_eigen_abi": dependency_eigen_abi,
         "dependency_inventory": dependency_inventory,
         "eligible_for_cp2_seal": False,
         "elf_and_linkage": linkage,
@@ -2618,6 +3077,7 @@ def require_report_fields(report, errors):
         "build",
         "checkpoint",
         "checkpoint_status",
+        "dependency_eigen_abi",
         "dependency_inventory",
         "eligible_for_cp2_seal",
         "elf_and_linkage",
@@ -2753,7 +3213,7 @@ def verify_unit_report(
         independent_gtest.get("errors"),
         independent_gtest.get("disabled"),
     ) != (expected_total, 0, 0, 0):
-        errors.append("gtest totals do not prove a clean 27-test CP1+CP2 run")
+        errors.append("gtest totals do not prove a clean 63-test CP1+CP2 run")
 
     independent_summaries = parse_summaries(artifact_dir, errors)
     if report.get("summaries") != independent_summaries:
@@ -2771,6 +3231,19 @@ def verify_unit_report(
     if independent_fp.get("passed") is not True:
         errors.append("effective strict-FP evidence did not pass")
 
+    independent_dependency_eigen_abi = analyze_dependency_eigen_abi(
+        artifact_dir,
+        Path(independent_workspace.get("source_root", repo_root)),
+        Path(independent_workspace.get("workspace_build_root", "")),
+        errors,
+    )
+    if report.get("dependency_eigen_abi") != independent_dependency_eigen_abi:
+        errors.append(
+            "reported dependency Eigen ABI evidence differs from dependency compile commands"
+        )
+    if independent_dependency_eigen_abi.get("passed") is not True:
+        errors.append("effective dependency Eigen ABI evidence did not pass")
+
     independent_linkage = collect_elf_linkage(artifact_dir, errors)
     if report.get("elf_and_linkage") != independent_linkage:
         errors.append("reported ELF/linkage evidence differs from independent inspection")
@@ -2786,9 +3259,9 @@ def verify_unit_report(
     if report.get("test_invocations") != independent_tests:
         errors.append("reported per-test commands/status/log hashes differ from captured records")
     if report.get("binary_sha256") != independent_binaries:
-        errors.append("reported five-CP2/four-CP1 binary SHA-256 inventory is wrong")
-    if len({name for name in independent_binaries if name in CP2_TESTS}) != 5:
-        errors.append("binary evidence does not contain exactly five CP2 test executables")
+        errors.append("reported nine-CP2/four-CP1 binary SHA-256 inventory is wrong")
+    if len({name for name in independent_binaries if name in CP2_TESTS}) != 9:
+        errors.append("binary evidence does not contain exactly nine CP2 test executables")
     if len({name for name in independent_binaries if name in CP1_TESTS}) != 4:
         errors.append("binary evidence does not contain exactly four CP1 test executables")
     if report.get("production_library") != independent_library:
@@ -3001,6 +3474,50 @@ TEST_CASES_BY_BINARY = {
         "CP2UpdaterMSCKFEndToEnd.SelectedReducersRejectNonfiniteProductionRowsWithoutSilentFallback",
         "CP2UpdaterMSCKFEndToEnd.SharedInvalidPreflightLeavesBothModeStatesBitwiseUnchanged",
     ],
+    "test_cp2_canonical": [
+        "CP2CanonicalSha256.MatchesPublishedVectorsUnderIncrementalChunking",
+        "CP2CanonicalBytes.IntegerBinary64AndUtf8EncodingIsExact",
+        "CP2CanonicalBytes.MatrixAndVectorUseLogicalRowMajorBinary64Order",
+        "CP2CanonicalBytes.Utf8ValidationRejectsMalformedSequencesWithoutAppending",
+        "CP2CanonicalBytes.SelfAppendStagesAliasedStorageBeforeGrowth",
+    ],
+    "test_cp2_feature_gate": [
+        "CP2FeatureGate.StageNamesAreFrozen",
+        "CP2FeatureGate.ReductionUnavailablePublishesNoNumericOrDecisionEvidence",
+        "CP2FeatureGate.GammaOverflowCanInvalidateEvidenceWithoutChangingBaselineLifecycleGate",
+        "CP2FeatureGate.EvidenceUnavailableEmittedSystemRetainsTheNormalLifecycleDecision",
+        "CP2FeatureGate.MarginalIsCopiedFromImmutablePriorInDeclaredLayoutOrder",
+        "CP2FeatureGate.InvalidOrOverlappingLayoutCannotFormInnovation",
+        "CP2FeatureGate.NonfiniteInnovationPrecedesFactorization",
+        "CP2FeatureGate.NonPositiveDefiniteInnovationFailsDefaultLowerLLT",
+        "CP2FeatureGate.NonfiniteDotIsSolveOrNISFailure",
+        "CP2FeatureGate.EqualityIsAcceptedAndStrictExcessRejected",
+        "CP2FeatureGate.NonfiniteThresholdNullsEvidenceButPreservesIEEEComparison",
+        "CP2FeatureGate.MissingConstructorTableEntryIsUnavailableNotSubstituted",
+        "CP2FeatureGate.FiveHundredRowsUseDynamicBoostQuantile",
+    ],
+    "test_cp2_updater_msckf_preview_snapshot": [
+        "CP2PreviewSnapshot.ExactAdapterParityAndInputImmutability",
+        "CP2PreviewSnapshot.RejectsMalformedOwningStateLayout",
+        "CP2PreviewSnapshot.RejectsMalformedValueOnlyJacobianLayout",
+        "CP2PreviewSnapshot.FiniteAndLLTBoundariesAreOrdered",
+    ],
+    "test_cp2_shadow_math": [
+        "CP2ShadowMath.FullRankPathsAgreeAndProduceIndependentGlobalProposals",
+        "CP2ShadowMath.CandidateRankFailureIsAOneSidedGateAttempt",
+        "CP2ShadowMath.DuplicateFeatureIdentityInvalidatesButDoesNotShortCircuitMath",
+        "CP2ShadowMath.RawAndPriorLayoutDisconnectsAreStructurallyInvalid",
+        "CP2ShadowMath.NullspaceStatisticsFailureCannotChangeLiveLifecycleAcceptance",
+        "CP2ShadowMath.CandidateGammaOverflowSuppressesOnlyCandidateProposal",
+        "CP2ShadowMath.LambdaDiagnosticOverflowCannotRemoveBaselineGateAttempt",
+        "CP2ShadowMath.WhitenedJacobianOverflowCannotRemoveFiniteGammaBaselineGate",
+        "CP2ShadowMath.NonfiniteWhitenedResidualStopsDiagnosticPipelineInOrder",
+        "CP2ShadowMath.RawLambdaOverflowStopsEtaButFiniteGammaDefinesModeValidity",
+        "CP2ShadowMath.DifferentLocalBlockOrdersUseFirstSeenGlobalLayoutExactly",
+        "CP2ShadowMath.CandidateGammaOverflowStillTraversesAndStacksLaterFeatures",
+        "CP2ShadowMath.EmptyAndAllRejectedGammaStatesAreExact",
+        "CP2ShadowMath.StatisticComparisonFirstFailurePrecedenceIsExact",
+    ],
 }
 
 
@@ -3106,6 +3623,16 @@ def create_synthetic_repo(repo_root):
             shutil.copyfile(str(actual), str(destination))
         else:
             destination.write_text("synthetic source: " + relative + "\n", encoding="utf-8")
+    for package, count in DEPENDENCY_EXPECTED_COMMAND_COUNTS.items():
+        for index in range(count):
+            source = repo_root / package / "src" / (
+                "synthetic_abi_probe_{}.cpp".format(index)
+            )
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(
+                "int synthetic_abi_probe_{}() {{ return {}; }}\n".format(index, index),
+                encoding="utf-8",
+            )
     synthetic_ov_init = repo_root / "ov_init"
     synthetic_ov_init.mkdir(parents=True, exist_ok=True)
     (synthetic_ov_init / ".synthetic-archive-root").write_text("fixture\n", encoding="utf-8")
@@ -3132,9 +3659,18 @@ def create_synthetic_compile_commands(path, source_root, workspace_build_root):
     def add(source, target):
         output = str(workspace_build_root / "ov_msckf/CMakeFiles" / (
             target + ".dir") / (Path(source).name + ".o"))
+        vectorization_definition = STRICT_REQUIRED_MACRO_DEFINITIONS[
+            "EIGEN_DONT_VECTORIZE"
+        ][
+            len(entries) % len(
+                STRICT_REQUIRED_MACRO_DEFINITIONS["EIGEN_DONT_VECTORIZE"]
+            )
+        ]
         tokens = [
             "/usr/bin/c++", "-O3", "-fno-signed-zeros", "-fno-fast-math",
-            "-ffp-contract=off", "-fsigned-zeros",
+            "-ffp-contract=off", "-fsigned-zeros", vectorization_definition,
+            "-DEIGEN_MAX_ALIGN_BYTES=16",
+            "-DEIGEN_MAX_STATIC_ALIGN_BYTES=16",
             "-ffile-prefix-map={}=/cp2/reproducible-root".format(source_root.parent),
             "-fdebug-prefix-map={}=/cp2/reproducible-root".format(source_root.parent),
             "-fmacro-prefix-map={}=/cp2/reproducible-root".format(source_root.parent),
@@ -3147,13 +3683,43 @@ def create_synthetic_compile_commands(path, source_root, workspace_build_root):
             "output": output,
         })
 
-    add(STRICT_PRODUCTION_SOURCE, "ov_msckf_lib")
+    for source in STRICT_PRODUCTION_SOURCES:
+        add(source, "ov_msckf_lib")
     for target in CP1_TESTS:
         add("ov_msckf/test/cp1/gtest_main.cpp", target)
-        add("ov_msckf/test/cp1/" + target.replace("test_cp1_", "test_") + ".cpp", target)
+        add(TEST_SOURCE_BY_BINARY[target], target)
     for target in CP2_TESTS:
         add("ov_msckf/test/cp2/gtest_main.cpp", target)
-        add("ov_msckf/test/cp2/" + target.replace("test_cp2_", "test_") + ".cpp", target)
+        add(TEST_SOURCE_BY_BINARY[target], target)
+    path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
+
+
+def create_synthetic_dependency_compile_commands(
+    path, source_root, workspace_build_root, package
+):
+    entries = []
+    package_build_root = workspace_build_root / package
+    package_build_root.mkdir(parents=True, exist_ok=True)
+    for index in range(DEPENDENCY_EXPECTED_COMMAND_COUNTS[package]):
+        source = "{}/src/synthetic_abi_probe_{}.cpp".format(package, index)
+        output = str(
+            Path("CMakeFiles") / (package + "_lib.dir")
+            / ("src/synthetic_abi_probe_{}.cpp.o".format(index))
+        )
+        tokens = [
+            "/usr/bin/c++",
+            "-DEIGEN_DONT_VECTORIZE=1",
+            "-DEIGEN_MAX_ALIGN_BYTES=16",
+            "-DEIGEN_MAX_STATIC_ALIGN_BYTES=16",
+            "-o", output,
+            "-c", str(source_root / source),
+        ]
+        entries.append({
+            "command": " ".join(shlex.quote(token) for token in tokens),
+            "directory": str(package_build_root),
+            "file": str(source_root / source),
+            "output": output,
+        })
     path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
 
 
@@ -3398,6 +3964,13 @@ def create_synthetic_artifact(artifact_dir, repo_root):
     create_synthetic_compile_commands(
         artifact_dir / "compile_commands.json", source_root, workspace_build_root
     )
+    for package, artifact in DEPENDENCY_COMPILE_COMMAND_ARTIFACTS.items():
+        create_synthetic_dependency_compile_commands(
+            artifact_dir / artifact,
+            source_root,
+            workspace_build_root,
+            package,
+        )
 
     before = synthetic_source_snapshot(repo_root, "2030-01-01T00:00:01Z")
     after = synthetic_source_snapshot(repo_root, "2030-01-01T00:00:40Z")
@@ -3737,6 +4310,29 @@ def run_self_test():
 
         corruption("missing-source-tree", remove_tree)
 
+        def remove_recorded_contract_from_archive(root):
+            archive_path = root / SOURCE_ARCHIVE_NAME
+            replacement = root / ("." + SOURCE_ARCHIVE_NAME + ".without-contract")
+            removed = 0
+            with tarfile.open(str(archive_path), mode="r:") as source_archive:
+                with tarfile.open(str(replacement), mode="w:") as target_archive:
+                    for member in source_archive.getmembers():
+                        if member.name == "docs/cp2_recorded_evidence_contract.md":
+                            removed += 1
+                            continue
+                        stream = source_archive.extractfile(member) if member.isfile() else None
+                        target_archive.addfile(member, stream)
+            if removed != 1:
+                raise RuntimeError("synthetic source archive lost the recorded contract")
+            os.replace(str(replacement), str(archive_path))
+            archive_path.chmod(0o600)
+
+        corruption(
+            "missing-recorded-contract-archive-member",
+            remove_recorded_contract_from_archive,
+            expected_error="source archive does not contain every curated SOURCE_INPUTS file",
+        )
+
         def corrupt_binary(root):
             binary = root / "binaries/test_cp2_production_schur_reducer"
             binary.chmod(0o755)
@@ -3752,6 +4348,467 @@ def run_self_test():
             path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
 
         corruption("strict-fp", remove_fp_flag)
+
+        def remove_preview_fp_flag(root):
+            path = root / "compile_commands.json"
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            matching = [
+                entry for entry in entries
+                if str(entry.get("file", "")).endswith(
+                    "/ov_msckf/src/update/UpdaterMSCKFPreview.cpp"
+                )
+            ]
+            if len(matching) != 1:
+                raise RuntimeError("synthetic fixture lost the preview production command")
+            matching[0]["command"] = matching[0]["command"].replace(
+                " -fsigned-zeros", "", 1
+            )
+            write_json_fixture(path, entries)
+
+        corruption(
+            "preview-production-strict-fp",
+            remove_preview_fp_flag,
+            expected_error=(
+                "ov_msckf/src/update/UpdaterMSCKFPreview.cpp compile command is not "
+                "effectively strict-FP"
+            ),
+        )
+
+        def remove_updater_helper_fp_flag(root):
+            path = root / "compile_commands.json"
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            matching = [
+                entry for entry in entries
+                if str(entry.get("file", "")).endswith(
+                    "/ov_msckf/src/update/UpdaterHelper.cpp"
+                )
+            ]
+            if len(matching) != 1:
+                raise RuntimeError("synthetic fixture lost the updater-helper production command")
+            matching[0]["command"] = matching[0]["command"].replace(
+                " -ffp-contract=off", "", 1
+            )
+            write_json_fixture(path, entries)
+
+        corruption(
+            "updater-helper-production-strict-fp",
+            remove_updater_helper_fp_flag,
+            expected_error=(
+                "ov_msckf/src/update/UpdaterHelper.cpp compile command is not "
+                "effectively strict-FP"
+            ),
+        )
+
+        def remove_state_helper_production_command(root):
+            path = root / "compile_commands.json"
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            retained = [
+                entry for entry in entries
+                if not str(entry.get("file", "")).endswith(
+                    "/ov_msckf/src/state/StateHelper.cpp"
+                )
+            ]
+            if len(retained) != len(entries) - 1:
+                raise RuntimeError("synthetic fixture lost the state-helper production command")
+            write_json_fixture(path, retained)
+
+        corruption(
+            "state-helper-production-inventory",
+            remove_state_helper_production_command,
+            expected_error=(
+                "strict-FP evidence requires exactly one production command for "
+                "ov_msckf/src/state/StateHelper.cpp"
+            ),
+        )
+
+        def remove_eigen_definition(root):
+            path = root / "compile_commands.json"
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            matching = [
+                entry for entry in entries
+                if str(entry.get("file", "")).endswith(
+                    "/ov_msckf/src/update/CP2Canonical.cpp"
+                )
+            ]
+            if len(matching) != 1:
+                raise RuntimeError("synthetic fixture lost the canonical production command")
+            tokens = shlex.split(matching[0]["command"])
+            retained = [
+                token for token in tokens
+                if token not in STRICT_REQUIRED_MACRO_DEFINITIONS[
+                    "EIGEN_DONT_VECTORIZE"
+                ]
+            ]
+            if len(retained) != len(tokens) - 1:
+                raise RuntimeError("synthetic fixture lacks one exact Eigen scalar definition")
+            matching[0]["command"] = " ".join(
+                shlex.quote(token) for token in retained
+            )
+            write_json_fixture(path, entries)
+
+        corruption(
+            "missing-eigen-dont-vectorize",
+            remove_eigen_definition,
+            expected_error=(
+                "ov_msckf/src/update/CP2Canonical.cpp compile command is not "
+                "effectively strict-FP"
+            ),
+        )
+
+        def undefine_eigen_after_definition(root):
+            path = root / "compile_commands.json"
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            matching = [
+                entry for entry in entries
+                if str(entry.get("file", "")).endswith(
+                    "/ov_msckf/src/state/StateHelper.cpp"
+                )
+            ]
+            if len(matching) != 1:
+                raise RuntimeError("synthetic fixture lost the state-helper production command")
+            tokens = shlex.split(matching[0]["command"])
+            output_index = tokens.index("-o")
+            tokens.insert(output_index, "-UEIGEN_DONT_VECTORIZE")
+            matching[0]["command"] = " ".join(shlex.quote(token) for token in tokens)
+            write_json_fixture(path, entries)
+
+        corruption(
+            "eigen-dont-vectorize-later-undefined",
+            undefine_eigen_after_definition,
+            expected_error=(
+                "ov_msckf/src/state/StateHelper.cpp compile command is not "
+                "effectively strict-FP"
+            ),
+        )
+
+        def override_eigen_after_definition(root):
+            path = root / "compile_commands.json"
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            matching = [
+                entry for entry in entries
+                if (
+                    "CMakeFiles/test_cp2_shadow_math.dir/" in str(entry.get("output", ""))
+                    and str(entry.get("file", "")).endswith(
+                        "/ov_msckf/test/cp2/test_cp2_shadow_math.cpp"
+                    )
+                )
+            ]
+            if len(matching) != 1:
+                raise RuntimeError("synthetic fixture lost the shadow-math test command")
+            tokens = shlex.split(matching[0]["command"])
+            output_index = tokens.index("-o")
+            tokens.insert(output_index, "-DEIGEN_DONT_VECTORIZE=0")
+            matching[0]["command"] = " ".join(shlex.quote(token) for token in tokens)
+            write_json_fixture(path, entries)
+
+        corruption(
+            "eigen-dont-vectorize-later-overridden",
+            override_eigen_after_definition,
+            expected_error=(
+                "test_cp2_shadow_math has a non-strict compile command for "
+                "ov_msckf/test/cp2/test_cp2_shadow_math.cpp"
+            ),
+        )
+
+        def rewrite_synthetic_compile_tokens(root, source_suffix, transform):
+            path = root / "compile_commands.json"
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            matching = [
+                entry for entry in entries
+                if str(entry.get("file", "")).endswith("/" + source_suffix)
+            ]
+            if len(matching) != 1:
+                raise RuntimeError(
+                    "synthetic fixture lost exactly one command for " + source_suffix
+                )
+            original = shlex.split(matching[0]["command"])
+            changed = transform(list(original))
+            if changed == original:
+                raise RuntimeError("synthetic compile-command transform made no change")
+            matching[0]["command"] = " ".join(
+                shlex.quote(token) for token in changed
+            )
+            write_json_fixture(path, entries)
+
+        def remove_exact_token(tokens, token):
+            if tokens.count(token) != 1:
+                raise RuntimeError("synthetic command lacks exactly one " + token)
+            tokens.remove(token)
+            return tokens
+
+        def insert_before_output(tokens, token):
+            output_positions = [
+                index for index, value in enumerate(tokens) if value == "-o"
+            ]
+            if len(output_positions) != 1:
+                raise RuntimeError("synthetic command lacks exactly one -o")
+            tokens.insert(output_positions[0], token)
+            return tokens
+
+        def replace_exact_token(tokens, old, new):
+            if tokens.count(old) != 1:
+                raise RuntimeError("synthetic command lacks exactly one " + old)
+            tokens[tokens.index(old)] = new
+            return tokens
+
+        def remove_max_align_bytes(root):
+            rewrite_synthetic_compile_tokens(
+                root,
+                "ov_msckf/src/update/CP2FeatureGate.cpp",
+                lambda tokens: remove_exact_token(
+                    tokens, "-DEIGEN_MAX_ALIGN_BYTES=16"
+                ),
+            )
+
+        corruption(
+            "missing-eigen-max-align-bytes",
+            remove_max_align_bytes,
+            expected_error=(
+                "ov_msckf/src/update/CP2FeatureGate.cpp compile command is not "
+                "effectively strict-FP"
+            ),
+        )
+
+        def remove_max_static_align_bytes(root):
+            rewrite_synthetic_compile_tokens(
+                root,
+                "ov_msckf/src/update/SchurUpdate.cpp",
+                lambda tokens: remove_exact_token(
+                    tokens, "-DEIGEN_MAX_STATIC_ALIGN_BYTES=16"
+                ),
+            )
+
+        corruption(
+            "missing-eigen-max-static-align-bytes",
+            remove_max_static_align_bytes,
+            expected_error=(
+                "ov_msckf/src/update/SchurUpdate.cpp compile command is not "
+                "effectively strict-FP"
+            ),
+        )
+
+        def undefine_max_static_align_bytes(root):
+            rewrite_synthetic_compile_tokens(
+                root,
+                "ov_msckf/src/update/UpdaterHelper.cpp",
+                lambda tokens: insert_before_output(
+                    tokens, "-UEIGEN_MAX_STATIC_ALIGN_BYTES"
+                ),
+            )
+
+        corruption(
+            "eigen-max-static-align-bytes-later-undefined",
+            undefine_max_static_align_bytes,
+            expected_error=(
+                "ov_msckf/src/update/UpdaterHelper.cpp compile command is not "
+                "effectively strict-FP"
+            ),
+        )
+
+        def zero_max_align_bytes(root):
+            rewrite_synthetic_compile_tokens(
+                root,
+                "ov_msckf/test/cp2/test_cp2_canonical.cpp",
+                lambda tokens: insert_before_output(
+                    tokens, "-DEIGEN_MAX_ALIGN_BYTES=0"
+                ),
+            )
+
+        corruption(
+            "eigen-max-align-bytes-later-zero",
+            zero_max_align_bytes,
+            expected_error=(
+                "test_cp2_canonical has a non-strict compile command for "
+                "ov_msckf/test/cp2/test_cp2_canonical.cpp"
+            ),
+        )
+
+        def override_max_static_align_bytes(root):
+            rewrite_synthetic_compile_tokens(
+                root,
+                "ov_msckf/test/cp2/test_cp2_feature_gate.cpp",
+                lambda tokens: insert_before_output(
+                    tokens, "-DEIGEN_MAX_STATIC_ALIGN_BYTES=32"
+                ),
+            )
+
+        corruption(
+            "eigen-max-static-align-bytes-later-other",
+            override_max_static_align_bytes,
+            expected_error=(
+                "test_cp2_feature_gate has a non-strict compile command for "
+                "ov_msckf/test/cp2/test_cp2_feature_gate.cpp"
+            ),
+        )
+
+        def make_max_align_bytes_opaque(root):
+            rewrite_synthetic_compile_tokens(
+                root,
+                "ov_msckf/test/cp2/test_updater_msckf_preview_snapshot.cpp",
+                lambda tokens: replace_exact_token(
+                    tokens,
+                    "-DEIGEN_MAX_ALIGN_BYTES=16",
+                    "-Wp,-DEIGEN_MAX_ALIGN_BYTES=16",
+                ),
+            )
+
+        corruption(
+            "eigen-max-align-bytes-opaque",
+            make_max_align_bytes_opaque,
+            expected_error=(
+                "test_cp2_updater_msckf_preview_snapshot has a non-strict compile "
+                "command for ov_msckf/test/cp2/test_updater_msckf_preview_snapshot.cpp"
+            ),
+        )
+
+        def rewrite_dependency_compile_tokens(root, package, transform):
+            path = root / DEPENDENCY_COMPILE_COMMAND_ARTIFACTS[package]
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(entries, list)
+                or len(entries) != DEPENDENCY_EXPECTED_COMMAND_COUNTS[package]
+            ):
+                raise RuntimeError(
+                    "synthetic dependency compile database lost its exact fixture inventory"
+                )
+            original = shlex.split(entries[0]["command"])
+            changed = transform(list(original))
+            if changed == original:
+                raise RuntimeError("dependency compile-command transform made no change")
+            entries[0]["command"] = " ".join(
+                shlex.quote(token) for token in changed
+            )
+            write_json_fixture(path, entries)
+
+        def corrupt_ov_core_eigen_abi(root):
+            rewrite_dependency_compile_tokens(
+                root,
+                "ov_core",
+                lambda tokens: remove_exact_token(
+                    tokens, "-DEIGEN_MAX_ALIGN_BYTES=16"
+                ),
+            )
+
+        corruption(
+            "ov-core-dependency-eigen-abi",
+            corrupt_ov_core_eigen_abi,
+            expected_error=(
+                "ov_core command 0 for ov_core/src/synthetic_abi_probe_0.cpp fails "
+                "dependency ABI/source/output proof"
+            ),
+        )
+
+        def make_ov_core_dont_vectorize_bare(root):
+            rewrite_dependency_compile_tokens(
+                root,
+                "ov_core",
+                lambda tokens: replace_exact_token(
+                    tokens,
+                    "-DEIGEN_DONT_VECTORIZE=1",
+                    "-DEIGEN_DONT_VECTORIZE",
+                ),
+            )
+
+        corruption(
+            "ov-core-dependency-dont-vectorize-bare",
+            make_ov_core_dont_vectorize_bare,
+            expected_error=(
+                "ov_core command 0 for ov_core/src/synthetic_abi_probe_0.cpp fails "
+                "dependency ABI/source/output proof"
+            ),
+        )
+
+        def corrupt_ov_init_eigen_abi(root):
+            rewrite_dependency_compile_tokens(
+                root,
+                "ov_init",
+                lambda tokens: insert_before_output(
+                    tokens, "-UEIGEN_MAX_STATIC_ALIGN_BYTES"
+                ),
+            )
+
+        corruption(
+            "ov-init-dependency-eigen-abi",
+            corrupt_ov_init_eigen_abi,
+            expected_error=(
+                "ov_init command 0 for ov_init/src/synthetic_abi_probe_0.cpp fails "
+                "dependency ABI/source/output proof"
+            ),
+        )
+
+        def truncate_ov_core_compile_commands(root):
+            path = root / DEPENDENCY_COMPILE_COMMAND_ARTIFACTS["ov_core"]
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            if len(entries) != DEPENDENCY_EXPECTED_COMMAND_COUNTS["ov_core"]:
+                raise RuntimeError("synthetic ov_core command inventory changed")
+            entries.pop()
+            write_json_fixture(path, entries)
+
+        corruption(
+            "ov-core-dependency-command-count",
+            truncate_ov_core_compile_commands,
+            expected_error="ov_core compile_commands.json must contain exactly 21 compile commands",
+        )
+
+        def duplicate_ov_init_source(root):
+            path = root / DEPENDENCY_COMPILE_COMMAND_ARTIFACTS["ov_init"]
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            if len(entries) != DEPENDENCY_EXPECTED_COMMAND_COUNTS["ov_init"]:
+                raise RuntimeError("synthetic ov_init command inventory changed")
+            duplicated_source = entries[0]["file"]
+            tokens = shlex.split(entries[1]["command"])
+            tokens[tokens.index("-c") + 1] = duplicated_source
+            entries[1]["file"] = duplicated_source
+            entries[1]["command"] = " ".join(shlex.quote(token) for token in tokens)
+            write_json_fixture(path, entries)
+
+        corruption(
+            "ov-init-dependency-duplicate-source",
+            duplicate_ov_init_source,
+            expected_error="ov_init compile commands do not have unique normalized sources",
+        )
+
+        def escape_ov_core_output(root):
+            rewrite_dependency_compile_tokens(
+                root,
+                "ov_core",
+                lambda tokens: replace_exact_token(
+                    tokens,
+                    tokens[tokens.index("-o") + 1],
+                    "../escaped-object.o",
+                ),
+            )
+
+        corruption(
+            "ov-core-dependency-output-root",
+            escape_ov_core_output,
+            expected_error=(
+                "ov_core command 0 for ov_core/src/synthetic_abi_probe_0.cpp fails "
+                "dependency ABI/source/output proof"
+            ),
+        )
+
+        def remove_shadow_math_test_source(root):
+            path = root / "compile_commands.json"
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            retained = [
+                entry for entry in entries
+                if not (
+                    "CMakeFiles/test_cp2_shadow_math.dir/" in str(entry.get("output", ""))
+                    and str(entry.get("file", "")).endswith(
+                        "/ov_msckf/test/cp2/test_cp2_shadow_math.cpp"
+                    )
+                )
+            ]
+            if len(retained) != len(entries) - 1:
+                raise RuntimeError("synthetic fixture lost the shadow-math target source")
+            write_json_fixture(path, retained)
+
+        corruption(
+            "shadow-math-target-source-inventory",
+            remove_shadow_math_test_source,
+            expected_error="test_cp2_shadow_math strict-FP source inventory mismatch",
+        )
 
         def fail_status(root):
             mutate_json(

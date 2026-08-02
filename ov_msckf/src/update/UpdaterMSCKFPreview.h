@@ -115,6 +115,39 @@ struct MSCKFUpdatePreviewResult {
 };
 
 /**
+ * @brief One value-only block in an MSCKF update snapshot or Jacobian layout.
+ *
+ * For a snapshot state block, @p covariance_id and @p offset are both the
+ * first row/column occupied by the block in the full covariance and must be
+ * equal. For a Jacobian-layout block, @p
+ * covariance_id is the first row/column occupied by the measured variable in
+ * the full covariance and @p offset is its first column in the supplied
+ * Jacobian. In both uses, @p size is the error-state dimension.
+ *
+ * Snapshot state blocks form an ordered, unique, complete partition of the
+ * covariance with no identity/offset indirection. Jacobian blocks are ordered
+ * by their explicit offsets, unique and nonoverlapping in covariance
+ * coordinates, and cover every Jacobian column exactly once.
+ */
+struct MSCKFUpdatePreviewBlock {
+  Eigen::Index covariance_id = -1;
+  Eigen::Index size = 0;
+  Eigen::Index offset = -1;
+};
+
+/**
+ * @brief Owning value-only state input for an MSCKF update preview.
+ *
+ * This type intentionally contains no State, Type, Feature, or other live
+ * object pointer. It is therefore suitable for the CP2 shadow and offline
+ * replay paths, which must operate only on an immutable pre-mutation prior.
+ */
+struct MSCKFUpdatePreviewSnapshot {
+  Eigen::MatrixXd covariance;
+  std::vector<MSCKFUpdatePreviewBlock> state_blocks;
+};
+
+/**
  * @brief Read-only preview of StateHelper::EKFUpdate for an MSCKF system.
  *
  * The helper snapshots the full covariance, constructs the full-state
@@ -129,6 +162,28 @@ struct MSCKFUpdatePreviewResult {
  */
 class UpdaterMSCKFPreview {
 public:
+  /**
+   * @brief Compute a read-only proposal from owning value inputs only.
+   *
+   * The arithmetic and validation order after layout validation match
+   * StateHelper::EKFUpdate exactly: block-ordered cross covariance, marginal
+   * covariance, upper-triangle innovation, upper-triangle LLT inverse,
+   * Kalman gain, subtractive/mirrored posterior, diagonal check, and state
+   * increment. No input is mutated and no repair or fallback is attempted.
+   *
+   * @param snapshot Full covariance and ordered active-state partition.
+   * @param jacobian_layout Value-only mapping from H columns to covariance.
+   * @param H Globally compressed measurement Jacobian.
+   * @param residual Globally compressed residual.
+   * @param R Measurement covariance.
+   * @return Accepted full proposal or an exact rejection stage.
+   */
+  static MSCKFUpdatePreviewResult
+  ComputeFromSnapshot(const MSCKFUpdatePreviewSnapshot &snapshot,
+                      const std::vector<MSCKFUpdatePreviewBlock> &jacobian_layout,
+                      const Eigen::MatrixXd &H, const Eigen::VectorXd &residual,
+                      const Eigen::MatrixXd &R);
+
   /**
    * @param state State whose covariance is read without mutation.
    * @param H_order State-variable ordering represented by the columns of H.

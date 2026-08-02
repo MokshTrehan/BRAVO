@@ -29,7 +29,7 @@
 
 #include <Eigen/Cholesky>
 
-#include <algorithm>
+#include <cstddef>
 #include <vector>
 
 namespace ov_msckf {
@@ -98,42 +98,124 @@ MSCKFUpdatePreviewResult UpdaterMSCKFPreview::Compute(const std::shared_ptr<Stat
     return result;
   }
 
-  // This is a copy; no live state field is exposed or mutated by the preview.
-  const Eigen::MatrixXd P = StateHelper::get_full_covariance(state);
+  // This adapter is the only live-object surface. It takes owning value
+  // copies, records the exact StateHelper block orders, and delegates all
+  // validation and arithmetic to the pointer-free kernel below.
+  MSCKFUpdatePreviewSnapshot snapshot;
+  snapshot.covariance = StateHelper::get_full_covariance(state);
+  snapshot.state_blocks.reserve(state->_variables.size());
+  for (const auto &variable : state->_variables) {
+    if (!variable) {
+      snapshot.state_blocks.push_back({-1, 0, -1});
+      continue;
+    }
+    snapshot.state_blocks.push_back({variable->id(), variable->size(), variable->id()});
+  }
+
+  std::vector<MSCKFUpdatePreviewBlock> jacobian_layout;
+  jacobian_layout.reserve(H_order.size());
+  Eigen::Index ordered_column = 0;
+  for (const auto &variable : H_order) {
+    if (!variable) {
+      jacobian_layout.push_back({-1, 0, ordered_column});
+      continue;
+    }
+    jacobian_layout.push_back({variable->id(), variable->size(), ordered_column});
+    ordered_column += variable->size();
+  }
+
+  return ComputeFromSnapshot(snapshot, jacobian_layout, H, residual, R);
+}
+
+MSCKFUpdatePreviewResult UpdaterMSCKFPreview::ComputeFromSnapshot(
+    const MSCKFUpdatePreviewSnapshot &snapshot,
+    const std::vector<MSCKFUpdatePreviewBlock> &jacobian_layout,
+    const Eigen::MatrixXd &H, const Eigen::VectorXd &residual,
+    const Eigen::MatrixXd &R) {
+  MSCKFUpdatePreviewResult result;
+  result.diagnostics.measurement_dimension = residual.rows();
+  result.diagnostics.jacobian_dimension = H.cols();
+
+  const Eigen::MatrixXd &P = snapshot.covariance;
   result.diagnostics.state_dimension = P.rows();
 
   const Eigen::Index n = P.rows();
   const Eigen::Index m = residual.rows();
-  if (n <= 0 || m <= 0 || P.cols() != n || H.rows() != m || H.cols() <= 0 || R.rows() != m || R.cols() != m || H_order.empty()) {
+  if (n <= 0 || m <= 0 || P.cols() != n || H.rows() != m || H.cols() <= 0 ||
+      R.rows() != m || R.cols() != m || jacobian_layout.empty()) {
     result.diagnostics.status = MSCKFUpdatePreviewStatus::kInvalidInput;
     result.diagnostics.stage = MSCKFUpdatePreviewStage::kInputDimensions;
     return result;
   }
 
+  // The owning snapshot must describe every covariance coordinate exactly
+  // once, in increasing ID and offset order. This is the value-only analogue
+  // of State::_variables and fixes the block loop order used by EKFUpdate.
+  if (snapshot.state_blocks.empty()) {
+    result.diagnostics.offending_order_index = 0;
+    result.diagnostics.status = MSCKFUpdatePreviewStatus::kInvalidInput;
+    result.diagnostics.stage = MSCKFUpdatePreviewStage::kStateOrder;
+    return result;
+  }
+  Eigen::Index expected_state_offset = 0;
+  Eigen::Index previous_covariance_id = -1;
+  for (std::size_t block_index = 0; block_index < snapshot.state_blocks.size(); ++block_index) {
+    const MSCKFUpdatePreviewBlock &block = snapshot.state_blocks[block_index];
+    const bool invalid_range = block.covariance_id < 0 || block.size <= 0 || block.offset < 0 ||
+                               block.offset > n - block.size || block.covariance_id != block.offset;
+    const bool invalid_order = block.offset != expected_state_offset ||
+                               (block_index > 0 && block.covariance_id <= previous_covariance_id);
+    if (invalid_range || invalid_order) {
+      result.diagnostics.offending_order_index = static_cast<Eigen::Index>(block_index);
+      result.diagnostics.status = MSCKFUpdatePreviewStatus::kInvalidInput;
+      result.diagnostics.stage = MSCKFUpdatePreviewStage::kStateOrder;
+      return result;
+    }
+    expected_state_offset += block.size;
+    previous_covariance_id = block.covariance_id;
+  }
+  if (expected_state_offset != n) {
+    result.diagnostics.offending_order_index =
+        static_cast<Eigen::Index>(snapshot.state_blocks.size());
+    result.diagnostics.status = MSCKFUpdatePreviewStatus::kInvalidInput;
+    result.diagnostics.stage = MSCKFUpdatePreviewStage::kStateOrder;
+    return result;
+  }
+
   // Validate every compressed-Jacobian block before any Eigen block access.
-  // H_order need not be sorted by covariance id, but it must be injective in
-  // covariance coordinates and must account for every column of H exactly.
+  // The layout may select a top-level state block or any contained
+  // subvariable, but it must be injective in covariance coordinates and must
+  // account for every column of H exactly.
   Eigen::Index ordered_column = 0;
   std::vector<unsigned char> covered(static_cast<std::size_t>(n), 0);
-  for (std::size_t order_index = 0; order_index < H_order.size(); ++order_index) {
-    const std::shared_ptr<ov_type::Type> &variable = H_order[order_index];
-    if (!variable) {
+  for (std::size_t order_index = 0; order_index < jacobian_layout.size(); ++order_index) {
+    const MSCKFUpdatePreviewBlock &block = jacobian_layout[order_index];
+    if (block.covariance_id < 0 || block.size <= 0 || block.offset != ordered_column ||
+        block.covariance_id > n - block.size || block.offset > H.cols() - block.size) {
       result.diagnostics.offending_order_index = static_cast<Eigen::Index>(order_index);
       result.diagnostics.status = MSCKFUpdatePreviewStatus::kInvalidInput;
       result.diagnostics.stage = MSCKFUpdatePreviewStage::kStateOrder;
       return result;
     }
 
-    const Eigen::Index id = variable->id();
-    const Eigen::Index size = variable->size();
-    if (id < 0 || size <= 0 || id > n - size || ordered_column > H.cols() - size) {
+    bool contained_by_state_block = false;
+    for (const MSCKFUpdatePreviewBlock &state_block : snapshot.state_blocks) {
+      if (block.covariance_id >= state_block.offset &&
+          block.covariance_id <= state_block.offset + state_block.size - block.size) {
+        contained_by_state_block = true;
+        break;
+      }
+    }
+    if (!contained_by_state_block) {
       result.diagnostics.offending_order_index = static_cast<Eigen::Index>(order_index);
       result.diagnostics.status = MSCKFUpdatePreviewStatus::kInvalidInput;
       result.diagnostics.stage = MSCKFUpdatePreviewStage::kStateOrder;
       return result;
     }
-    for (Eigen::Index offset = 0; offset < size; ++offset) {
-      const std::size_t covariance_index = static_cast<std::size_t>(id + offset);
+
+    for (Eigen::Index covariance_offset = 0; covariance_offset < block.size; ++covariance_offset) {
+      const std::size_t covariance_index =
+          static_cast<std::size_t>(block.covariance_id + covariance_offset);
       if (covered[covariance_index] != 0) {
         result.diagnostics.offending_order_index = static_cast<Eigen::Index>(order_index);
         result.diagnostics.status = MSCKFUpdatePreviewStatus::kInvalidInput;
@@ -142,7 +224,7 @@ MSCKFUpdatePreviewResult UpdaterMSCKFPreview::Compute(const std::shared_ptr<Stat
       }
       covered[covariance_index] = 1;
     }
-    ordered_column += size;
+    ordered_column += block.size;
   }
   result.diagnostics.ordered_jacobian_dimension = ordered_column;
   if (ordered_column != H.cols()) {
@@ -159,25 +241,20 @@ MSCKFUpdatePreviewResult UpdaterMSCKFPreview::Compute(const std::shared_ptr<Stat
 
   // Match StateHelper::EKFUpdate's block ordering exactly rather than relying
   // on a mathematically equivalent full GEMM. This retains the correction to
-  // every directly unobserved state block correlated with H_order while also
-  // making the preflight's floating-point proposal track the live commit.
+  // every directly unobserved state block correlated with the Jacobian layout
+  // while also making the preflight's floating-point proposal track the live
+  // commit.
   Eigen::MatrixXd M = Eigen::MatrixXd::Zero(n, m);
-  std::vector<Eigen::Index> H_column_ids;
-  H_column_ids.reserve(H_order.size());
-  ordered_column = 0;
-  for (const auto &variable : H_order) {
-    H_column_ids.push_back(ordered_column);
-    ordered_column += variable->size();
-  }
-  for (const auto &state_variable : state->_variables) {
-    Eigen::MatrixXd M_block = Eigen::MatrixXd::Zero(state_variable->size(), m);
-    for (std::size_t order_index = 0; order_index < H_order.size(); ++order_index) {
-      const auto &measurement_variable = H_order[order_index];
-      M_block.noalias() +=
-          P.block(state_variable->id(), measurement_variable->id(), state_variable->size(), measurement_variable->size()) *
-          H.block(0, H_column_ids[order_index], m, measurement_variable->size()).transpose();
+  for (const MSCKFUpdatePreviewBlock &state_block : snapshot.state_blocks) {
+    Eigen::MatrixXd M_block = Eigen::MatrixXd::Zero(state_block.size, m);
+    for (const MSCKFUpdatePreviewBlock &measurement_block : jacobian_layout) {
+      M_block.noalias() += P.block(state_block.offset, measurement_block.covariance_id,
+                                   state_block.size, measurement_block.size) *
+                           H.block(0, measurement_block.offset, m,
+                                   measurement_block.size)
+                               .transpose();
     }
-    M.block(state_variable->id(), 0, state_variable->size(), m) = M_block;
+    M.block(state_block.offset, 0, state_block.size, m) = M_block;
   }
   if (!M.allFinite()) {
     result.diagnostics.status = MSCKFUpdatePreviewStatus::kNonfinite;
@@ -185,18 +262,19 @@ MSCKFUpdatePreviewResult UpdaterMSCKFPreview::Compute(const std::shared_ptr<Stat
     return result;
   }
 
-  // Copy P_small in the exact H_order block layout used by EKFUpdate. Using
-  // the covariance snapshot keeps M and S internally consistent.
+  // Copy P_small in the exact Jacobian block layout used by EKFUpdate. Using
+  // one owning covariance snapshot keeps M and S internally consistent.
   Eigen::MatrixXd P_small(H.cols(), H.cols());
   Eigen::Index row = 0;
-  for (const auto &row_variable : H_order) {
+  for (const MSCKFUpdatePreviewBlock &row_block : jacobian_layout) {
     Eigen::Index col = 0;
-    for (const auto &col_variable : H_order) {
-      P_small.block(row, col, row_variable->size(), col_variable->size()) =
-          P.block(row_variable->id(), col_variable->id(), row_variable->size(), col_variable->size());
-      col += col_variable->size();
+    for (const MSCKFUpdatePreviewBlock &column_block : jacobian_layout) {
+      P_small.block(row, col, row_block.size, column_block.size) =
+          P.block(row_block.covariance_id, column_block.covariance_id,
+                  row_block.size, column_block.size);
+      col += column_block.size;
     }
-    row += row_variable->size();
+    row += row_block.size;
   }
   if (!P_small.allFinite()) {
     result.diagnostics.status = MSCKFUpdatePreviewStatus::kNonfinite;
