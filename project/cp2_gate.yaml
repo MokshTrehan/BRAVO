@@ -14,6 +14,8 @@ gate:
   deadline_scope_impact: cp2_evidence_delayed_cp3_schedule_compressed_requirements_unchanged
   source_of_truth: docs/checkpoints.md
   implementation_contract: docs/cp2_one_pass_contract.md
+  recorded_evidence_contract: docs/cp2_recorded_evidence_contract.md
+  artifact_schema: docs/cp2_artifact_schema.md
   cp1_authorization_commit: 8d80f483752411d34a3bc4c1ff6330b3a5c0fef3
   branch: schurvio-lite/cp2-one-pass
 
@@ -26,12 +28,16 @@ scope:
   valid_configuration_values: [nullspace, schur]
   frozen_euroc_yaml_modified_for_mode_key: false
   evidence_mode_selection: dedicated_ros_launch_override
+  evidence_launch: project/cp2_serial.launch
+  evidence_launch_sha256: bede519721575d769a1fcef67c5527661cb39ba05ab77faa6c20771b0756c49a
   landmark_representation: GLOBAL_3D
   landmark_dimension: 3
   startup_validation:
     mode_known: required
     sigma_px_finite_and_strictly_positive: required
     sigma_px_squared_finite_and_strictly_positive_binary64: required
+    chi2_multiplier_finite: required
+    chi2_constructor_table_q_1_through_499_finite: required
     schur_representation_GLOBAL_3D: required
     failure: fail_fast_before_feature_processing
   camera_model: CamRadtan
@@ -41,6 +47,8 @@ scope:
   camera_extrinsic_calibration: false
   camera_intrinsic_calibration: false
   camera_timeoffset_calibration: false
+  imu_intrinsic_calibration: false
+  imu_g_sensitivity_calibration: false
   ground_truth_initialization: false
   fixed_two_pass_permitted: false
   direct_information_covariance_update_permitted: false
@@ -99,23 +107,10 @@ checkpoints:
     status: pending
     minimum_visual_updates: 1000
     counted_record: accepted_nonempty_global_system_preflight_passed_and_baseline_committed
-    noncounted_records_reported: [all_rejected, empty_after_compression, preflight_rejected]
+    noncounted_records_reported: [empty_input, all_rejected, empty_after_compression, preflight_rejected, internal_failure]
     disagreement_exempts_state_or_covariance_bound: false
     minimum_accept_reject_agreement: 0.999
     source: deterministic_serial_ROS1_on_predeclared_CP2_bags_offsets_and_config
-    feature_agreement_denominator: all_attempted_feature_gate_decisions_in_counted_nonempty_updates
-    row_weighted_agreement_denominator: sum_raw_measurement_rows_over_all_attempted_feature_gate_decisions
-    both_agreements_required: true
-    state_block_tolerance:
-      absolute: 1.0e-8
-      relative: 1.0e-6
-    covariance_scope: every_block_pair
-    covariance_block_pair_tolerance:
-      absolute: 1.0e-8
-      relative: 1.0e-6
-  CP2-D:
-    name: sequence_parity
-    status: pending
     sequences: [MH_01_easy, MH_03_medium, V1_01_easy]
     startup_offsets_seconds:
       MH_01_easy: 40.0
@@ -129,6 +124,90 @@ checkpoints:
       estimator: b706f0082106e49e20c3292147d238b7e225b0df414106b9d4ac009bbb123f3b
       imu: 408ea8b60b5f9e7c8251e6d302f04c0675bfefdd31229bb1afd139bc8f4a0287
       imucam: b9e11b7bcda102f7c8c384c97318d67f3916b58942f9073722f83c22bd7073f7
+    ground_truth_sha256:
+      MH_01_easy: ab1579de35a047d241e2d0d1a4f4306b4fa51d99c6f11bcdebf336ab2b784df9
+      MH_03_medium: 8c7c9873f5cb102eda2b68d665134f144eed9d5778f0dbdc82bbf8e8fdbd558e
+      V1_01_easy: 6d2f961334ff3069105be0aacf118d3c7e82bf3ab0e238acd5f40f1d897573d1
+    process_all_sequences_to_completion: true
+    stop_after_minimum_visual_updates: false
+    feature_agreement_denominator: union_of_per_mode_finite_boolean_gate_decisions_in_all_updater_invocations
+    row_weighted_agreement_denominator: sum_pre_elimination_raw_rows_over_same_union_in_all_updater_invocations
+    official_gate_population: union_of_per_mode_finite_boolean_gate_decisions_counted_once_per_feature
+    official_gate_match_population: intersection_with_equal_boolean_decision
+    one_sided_missing_gate_decision: denominator_only_disagreement
+    both_sided_missing_gate_decision: traced_but_not_in_gate_denominator
+    row_weight: pre_elimination_raw_measurement_rows
+    ratio_check: exact_integer_cross_product_1000_numerator_gte_999_denominator
+    both_agreements_required: true
+    accepted_set_digest: sha256_domain_separated_sorted_unique_big_endian_uint64_v1
+    accepted_sequence_digest: sha256_domain_separated_processing_order_big_endian_uint64_v1
+    per_feature_statistics_population: every_shared_raw_system_in_every_invocation_where_both_reductions_are_valid
+    per_feature_statistics_failure: any_unavailable_nonfinite_or_out_of_tolerance_comparison_fails_campaign
+    per_feature_statistics_tolerance:
+      absolute: 1.0e-10
+      relative: 1.0e-8
+    nullspace_statistics_evaluation: direct_elementwise_whitening_then_gemm_dot_and_post_raw_check_symmetrization
+    schur_statistics_source: accepted_production_reducer_result_without_unwhitened_reconstruction
+    statistics_floating_point: strict_no_fast_math_no_fp_contraction
+    disagreement_classes:
+      - both_match_accept
+      - both_match_reject
+      - boolean_nullspace_accept_schur_reject
+      - boolean_nullspace_reject_schur_accept
+      - nullspace_only
+      - schur_only
+      - neither_decision
+    shadow_enablement: orthogonal_evidence_capability_live_mode_must_be_nullspace
+    trace_level: recorded_full
+    launch_outputs:
+      save_total_state: false
+      record_openvins_timing: false
+    candidate_missing_proposal_on_counted_record: hard_failure
+    candidate_live_write_count_required: 0
+    baseline_ekf_update_calls_per_counted_record: 1
+    state_block_tolerance:
+      absolute: 1.0e-8
+      relative: 1.0e-6
+    state_blocks:
+      - imu_theta
+      - imu_position
+      - imu_velocity
+      - imu_gyro_bias
+      - imu_accel_bias
+      - every_clone_theta
+      - every_clone_position
+      - every_active_slam_landmark_full_error_block
+    unexpected_active_type: fail_evidence_before_hashing
+    covariance_scope: every_block_pair
+    covariance_block_pairs_ordered: true
+    covariance_block_pair_tolerance:
+      absolute: 1.0e-8
+      relative: 1.0e-6
+  CP2-D:
+    name: sequence_parity
+    status: pending
+    trace_level: sequence
+    shadow_enabled: false
+    launch_outputs:
+      save_total_state: true
+      record_openvins_timing: true
+    sequences: [MH_01_easy, MH_03_medium, V1_01_easy]
+    startup_offsets_seconds:
+      MH_01_easy: 40.0
+      MH_03_medium: 5.0
+      V1_01_easy: 0.0
+    bag_sha256:
+      MH_01_easy: 57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9
+      MH_03_medium: c51b0064681dfb287b6653f5fd54e6c56af5d9151c866e17574fdbc527db2311
+      V1_01_easy: 6dc6192fac63dd0a05ba745548b41fe8cae14724168a98865a81d37e681bbc81
+    config_sha256:
+      estimator: b706f0082106e49e20c3292147d238b7e225b0df414106b9d4ac009bbb123f3b
+      imu: 408ea8b60b5f9e7c8251e6d302f04c0675bfefdd31229bb1afd139bc8f4a0287
+      imucam: b9e11b7bcda102f7c8c384c97318d67f3916b58942f9073722f83c22bd7073f7
+    ground_truth_sha256:
+      MH_01_easy: ab1579de35a047d241e2d0d1a4f4306b4fa51d99c6f11bcdebf336ab2b784df9
+      MH_03_medium: 8c7c9873f5cb102eda2b68d665134f144eed9d5778f0dbdc82bbf8e8fdbd558e
+      V1_01_easy: 6d2f961334ff3069105be0aacf118d3c7e82bf3ab0e238acd5f40f1d897573d1
     minimum_selected_input_time_coverage: 0.995
     minimum_processed_synchronized_fraction: 0.995
     synchronized_pair_rule:
@@ -151,6 +230,12 @@ checkpoints:
   CP2-E:
     name: fixed_clock_timing
     status: blocked_pending_fixed_clock_profile
+    trace_level: timing
+    shadow_enabled: false
+    launch_outputs:
+      save_total_state: false
+      record_openvins_timing: false
+      status: draft_non_authorizing_pending_timing_profile
     observed_governor: ondemand
     primary_sample: nonempty_msckf_invocation_reaching_and_committing_global_update
     clock: std_chrono_steady_clock_integer_nanoseconds

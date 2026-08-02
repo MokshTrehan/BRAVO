@@ -1,0 +1,50 @@
+<launch>
+    <!-- Frozen CP2 serial surface. No ground-truth initialization parameter is permitted. -->
+    <arg name="bag" />
+    <arg name="bag_start" />
+    <arg name="config_path" />
+    <arg name="path_state" />
+    <arg name="path_std" />
+    <arg name="path_time" />
+    <arg name="save_total_state" default="false" />
+    <arg name="record_openvins_timing" default="false" />
+    <arg name="cp2_trace_directory" />
+    <arg name="cp2_context_path" />
+    <arg name="cp2_sequence_id" />
+    <arg name="cp2_sequence_index" />
+    <arg name="landmark_elimination" />
+    <arg name="cp2_shadow_enabled" />
+    <arg name="cp2_trace_level" />
+    <arg name="verbosity" default="INFO" />
+    <node name="cp2_vio" pkg="ov_msckf" type="ros1_serial_msckf"
+          output="screen" clear_params="true" required="true">
+        <param name="path_bag" type="str" value="$(arg bag)" />
+        <param name="bag_start" type="double" value="$(arg bag_start)" />
+        <param name="bag_durr" type="double" value="-1" />
+        <param name="verbosity" type="str" value="$(arg verbosity)" />
+        <param name="config_path" type="str" value="$(arg config_path)" />
+        <param name="use_stereo" type="bool" value="true" />
+        <param name="max_cameras" type="int" value="2" />
+        <param name="num_opencv_threads" type="int" value="0" />
+        <param name="multi_threading_pubs" type="bool" value="false" />
+        <param name="multi_threading_subs" type="bool" value="false" />
+        <param name="calib_cam_extrinsics" type="bool" value="false" />
+        <param name="calib_cam_intrinsics" type="bool" value="false" />
+        <param name="calib_cam_timeoffset" type="bool" value="false" />
+        <param name="calib_imu_intrinsics" type="bool" value="false" />
+        <param name="calib_imu_g_sensitivity" type="bool" value="false" />
+        <param name="up_msckf_landmark_elimination" type="str"
+               value="$(arg landmark_elimination)" />
+        <param name="save_total_state" type="bool" value="$(arg save_total_state)" />
+        <param name="filepath_est" type="str" value="$(arg path_state)" />
+        <param name="filepath_std" type="str" value="$(arg path_std)" />
+        <param name="record_timing_information" type="bool" value="$(arg record_openvins_timing)" />
+        <param name="record_timing_filepath" type="str" value="$(arg path_time)" />
+        <param name="cp2_trace_directory" type="str" value="$(arg cp2_trace_directory)" />
+        <param name="cp2_context_path" type="str" value="$(arg cp2_context_path)" />
+        <param name="cp2_sequence_id" type="str" value="$(arg cp2_sequence_id)" />
+        <param name="cp2_sequence_index" type="int" value="$(arg cp2_sequence_index)" />
+        <param name="cp2_shadow_enabled" type="bool" value="$(arg cp2_shadow_enabled)" />
+        <param name="cp2_trace_level" type="str" value="$(arg cp2_trace_level)" />
+    </node>
+</launch>
