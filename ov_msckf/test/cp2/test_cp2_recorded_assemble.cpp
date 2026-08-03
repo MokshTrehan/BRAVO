@@ -12,28 +12,34 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cfenv>
+#include <chrono>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <dirent.h>
 #include <fcntl.h>
 #include <memory>
+#include <poll.h>
 #include <string>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 
-#ifndef CP2_RECORDED_ASSEMBLER_PATH
-#error "CP2_RECORDED_ASSEMBLER_PATH must name the built assembler"
-#endif
-
 namespace ov_msckf {
 int cp2_recorded_assemble_entry(int argc, char **argv) noexcept;
 }
 
 namespace {
+
+constexpr int kHarnessCleanupFailureExit = 90;
+constexpr int kHarnessParentDeathContractExit = 91;
+constexpr int kHarnessDiagnosticRedirectExit = 92;
+constexpr int kHarnessRoundingSetupExit = 93;
 
 class MemoryWriter final : public ov_msckf::CP2TraceJournalWriter {
 public:
@@ -123,36 +129,183 @@ public:
   std::string path;
 };
 
-int run_assembler(const std::string &spec, const std::string &output) {
-  const pid_t child = ::fork();
-  if (child == 0) {
-    ::execl(CP2_RECORDED_ASSEMBLER_PATH, CP2_RECORDED_ASSEMBLER_PATH,
-            "--spec", spec.c_str(), "--output-dir", output.c_str(),
-            static_cast<char *>(nullptr));
-    _exit(127);
-  }
-  if (child < 0) return -1;
-  int status = 0;
-  if (::waitpid(child, &status, 0) != child) return -1;
-  return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-}
-
-int run_assembler_with_rounding(const std::string &spec,
-                                const std::string &output, int rounding) {
-  const int original = std::fegetround();
-  if (original < 0 || std::fesetround(rounding) != 0)
-    return -1;
-  const std::string executable(CP2_RECORDED_ASSEMBLER_PATH);
+int invoke_assembler(const std::string &spec, const std::string &output) {
+  const std::string executable("cp2_recorded_assemble");
   const std::string spec_flag("--spec");
   const std::string output_flag("--output-dir");
   char *arguments[] = {
       const_cast<char *>(executable.c_str()),
       const_cast<char *>(spec_flag.c_str()), const_cast<char *>(spec.c_str()),
       const_cast<char *>(output_flag.c_str()),
-      const_cast<char *>(output.c_str())};
-  const int result = ov_msckf::cp2_recorded_assemble_entry(5, arguments);
-  EXPECT_EQ(std::fesetround(original), 0);
-  return result;
+      const_cast<char *>(output.c_str()), nullptr};
+  return ov_msckf::cp2_recorded_assemble_entry(5, arguments);
+}
+
+bool process_is_single_threaded() {
+  DIR *tasks = ::opendir("/proc/self/task");
+  if (tasks == nullptr) return false;
+  std::size_t count = 0U;
+  errno = 0;
+  while (dirent *entry = ::readdir(tasks)) {
+    const std::string name(entry->d_name);
+    if (name != "." && name != "..") ++count;
+  }
+  const bool complete = errno == 0;
+  const bool closed = ::closedir(tasks) == 0;
+  return complete && closed && count == 1U;
+}
+
+bool child_process_contract_ready() {
+  if (!process_is_single_threaded()) return false;
+  struct sigaction action {};
+  if (::sigaction(SIGCHLD, nullptr, &action) != 0) return false;
+  return action.sa_handler == SIG_DFL && (action.sa_flags & SA_NOCLDWAIT) == 0;
+}
+
+bool wait_interval() {
+  const int result = ::poll(nullptr, 0, 10);
+  return result == 0 || (result < 0 && errno == EINTR);
+}
+
+bool terminate_and_reap(pid_t child) {
+  if (::kill(child, SIGKILL) != 0 && errno != ESRCH) return false;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  for (;;) {
+    const pid_t waited = ::waitpid(child, nullptr, WNOHANG);
+    if (waited == child || (waited < 0 && errno == ECHILD)) return true;
+    if (waited < 0 && errno == EINTR) {
+      if (std::chrono::steady_clock::now() >= deadline) return false;
+      continue;
+    }
+    if (waited < 0 || std::chrono::steady_clock::now() >= deadline)
+      return false;
+    if (!wait_interval()) return false;
+  }
+}
+
+void terminate_or_fail_stop(pid_t child) {
+  if (!terminate_and_reap(child)) _exit(kHarnessCleanupFailureExit);
+}
+
+bool wait_for_child(pid_t child, int &status) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  for (;;) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      terminate_or_fail_stop(child);
+      return false;
+    }
+    const pid_t waited = ::waitpid(child, &status, WNOHANG);
+    if (waited == child)
+      return std::chrono::steady_clock::now() < deadline;
+    if (waited < 0 && errno == EINTR) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        terminate_or_fail_stop(child);
+        return false;
+      }
+      continue;
+    }
+    if (waited < 0 && errno == ECHILD) return false;
+    if (waited < 0) {
+      terminate_or_fail_stop(child);
+      return false;
+    }
+    if (!wait_interval()) {
+      terminate_or_fail_stop(child);
+      return false;
+    }
+  }
+}
+
+int anonymous_diagnostic_file() {
+  std::array<char, 64> path{};
+  const char pattern[] = "/tmp/cp2-recorded-stderr-XXXXXX";
+  std::copy(pattern, pattern + sizeof(pattern), path.begin());
+  const int descriptor = ::mkstemp(path.data());
+  if (descriptor < 0) return -1;
+  const bool unlinked = ::unlink(path.data()) == 0;
+  struct stat status {};
+  const bool valid = unlinked && ::fstat(descriptor, &status) == 0 &&
+                     S_ISREG(status.st_mode) && status.st_nlink == 0 &&
+                     (status.st_mode & 0777) == 0600;
+  if (!valid) {
+    (void)::close(descriptor);
+    if (!unlinked) (void)::unlink(path.data());
+    return -1;
+  }
+  return descriptor;
+}
+
+bool read_diagnostic(int descriptor, std::string &diagnostic) {
+  constexpr std::size_t maximum_size = 65536U;
+  struct stat status {};
+  if (::fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode) ||
+      status.st_nlink != 0 || status.st_size < 0 ||
+      static_cast<std::uintmax_t>(status.st_size) > maximum_size) {
+    return false;
+  }
+  diagnostic.assign(static_cast<std::size_t>(status.st_size), '\0');
+  std::size_t offset = 0U;
+  while (offset < diagnostic.size()) {
+    const ssize_t amount =
+        ::pread(descriptor, &diagnostic[offset], diagnostic.size() - offset,
+                static_cast<off_t>(offset));
+    if (amount < 0 && errno == EINTR) continue;
+    if (amount <= 0) return false;
+    offset += static_cast<std::size_t>(amount);
+  }
+  struct stat final_status {};
+  return ::fstat(descriptor, &final_status) == 0 &&
+         final_status.st_dev == status.st_dev &&
+         final_status.st_ino == status.st_ino &&
+         final_status.st_size == status.st_size && final_status.st_nlink == 0;
+}
+
+int run_assembler(const std::string &spec, const std::string &output,
+                  const std::string &expected_diagnostic = std::string(),
+                  int child_rounding = FE_TONEAREST) {
+  if (!child_process_contract_ready() ||
+      std::fegetround() != FE_TONEAREST) return -1;
+  const int diagnostic = anonymous_diagnostic_file();
+  if (diagnostic < 0) return -1;
+  if (!child_process_contract_ready() ||
+      std::fegetround() != FE_TONEAREST) {
+    (void)::close(diagnostic);
+    return -1;
+  }
+  const pid_t parent = ::getpid();
+  const pid_t child = ::fork();
+  if (child == 0) {
+    if (::prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || ::getppid() != parent)
+      _exit(kHarnessParentDeathContractExit);
+    if (::dup2(diagnostic, STDERR_FILENO) < 0)
+      _exit(kHarnessDiagnosticRedirectExit);
+    if (diagnostic != STDERR_FILENO) (void)::close(diagnostic);
+    if (std::fesetround(child_rounding) != 0 ||
+        std::fegetround() != child_rounding) {
+      _exit(kHarnessRoundingSetupExit);
+    }
+    _exit(invoke_assembler(spec, output));
+  }
+  if (child < 0) {
+    (void)::close(diagnostic);
+    return -1;
+  }
+  int status = 0;
+  if (!wait_for_child(child, status)) {
+    (void)::close(diagnostic);
+    return -1;
+  }
+  std::string observed_diagnostic;
+  const bool diagnostic_valid = read_diagnostic(diagnostic, observed_diagnostic);
+  const bool diagnostic_closed = ::close(diagnostic) == 0;
+  if (!diagnostic_valid || !diagnostic_closed ||
+      std::fegetround() != FE_TONEAREST ||
+      observed_diagnostic != expected_diagnostic) {
+    return -1;
+  }
+  return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
 std::uint64_t load_u64(const std::vector<std::uint8_t> &bytes,
@@ -442,7 +595,11 @@ TEST(CP2RecordedAssemble, WrongFrozenSequenceAndCorruptJournalFailClosed) {
   const std::string wrong_spec = wrong_sequence.path + "/spec.json";
   write_text(wrong_spec, make_spec(wrong_sequence.path, "V1_02_medium",
                                    empty_digest.HexDigest()));
-  EXPECT_NE(run_assembler(wrong_spec, wrong_sequence.path + "/output"), 0);
+  EXPECT_EQ(run_assembler(
+                wrong_spec, wrong_sequence.path + "/output",
+                "cp2_recorded_assemble: assembly run identity, hash, or path "
+                "is invalid\n"),
+            1);
   EXPECT_TRUE(read_text(wrong_spec).size() > 0U);
 
   TemporaryDirectory corrupt;
@@ -458,7 +615,10 @@ TEST(CP2RecordedAssemble, WrongFrozenSequenceAndCorruptJournalFailClosed) {
   const std::string corrupt_spec = corrupt.path + "/spec.json";
   write_text(corrupt_spec, make_spec(corrupt.path, "V1_01_easy",
                                      empty_digest.HexDigest()));
-  EXPECT_NE(run_assembler(corrupt_spec, corrupt.path + "/output"), 0);
+  EXPECT_EQ(run_assembler(
+                corrupt_spec, corrupt.path + "/output",
+                "cp2_recorded_assemble: journal decode failed: invalid_header\n"),
+            1);
 
   TemporaryDirectory skipped_invocation;
   ASSERT_FALSE(skipped_invocation.path.empty());
@@ -486,8 +646,10 @@ TEST(CP2RecordedAssemble, WrongFrozenSequenceAndCorruptJournalFailClosed) {
   write_text(skipped_spec,
              make_spec(skipped_invocation.path, "V1_01_easy",
                        serial_digest.HexDigest()));
-  EXPECT_NE(run_assembler(skipped_spec,
-                          skipped_invocation.path + "/output"), 0);
+  EXPECT_EQ(run_assembler(
+                skipped_spec, skipped_invocation.path + "/output",
+                "cp2_recorded_assemble: serial updater ownership is duplicate\n"),
+            1);
 }
 
 TEST(CP2RecordedAssemble, OrphanStateProposalAndRawFramesFailClosed) {
@@ -514,7 +676,11 @@ TEST(CP2RecordedAssemble, OrphanStateProposalAndRawFramesFailClosed) {
     const std::string spec = temporary.path + "/spec.json";
     write_text(spec, make_spec(temporary.path, "V1_01_easy",
                                empty_digest.HexDigest()));
-    EXPECT_NE(run_assembler(spec, temporary.path + "/output"), 0)
+    EXPECT_EQ(run_assembler(
+                  spec, temporary.path + "/output",
+                  "cp2_recorded_assemble: journal decode failed: "
+                  "canonical_codec_failure\n"),
+              1)
         << "journal section tag " << corruption.first;
   }
 
@@ -546,9 +712,13 @@ TEST(CP2RecordedAssemble, OrphanStateProposalAndRawFramesFailClosed) {
   const std::string spec = rounding.path + "/spec.json";
   write_text(spec, make_spec(rounding.path, "V1_01_easy",
                              serial_digest.HexDigest()));
-  EXPECT_NE(run_assembler_with_rounding(spec, rounding.path + "/output",
-                                        FE_DOWNWARD),
-            0);
+  ASSERT_EQ(std::fegetround(), FE_TONEAREST);
+  EXPECT_EQ(run_assembler(spec, rounding.path + "/output",
+                          "cp2_recorded_assemble: gate ratio requires "
+                          "FE_TONEAREST\n",
+                          FE_DOWNWARD),
+            1);
+  EXPECT_EQ(std::fegetround(), FE_TONEAREST);
   ASSERT_EQ(::mkdir((rounding.path + "/output_nearest").c_str(), 0700), 0);
   EXPECT_EQ(run_assembler(spec, rounding.path + "/output_nearest"), 0);
 

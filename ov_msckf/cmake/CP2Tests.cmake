@@ -199,11 +199,9 @@ if (CATKIN_ENABLE_TESTING)
         endif ()
     endforeach ()
     if (TARGET test_cp2_recorded_assemble)
-        add_dependencies(test_cp2_recorded_assemble cp2_recorded_assemble)
         target_sources(test_cp2_recorded_assemble PRIVATE
                 src/update/CP2RecordedAssemble.cpp)
         target_compile_definitions(test_cp2_recorded_assemble PRIVATE
-                CP2_RECORDED_ASSEMBLER_PATH="$<TARGET_FILE:cp2_recorded_assemble>"
                 CP2_RECORDED_ASSEMBLE_NO_MAIN=1)
     endif ()
 endif ()

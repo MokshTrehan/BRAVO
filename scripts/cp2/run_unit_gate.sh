@@ -296,9 +296,9 @@ readonly -a cp2_tests=(
     test_cp2_commit_oracle
     test_cp2_commit_boundary
     test_cp2_canonical
-    test_cp2_feature_gate
     test_cp2_offline_replay
     test_cp2_recorded_assemble
+    test_cp2_feature_gate
     test_cp2_runtime_context
     test_cp2_ros1_runtime_parameters
     test_cp2_serial_pairing

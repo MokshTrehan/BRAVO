@@ -134,6 +134,11 @@ TEST_SOURCE_BY_BINARY = {
     "test_cp2_trace_journal": "ov_msckf/test/cp2/test_cp2_trace_journal.cpp",
     "test_cp2_trace_codec": "ov_msckf/test/cp2/test_cp2_trace_codec.cpp",
 }
+EXTRA_TEST_SOURCES_BY_BINARY = {
+    "test_cp2_recorded_assemble": (
+        "ov_msckf/src/update/CP2RecordedAssemble.cpp",
+    ),
+}
 
 EXPECTED_TEST_CASES = {
     "CP1Compression.ProductionTruncationPreservesLambdaEtaButNotGamma",
@@ -1360,6 +1365,55 @@ def cp2_testing_macro_record(tokens, expected_enabled):
     }
 
 
+def recorded_assembler_test_macro_record(tokens, expected_no_main):
+    no_main_macro = "CP2_RECORDED_ASSEMBLE_NO_MAIN"
+    no_main_definition = "-DCP2_RECORDED_ASSEMBLE_NO_MAIN=1"
+    path_macro = "CP2_RECORDED_ASSEMBLER_PATH"
+    no_main_events = []
+    unsupported_no_main = []
+    path_occurrences = []
+    for index, token in enumerate(tokens):
+        if token == no_main_definition:
+            no_main_events.append({
+                "index": index,
+                "state": "enabled",
+                "token": token,
+            })
+        elif token == "-U" + no_main_macro:
+            no_main_events.append({
+                "index": index,
+                "state": "undefined",
+                "token": token,
+            })
+        elif token == "-D" + no_main_macro or token.startswith(
+            "-D" + no_main_macro + "="
+        ):
+            no_main_events.append({
+                "index": index,
+                "state": "rejected",
+                "token": token,
+            })
+        elif no_main_macro in token:
+            unsupported_no_main.append({"index": index, "token": token})
+        if path_macro in token:
+            path_occurrences.append({"index": index, "token": token})
+    effective = no_main_events[-1]["state"] if no_main_events else "absent"
+    expected = "enabled" if expected_no_main else "absent"
+    return {
+        "effective_no_main": effective,
+        "expected_no_main": expected,
+        "no_main_events": no_main_events,
+        "passed": bool(
+            effective == expected
+            and not unsupported_no_main
+            and not path_occurrences
+            and (len(no_main_events) == 1 if expected_no_main else not no_main_events)
+        ),
+        "path_macro_occurrences": path_occurrences,
+        "unsupported_no_main_tokens": unsupported_no_main,
+    }
+
+
 def forced_include_record(tokens):
     events = []
     for index, token in enumerate(tokens):
@@ -1673,6 +1727,18 @@ def analyze_compile_commands(
         cp2_macro = cp2_testing_macro_record(tokens, macro_expected)
         if tracked_target and not cp2_macro["passed"]:
             structure_errors.append("OV_MSCKF_CP2_TESTING isolation contract failed")
+        recorded_assembler_macro = recorded_assembler_test_macro_record(
+            tokens, target == "test_cp2_recorded_assemble"
+        )
+        if tracked_target and not recorded_assembler_macro["passed"]:
+            structure_errors.append(
+                "recorded-assembler unit macro isolation contract failed"
+            )
+            errors.append(
+                "{} recorded-assembler unit macro isolation failed for {}".format(
+                    target, source
+                )
+            )
         strict_passed = record["passed"]
         structure_passed = not structure_errors
         record["passed"] = bool(strict_passed and structure_passed)
@@ -1682,6 +1748,7 @@ def analyze_compile_commands(
             "compile_structure_passed": structure_passed,
             "cp2_testing_macro": cp2_macro,
             "output": output,
+            "recorded_assembler_test_macro": recorded_assembler_macro,
             "source": source,
             "structure_errors": structure_errors,
             "target": target,
@@ -1742,6 +1809,7 @@ def analyze_compile_commands(
         name: Counter((
             "ov_msckf/test/cp1/gtest_main.cpp",
             TEST_SOURCE_BY_BINARY[name],
+            *EXTRA_TEST_SOURCES_BY_BINARY.get(name, ()),
         ))
         for name in CP1_TESTS
     }
@@ -1749,6 +1817,7 @@ def analyze_compile_commands(
         name: Counter((
             "ov_msckf/test/cp2/gtest_main.cpp",
             TEST_SOURCE_BY_BINARY[name],
+            *EXTRA_TEST_SOURCES_BY_BINARY.get(name, ()),
         ))
         for name in CP2_TESTS
     })
@@ -5524,6 +5593,8 @@ def create_synthetic_compile_commands(path, source_root, workspace_build_root):
         ]
         if cp2_testing:
             tokens.append("-DOV_MSCKF_CP2_TESTING=1")
+        if target == "test_cp2_recorded_assemble":
+            tokens.append("-DCP2_RECORDED_ASSEMBLE_NO_MAIN=1")
         tokens.extend(["-o", output, "-c", str(source_root / source)])
         entries.append({
             "command": " ".join(shlex.quote(token) for token in tokens),
@@ -5542,6 +5613,8 @@ def create_synthetic_compile_commands(path, source_root, workspace_build_root):
         cp2_testing = target == FAULT_INJECTION_TEST
         add("ov_msckf/test/cp2/gtest_main.cpp", target, cp2_testing=cp2_testing)
         add(TEST_SOURCE_BY_BINARY[target], target, cp2_testing=cp2_testing)
+        for source in EXTRA_TEST_SOURCES_BY_BINARY.get(target, ()):
+            add(source, target, cp2_testing=cp2_testing)
     path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
 
 
@@ -12324,6 +12397,13 @@ def run_unit_self_test():
     if set(TEST_SOURCE_BY_BINARY) != set(ALL_TESTS):
         raise RuntimeError("test source mapping does not cover the exact executable inventory")
 
+    if EXTRA_TEST_SOURCES_BY_BINARY != {
+        "test_cp2_recorded_assemble": (
+            "ov_msckf/src/update/CP2RecordedAssemble.cpp",
+        ),
+    }:
+        raise RuntimeError("extra test translation-unit inventory is not exact")
+
     run_readiness_engine_protecting_tests()
 
     frozen_sha256 = {
@@ -12881,6 +12961,92 @@ def run_unit_self_test():
             duplicate_commit_boundary_test_source,
             expected_error=(
                 "test_cp2_commit_boundary strict-FP source inventory mismatch"
+            ),
+        )
+
+        def remove_recorded_assembler_test_source(root):
+            path = root / "compile_commands.json"
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            matching = [
+                index for index, entry in enumerate(entries)
+                if (
+                    "CMakeFiles/test_cp2_recorded_assemble.dir/"
+                    in str(entry.get("output", ""))
+                    and str(entry.get("file", "")).endswith(
+                        "/ov_msckf/src/update/CP2RecordedAssemble.cpp"
+                    )
+                )
+            ]
+            if len(matching) != 1:
+                raise RuntimeError(
+                    "synthetic fixture lost the recorded-assembler test source"
+                )
+            del entries[matching[0]]
+            write_json_fixture(path, entries)
+
+        corruption(
+            "recorded-assembler-test-source-omission",
+            remove_recorded_assembler_test_source,
+            expected_error=(
+                "test_cp2_recorded_assemble strict-FP source inventory mismatch"
+            ),
+        )
+
+        def remove_recorded_assembler_no_main(root):
+            rewrite_synthetic_compile_tokens(
+                root,
+                "ov_msckf/src/update/CP2RecordedAssemble.cpp",
+                lambda tokens: remove_exact_token(
+                    tokens, "-DCP2_RECORDED_ASSEMBLE_NO_MAIN=1"
+                ),
+                target="test_cp2_recorded_assemble",
+            )
+
+        corruption(
+            "recorded-assembler-no-main-removal",
+            remove_recorded_assembler_no_main,
+            expected_error=(
+                "test_cp2_recorded_assemble recorded-assembler unit macro "
+                "isolation failed for ov_msckf/src/update/CP2RecordedAssemble.cpp"
+            ),
+        )
+
+        def inject_recorded_assembler_path_macro(root):
+            rewrite_synthetic_compile_tokens(
+                root,
+                "ov_msckf/src/update/CP2RecordedAssemble.cpp",
+                lambda tokens: insert_before_output(
+                    tokens,
+                    "-DCP2_RECORDED_ASSEMBLER_PATH=/unretained/cp2_recorded_assemble",
+                ),
+                target="test_cp2_recorded_assemble",
+            )
+
+        corruption(
+            "recorded-assembler-path-macro-injection",
+            inject_recorded_assembler_path_macro,
+            expected_error=(
+                "test_cp2_recorded_assemble recorded-assembler unit macro "
+                "isolation failed for ov_msckf/src/update/CP2RecordedAssemble.cpp"
+            ),
+        )
+
+        def leak_recorded_assembler_no_main(root):
+            rewrite_synthetic_compile_tokens(
+                root,
+                "ov_msckf/test/cp2/test_cp2_feature_gate.cpp",
+                lambda tokens: insert_before_output(
+                    tokens, "-DCP2_RECORDED_ASSEMBLE_NO_MAIN=1"
+                ),
+                target="test_cp2_feature_gate",
+            )
+
+        corruption(
+            "recorded-assembler-no-main-target-leak",
+            leak_recorded_assembler_no_main,
+            expected_error=(
+                "test_cp2_feature_gate recorded-assembler unit macro isolation failed "
+                "for ov_msckf/test/cp2/test_cp2_feature_gate.cpp"
             ),
         )
 

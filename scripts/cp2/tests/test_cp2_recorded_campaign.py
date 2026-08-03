@@ -294,11 +294,8 @@ class RecordedCampaignTests(unittest.TestCase):
 
                 def fail_communicate(process, *args, **kwargs):
                     del args, kwargs
-                    deadline = time.monotonic() + 5.0
-                    while not pid_path.is_file() and time.monotonic() < deadline:
-                        if process.poll() is not None:
-                            break
-                        time.sleep(0.01)
+                    parent_pid, _ = self._wait_for_process_ids(pid_path)
+                    self.assertEqual(parent_pid, process.pid)
                     raise injected_error
 
                 with mock.patch.object(
