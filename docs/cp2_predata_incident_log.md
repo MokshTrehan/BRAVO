@@ -104,3 +104,42 @@ Impact and disposition:
   clean committed source state, fresh exact-commit unit anchor, and passing
   five-entry-point readiness barrier. Nothing learned from this accidental
   output may be carried into that campaign.
+
+## 2026-08-03T09:38:27.409409Z — broad diagnostic search discovered during handoff
+
+- Repository commit at discovery:
+  `0d71fee98499a10df4e92176709c1afe14077f90`; `pickup.md` was the only
+  uncommitted tracked change. The exact command-execution timestamp was not
+  retained; this timestamp is the immediate discovery/disclosure time.
+- While locating retained sanitizer-diagnostic references for the morning
+  handoff, the following read-only command was mistakenly given the repository
+  root and omitted the required explicit registry and ground-truth exclusions:
+
+  ```text
+  rg -n '203|189|14|UBSAN|ASAN|LSAN|SANIT' -S . --glob '!build/**' --glob '!results/**' --glob '!*snapshot*' | head -240
+  ```
+
+- Both `project/datasets.yaml` and
+  `ov_data/euroc_mav/MH_01_easy.txt` are tracked and not ignored, so this broad
+  invocation could have opened them before `head` terminated the pipeline.
+  It is conservatively recorded as a preauthorization registry/ground-truth
+  open even though no line from either path appeared in the retained stdout.
+- No bag was opened, no provider or campaign runner was invoked, and no
+  registry or ground-truth value from this command was copied, retained in the
+  handoff, or used to derive code, constants, thresholds, fixtures, tests, or
+  execution choices.
+
+Impact and disposition:
+
+- The finalized `0d71fee...` unit artifact is unaffected: its build, tests,
+  independent re-execution, atomic finalization, and in-gate verification all
+  completed before this command. Its `dataset_or_bag_accessed=false` claim is
+  limited to that formal gate and must not be generalized to the development
+  session.
+- This post-gate handoff session is non-evidence. No CP2-C3 readiness or
+  CP2-C/D/E campaign is credited as run or passed.
+- Every later repository-wide preauthorization search must include exact
+  exclusions for `!project/datasets.yaml`, `!ov_data/**`, `!results/**`, and
+  `!build/**`. Resume actual work only through a fresh clean commit/unit anchor
+  and a fresh-process, approval-bound readiness barrier; nothing from the
+  accidental search may enter recorded evidence.
