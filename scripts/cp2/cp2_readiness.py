@@ -110,9 +110,12 @@ SEQUENCE_SELF_TEST_SUFFIX = (
 TIMING_SELF_TEST_SUFFIX = (
     "wrong_pair_order", "wrong_pair_index", "runtime_drift", "config_drift",
     "profile_drift", "changed_clock_snapshot", "affinity_mismatch",
-    "warm_up_boundary_error", "unilateral_noncommon_samples", "duplicate_timestamp",
-    "negative_duration", "noninteger_duration", "nonprimary_inclusion",
-    "incorrect_linear_quantiles", "median_ratio_limit", "p95_ratio_limit",
+    "warm_up_boundary_error", "warm_up_u64_overflow",
+    "unilateral_noncommon_samples", "omitted_bilateral_common_sample",
+    "duplicate_timestamp", "timestamp_u64_overflow", "negative_duration",
+    "duration_u64_overflow", "noninteger_duration", "nonprimary_inclusion",
+    "incorrect_linear_quantiles", "binary64_quantile_rounding",
+    "median_ratio_limit", "p95_ratio_limit",
 )
 
 

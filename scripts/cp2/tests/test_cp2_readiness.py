@@ -1157,7 +1157,7 @@ class FullBarrierTests(unittest.TestCase):
                 self.assertEqual(len(authorization.record["self_tests"]), 5)
                 self.assertEqual(
                     [item["result"]["case_count"] for item in authorization.record["self_tests"]],
-                    [22, 48, 36, 38, 78],
+                    [22, 48, 36, 43, 83],
                 )
                 for index, item in enumerate(authorization.record["self_tests"]):
                     self.assertEqual(item["index"], index)

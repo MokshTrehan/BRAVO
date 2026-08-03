@@ -38,6 +38,7 @@ SAFE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 PAIR_ORDER = (("nullspace", "schur"), ("schur", "nullspace"), ("nullspace", "schur"))
 FROZEN_CLOCK_KEYS = ("cpu_ids", "affinity", "driver", "governor", "min_frequency", "max_frequency", "boost")
+U64_MAX = (1 << 64) - 1
 
 # This literal tuple is the readiness barrier's deterministic expected-case
 # inventory.  The common runner cases come first in contract order, followed
@@ -73,12 +74,17 @@ EXPECTED_CASE_NAMES = (
     "changed_clock_snapshot",
     "affinity_mismatch",
     "warm_up_boundary_error",
+    "warm_up_u64_overflow",
     "unilateral_noncommon_samples",
+    "omitted_bilateral_common_sample",
     "duplicate_timestamp",
+    "timestamp_u64_overflow",
     "negative_duration",
+    "duration_u64_overflow",
     "noninteger_duration",
     "nonprimary_inclusion",
     "incorrect_linear_quantiles",
+    "binary64_quantile_rounding",
     "median_ratio_limit",
     "p95_ratio_limit",
 )
@@ -261,24 +267,37 @@ def _affinity_equal(expected: Sequence[Any], observed: Sequence[Any]) -> None:
 
 def _warmup_eligible(record_time_ns: Any, boundary_ns: Any) -> None:
     for value in (record_time_ns, boundary_ns):
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            _reject("warm-up time is not a nonnegative integer")
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+            or value > U64_MAX
+        ):
+            _reject("warm-up time is not u64")
     if record_time_ns < boundary_ns:
         _reject("sample precedes the inclusive warm-up boundary")
 
 
 def _common_population_valid(common: Sequence[int], left: Sequence[int], right: Sequence[int]) -> None:
-    if len(set(common)) != len(common) or list(common) != sorted(common):
+    _unique_timestamps(common)
+    _unique_timestamps(left)
+    _unique_timestamps(right)
+    if list(common) != sorted(common):
         _reject("common timing timestamps are duplicate or unordered")
-    left_set = set(left)
-    right_set = set(right)
-    if any(timestamp not in left_set or timestamp not in right_set for timestamp in common):
-        _reject("common population includes a unilateral sample")
+    expected = sorted(set(left).intersection(right))
+    if list(common) != expected:
+        _reject("common population is not the complete exact intersection")
 
 
 def _unique_timestamps(values: Sequence[Any]) -> None:
-    if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in values):
-        _reject("timestamp is not a nonnegative integer")
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+        or value > U64_MAX
+        for value in values
+    ):
+        _reject("timestamp is not u64")
     if len(values) != len(set(values)):
         _reject("duplicate timing timestamp")
 
@@ -286,8 +305,8 @@ def _unique_timestamps(values: Sequence[Any]) -> None:
 def _duration_valid(value: Any) -> None:
     if isinstance(value, bool) or not isinstance(value, int):
         _reject("duration is not an integer")
-    if value < 0:
-        _reject("duration is negative")
+    if value < 0 or value > U64_MAX:
+        _reject("duration is outside u64")
 
 
 def _primary_inclusion_valid(sample: Mapping[str, Any]) -> None:
@@ -296,33 +315,75 @@ def _primary_inclusion_valid(sample: Mapping[str, Any]) -> None:
         _reject("included timing sample is not primary")
 
 
-def _linear_quantile(values: Sequence[int], quantile: float) -> float:
+def _canonical_rational(value: Any, label: str, positive: bool = False) -> Tuple[int, int]:
+    if type(value) is not tuple or len(value) != 2:
+        _reject(label + " must be a canonical rational pair")
+    numerator, denominator = value
+    if (
+        type(numerator) is not int
+        or type(denominator) is not int
+        or numerator < 0
+        or denominator <= 0
+        or math.gcd(numerator, denominator) != 1
+        or (positive and numerator == 0)
+    ):
+        _reject(label + " is not a reduced nonnegative rational")
+    return numerator, denominator
+
+
+def _reduced_rational(numerator: int, denominator: int) -> Tuple[int, int]:
+    divisor = math.gcd(numerator, denominator)
+    return numerator // divisor, denominator // divisor
+
+
+def _linear_quantile(
+    values: Sequence[int], quantile: Tuple[int, int]
+) -> Tuple[int, int]:
     if not values:
         _reject("quantile population is empty")
     for value in values:
         _duration_valid(value)
+    q_num, q_den = _canonical_rational(quantile, "linear quantile", positive=True)
+    if (q_num, q_den) not in ((1, 2), (19, 20)):
+        _reject("linear quantile is not frozen p50 or p95")
     ordered = sorted(values)
-    h = (len(ordered) - 1) * quantile
-    low = int(math.floor(h))
-    high = int(math.ceil(h))
-    return float(ordered[low]) + (h - low) * float(ordered[high] - ordered[low])
+    interval_count = len(ordered) - 1
+    if interval_count > U64_MAX // q_num:
+        _reject("linear rank overflows u64")
+    scaled_rank = interval_count * q_num
+    low, remainder = divmod(scaled_rank, q_den)
+    high = low if remainder == 0 else low + 1
+    if high >= len(ordered):
+        _reject("linear rank is outside the population")
+    numerator = (q_den - remainder) * ordered[low] + remainder * ordered[high]
+    return _reduced_rational(numerator, q_den)
 
 
-def _quantile_matches(values: Sequence[int], quantile: float, retained: Any) -> None:
-    if isinstance(retained, bool) or not isinstance(retained, (int, float)) or not math.isfinite(float(retained)):
-        _reject("retained quantile is not finite")
-    if float(retained) != _linear_quantile(values, quantile):
+def _quantile_matches(
+    values: Sequence[int], quantile: Tuple[int, int], retained: Any
+) -> None:
+    retained_rational = _canonical_rational(retained, "retained quantile")
+    if retained_rational != _linear_quantile(values, quantile):
         _reject("retained linear quantile is incorrect")
 
 
-def _ratio_passes(baseline: Any, candidate: Any, limit: float) -> None:
-    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in (baseline, candidate)):
-        _reject("ratio input is not numeric")
-    baseline_f = float(baseline)
-    candidate_f = float(candidate)
-    if not math.isfinite(baseline_f) or not math.isfinite(candidate_f) or baseline_f <= 0.0 or candidate_f < 0.0:
-        _reject("ratio input is outside its finite positive domain")
-    if candidate_f / baseline_f > limit:
+def _ratio_passes(
+    baseline: Any, candidate: Any, limit: Tuple[int, int]
+) -> None:
+    baseline_num, baseline_den = _canonical_rational(
+        baseline, "baseline timing quantile", positive=True
+    )
+    candidate_num, candidate_den = _canonical_rational(
+        candidate, "candidate timing quantile"
+    )
+    limit_num, limit_den = _canonical_rational(
+        limit, "timing ratio limit", positive=True
+    )
+    if (limit_num, limit_den) not in ((11, 10), (23, 20)):
+        _reject("timing ratio limit is not frozen")
+    left = candidate_num * baseline_den * limit_den
+    right = limit_num * candidate_den * baseline_num
+    if left > right:
         _reject("timing ratio exceeds its frozen limit")
 
 
@@ -383,10 +444,10 @@ def _validate_minimal_fixture() -> None:
     _unique_timestamps((10, 20))
     _duration_valid(0)
     _primary_inclusion_valid({"primary": True, "nonempty": True, "preflight_accepted": True, "committed": True})
-    _quantile_matches((10, 20, 30), 0.5, 20.0)
-    _quantile_matches((10, 20, 30), 0.95, 29.0)
-    _ratio_passes(10.0, 11.0, 1.10)
-    _ratio_passes(20.0, 23.0, 1.15)
+    _quantile_matches((10, 20, 30), (1, 2), (20, 1))
+    _quantile_matches((10, 20, 30), (19, 20), (29, 1))
+    _ratio_passes((10, 1), (11, 1), (11, 10))
+    _ratio_passes((20, 1), (23, 1), (23, 20))
 
 
 def _parse_actual_cli(arguments: Sequence[str]) -> Dict[str, str]:
@@ -452,6 +513,22 @@ def _case_functions(temporary_root: str) -> Mapping[str, Callable[[], None]]:
         after["boost"] = True
         _clock_controls_equal(before, after)
 
+    precision_scale = (1 << 53) + 1
+
+    def median_ratio_over_limit() -> None:
+        _ratio_passes(
+            (10 * precision_scale, 1),
+            (11 * precision_scale + 1, 1),
+            (11, 10),
+        )
+
+    def p95_ratio_over_limit() -> None:
+        _ratio_passes(
+            (20 * precision_scale, 1),
+            (23 * precision_scale + 1, 1),
+            (23, 20),
+        )
+
     return {
         "valid_minimal_fixture": _validate_minimal_fixture,
         "cli_exclusivity": lambda: _parse_actual_cli(("--self-test", "unexpected")),
@@ -488,16 +565,29 @@ def _case_functions(temporary_root: str) -> Mapping[str, Callable[[], None]]:
         "changed_clock_snapshot": changed_clock,
         "affinity_mismatch": lambda: _affinity_equal((0, 1, 2, 3), (0, 1, 2, 4)),
         "warm_up_boundary_error": lambda: _warmup_eligible(59_999_999_999, 60_000_000_000),
+        "warm_up_u64_overflow": lambda: _warmup_eligible(U64_MAX + 1, U64_MAX),
         "unilateral_noncommon_samples": lambda: _common_population_valid((10, 20), (10, 20), (10,)),
+        "omitted_bilateral_common_sample": lambda: _common_population_valid(
+            (10,), (10, 20), (10, 20)
+        ),
         "duplicate_timestamp": lambda: _unique_timestamps((10, 10)),
+        "timestamp_u64_overflow": lambda: _unique_timestamps((10, U64_MAX + 1)),
         "negative_duration": lambda: _duration_valid(-1),
+        "duration_u64_overflow": lambda: _duration_valid(U64_MAX + 1),
         "noninteger_duration": lambda: _duration_valid(1.0),
         "nonprimary_inclusion": lambda: _primary_inclusion_valid(
             {"primary": False, "nonempty": True, "preflight_accepted": True, "committed": True}
         ),
-        "incorrect_linear_quantiles": lambda: _quantile_matches((10, 20, 30), 0.95, 30.0),
-        "median_ratio_limit": lambda: _ratio_passes(10.0, 11.1, 1.10),
-        "p95_ratio_limit": lambda: _ratio_passes(20.0, 23.000000000000004, 1.15),
+        "incorrect_linear_quantiles": lambda: _quantile_matches(
+            (0, 100), (19, 20), (100, 1)
+        ),
+        "binary64_quantile_rounding": lambda: _quantile_matches(
+            (precision_scale, precision_scale + 1),
+            (1, 2),
+            (precision_scale, 1),
+        ),
+        "median_ratio_limit": median_ratio_over_limit,
+        "p95_ratio_limit": p95_ratio_over_limit,
     }
 
 

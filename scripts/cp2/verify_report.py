@@ -530,6 +530,7 @@ SOURCE_INPUTS = {
     "scripts/cp2/cp2_sequence_actual.py",
     "scripts/cp2/cp2_sequence_math.py",
     "scripts/cp2/cp2_sequence_runner.py",
+    "scripts/cp2/cp2_timing_math.py",
     "scripts/cp2/run_recorded_parity.py",
     "scripts/cp2/run_sequence_pair.py",
     "scripts/cp2/run_timing_pair.py",
@@ -544,6 +545,7 @@ SOURCE_INPUTS = {
     "scripts/cp2/tests/test_cp2_sequence_actual.py",
     "scripts/cp2/tests/test_cp2_sequence_math.py",
     "scripts/cp2/tests/test_cp2_sequence_runner.py",
+    "scripts/cp2/tests/test_cp2_timing_math.py",
     "scripts/cp2/verify_report.py",
 }
 
@@ -4520,6 +4522,15 @@ def collect_verifier_self_test(artifact_dir, repo_root, errors, verifier_path=No
         errors.append(
             "verifier self-test log lacks the exact CP2-D data-free protecting-test result"
         )
+    if re.search(
+        r"^CP2_E_DATA_FREE_PROTECTING_TESTS count=37 passed=true "
+        r"module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$",
+        log_text,
+        flags=re.MULTILINE,
+    ) is None:
+        errors.append(
+            "verifier self-test log lacks the exact CP2-E data-free protecting-test result"
+        )
     enriched = dict(record)
     enriched.update({
         "log": "verifier_self_test.log",
@@ -6012,8 +6023,11 @@ def create_synthetic_artifact(artifact_dir, repo_root):
         "CP2_READINESS_ENGINE_PROTECTING_TESTS count=39 passed=true "
         "module_sha256={} output_sha256={}\n"
         "CP2_D_DATA_FREE_PROTECTING_TESTS count=66 passed=true "
+        "module_sha256={} output_sha256={}\n"
+        "CP2_E_DATA_FREE_PROTECTING_TESTS count=37 passed=true "
         "module_sha256={} output_sha256={}\n".format(
-            "0" * 64, "1" * 64, "2" * 64, "3" * 64
+            "0" * 64, "1" * 64, "2" * 64, "3" * 64,
+            "4" * 64, "5" * 64,
         ),
         encoding="utf-8",
     )
@@ -11459,9 +11473,12 @@ READINESS_SEQUENCE_CASES = (
 READINESS_TIMING_CASES = (
     "wrong_pair_order", "wrong_pair_index", "runtime_drift", "config_drift",
     "profile_drift", "changed_clock_snapshot", "affinity_mismatch",
-    "warm_up_boundary_error", "unilateral_noncommon_samples", "duplicate_timestamp",
-    "negative_duration", "noninteger_duration", "nonprimary_inclusion",
-    "incorrect_linear_quantiles", "median_ratio_limit", "p95_ratio_limit",
+    "warm_up_boundary_error", "warm_up_u64_overflow",
+    "unilateral_noncommon_samples", "omitted_bilateral_common_sample",
+    "duplicate_timestamp", "timestamp_u64_overflow", "negative_duration",
+    "duration_u64_overflow", "noninteger_duration", "nonprimary_inclusion",
+    "incorrect_linear_quantiles", "binary64_quantile_rounding",
+    "median_ratio_limit", "p95_ratio_limit",
 )
 READINESS_VERIFIER_CASES = tuple(dict.fromkeys(
     READINESS_COMMON_CASES + READINESS_RECORDED_CASES
@@ -11672,47 +11689,142 @@ def run_readiness_self_test():
                 "populations": [2, 2], "common_alignment": True, "orthogonality_error": 1e-10,
                 "position": 0.01, "orientation": 0.05, "relative_ate": 0.01}
 
-    def linear_quantile(values, probability):
+    def timing_rational(value, label, positive=False):
+        if not isinstance(value, tuple) or len(value) != 2:
+            reject(label + " rational shape")
+        numerator, denominator = value
+        if (
+            isinstance(numerator, bool)
+            or not isinstance(numerator, int)
+            or isinstance(denominator, bool)
+            or not isinstance(denominator, int)
+            or numerator < 0
+            or denominator <= 0
+            or math.gcd(numerator, denominator) != 1
+            or (positive and numerator == 0)
+        ):
+            reject(label + " rational domain")
+        return numerator, denominator
+
+    def reduced_timing_rational(numerator, denominator):
+        divisor = math.gcd(numerator, denominator)
+        return numerator // divisor, denominator // divisor
+
+    def linear_quantile(values, quantile):
+        if not values:
+            reject("empty timing population")
+        if any(
+            isinstance(item, bool)
+            or not isinstance(item, int)
+            or item < 0
+            or item > (1 << 64) - 1
+            for item in values
+        ):
+            reject("duration")
+        q_num, q_den = timing_rational(quantile, "quantile", positive=True)
+        if (q_num, q_den) not in ((1, 2), (19, 20)):
+            reject("unfrozen timing quantile")
         ordered = sorted(values)
-        position = (len(ordered) - 1) * probability
-        low = int(math.floor(position)); high = int(math.ceil(position))
-        return ordered[low] if low == high else ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+        interval_count = len(ordered) - 1
+        if interval_count > ((1 << 64) - 1) // q_num:
+            reject("linear timing rank overflow")
+        scaled_rank = interval_count * q_num
+        low, remainder = divmod(scaled_rank, q_den)
+        high = low if remainder == 0 else low + 1
+        if high >= len(ordered):
+            reject("linear timing rank")
+        numerator = (
+            (q_den - remainder) * ordered[low] + remainder * ordered[high]
+        )
+        return reduced_timing_rational(numerator, q_den)
+
+    def timing_ratio(baseline, candidate, limit):
+        baseline_num, baseline_den = timing_rational(
+            baseline, "baseline timing", positive=True
+        )
+        candidate_num, candidate_den = timing_rational(
+            candidate, "candidate timing"
+        )
+        limit_num, limit_den = timing_rational(
+            limit, "timing limit", positive=True
+        )
+        if (limit_num, limit_den) not in ((11, 10), (23, 20)):
+            reject("unfrozen timing ratio limit")
+        ratio = reduced_timing_rational(
+            candidate_num * baseline_den, candidate_den * baseline_num
+        )
+        passed = (
+            candidate_num * baseline_den * limit_den
+            <= limit_num * candidate_den * baseline_num
+        )
+        return ratio, passed
 
     def check_timing(value):
         if value["pairs"] != [["nullspace", "schur"], ["schur", "nullspace"], ["nullspace", "schur"]]: reject("pair order")
         if value["indices"] != [0, 1, 2]: reject("pair indices")
         if not all(value[key] for key in ("runtime_match", "config_match", "profile_match", "clock_match", "affinity_match")): reject("provenance drift")
-        if value["warmups_included"]: reject("warm-up inclusion")
-        if value["populations"][0] != value["populations"][1]: reject("noncommon samples")
+        for warmup_value in (value["warmup_record_time_ns"], value["warmup_boundary_ns"]):
+            if isinstance(warmup_value, bool) or not isinstance(warmup_value, int) or not 0 <= warmup_value <= (1 << 64) - 1: reject("warm-up u64")
+        if value["warmups_included"] or value["warmup_record_time_ns"] < value["warmup_boundary_ns"]: reject("warm-up inclusion")
+        for population in (value["common"], value["left"], value["right"]):
+            if any(isinstance(item, bool) or not isinstance(item, int) or not 0 <= item <= (1 << 64) - 1 for item in population): reject("timestamps")
+            if len(set(population)) != len(population): reject("timestamps")
+        if value["common"] != sorted(set(value["left"]).intersection(value["right"])): reject("noncommon samples")
+        if any(isinstance(item, bool) or not isinstance(item, int) or not 0 <= item <= (1 << 64) - 1 for item in value["timestamps"]): reject("timestamps")
         if len(set(value["timestamps"])) != len(value["timestamps"]): reject("timestamps")
-        if any(isinstance(item, bool) or not isinstance(item, int) or item < 0 for item in value["durations"]): reject("duration")
+        if any(
+            isinstance(item, bool)
+            or not isinstance(item, int)
+            or item < 0
+            or item > (1 << 64) - 1
+            for item in value["durations"]
+        ): reject("duration")
         if not all(value["primary"]): reject("nonprimary inclusion")
-        if value["median"] != linear_quantile(value["durations"], 0.5) or value["p95"] != linear_quantile(value["durations"], 0.95): reject("quantiles")
-        if value["median_ratio"] > 1.10: reject("median ratio")
-        if value["p95_ratio"] > 1.15: reject("p95 ratio")
+        if value["median"] != linear_quantile(value["durations"], (1, 2)) or value["p95"] != linear_quantile(value["durations"], (19, 20)): reject("quantiles")
+        median_ratio, median_passed = timing_ratio(
+            value["median_baseline"], value["median_candidate"], (11, 10)
+        )
+        p95_ratio, p95_passed = timing_ratio(
+            value["p95_baseline"], value["p95_candidate"], (23, 20)
+        )
+        if value["median_ratio"] != median_ratio or not median_passed: reject("median ratio")
+        if value["p95_ratio"] != p95_ratio or not p95_passed: reject("p95 ratio")
 
     def valid_timing():
         values = [1, 2, 3, 4]
         return {"pairs": [["nullspace", "schur"], ["schur", "nullspace"], ["nullspace", "schur"]],
                 "indices": [0, 1, 2], "runtime_match": True, "config_match": True,
                 "profile_match": True, "clock_match": True, "affinity_match": True,
-                "warmups_included": False, "populations": [4, 4], "timestamps": [1, 2, 3, 4],
-                "durations": values, "primary": [True] * 4,
-                "median": linear_quantile(values, 0.5), "p95": linear_quantile(values, 0.95),
-                "median_ratio": 1.10, "p95_ratio": 1.15}
+                "warmups_included": False, "warmup_record_time_ns": 60_000_000_000,
+                "warmup_boundary_ns": 60_000_000_000,
+                "common": [1, 2, 3, 4],
+                "left": [1, 2, 3, 4], "right": [1, 2, 3, 4],
+                "timestamps": [1, 2, 3, 4], "durations": values,
+                "primary": [True] * 4,
+                "median": linear_quantile(values, (1, 2)),
+                "p95": linear_quantile(values, (19, 20)),
+                "median_baseline": (10, 1), "median_candidate": (11, 1),
+                "p95_baseline": (20, 1), "p95_candidate": (23, 1),
+                "median_ratio": (11, 10), "p95_ratio": (23, 20)}
 
     timing_mutations = {
         "wrong_pair_order": ("pairs", [["schur", "nullspace"]]),
         "wrong_pair_index": ("indices", [0, 2, 1]), "runtime_drift": ("runtime_match", False),
         "config_drift": ("config_match", False), "profile_drift": ("profile_match", False),
         "changed_clock_snapshot": ("clock_match", False), "affinity_mismatch": ("affinity_match", False),
-        "warm_up_boundary_error": ("warmups_included", True),
-        "unilateral_noncommon_samples": ("populations", [4, 3]),
-        "duplicate_timestamp": ("timestamps", [1, 1, 3, 4]), "negative_duration": ("durations", [1, -1, 3, 4]),
+        "warm_up_boundary_error": ("warmup_record_time_ns", 59_999_999_999),
+        "warm_up_u64_overflow": ("warmup_record_time_ns", 1 << 64),
+        "unilateral_noncommon_samples": ("right", [1, 2, 3]),
+        "omitted_bilateral_common_sample": ("common", [1, 2, 3]),
+        "duplicate_timestamp": ("timestamps", [1, 1, 3, 4]),
+        "timestamp_u64_overflow": ("timestamps", [1, 2, 3, 1 << 64]),
+        "negative_duration": ("durations", [1, -1, 3, 4]),
+        "duration_u64_overflow": ("durations", [1, 2, 3, 1 << 64]),
         "noninteger_duration": ("durations", [1, 2.5, 3, 4]),
         "nonprimary_inclusion": ("primary", [True, False, True, True]),
-        "incorrect_linear_quantiles": ("median", 2.0), "median_ratio_limit": ("median_ratio", 1.100000001),
-        "p95_ratio_limit": ("p95_ratio", 1.150000001),
+        "incorrect_linear_quantiles": ("median", (2, 1)),
+        "median_ratio_limit": ("median_candidate", (12, 1)),
+        "p95_ratio_limit": ("p95_candidate", (24, 1)),
     }
 
     def validate_actual_mode_primitives(root):
@@ -12274,6 +12386,15 @@ def run_readiness_self_test():
                     value = valid_recorded(); key, mutation = recorded_mutations[name]; value[key] = mutation; check_recorded(value)
                 elif name in sequence_mutations:
                     value = valid_sequence(); key, mutation = sequence_mutations[name]; value[key] = mutation; check_sequence(value)
+                elif name == "binary64_quantile_rounding":
+                    value = valid_timing()
+                    precision_base = (1 << 53) + 1
+                    value["durations"] = [precision_base, precision_base + 1]
+                    value["median"] = (precision_base, 1)
+                    value["p95"] = linear_quantile(
+                        value["durations"], (19, 20)
+                    )
+                    check_timing(value)
                 elif name in timing_mutations:
                     value = valid_timing(); key, mutation = timing_mutations[name]; value[key] = mutation; check_timing(value)
                 else:
@@ -12488,6 +12609,105 @@ def run_cp2_d_data_free_protecting_tests():
     )
 
 
+CP2_E_DATA_FREE_PROTECTING_MODULES = (
+    "cp2_timing_math.py",
+    "tests/test_cp2_timing_math.py",
+)
+CP2_E_DATA_FREE_PROTECTING_TESTS = (("test_cp2_timing_math.py", 37),)
+CP2_E_DATA_FREE_PROTECTING_TEST_COUNT = sum(
+    count for _, count in CP2_E_DATA_FREE_PROTECTING_TESTS
+)
+
+
+def run_cp2_e_data_free_protecting_tests():
+    """Run the proposed exact CP2-E timing-math suite in isolation."""
+
+    environment = {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PYTHONHASHSEED": "0",
+        "TZ": "UTC",
+    }
+    cp2_directory = Path(__file__).resolve().parent
+    tests_directory = cp2_directory / "tests"
+    module_digest = hashlib.sha256(
+        b"SchurVIO-CP2-E-data-free-protecting-modules-v1\0"
+    )
+    output_digest = hashlib.sha256(
+        b"SchurVIO-CP2-E-data-free-protecting-outputs-v1\0"
+    )
+    for relative in CP2_E_DATA_FREE_PROTECTING_MODULES:
+        module_path = (cp2_directory / relative).resolve()
+        if (
+            cp2_directory.resolve() not in module_path.parents
+            or not module_path.is_file()
+            or module_path.is_symlink()
+        ):
+            raise RuntimeError(
+                "CP2-E data-free protecting module is unavailable: " + relative
+            )
+        module_bytes = module_path.read_bytes()
+        encoded_name = relative.encode("utf-8")
+        module_digest.update(len(encoded_name).to_bytes(8, "big"))
+        module_digest.update(encoded_name)
+        module_digest.update(len(module_bytes).to_bytes(8, "big"))
+        module_digest.update(module_bytes)
+
+    for filename, expected_count in CP2_E_DATA_FREE_PROTECTING_TESTS:
+        test_path = (tests_directory / filename).resolve()
+        if (
+            test_path.parent != tests_directory.resolve()
+            or not test_path.is_file()
+            or test_path.is_symlink()
+        ):
+            raise RuntimeError(
+                "CP2-E data-free protecting test is unavailable: " + filename
+            )
+        command = ["/usr/bin/python3", "-I", "-B", str(test_path), "-v"]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd="/tmp",
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+                timeout=180,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                "CP2-E data-free protecting tests timed out: " + filename
+            ) from exc
+        output = completed.stdout
+        sys.stdout.buffer.write(output)
+        sys.stdout.buffer.flush()
+        encoded_name = filename.encode("utf-8")
+        output_digest.update(len(encoded_name).to_bytes(8, "big"))
+        output_digest.update(encoded_name)
+        output_digest.update(len(output).to_bytes(8, "big"))
+        output_digest.update(output)
+        match = re.search(rb"Ran ([0-9]+) tests in [^\n]+\n\nOK\n", output)
+        if (
+            completed.returncode != 0
+            or match is None
+            or int(match.group(1)) != expected_count
+        ):
+            raise RuntimeError(
+                "CP2-E data-free protecting-test inventory/outcome is not exact: "
+                + filename
+            )
+    print(
+        "CP2_E_DATA_FREE_PROTECTING_TESTS count={} passed=true "
+        "module_sha256={} output_sha256={}".format(
+            CP2_E_DATA_FREE_PROTECTING_TEST_COUNT,
+            module_digest.hexdigest(),
+            output_digest.hexdigest(),
+        )
+    )
+
+
 def run_unit_self_test():
     required_cp2_c2_counts = {
         "test_cp2_updater_msckf_end_to_end": 16,
@@ -12532,6 +12752,7 @@ def run_unit_self_test():
 
     run_readiness_engine_protecting_tests()
     run_cp2_d_data_free_protecting_tests()
+    run_cp2_e_data_free_protecting_tests()
 
     frozen_sha256 = {
         relative: expected["sha256"]
