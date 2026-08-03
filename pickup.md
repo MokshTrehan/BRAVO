@@ -6,6 +6,8 @@ Last updated: 2026-08-03 (America/Toronto)
 
 - Repository: `/home/moksh/newSlam variant`
 - Branch: `schurvio-lite/cp2-one-pass`
+- Remote review branch: `origin/schurvio-lite/cp2-one-pass`. The final session
+  close requires the local and remote branch tips to be identical.
 - Approval-gated CP2-C3 review-candidate base commit: `71e2c56f1b63a391f417b0243edd5b1355c74012` (tree `0c2e4953f5f0288ab4e8da27e6512ef852503f90`).
 - Exact runtime/provenance replacement commit: `0d71fee98499a10df4e92176709c1afe14077f90` (`fix: bind CP2 unit evidence provenance`; tree `9e3dd0c72134b319f17c002c41aa63337de26414`).
 - Expanded preauthorization incident-log commit:
@@ -23,8 +25,17 @@ Last updated: 2026-08-03 (America/Toronto)
   `02631c7dc83aafa278830224cb547c589d4a226394ab0a67745a083804c11f90`.
 - Focused C3/D/E mathematical and lifetime hardening commit:
   `a3b27a18f865dcfd5e3933ba9efecd302bff2d38` (tree
-  `2104f7ab127d4d561e6b8bc2314ff635c0da7805`). This pickup commit follows
-  it, so one new exact-HEAD unit artifact is still required before stopping.
+  `2104f7ab127d4d561e6b8bc2314ff635c0da7805`).
+- Pre-handoff exact-commit unit artifact:
+  `results/staging/cp2/unit/cp2_unit_20260803T123735005116962Z-g21522d626450-Qbu5fd54`.
+  It binds commit `21522d626450a999f1f8b5e4b5b34d132256f70f`, tree
+  `f74fb99bf7d7bcc19263ca3f3ee2293987c6f22b`, and external
+  `SHA256SUMS` anchor
+  `602d3e32df170f4e9455895e2808d48d858f331bfd3b456e58b1ae285fd0cc75`.
+  The final pickup commit cannot contain its own Git identity or future
+  artifact pathname without a circular source change. The immediate pickup
+  commands below therefore resolve the unique artifact whose embedded commit
+  and tree equal the live `HEAD`, and verify it before any approval work.
 - Data-free CP2-D candidate commit:
   `d53139a4bc799e1625a290fec146eef15cfbe1f5` (tree
   `75740cec9261d6fa86e5c8dd29125e62dac85dd0`).
@@ -173,13 +184,15 @@ erase the earlier incidents in `docs/cp2_predata_incident_log.md`.
 1. CP2-C3 still requires Moksh's incident-log disposition and approval of the
    complete detached-readiness replacement, followed by one separate
    source/approval-binding commit and a fresh exact-HEAD unit gate.
-2. CP2-D additionally requires Moksh to choose desktop `x86_64` versus Jetson
-   `aarch64` for this checkpoint and authorize a named local evaluator/direct-
-   math source set or audited build. Only then may real capsules, complete
+2. Moksh has selected Jetson Nano as the final project target, but the frozen
+   CP2 contract still says desktop. CP2-D therefore requires an explicit
+   checkpoint-level replacement selecting Jetson `aarch64`, plus authority to
+   inspect a named local evaluator/direct-math source set or build it from
+   named audited revisions. Only then may real capsules, complete
    native/license inventories, version/preflight bytes, and stack-specific
    known-answer bits be frozen for another exact review and approval.
-3. CP2-E requires an explicit decision to retain the frozen desktop checkpoint
-   or replace it with Jetson, plus the exact machine/CPU IDs, fixed clocks,
+3. CP2-E likewise requires explicit replacement of the frozen desktop
+   checkpoint with Jetson, plus the exact machine/CPU IDs, fixed clocks,
    governor/driver, affinity, boost/turbo, thermal policy, read-only sampling
    commands, sequence/input identity, and resource bounds. The runner validates
    but never changes those controls.
@@ -187,9 +200,21 @@ erase the earlier incidents in `docs/cp2_predata_incident_log.md`.
    A failure stops later stages; no data-driven tuning, threshold changes,
    alternate profile, or silent retry is permitted.
 
-The next mechanical action after this pickup is committed is a complete unit
-gate at that exact clean `HEAD`. That unit anchor is necessary provenance but
-cannot substitute for any missing human approval above.
+The approvals arrive in two stages. Stage 1 supplies the CP2-C incident
+disposition and complete replacement approval, the explicit CP2-D/E Jetson
+architecture replacements, the named evaluator/direct-math sources or
+artifacts, the exact timing-machine controls, and authority for their
+data-free inspection. Codex then records the C approval binding and constructs
+the D/E capsule and profile candidates without opening recorded inputs or
+observing clocks. Stage 2 approves that exact new implementation commit and
+its frozen capsule/profile identities. Only after a fresh unit gate and
+readiness barrier may the separately authorized recorded and read-only timing
+work execute.
+
+At final session close, run one complete unit gate at the exact clean pickup
+`HEAD`, verify its internal manifest, and push that same commit. The dynamic
+checks in the final section are authoritative; this necessary unit provenance
+does not substitute for either approval stage.
 
 The first such attempt at commit `e808c10070b380565ac6598fe59e7edd362fc803`
 failed closed during the pre-artifact verifier self-test, before any evidence
@@ -716,30 +741,99 @@ That thesis survives only if the experiments show one of the preregistered CP6 P
 
 ## Immediate pickup command sequence
 
-Use read-only checks first:
+Use read-only checks first. The current handoff is valid only when there is
+exactly one finalized unit artifact for the live `HEAD`, its complete manifest
+verifies, its report binds the same clean commit/tree before and after, and the
+local and pushed branch tips agree:
 
 ```bash
 git status --short --branch
 git status --porcelain=v1 --untracked-files=all
-git rev-parse HEAD
+git branch --show-current
 git log -5 --oneline --decorate
 git merge-base --is-ancestor 0d71fee98499a10df4e92176709c1afe14077f90 HEAD
 git merge-base --is-ancestor 66f4eaf56bb42258214c25fe078e78b3cc0eeb15 HEAD
-sha256sum results/staging/cp2/unit/cp2_unit_20260803T090606610655669Z-g0d71fee98499-pry4lam2/SHA256SUMS
+
+cp2_pickup_head="$(git rev-parse HEAD^{commit})"
+cp2_pickup_tree="$(git rev-parse HEAD^{tree})"
+test "$(git rev-parse origin/schurvio-lite/cp2-one-pass^{commit})" = "$cp2_pickup_head"
+cp2_pickup_short="$(git rev-parse --short=12 "$cp2_pickup_head")"
+mapfile -t cp2_pickup_artifacts < <(
+  find results/staging/cp2/unit -mindepth 1 -maxdepth 1 -type d \
+    -name "cp2_unit_*-g${cp2_pickup_short}-*" -print | LC_ALL=C sort
+)
+test "${#cp2_pickup_artifacts[@]}" -eq 1
+cp2_pickup_artifact="${cp2_pickup_artifacts[0]}"
+(cd "$cp2_pickup_artifact" && sha256sum --quiet -c SHA256SUMS)
+sha256sum "$cp2_pickup_artifact/SHA256SUMS"
+
+/usr/bin/python3 -I -B - \
+  "$cp2_pickup_artifact/cp2_report.json" \
+  "$cp2_pickup_head" "$cp2_pickup_tree" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as stream:
+    report = json.load(stream)
+commit, tree = sys.argv[2:]
+source = report["source"]
+assert source["commit"] == commit
+assert source["tree"] == tree
+assert source["dirty"] is False
+for snapshot_name in ("before", "after"):
+    snapshot = source[snapshot_name]
+    assert snapshot["commit"] == commit
+    assert snapshot["tree"] == tree
+    assert snapshot["status_porcelain_v1"] == []
+assert report["status"] == "passed_cp2_a_b_cp2_c2_unit_only"
+assert report["eligible_for_cp2_seal"] is False
+assert report["gtest"]["tests"] == 203
+assert report["gtest"]["failures"] == 0
+assert report["checkpoint_status"]["CP2-C3"] == "not_run"
+assert report["checkpoint_status"]["CP2-C"] == "not_run"
+assert report["checkpoint_status"]["CP2-D"] == "not_run"
+assert report["checkpoint_status"]["CP2-E"] == \
+    "not_run_blocked_pending_fixed_clock_profile"
+print("verified exact-HEAD unit handoff", commit, tree)
+PY
 ```
 
-Require a clean HEAD that descends from the tested CP2-C3 review-candidate
-runtime commit
-`0d71fee98499a10df4e92176709c1afe14077f90`. A later pickup-metadata commit is
-expected; do not confuse it with the runtime-tested source commit. Verify the
-previous retained artifact path and external anchor above, then locate and
-verify the newer exact-HEAD unit artifact reported by the final handoff. Verify
-Moksh's exact incident-log acknowledgment/evidence disposition and exact
-replacement approval. Make the source-bound incident disposition, approval record, all
-required source/contract identities, and removal of the two deliberate
-actual-mode blocks one separately reviewed binding commit; do not invoke
-readiness or actual mode until that commit is clean and its fresh unit gate
-passes. If ancestry fails or the worktree has
-unexplained changes, inspect and reconcile them before continuing. Do not
-reset or overwrite unexplained work, and do not inspect recorded inputs during
-diagnosis.
+If any check fails, stop and reconcile without resetting unexplained work or
+inspecting recorded inputs. Do not confuse the pickup-only containing commit
+with the earlier runtime implementation checkpoint; the exact-HEAD artifact
+must bind both through Git ancestry and the full source inventory.
+
+Before changing an actual-mode block, retain the human statements verbatim and
+confirm the first-stage packet contains all of the following:
+
+1. An acknowledgment of every incident and the evidence disposition in
+   `docs/cp2_predata_incident_log.md` at commit
+   `c2f3ad9c54ed126cc69526c76adb3134c3bf9545`.
+2. This exact CP2-C approval, with the reviewer identity and date attached:
+
+   > I, Moksh Trehan, approve the complete CP2-C detached-readiness and
+   > evidence-binding replacement in
+   > `docs/cp2_c_detached_readiness_binding_clarification_proposed.md` as
+   > reviewed at commit `0d71fee98499a10df4e92176709c1afe14077f90`;
+   > no exceptions.
+
+3. Explicit replacement of both CP2-D and CP2-E checkpoint architectures with
+   NVIDIA Jetson Nano `aarch64`, not merely a statement that Jetson is the
+   eventual project target.
+4. The named evaluator/direct-math source revisions or retained artifact
+   identities and authority for a data-free audited build/inspection,
+   including the dependency and GPLv3 corresponding-source/license closure.
+5. The exact timing machine, CPU/affinity, clocks, governor/driver,
+   boost/turbo, thermal policy, sampling commands, sequence/resource bounds,
+   and authority for later read-only observation. No statement may authorize
+   Codex to change clocks or other host controls.
+6. Authority for recorded-input access only after the new source-binding unit
+   gate and nine-step readiness barrier both pass.
+
+Then proceed without overlap: record and commit the C approval/source binding;
+run a fresh exact-HEAD unit gate; run readiness in a fresh process; execute and
+independently verify CP2-C once; freeze, commit, review, and approve the real D
+capsules/profile before executing D; freeze, commit, review, and approve the E
+timing profile before executing E. The order is readiness -> C -> D -> E, and
+the first failure ends the campaign. No observed data may change mathematics,
+thresholds, profiles, ordering, or retry decisions.
