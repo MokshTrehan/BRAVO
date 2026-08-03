@@ -15,6 +15,7 @@
 #include "UpdaterHelper.h"
 
 #include <algorithm>
+#include <cfenv>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -189,6 +190,10 @@ CP2StatisticComparison compare_eigen_statistic(bool reference_available,
     return result;
   }
 
+  if (std::fegetround() != FE_TONEAREST) {
+    result.status = CP2StatisticComparisonStatus::kRatioNonfinite;
+    return result;
+  }
   const double ratio = error / tolerance;
   if (!std::isfinite(ratio)) {
     result.status = CP2StatisticComparisonStatus::kRatioNonfinite;
@@ -241,6 +246,10 @@ CP2StatisticComparison compare_scalar_statistic_impl(bool reference_available, d
     return result;
   }
 
+  if (std::fegetround() != FE_TONEAREST) {
+    result.status = CP2StatisticComparisonStatus::kRatioNonfinite;
+    return result;
+  }
   const double ratio = error / tolerance;
   if (!std::isfinite(ratio)) {
     result.status = CP2StatisticComparisonStatus::kRatioNonfinite;

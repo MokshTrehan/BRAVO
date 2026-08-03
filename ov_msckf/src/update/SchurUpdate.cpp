@@ -27,6 +27,7 @@
 #include <Eigen/SVD>
 
 #include <algorithm>
+#include <cfenv>
 #include <cmath>
 #include <limits>
 
@@ -145,13 +146,26 @@ SchurReductionResult SchurUpdate::Reduce(const Eigen::MatrixXd &H_x, const Eigen
     result.stage = SchurReductionStage::kLargestSingularValue;
     return result;
   }
+
+  // Preserve the frozen rejection priority even when the process rounding
+  // mode makes the subsequently required diagnostic ratio unavailable.  On
+  // the ordinary FE_TONEAREST path the ratio is still materialized whenever
+  // s_1 passes, including for a numerical-rank rejection.
+  const double rank_scale = static_cast<double>(std::max<Eigen::Index>(m, 3));
+  const double numerical_floor = rank_scale * std::numeric_limits<double>::epsilon() * largest;
+  const bool numerical_rank_deficient = !(smallest > numerical_floor);
+  if (std::fegetround() != FE_TONEAREST) {
+    result.status = numerical_rank_deficient ? SchurReductionStatus::kRankDeficient
+                                             : SchurReductionStatus::kNonfinite;
+    result.stage = numerical_rank_deficient ? SchurReductionStage::kNumericalRank
+                                            : SchurReductionStage::kConditioning;
+    return result;
+  }
   result.singular_ratio = smallest / largest;
   result.singular_ratio_available = true;
 
   // Step 7: equality at the numerical-rank floor is rejected.
-  const double rank_scale = static_cast<double>(std::max<Eigen::Index>(m, 3));
-  const double numerical_floor = rank_scale * std::numeric_limits<double>::epsilon() * largest;
-  if (!(smallest > numerical_floor)) {
+  if (numerical_rank_deficient) {
     result.status = SchurReductionStatus::kRankDeficient;
     result.stage = SchurReductionStage::kNumericalRank;
     return result;

@@ -9,6 +9,8 @@
 
 #include <Eigen/Core>
 
+#include <array>
+#include <cfenv>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -16,6 +18,22 @@
 #include <utility>
 
 namespace {
+
+class ScopedRoundingMode {
+public:
+  explicit ScopedRoundingMode(int mode) noexcept
+      : original_(std::fegetround()), changed_(std::fesetround(mode) == 0) {}
+  ~ScopedRoundingMode() {
+    if (original_ != -1) {
+      (void)std::fesetround(original_);
+    }
+  }
+  bool changed() const noexcept { return changed_; }
+
+private:
+  int original_ = -1;
+  bool changed_ = false;
+};
 
 std::uint64_t binary64_bits(double value) {
   std::uint64_t bits = 0;
@@ -608,6 +626,26 @@ TEST(CP2ShadowMath, StatisticComparisonFirstFailurePrecedenceIsExact) {
                 true, 0.0, true, std::numeric_limits<double>::max())
                 .status,
             CP2StatisticComparisonStatus::kRatioNonfinite);
+
+  ASSERT_EQ(std::fegetround(), FE_TONEAREST);
+  for (const int mode : {FE_UPWARD, FE_DOWNWARD, FE_TOWARDZERO}) {
+    ScopedRoundingMode rounding(mode);
+    ASSERT_TRUE(rounding.changed());
+    ASSERT_EQ(std::fegetround(), mode);
+    const std::array<ov_msckf::CP2StatisticComparison, 3> rejected{{
+        CP2ShadowMath::CompareMatrixStatistic(true, zero, true, one),
+        CP2ShadowMath::CompareVectorStatistic(true, vector_zero, true,
+                                              vector_one),
+        CP2ShadowMath::CompareScalarStatistic(true, 0.0, true, 1.0),
+    }};
+    for (const auto &comparison : rejected) {
+      EXPECT_EQ(comparison.status,
+                CP2StatisticComparisonStatus::kRatioNonfinite);
+      EXPECT_FALSE(comparison.available);
+      EXPECT_FALSE(comparison.passed);
+    }
+  }
+  EXPECT_EQ(std::fegetround(), FE_TONEAREST);
 }
 
 } // namespace

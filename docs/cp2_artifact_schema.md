@@ -1,16 +1,29 @@
 # CP2 artifact and runner schema
 
-Status: **CP2-C frozen before implementation; CP2-D/E evidence remains blocked;
-no dataset access authorized**
+Status: **CP2-C detached-readiness replacement draft pending explicit approval;
+CP2-D/E evidence remains blocked; no dataset access authorized**
 
 This schema is subordinate to `docs/cp2_one_pass_contract.md` and
-`docs/cp2_recorded_evidence_contract.md`. It freezes the CP2-C machine
+`docs/cp2_recorded_evidence_contract.md`. The working-tree replacement of its
+CP2-C readiness section is non-authorizing until the exact commit containing
+it and
+`docs/cp2_c_detached_readiness_binding_clarification_proposed.md` receives the
+required explicit approval. Once approved, it freezes the CP2-C machine
 interface and the common readiness barrier that must run before a bag path is
 resolved, hashed, imported through `rosbag`, or opened. The CP2-D section
-preregisters its stricter sequence interface for the next hard checkpoint.
+preregisters its stricter sequence interface for the next hard checkpoint,
+but its runner and verifier stop before readiness/artifact access while the
+evaluator-precision/provenance and direct numerical-stack replacement in
+`docs/cp2_d_evaluator_precision_clarification_proposed.md` is pending.
 CP2-E remains a non-authorizing draft until its fixed-clock profile and complete
 machine schema are separately committed; no text in its section can make a
 timing artifact eligible before then.
+
+While the CP2-C replacement remains pending, the actual recorded runner is
+hard blocked before readiness or registry access and the actual recorded
+artifact verifier is hard blocked before artifact access. The implementation
+and synthetic/unit verifier paths remain reviewable, but no CP2-C recorded
+evidence can be created or accepted by this source state.
 
 ## Strict data conventions
 
@@ -52,12 +65,12 @@ Actual-mode CLIs are exact:
 
 ```text
 scripts/cp2/run_unit_gate.sh
-/usr/bin/python3 -B scripts/cp2/run_recorded_parity.py \
+/usr/bin/python3 -I -B scripts/cp2/run_recorded_parity.py \
   --unit-artifact ABS_PATH --unit-manifest-sha256 SHA256 [--run-id SAFE_ID]
-/usr/bin/python3 -B scripts/cp2/run_sequence_pair.py \
+/usr/bin/python3 -I -B scripts/cp2/run_sequence_pair.py \
   --unit-artifact ABS_PATH --unit-manifest-sha256 SHA256 \
   --sequence {MH_01_easy,MH_03_medium,V1_01_easy} [--run-id SAFE_ID]
-/usr/bin/python3 -B scripts/cp2/run_timing_pair.py \
+/usr/bin/python3 -I -B scripts/cp2/run_timing_pair.py \
   --unit-artifact ABS_PATH --unit-manifest-sha256 SHA256 [--run-id SAFE_ID]
 ```
 
@@ -72,13 +85,13 @@ hashes are the exact values in `project/cp2_gate.yaml`. The verifier retains its
 and adds these mutually exclusive actual modes:
 
 ```text
-/usr/bin/python3 -B scripts/cp2/verify_report.py \
+/usr/bin/python3 -I -B scripts/cp2/verify_report.py \
   --verify-recorded ABS_PATH --manifest-sha256 SHA256
-/usr/bin/python3 -B scripts/cp2/verify_report.py \
+/usr/bin/python3 -I -B scripts/cp2/verify_report.py \
   --verify-sequence ABS_PATH --manifest-sha256 SHA256
-/usr/bin/python3 -B scripts/cp2/verify_report.py \
+/usr/bin/python3 -I -B scripts/cp2/verify_report.py \
   --verify-timing ABS_PATH --manifest-sha256 SHA256
-/usr/bin/python3 -B scripts/cp2/verify_report.py \
+/usr/bin/python3 -I -B scripts/cp2/verify_report.py \
   --verify-sequence-set ABS0 ABS1 ABS2 \
   --manifest-sha256 SHA256_0 SHA256_1 SHA256_2
 ```
@@ -183,7 +196,10 @@ before dataset access and leaves no result directory.
    timeout, under `/usr/bin/env -i` with only
    `PATH=/usr/bin:/bin`, `LANG=C.UTF-8`, `LC_ALL=C.UTF-8`,
    `CP2_SELF_TEST=1`, and `CP2_FORBID_BAG_ACCESS=1`. Shell and Python entry
-   points use their committed shebang or `/usr/bin/python3 -B`, respectively;
+   points use their committed isolated shebang or `/usr/bin/python3 -I -B`,
+   respectively. Isolated mode must be established by the interpreter before
+   startup imports, removes the script/current directory and user site from
+   `sys.path`, ignores `PYTHONPATH`, and is checked by each Python entry point;
    Python also sets `sys.dont_write_bytecode=true` before any local import.
    Retain argv, entry-point SHA-256, UTC interval, exit code, timeout flag, and
    stdout/stderr SHA-256. Every self-test reports a zero bag-provider call
@@ -206,7 +222,7 @@ before dataset access and leaves no result directory.
 9. Only now may the runner read `project/datasets.yaml`, resolve or stat a bag,
    import/use `rosbag`, hash input bytes, or launch a process that opens a bag.
 
-The barrier record has exact keys:
+Subject to the replacement approval above, the barrier record has exact keys:
 `schema_version`, `record_type`=`readiness_barrier`, `entrypoints` (five
 records), `source_before_sha256`, `build_before_sha256`,
 `source_before_payload`, `build_before_payload`, `results_before_payload`,
@@ -215,14 +231,19 @@ records), `source_before_sha256`, `build_before_sha256`,
 `source_after_payload`, `source_after_sha256`, `build_after_payload`,
 `build_after_sha256`, `results_after_payload`, `results_after_sha256`,
 `testing_after_payload`, `testing_after_sha256`,
-`post_lock_payload`, `post_lock_recheck_sha256`, `unit_artifact`, `unit_manifest_sha256`,
+`post_lock_payload`, `post_lock_recheck_sha256`, `post_unit_payload`,
+`post_unit_recheck_sha256`, `source_context_payload`,
+`source_context_sha256`, `data_lock`, `readiness_git_environment`,
+`readiness_git_commands`, `unit_verification`, `unit_artifact`, `unit_manifest_sha256`,
 `unit_tested_commit`, `unit_tested_tree`, `bag_provider_calls` (zero), and
 `passed` (true). Each entry-point record has exact keys `path`, `git_blob`,
 `sha256`, `mode`, and `regular_nonsymlink`. Each self-test record has exact keys
-`index`, `path`, `argv`, `entrypoint_sha256`, `started_utc`, `finished_utc`,
-`environment_sha256`, `exit_code`, `timed_out`, `stdout`, `stdout_sha256`,
-`stderr`, `stderr_sha256`,
-`expected_case_names`, `result`, and `bag_provider_calls`. `stdout` and
+`index`, `path`, `argv`, `cwd`, `entrypoint_sha256`, `started_utc`, `finished_utc`,
+`environment_sha256`, `exit_code`, `timed_out`, `process_group_complete`,
+`stdout`, `stdout_sha256`, `stderr`, `stderr_sha256`,
+`expected_case_names`, `result`, `bag_provider_calls`, and
+`temporary_root_removed`. `cwd` is exactly `/tmp`,
+`process_group_complete` and `temporary_root_removed` are true, and `stdout` and
 `stderr` are distinct relpaths retained in the eventual artifact;
 `expected_case_names` is the exact ordered nonempty name array embedded in the
 committed entry point, and `result` is the parsed final-line object. Its case
@@ -268,8 +289,97 @@ Invalid/nonhex Git identities fail before encoding. The before/after/post-lock
 payload relpaths and hashes are included in the barrier record; the verifier
 parses and rehashes every payload, requires byte-identical before/after payloads
 for each root, and reconstructs the source/post-lock payload from the retained
-source archive. This trusted-runner-local class does not claim malicious-runner
-attestation of ephemeral pre-run `build`/`results` bytes.
+source archive. `source_context_payload` retains the exact canonical JSON bytes
+fed to the independent unit-anchor verifier at readiness step 8; its digest is
+`source_context_sha256`, and the detached actual verifier revalidates that
+context against the postauthorization source archive, governing approvals,
+entry points, contracts, and unit anchor. The separate `post_unit` payload is a
+second `post_lock`-tag snapshot captured after detached unit verification and
+must be byte-identical to the retained post-lock payload.
+
+`data_lock` has exact keys `path`, `device`, `inode`, `mode`, `owner_uid`,
+`link_count`, and `acquired_exclusive`. Its path is exactly
+`/tmp/schurvio-lite-cp2-data.lock`; the remaining integer fields retain the
+held descriptor's `st_dev`, `st_ino`, permission-only mode `0600`, `st_uid`,
+and `st_nlink` respectively, and `acquired_exclusive` is true. The producer
+checks those values against the held descriptor and live path throughout the
+authorized run. Historical detached verification validates the retained exact
+types, path, mode, link count, and nonzero inode; it does not require the
+process-global lock path to preserve one ephemeral inode after the runner
+exits.
+
+`readiness_git_environment` is the exact `readiness_git_v1` environment-class
+object `{environment_id,variables,canonical_sha256}`. Its variables are the
+bytewise-name-sorted complete environment used by every readiness Git child:
+`GIT_ALLOW_PROTOCOL=none`, `GIT_ATTR_NOSYSTEM=1`,
+`GIT_CONFIG_NOSYSTEM=1`, `GIT_LITERAL_PATHSPECS=1`,
+`GIT_NO_LAZY_FETCH=1`, `GIT_NO_REPLACE_OBJECTS=1`,
+`GIT_OPTIONAL_LOCKS=0`, `GIT_PAGER=` (empty),
+`GIT_PROTOCOL_FROM_USER=0`, `GIT_TERMINAL_PROMPT=0`,
+`LANG=C.UTF-8`, `LC_ALL=C.UTF-8`, `PATH=/usr/bin:/bin`, and private
+`HOME`/`TMPDIR` directories named `git-home`/`git-tmp` beneath the same fresh
+`/tmp/schurvio-cp2-readiness-*` root. The producer requires those directories
+to be distinct real mode-0700 directories while readiness is live. Historical
+verification retains and validates their exact lexical relationship and does
+not require the intentionally removed private tree to be recreated.
+
+`readiness_git_commands` is exactly 20 records, indexed contiguously. Each has
+exact keys `command_index`, `argv`, `cwd`, `environment_sha256`,
+`stdin_sha256`, `stdout_sha256`, `stderr_sha256`, `stdout_payload`,
+`started_utc`, `finished_utc`, `exit_code`, `timed_out`, and
+`process_group_complete`. The exact command suffixes are, in order: initial
+`ls-files --stage -z`; `ls-files --others -z`; `cat-file --batch`; `status
+--porcelain=v1 -z --untracked-files=all`; `ls-files --others --ignored
+--exclude-standard -z`; `rev-parse --verify HEAD`; `rev-parse --verify
+HEAD^{tree}`; `merge-base --is-ancestor APPROVED_CP1_COMMIT HEAD`; then the
+status/HEAD/tree triplet four times for source-before, source-after, post-lock,
+and post-unit capture. Every argv starts with the frozen absolute Git binary,
+descriptor-bound Git/worktree arguments, and exact fail-closed `-c` options;
+`cwd` is `/proc/self/fd/3`; stderr is empty; exit is zero; timeout is false;
+process-group completion is true; and UTC intervals are nonoverlapping and in
+command order.
+
+The `cat-file` request is the ordered blob-ID population from `ls-files
+--stage`; its stdout content is never persisted, while its SHA-256 is
+independently reconstructed by streaming the full source archive. Every other
+Git stdout is retained at the exact path `readiness/git/NN.stdout`. Path-list
+outputs are strict NUL-terminated UTF-8, duplicate-free and bytewise sorted.
+The all-other list equals the nontracked regular/symlink leaf population in the
+retained `build`, `results`, and `Testing` snapshots; the ignored list is its
+subset. Control files named `.gitignore` or `.gitattributes` are forbidden in
+those roots. The other retained stdout hashes reconstruct the exact stage,
+empty status/ancestor result, commit, and tree bytes. The detached verifier
+requires the environment record and all 20 command summaries to match this
+flow exactly and closes the entire `readiness/` namespace against missing,
+aliased, and orphan payloads.
+
+`unit_verification` has exact keys `argv`, `cwd`, `environment`, `started_utc`,
+`finished_utc`, `exit_code`, `timed_out`, `process_group_complete`, `stdout`,
+`stdout_sha256`, `stderr`, `stderr_sha256`, and `source_context_sha256`. It is
+the descriptor-executed `/usr/bin/python3 -I -B` invocation of the held
+verifier with `--verify-unit-anchor-prevalidated`, a private frozen copy of the
+unit artifact, and the externally supplied manifest digest. Its cwd is `/tmp`;
+its complete environment is exactly `PATH=/usr/bin:/bin`, `LANG=C`, and
+`LC_ALL=C`; exit is zero; timeout is false; process-group completion is true;
+and its source-context digest equals the barrier's. Its retained final stdout
+line is the exact passing prevalidated-unit result for the held commit/tree.
+The nested record is also projected without alteration as command zero in
+`commands.jsonl`, using the exact `unit_verifier_v1` environment class, and the
+detached actual verifier repeats the complete unit-anchor verification rather
+than trusting that subprocess result alone.
+
+The detached actual verifier may execute only the two workspace-local helper
+modules `scripts/cp2/cp2_schema.py` and
+`scripts/cp2/cp2_sequence_math.py`. It installs their path, Git mode, size, and
+SHA-256 from the validated source context before loading either, opens each
+through a real held `scripts/cp2` directory with `O_NOFOLLOW`, requires a
+single-link regular file, reads/re-fstats/hashes the same descriptor, and
+compiles those held bytes directly. An unbound name, path-reopening loader,
+context mismatch, or cache/source mismatch is fatal. The explicitly marked
+artifact-free self-test fixture is the only nonartifact binding mode.
+
+This trusted-runner-local class does not claim malicious-runner attestation of
+ephemeral pre-run `build`/`results` bytes.
 
 ## Common provenance and command records
 
@@ -322,9 +432,14 @@ The required nested keys are:
   the complete environment passed to that command class, sorted strictly by
   UTF-8 name bytes, with exact unique `{name,value}` string objects. Names are
   restricted to `CC`, `CFLAGS`, `CMAKE_PREFIX_PATH`, `CP2_FORBID_BAG_ACCESS`,
-  `CP2_SELF_TEST`, `CPATH`, `CXX`, `CXXFLAGS`, `HOME`, `LANG`, `LC_ALL`,
+  `CP2_POSTAUTH_PAIR_INDEX`, `CP2_SELF_TEST`, `CPATH`, `CXX`, `CXXFLAGS`,
+  `GIT_ALLOW_PROTOCOL`, `GIT_ATTR_NOSYSTEM`, `GIT_CONFIG_NOSYSTEM`,
+  `GIT_LITERAL_PATHSPECS`, `GIT_NO_LAZY_FETCH`, `GIT_NO_REPLACE_OBJECTS`,
+  `GIT_OPTIONAL_LOCKS`, `GIT_PAGER`, `GIT_PROTOCOL_FROM_USER`,
+  `GIT_TERMINAL_PROMPT`, `HOME`, `LANG`, `LC_ALL`,
   `LD_LIBRARY_PATH`, `LDFLAGS`, `LIBRARY_PATH`, `LOGNAME`, `OMP_NUM_THREADS`,
-  `PATH`, `PKG_CONFIG_PATH`, `PYTHONPATH`, `ROS_DISTRO`, `ROS_ETC_DIR`,
+  `PATH`, `PKG_CONFIG_PATH`, `PYTHONDONTWRITEBYTECODE`, `PYTHONNOUSERSITE`,
+  `PYTHONPATH`, `ROS_DISTRO`, `ROS_ETC_DIR`,
   `ROS_HOSTNAME`, `ROS_IP`, `ROS_MASTER_URI`, `ROS_PACKAGE_PATH`,
   `ROS_PYTHON_VERSION`, `ROS_ROOT`, `ROS_VERSION`, `SOURCE_DATE_EPOCH`,
   `TMPDIR`, and `USER`; and

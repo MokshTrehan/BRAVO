@@ -90,9 +90,14 @@ list(APPEND LIBRARY_SOURCES
         src/update/CP2CommitOracle.cpp
         src/update/CP2CompositeState.cpp
         src/update/CP2FeatureGate.cpp
+        src/update/CP2OfflineReplay.cpp
+        src/update/CP2RuntimeContext.cpp
+        src/update/CP2SerialPairing.cpp
+        src/update/CP2SerialRuntimeTrace.cpp
         src/update/CP2ShadowMath.cpp
         src/update/CP2StateTraceCodec.cpp
         src/update/CP2TraceCodec.cpp
+        src/update/CP2TraceJournal.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
@@ -107,14 +112,21 @@ list(APPEND LIBRARY_SOURCES
 # actual Givens/compression and EKF implementations called by strict wrappers.
 set_source_files_properties(
         src/state/StateHelper.cpp
+        src/ros/CP2ROS1RuntimeParameters.cpp
         src/update/CP2Canonical.cpp
         src/update/CP2CommitBoundary.cpp
         src/update/CP2CommitOracle.cpp
         src/update/CP2CompositeState.cpp
         src/update/CP2FeatureGate.cpp
+        src/update/CP2OfflineReplay.cpp
+        src/update/CP2RecordedAssemble.cpp
+        src/update/CP2RuntimeContext.cpp
+        src/update/CP2SerialPairing.cpp
+        src/update/CP2SerialRuntimeTrace.cpp
         src/update/CP2ShadowMath.cpp
         src/update/CP2StateTraceCodec.cpp
         src/update/CP2TraceCodec.cpp
+        src/update/CP2TraceJournal.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
@@ -123,7 +135,10 @@ set_source_files_properties(
         COMPILE_FLAGS "-fno-fast-math -ffp-contract=off -fsigned-zeros")
 
 if (catkin_FOUND AND ENABLE_ROS)
-    list(APPEND LIBRARY_SOURCES src/ros/ROS1Visualizer.cpp src/ros/ROSVisualizerHelper.cpp)
+    list(APPEND LIBRARY_SOURCES
+            src/ros/CP2ROS1RuntimeParameters.cpp
+            src/ros/ROS1Visualizer.cpp
+            src/ros/ROSVisualizerHelper.cpp)
 endif ()
 file(GLOB_RECURSE LIBRARY_HEADERS "src/*.h")
 add_library(ov_msckf_lib SHARED ${LIBRARY_SOURCES} ${LIBRARY_HEADERS})
@@ -137,6 +152,14 @@ install(TARGETS ov_msckf_lib
 install(DIRECTORY src/
         DESTINATION ${CATKIN_GLOBAL_INCLUDE_DESTINATION}
         FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
+)
+
+add_executable(cp2_recorded_assemble src/update/CP2RecordedAssemble.cpp)
+target_link_libraries(cp2_recorded_assemble ov_msckf_lib ${thirdparty_libraries})
+install(TARGETS cp2_recorded_assemble
+        ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+        LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+        RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
 

@@ -392,6 +392,16 @@ TEST(CP2TraceRawFile, FrameContextOffsetsOrderingAndFeatureIdentityAreExact) {
   EXPECT_THROW(ov_msckf::CP2TraceCodec::DecodeRawSystemFile(disconnected),
                ov_msckf::CP2TraceCodecError);
 
+  std::vector<std::uint8_t> overflowing_payload_range = encoded.bytes;
+  store_u64(overflowing_payload_range, 32U + 5U * 8U,
+            std::numeric_limits<std::uint64_t>::max());
+  try {
+    (void)ov_msckf::CP2TraceCodec::DecodeRawSystemFile(overflowing_payload_range);
+    FAIL() << "raw payload offset-plus-length overflow was not rejected";
+  } catch (const ov_msckf::CP2TraceCodecError &error) {
+    EXPECT_STREQ(error.what(), "raw payload offset plus length overflows u64");
+  }
+
   second.feature_ordinal = 2;
   EXPECT_THROW(ov_msckf::CP2TraceCodec::EncodeRawSystemFile({first, second}),
                ov_msckf::CP2TraceCodecError);
@@ -486,6 +496,15 @@ TEST(CP2TraceProposal, FrozenPayloadAndRoleFramingRejectAllStructuralCorruption)
   bad_role[32U] = 2U;
   EXPECT_THROW(ov_msckf::CP2TraceCodec::DecodeProposalFile(bad_role),
                ov_msckf::CP2TraceCodecError);
+  std::vector<std::uint8_t> overflowing_payload_range = encoded.bytes;
+  store_u64(overflowing_payload_range, 32U + 4U * 8U,
+            std::numeric_limits<std::uint64_t>::max());
+  try {
+    (void)ov_msckf::CP2TraceCodec::DecodeProposalFile(overflowing_payload_range);
+    FAIL() << "proposal payload offset-plus-length overflow was not rejected";
+  } catch (const ov_msckf::CP2TraceCodecError &error) {
+    EXPECT_STREQ(error.what(), "proposal payload offset plus length overflows u64");
+  }
   EXPECT_THROW(ov_msckf::CP2TraceCodec::EncodeProposalFile({candidate, baseline}),
                ov_msckf::CP2TraceCodecError);
   EXPECT_THROW(ov_msckf::CP2TraceCodec::EncodeProposalFile({baseline, baseline}),
@@ -555,6 +574,20 @@ TEST(CP2TraceReplay, OwningDecodedFramesDriveTheSoleShadowMathKernel) {
 
   const ov_msckf::CP2TraceReplayResult replay =
       ov_msckf::CP2TraceCodec::ReplayInvocation(input);
+  const std::vector<ov_msckf::CP2RawSystemTraceFrame> decoded_raw =
+      ov_msckf::CP2TraceCodec::DecodeRawSystemFile(
+          input.raw_system_file_bytes);
+  const std::vector<ov_msckf::CP2ProposalTraceFrame> decoded_proposals =
+      ov_msckf::CP2TraceCodec::DecodeProposalFile(
+          input.proposal_file_bytes);
+  const ov_msckf::CP2TraceReplayResult decoded_replay =
+      ov_msckf::CP2TraceCodec::ReplayDecodedInvocation(
+          input, decoded_raw, decoded_proposals);
+  EXPECT_EQ(decoded_replay.raw_system_sha256, replay.raw_system_sha256);
+  EXPECT_EQ(decoded_replay.baseline_accepted.sequence_sha256,
+            replay.baseline_accepted.sequence_sha256);
+  EXPECT_EQ(decoded_replay.candidate_accepted.sequence_sha256,
+            replay.candidate_accepted.sequence_sha256);
   ASSERT_TRUE(replay.math.input_valid);
   ASSERT_EQ(replay.math.features.size(), 2U);
   EXPECT_EQ(replay.math.nullspace.accepted_ids, (std::vector<std::uint64_t>{7, 3}));

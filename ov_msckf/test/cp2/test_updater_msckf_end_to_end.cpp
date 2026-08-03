@@ -51,6 +51,11 @@ public:
     return updater.cp2_test_raw_assembly_calls;
   }
 
+  static void SetNextInvocationId(UpdaterMSCKF &updater,
+                                  std::uint64_t value) {
+    updater.cp2_next_invocation_id = value;
+  }
+
   static std::vector<CP2UpdaterTestStage>
   Stages(const UpdaterMSCKF &updater) {
     return std::vector<CP2UpdaterTestStage>(
@@ -525,6 +530,16 @@ make_updater(ov_msckf::UpdaterOptions::LandmarkElimination mode,
   ov_core::FeatureInitializerOptions initializer_options = feature_initializer_options();
   return std::unique_ptr<ov_msckf::UpdaterMSCKF>(
       new ov_msckf::UpdaterMSCKF(updater_options, initializer_options));
+}
+
+ov_msckf::CP2UpdateInvocationContext invocation_context(
+    std::uint64_t sequence_index = 3U, std::uint64_t pair_index = 11U,
+    std::uint64_t camera_timestamp_ns = 123456789U) {
+  ov_msckf::CP2UpdateInvocationContext context;
+  context.sequence_index = sequence_index;
+  context.pair_index = pair_index;
+  context.camera_timestamp_ns = camera_timestamp_ns;
+  return context;
 }
 
 class RecordingUpdateSink final : public ov_msckf::CP2RecordedUpdateSink {
@@ -1154,6 +1169,7 @@ TEST(CP2UpdaterMSCKFEndToEnd,
   std::size_t callback_count = 0;
   ov_msckf::CP2LiveUpdateEvent observed;
   ASSERT_TRUE(updater->set_cp2_recorded_sink(recorded_sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
   ASSERT_TRUE(updater->set_cp2_update_callback(
       [&](const ov_msckf::CP2LiveUpdateEvent &event) {
         ++callback_count;
@@ -1381,6 +1397,8 @@ TEST(CP2UpdaterMSCKFTransaction,
   std::size_t observer_count = 0U;
   bool observer_saw_published_record = false;
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(
+      invocation_context(5U, 17U, 987654321U)));
   ASSERT_TRUE(updater->set_cp2_update_callback(
       [&](const ov_msckf::CP2LiveUpdateEvent &) {
         ++observer_count;
@@ -1396,6 +1414,11 @@ TEST(CP2UpdaterMSCKFTransaction,
   EXPECT_EQ(observer_count, 1U);
   EXPECT_TRUE(observer_saw_published_record);
   EXPECT_FALSE(updater->cp2_trace_fatal_latched());
+  EXPECT_TRUE(sink->record->update.invocation_context_available);
+  EXPECT_EQ(sink->record->update.sequence_index, 5U);
+  EXPECT_EQ(sink->record->update.pair_index, 17U);
+  EXPECT_EQ(sink->record->update.camera_timestamp_ns, 987654321U);
+  EXPECT_EQ(sink->record->update.invocation_id, 0U);
   EXPECT_EQ(sink->record->update.terminal_status,
             ov_msckf::CP2UpdateTerminalStatus::kAllRejected);
   EXPECT_EQ(sink->record->update.terminal_subreason,
@@ -1434,12 +1457,19 @@ TEST(CP2UpdaterMSCKFTransaction,
       make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
   auto sink = std::make_shared<RecordingUpdateSink>();
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(
+      invocation_context(8U, 23U, 1122334455U)));
 
   EXPECT_NO_THROW(updater->update(fixture.state, features));
 
   ASSERT_EQ(sink->call_count, 1U);
   ASSERT_TRUE(sink->record);
   const ov_msckf::CP2RecordedUpdateEvent &record = *sink->record;
+  EXPECT_TRUE(record.update.invocation_context_available);
+  EXPECT_EQ(record.update.sequence_index, 8U);
+  EXPECT_EQ(record.update.pair_index, 23U);
+  EXPECT_EQ(record.update.camera_timestamp_ns, 1122334455U);
+  EXPECT_EQ(record.update.invocation_id, 0U);
   expect_recorded_phase_population(
       record, {ov_msckf::CP2StatePhase::kPhase0Prior,
                ov_msckf::CP2StatePhase::kPhase1Precommit,
@@ -1520,6 +1550,7 @@ TEST(CP2UpdaterMSCKFTransaction,
       make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
   auto sink = std::make_shared<RecordingUpdateSink>();
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
 
   EXPECT_NO_THROW(updater->update(fixture.state, features));
 
@@ -1571,6 +1602,7 @@ TEST(CP2UpdaterMSCKFTransaction,
       make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
   auto sink = std::make_shared<RecordingUpdateSink>();
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
 
   try {
     updater->update(fixture.state, features);
@@ -1615,6 +1647,7 @@ TEST(CP2UpdaterMSCKFTransaction,
   sink->status = ov_msckf::CP2RecordedSinkStatus::kRejected;
   std::size_t observer_count = 0U;
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
   ASSERT_TRUE(updater->set_cp2_update_callback(
       [&](const ov_msckf::CP2LiveUpdateEvent &) { ++observer_count; }, false));
 
@@ -1644,7 +1677,132 @@ TEST(CP2UpdaterMSCKFTransaction,
       ov_msckf::StateHelper::get_full_covariance(fixture.state)));
 }
 
+TEST(CP2UpdaterMSCKFTransaction,
+     MissingRecordedContextIsFatalBeforeEstimatorWork) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto features = make_accepted_features(fixture, 0x4350324d4358ULL);
+  const std::vector<std::shared_ptr<ov_core::Feature>> features_before =
+      features;
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  std::size_t observer_count = 0U;
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_update_callback(
+      [&](const ov_msckf::CP2LiveUpdateEvent &) { ++observer_count; }, false));
+
+  try {
+    updater->update(fixture.state, features);
+    FAIL() << "recorded update without invocation context did not fail";
+  } catch (const ov_msckf::CP2TraceFatalError &error) {
+    EXPECT_EQ(error.reason(),
+              ov_msckf::CP2TraceFatalReason::kConfigurationInvariant);
+  }
+
+  EXPECT_EQ(sink->call_count, 0U);
+  EXPECT_FALSE(sink->record);
+  EXPECT_EQ(observer_count, 0U);
+  EXPECT_TRUE(updater->cp2_trace_fatal_latched());
+  EXPECT_EQ(updater->cp2_trace_fatal_reason(),
+            ov_msckf::CP2TraceFatalReason::kConfigurationInvariant);
+  EXPECT_FALSE(
+      updater->set_cp2_invocation_context(invocation_context()));
+  EXPECT_EQ(features, features_before);
 #if defined(OV_MSCKF_CP2_TESTING)
+  EXPECT_EQ(ov_msckf::CP2UpdaterTestAccess::RawAssemblyCalls(*updater), 0U);
+#endif
+  expect_exact_state(fixture, before);
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     InvocationContextIsOneShotContiguousAndSettersFailClosed) {
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  std::vector<ov_msckf::CP2LiveUpdateEvent> observed;
+  std::vector<bool> reentrant_setter_results;
+  ASSERT_TRUE(updater->set_cp2_update_callback(
+      [&](const ov_msckf::CP2LiveUpdateEvent &event) {
+        observed.push_back(event);
+        reentrant_setter_results.push_back(
+            updater->set_cp2_invocation_context(
+                invocation_context(99U, 99U, 99U)));
+      },
+      false));
+
+  const ov_msckf::CP2UpdateInvocationContext first =
+      invocation_context(2U, 7U, 1000000001U);
+  const ov_msckf::CP2UpdateInvocationContext second =
+      invocation_context(2U, 8U, 1000000002U);
+  ASSERT_TRUE(updater->set_cp2_invocation_context(first));
+  EXPECT_FALSE(updater->set_cp2_invocation_context(second));
+
+  std::vector<std::shared_ptr<ov_core::Feature>> features;
+  EXPECT_NO_THROW(
+      updater->update(std::shared_ptr<ov_msckf::State>(), features));
+  EXPECT_NO_THROW(
+      updater->update(std::shared_ptr<ov_msckf::State>(), features));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(second));
+  EXPECT_FALSE(updater->set_cp2_update_callback(
+      ov_msckf::UpdaterMSCKF::CP2UpdateCallback(), false));
+  EXPECT_NO_THROW(
+      updater->update(std::shared_ptr<ov_msckf::State>(), features));
+
+  ASSERT_EQ(observed.size(), 3U);
+  EXPECT_EQ(reentrant_setter_results,
+            (std::vector<bool>{false, false, false}));
+  EXPECT_TRUE(observed[0].invocation_context_available);
+  EXPECT_EQ(observed[0].sequence_index, first.sequence_index);
+  EXPECT_EQ(observed[0].pair_index, first.pair_index);
+  EXPECT_EQ(observed[0].camera_timestamp_ns, first.camera_timestamp_ns);
+  EXPECT_EQ(observed[0].invocation_id, 0U);
+  EXPECT_FALSE(observed[1].invocation_context_available);
+  EXPECT_EQ(observed[1].sequence_index, 0U);
+  EXPECT_EQ(observed[1].pair_index, 0U);
+  EXPECT_EQ(observed[1].camera_timestamp_ns, 0U);
+  EXPECT_EQ(observed[1].invocation_id, 0U);
+  EXPECT_TRUE(observed[2].invocation_context_available);
+  EXPECT_EQ(observed[2].sequence_index, second.sequence_index);
+  EXPECT_EQ(observed[2].pair_index, second.pair_index);
+  EXPECT_EQ(observed[2].camera_timestamp_ns, second.camera_timestamp_ns);
+  EXPECT_EQ(observed[2].invocation_id, 1U);
+  for (const ov_msckf::CP2LiveUpdateEvent &event : observed) {
+    EXPECT_EQ(event.terminal_status,
+              ov_msckf::CP2UpdateTerminalStatus::kEmptyInput);
+  }
+  EXPECT_FALSE(updater->cp2_trace_fatal_latched());
+}
+
+#if defined(OV_MSCKF_CP2_TESTING)
+TEST(CP2UpdaterMSCKFTransaction,
+     InvocationIdOverflowIsFatalBeforeEstimatorWork) {
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  auto sink = std::make_shared<RecordingUpdateSink>();
+  ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
+  ov_msckf::CP2UpdaterTestAccess::SetNextInvocationId(
+      *updater, std::numeric_limits<std::uint64_t>::max());
+  std::vector<std::shared_ptr<ov_core::Feature>> features;
+
+  try {
+    updater->update(std::shared_ptr<ov_msckf::State>(), features);
+    FAIL() << "overflowed invocation identity was accepted";
+  } catch (const ov_msckf::CP2TraceFatalError &error) {
+    EXPECT_EQ(error.reason(),
+              ov_msckf::CP2TraceFatalReason::kArithmeticInvariant);
+  }
+
+  EXPECT_EQ(sink->call_count, 0U);
+  EXPECT_FALSE(sink->record);
+  EXPECT_TRUE(updater->cp2_trace_fatal_latched());
+  EXPECT_EQ(updater->cp2_trace_fatal_reason(),
+            ov_msckf::CP2TraceFatalReason::kArithmeticInvariant);
+  EXPECT_FALSE(
+      updater->set_cp2_invocation_context(invocation_context()));
+  EXPECT_EQ(ov_msckf::CP2UpdaterTestAccess::RawAssemblyCalls(*updater), 0U);
+}
+
 TEST(CP2UpdaterMSCKFTransaction,
      CandidateAssemblyFailureCannotVetoBaselineCommit) {
   ProductionFixture fixture = make_production_fixture();
@@ -1656,6 +1814,7 @@ TEST(CP2UpdaterMSCKFTransaction,
   ov_msckf::CP2UpdaterTestAccess::SetFault(
       *updater, ov_msckf::CP2UpdaterTestFault::kCandidateAssemblyFailure);
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
 
   EXPECT_NO_THROW(updater->update(fixture.state, features));
 
@@ -1695,6 +1854,7 @@ TEST(CP2UpdaterMSCKFTransaction,
       *updater,
       ov_msckf::CP2UpdaterTestFault::kBaselineProvenanceMismatch);
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
 
   EXPECT_NO_THROW(updater->update(fixture.state, features));
 
@@ -1755,6 +1915,7 @@ TEST(CP2UpdaterMSCKFTransaction,
   ov_msckf::CP2UpdaterTestAccess::SetFault(
       *updater, ov_msckf::CP2UpdaterTestFault::kInvalidPhase2);
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
 
   EXPECT_NO_THROW(updater->update(fixture.state, features));
 
@@ -1796,6 +1957,7 @@ TEST(CP2UpdaterMSCKFTransaction,
   ov_msckf::CP2UpdaterTestAccess::SetFault(
       *updater, ov_msckf::CP2UpdaterTestFault::kPhase1ValueMismatch);
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
 
   EXPECT_NO_THROW(updater->update(fixture.state, features));
 
@@ -1833,6 +1995,7 @@ TEST(CP2UpdaterMSCKFTransaction,
   ov_msckf::CP2UpdaterTestAccess::SetFault(
       *updater, ov_msckf::CP2UpdaterTestFault::kFinalPointerMismatch);
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
 
   EXPECT_NO_THROW(updater->update(fixture.state, features));
 
@@ -1867,6 +2030,7 @@ TEST(CP2UpdaterMSCKFTransaction,
   ov_msckf::CP2UpdaterTestAccess::SetFault(
       *updater, ov_msckf::CP2UpdaterTestFault::kInvalidatePostcommitStorage);
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
 
   try {
     updater->update(fixture.state, features);
@@ -1898,6 +2062,7 @@ TEST(CP2UpdaterMSCKFTransaction,
       *updater,
       ov_msckf::CP2UpdaterTestFault::kInvalidatePostcommitPointerToken);
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
 
   try {
     updater->update(fixture.state, features);
@@ -1928,6 +2093,7 @@ TEST(CP2UpdaterMSCKFTransaction,
   ov_msckf::CP2UpdaterTestAccess::SetFault(
       *updater, ov_msckf::CP2UpdaterTestFault::kPhase3ValueMismatch);
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
 
   EXPECT_NO_THROW(updater->update(fixture.state, features));
 
@@ -1972,6 +2138,7 @@ TEST(CP2UpdaterMSCKFTransaction,
   ov_msckf::CP2UpdaterTestAccess::SetFault(
       *updater, ov_msckf::CP2UpdaterTestFault::kPhase3Nonfinite);
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
 
   EXPECT_NO_THROW(updater->update(fixture.state, features));
 
@@ -2008,6 +2175,7 @@ TEST(CP2UpdaterMSCKFTransaction,
       *updater,
       ov_msckf::CP2UpdaterTestFault::kNoncommitDurationArithmeticFailure);
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
   std::vector<std::shared_ptr<ov_core::Feature>> features;
 
   try {
@@ -2041,6 +2209,7 @@ TEST(CP2UpdaterMSCKFTransaction,
       *updater,
       ov_msckf::CP2UpdaterTestFault::kNoncommitDurationArithmeticFailure);
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
 
   try {
     updater->update(fixture.state, features);
@@ -2070,6 +2239,7 @@ TEST(CP2UpdaterMSCKFTransaction,
       *updater,
       ov_msckf::CP2UpdaterTestFault::kCommittedDurationArithmeticFailure);
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
 
   try {
     updater->update(fixture.state, features);
@@ -2101,6 +2271,7 @@ TEST(CP2UpdaterMSCKFTransaction,
       *updater,
       ov_msckf::CP2UpdaterTestFault::kCommitOracleArithmeticOverflow);
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
 
   try {
     updater->update(fixture.state, features);
@@ -2131,6 +2302,7 @@ TEST(CP2UpdaterMSCKFTransaction,
   ov_msckf::CP2UpdaterTestAccess::SetFault(
       *updater, ov_msckf::CP2UpdaterTestFault::kCommitOracleInvalidPhase);
   ASSERT_TRUE(updater->set_cp2_recorded_sink(sink));
+  ASSERT_TRUE(updater->set_cp2_invocation_context(invocation_context()));
 
   try {
     updater->update(fixture.state, features);
@@ -2163,6 +2335,8 @@ TEST(CP2UpdaterMSCKFTransaction,
       make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
   auto installed_sink = std::make_shared<RecordingUpdateSink>();
   ASSERT_TRUE(nullspace_updater->set_cp2_recorded_sink(installed_sink));
+  ASSERT_TRUE(nullspace_updater->set_cp2_invocation_context(
+      invocation_context()));
   std::vector<std::shared_ptr<ov_core::Feature>> features;
   nullspace_updater->update(std::shared_ptr<ov_msckf::State>(), features);
   EXPECT_EQ(installed_sink->call_count, 1U);

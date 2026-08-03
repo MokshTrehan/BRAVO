@@ -171,6 +171,20 @@ public:
    * accepted as artifact replay evidence.
    */
   static CP2TraceReplayResult ReplayInvocation(const CP2TraceReplayInput &input);
+
+  /**
+   * Replay using complete files that the caller decoded once with this codec.
+   *
+   * This is the campaign-scale equivalent of ReplayInvocation: canonical
+   * payload references are still checked against input file bytes, while the
+   * complete decoded populations avoid reparsing multi-gigabyte files for
+   * every invocation. The two decoded vectors must be the unchanged direct
+   * results of DecodeRawSystemFile/DecodeProposalFile for input's files.
+   */
+  static CP2TraceReplayResult ReplayDecodedInvocation(
+      const CP2TraceReplayInput &input,
+      const std::vector<CP2RawSystemTraceFrame> &decoded_raw_frames,
+      const std::vector<CP2ProposalTraceFrame> &decoded_proposal_frames);
 };
 
 } // namespace ov_msckf

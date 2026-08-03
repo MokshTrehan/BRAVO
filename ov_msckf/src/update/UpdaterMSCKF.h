@@ -125,6 +125,18 @@ const char *cp2_update_terminal_status_name(CP2UpdateTerminalStatus status) noex
 const char *cp2_update_terminal_subreason_name(CP2UpdateTerminalSubreason subreason) noexcept;
 
 /**
+ * @brief One-shot serial-runner identity supplied before an updater call.
+ *
+ * The updater assigns invocation_id itself at call entry. Keeping that counter
+ * out of the caller prevents duplicate or reordered invocation identities.
+ */
+struct CP2UpdateInvocationContext {
+  std::uint64_t sequence_index = 0U;
+  std::uint64_t pair_index = 0U;
+  std::uint64_t camera_timestamp_ns = 0U;
+};
+
+/**
  * @brief Value-only terminal event for timing and later trace serialization.
  *
  * duration_ns ends before observer execution. On a committing invocation its
@@ -134,6 +146,11 @@ const char *cp2_update_terminal_subreason_name(CP2UpdateTerminalSubreason subrea
  * authoritative mode it is also embedded in the immutable owning record.
  */
 struct CP2LiveUpdateEvent {
+  bool invocation_context_available = false;
+  std::uint64_t sequence_index = 0U;
+  std::uint64_t pair_index = 0U;
+  std::uint64_t camera_timestamp_ns = 0U;
+  std::uint64_t invocation_id = 0U;
   std::uint64_t duration_ns = 0;
   CP2UpdateTerminalStatus terminal_status = CP2UpdateTerminalStatus::kInternalFailure;
   CP2UpdateTerminalSubreason terminal_subreason = CP2UpdateTerminalSubreason::kTraceInvariantFailure;
@@ -211,6 +228,10 @@ struct CP2EncodedStatePhase {
 
 /**
  * Complete value-owning result of one authoritative recorded invocation.
+ *
+ * The embedded update owns the required sequence, pair, camera timestamp, and
+ * updater-assigned invocation identity; authoritative records therefore have
+ * update.invocation_context_available=true without duplicating identity state.
  *
  * state_phase_count is exactly 0, 2, or 4. The populated prefix is therefore
  * exactly [], [0,1], or [0,1,2,3]. Pointer identity never enters this object.
@@ -315,6 +336,19 @@ public:
    */
   bool set_cp2_recorded_sink(std::shared_ptr<CP2RecordedUpdateSink> sink);
 
+  /**
+   * Install exactly one value-only identity for the next updater call.
+   *
+   * A pending identity cannot be overwritten. The setter is rejected while
+   * an update is active or after a fatal trace latch. Every accepted identity
+   * is consumed once at the next call entry, where the updater assigns its
+   * own checked, contiguous zero-based invocation ID. Authoritative recorded
+   * mode requires an identity on every call; ordinary diagnostic/estimator
+   * use remains legal without one.
+   */
+  bool set_cp2_invocation_context(
+      const CP2UpdateInvocationContext &context) noexcept;
+
   bool cp2_trace_fatal_latched() const noexcept;
   CP2TraceFatalReason cp2_trace_fatal_reason() const noexcept;
 
@@ -348,6 +382,11 @@ protected:
   /// Callback configuration is synchronized and frozen at first update entry.
   std::mutex cp2_callback_mutex;
   bool cp2_callback_configuration_frozen = false;
+
+  /// One-shot caller identity and updater-owned contiguous invocation counter.
+  bool cp2_invocation_context_pending = false;
+  CP2UpdateInvocationContext cp2_pending_invocation_context;
+  std::uint64_t cp2_next_invocation_id = 0U;
 
   /// External state serialization is mandatory; reject accidental reentry.
   std::atomic<bool> cp2_update_active{false};

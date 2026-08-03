@@ -32,6 +32,7 @@
 #include <string>
 
 #include "VioManagerOptions.h"
+#include "update/UpdaterMSCKF.h"
 
 namespace ov_core {
 struct ImuData;
@@ -47,7 +48,6 @@ namespace ov_msckf {
 
 class State;
 class StateHelper;
-class UpdaterMSCKF;
 class UpdaterSLAM;
 class UpdaterZeroVelocity;
 class Propagator;
@@ -81,6 +81,18 @@ public:
   void feed_measurement_camera(const ov_core::CameraData &message) { track_image_and_update(message); }
 
   /**
+   * Process one serial camera measurement while carrying a CP2 identity by
+   * value to the exact MSCKF call boundary. The context is never installed
+   * early: initialization, ZUPT, out-of-order, or other pre-update returns
+   * leave no stale updater identity. ``updater_invoked`` is set only after the
+   * updater accepts the one-shot identity immediately before call entry.
+   */
+  bool feed_measurement_camera_with_cp2_context(
+      const ov_core::CameraData &message,
+      const CP2UpdateInvocationContext &context,
+      bool &updater_invoked);
+
+  /**
    * @brief Feed function for a synchronized simulated cameras
    * @param timestamp Time that this image was collected
    * @param camids Camera ids that we have simulated measurements for
@@ -109,6 +121,21 @@ public:
 
   /// Accessor to get the current propagator
   std::shared_ptr<Propagator> get_propagator() { return propagator; }
+
+  /// Supply the value-only identity consumed by the next MSCKF update call.
+  bool set_cp2_invocation_context(
+      const CP2UpdateInvocationContext &context) noexcept;
+
+  /// Install the optional CP2 diagnostic observer before the first update.
+  bool set_cp2_update_callback(UpdaterMSCKF::CP2UpdateCallback callback,
+                               bool enable_shadow = false);
+
+  /// Install the authoritative CP2 sink before the first update.
+  bool set_cp2_recorded_sink(std::shared_ptr<CP2RecordedUpdateSink> sink);
+
+  /// Read the updater's sticky authoritative-trace failure state.
+  bool cp2_trace_fatal_latched() const noexcept;
+  CP2TraceFatalReason cp2_trace_fatal_reason() const noexcept;
 
   /// Get a nice visualization image of what tracks we have
   cv::Mat get_historical_viz_image();
@@ -199,6 +226,11 @@ protected:
 
   /// Our MSCKF feature updater
   std::shared_ptr<UpdaterMSCKF> updaterMSCKF;
+
+  /// Serial-camera identity held only for one synchronous camera feed.
+  bool cp2_camera_context_active = false;
+  bool cp2_camera_context_consumed = false;
+  CP2UpdateInvocationContext cp2_camera_context;
 
   /// Our SLAM/ARUCO feature updater
   std::shared_ptr<UpdaterSLAM> updaterSLAM;

@@ -504,6 +504,18 @@ bool UpdaterMSCKF::set_cp2_recorded_sink(
   return true;
 }
 
+bool UpdaterMSCKF::set_cp2_invocation_context(
+    const CP2UpdateInvocationContext &context) noexcept {
+  const std::lock_guard<std::mutex> lock(cp2_callback_mutex);
+  if (cp2_update_active.load(std::memory_order_acquire) ||
+      cp2_invocation_context_pending || cp2_trace_fatal_latched()) {
+    return false;
+  }
+  cp2_pending_invocation_context = context;
+  cp2_invocation_context_pending = true;
+  return true;
+}
+
 bool UpdaterMSCKF::cp2_trace_fatal_latched() const noexcept {
   return cp2_trace_fatal_reason() != CP2TraceFatalReason::kNone;
 }
@@ -539,14 +551,42 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   std::shared_ptr<const CP2UpdateCallback> update_callback;
   std::shared_ptr<CP2RecordedUpdateSink> recorded_sink;
   bool shadow_requested = false;
+  bool invocation_context_supplied = false;
+  bool invocation_id_overflow = false;
+  CP2UpdateInvocationContext invocation_context;
+  std::uint64_t invocation_id = 0U;
   {
     const std::lock_guard<std::mutex> lock(cp2_callback_mutex);
     cp2_callback_configuration_frozen = true;
     update_callback = cp2_update_callback;
     recorded_sink = cp2_recorded_sink;
     shadow_requested = cp2_shadow_enabled;
+    if (cp2_invocation_context_pending) {
+      invocation_context = cp2_pending_invocation_context;
+      cp2_pending_invocation_context = CP2UpdateInvocationContext{};
+      cp2_invocation_context_pending = false;
+      invocation_context_supplied = true;
+      invocation_id = cp2_next_invocation_id;
+      if (!cp2_checked_add_u64(cp2_next_invocation_id, UINT64_C(1),
+                               cp2_next_invocation_id)) {
+        invocation_id_overflow = true;
+      }
+    }
   }
   const bool recorded_mode = static_cast<bool>(recorded_sink);
+  if (invocation_id_overflow) {
+    if (recorded_mode) {
+      latch_cp2_trace_fatal(
+          CP2TraceFatalReason::kArithmeticInvariant,
+          "CP2 invocation identity population exceeds u64");
+    }
+    throw std::overflow_error(
+        "UpdaterMSCKF invocation identity population exceeds u64");
+  }
+  if (recorded_mode && !invocation_context_supplied) {
+    latch_cp2_trace_fatal(CP2TraceFatalReason::kConfigurationInvariant,
+                          "CP2 recorded update requires invocation context");
+  }
   if (recorded_mode && _options.landmark_elimination !=
                            UpdaterOptions::LandmarkElimination::NULLSPACE) {
     latch_cp2_trace_fatal(CP2TraceFatalReason::kConfigurationInvariant,
@@ -565,6 +605,13 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   }
 
   CP2LiveUpdateEvent update_event;
+  if (invocation_context_supplied) {
+    update_event.invocation_context_available = true;
+    update_event.sequence_index = invocation_context.sequence_index;
+    update_event.pair_index = invocation_context.pair_index;
+    update_event.camera_timestamp_ns = invocation_context.camera_timestamp_ns;
+    update_event.invocation_id = invocation_id;
+  }
   if (!cp2_size_to_u64(feature_vec.size(), update_event.input_feature_count)) {
     if (recorded_mode) {
       latch_cp2_trace_fatal(CP2TraceFatalReason::kRequiredEncoding,

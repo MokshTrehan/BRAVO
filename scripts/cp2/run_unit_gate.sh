@@ -5,6 +5,252 @@ set -Eeuo pipefail
 umask 077
 export PATH=/usr/bin:/bin
 
+# The readiness-barrier self-test is an exclusive, artifact-free surface.  It
+# must dispatch before the repository-derived lock, Git status, build/results
+# snapshots, or any unit workspace is touched.  The default no-argument mode
+# below retains the full CP1/CP2 unit-evidence workflow.
+if [[ "$#" -eq 1 && "$1" == "--self-test" ]]; then
+    exec /usr/bin/python3 -I -B - <<'PY'
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import stat
+import tempfile
+
+ENTRYPOINT = "scripts/cp2/run_unit_gate.sh"
+EXPECTED = (
+    "valid_minimal_fixture",
+    "cli_exclusivity",
+    "forbidden_bag_provider",
+    "non_tmp_write",
+    "schema_extra_key",
+    "schema_missing_key",
+    "duplicate_json_key",
+    "unsafe_path",
+    "symlink",
+    "hardlink",
+    "manifest_missing_entry",
+    "manifest_extra_entry",
+    "manifest_digest_mismatch",
+    "readiness_order",
+    "readiness_timeout",
+    "readiness_process_group",
+    "readiness_lock_identity",
+    "readiness_snapshot_mutation",
+    "ignored_source_path",
+    "snapshotted_root_symlink",
+    "launch_output_combination",
+    "unit_anchor_commit_mismatch",
+)
+
+
+class Rejected(ValueError):
+    pass
+
+
+def reject(message):
+    raise Rejected(message)
+
+
+def exact_keys(value, keys):
+    if not isinstance(value, dict) or set(value) != set(keys):
+        reject("schema key mismatch")
+
+
+def parse_cli(arguments):
+    if tuple(arguments) != ():
+        reject("unit actual mode accepts no arguments")
+
+
+def strict_json(document):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                reject("duplicate JSON key")
+            result[key] = value
+        return result
+    return json.loads(document, object_pairs_hook=unique)
+
+
+def safe_relpath(value):
+    if (not isinstance(value, str) or not value or "\\" in value or "\0" in value
+            or os.path.isabs(value) or os.path.normpath(value) != value
+            or any(part in ("", ".", "..") for part in value.split("/"))):
+        reject("unsafe relative path")
+
+
+def tmp_child(value, root):
+    if not isinstance(value, str) or not os.path.isabs(value):
+        reject("write path is not absolute")
+    if os.path.commonpath((os.path.normpath(value), root)) != root or os.path.normpath(value) == root:
+        reject("write path is not below the temporary root")
+
+
+def regular_single(path):
+    metadata = os.lstat(path)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        reject("not a single-link regular file")
+
+
+def manifest(expected, observed):
+    if set(expected) != set(observed):
+        reject("manifest population mismatch")
+    if any(observed[path] != digest for path, digest in expected.items()):
+        reject("manifest digest mismatch")
+
+
+def readiness(records):
+    if [record.get("index") for record in records] != list(range(len(records))):
+        reject("readiness order mismatch")
+    if any(record.get("timed_out") is not False for record in records):
+        reject("readiness timeout")
+    if any(record.get("process_group_complete") is not True for record in records):
+        reject("readiness process group incomplete")
+
+
+def snapshots_equal(before, after):
+    if not isinstance(before, bytes) or not isinstance(after, bytes) or before != after:
+        reject("readiness snapshots differ")
+
+
+def lock(record):
+    exact_keys(record, ("regular", "owner", "mode"))
+    if record != {"regular": True, "owner": True, "mode": 0o600}:
+        reject("readiness lock mismatch")
+
+
+def ignored(path):
+    safe_relpath(path)
+    if path.split("/", 1)[0] not in ("build", "results", "Testing"):
+        reject("ignored source path")
+
+
+def real_directory(path):
+    if not stat.S_ISDIR(os.lstat(path).st_mode):
+        reject("snapshotted root symlink")
+
+
+def launch(record):
+    exact_keys(record, ("unit_only", "bag_provider_calls", "artifact_created"))
+    if record != {"unit_only": True, "bag_provider_calls": 0, "artifact_created": False}:
+        reject("unit self-test launch combination")
+
+
+def anchor(expected_commit, expected_tree, actual_commit, actual_tree):
+    if (expected_commit, expected_tree) != (actual_commit, actual_tree):
+        reject("unit anchor identity mismatch")
+
+
+def run_valid():
+    parse_cli(())
+    exact_keys({"required": 1}, ("required",))
+    strict_json('{"key":1}')
+    safe_relpath("logs/self-test.log")
+    readiness(({"index": 0, "timed_out": False, "process_group_complete": True},))
+    lock({"regular": True, "owner": True, "mode": 0o600})
+    ignored("build/self-test")
+    launch({"unit_only": True, "bag_provider_calls": 0, "artifact_created": False})
+    anchor("a" * 40, "b" * 40, "a" * 40, "b" * 40)
+
+
+os.umask(0o077)
+temporary_root = tempfile.mkdtemp(prefix="schurvio-lite-cp2-unit-self-test-", dir="/tmp")
+cases = []
+try:
+    file_a = os.path.join(temporary_root, "file-a")
+    file_b = os.path.join(temporary_root, "file-b")
+    link = os.path.join(temporary_root, "link")
+    root_link = os.path.join(temporary_root, "root-link")
+    with open(file_a, "wb") as stream:
+        stream.write(b"a")
+    os.link(file_a, file_b)
+    os.symlink(file_a, link)
+    os.symlink(temporary_root, root_link)
+    digest = hashlib.sha256(b"a").hexdigest()
+
+    def forbidden_provider():
+        reject("bag provider is forbidden")
+
+    functions = {
+        "valid_minimal_fixture": run_valid,
+        "cli_exclusivity": lambda: parse_cli(("--self-test", "unexpected")),
+        "forbidden_bag_provider": forbidden_provider,
+        "non_tmp_write": lambda: tmp_child("/var/tmp/cp2-forbidden", temporary_root),
+        "schema_extra_key": lambda: exact_keys({"required": 1, "extra": 2}, ("required",)),
+        "schema_missing_key": lambda: exact_keys({}, ("required",)),
+        "duplicate_json_key": lambda: strict_json('{"key":1,"key":2}'),
+        "unsafe_path": lambda: safe_relpath("../escape"),
+        "symlink": lambda: regular_single(link),
+        "hardlink": lambda: regular_single(file_a),
+        "manifest_missing_entry": lambda: manifest({"a": digest}, {}),
+        "manifest_extra_entry": lambda: manifest({"a": digest}, {"a": digest, "b": digest}),
+        "manifest_digest_mismatch": lambda: manifest({"a": digest}, {"a": "0" * 64}),
+        "readiness_order": lambda: readiness((
+            {"index": 1, "timed_out": False, "process_group_complete": True},
+            {"index": 0, "timed_out": False, "process_group_complete": True},
+        )),
+        "readiness_timeout": lambda: readiness((
+            {"index": 0, "timed_out": True, "process_group_complete": True},
+        )),
+        "readiness_process_group": lambda: readiness((
+            {"index": 0, "timed_out": False, "process_group_complete": False},
+        )),
+        "readiness_lock_identity": lambda: lock({"regular": True, "owner": False, "mode": 0o600}),
+        "readiness_snapshot_mutation": lambda: snapshots_equal(b"before", b"after"),
+        "ignored_source_path": lambda: ignored("cache/file"),
+        "snapshotted_root_symlink": lambda: real_directory(root_link),
+        "launch_output_combination": lambda: launch(
+            {"unit_only": True, "bag_provider_calls": 0, "artifact_created": True}
+        ),
+        "unit_anchor_commit_mismatch": lambda: anchor("a" * 40, "b" * 40, "c" * 40, "b" * 40),
+    }
+    if tuple(functions) != EXPECTED:
+        raise RuntimeError("self-test inventory differs from its literal declaration")
+    for index, name in enumerate(EXPECTED):
+        expected_rejection = name != "valid_minimal_fixture"
+        observed_rejection = False
+        unexpected = False
+        try:
+            functions[name]()
+        except Rejected:
+            observed_rejection = True
+        except Exception:
+            unexpected = True
+        cases.append({
+            "index": index,
+            "name": name,
+            "expected_rejection": expected_rejection,
+            "observed_rejection": observed_rejection,
+            "passed": not unexpected and observed_rejection == expected_rejection,
+        })
+finally:
+    shutil.rmtree(temporary_root)
+
+passed = (not os.path.lexists(temporary_root) and len(cases) == len(EXPECTED)
+          and all(case["passed"] for case in cases))
+result = {
+    "schema_version": 1,
+    "record_type": "self_test_result",
+    "entrypoint": ENTRYPOINT,
+    "temporary_root": temporary_root,
+    "bag_provider_calls": 0,
+    "cases": cases,
+    "case_count": len(cases),
+    "passed": passed,
+}
+print(json.dumps(result, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+raise SystemExit(0 if passed else 1)
+PY
+fi
+if [[ "$#" -ne 0 ]]; then
+    echo "CP2 unit gate: expected no arguments or exclusive --self-test" >&2
+    exit 2
+fi
+
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd -P)"
 readonly script_dir repo_root
@@ -30,26 +276,8 @@ readonly artifact_parent="${repo_root}/results/staging/cp2/unit"
 readonly lock_root="/tmp"
 
 readonly -a archive_roots=(
-    LICENSE
-    ov_core
-    ov_init
-    ov_msckf
-    scripts
-    config/euroc_mav
-    docs/checkpoints.md
-    docs/conventions.md
-    docs/cp2_artifact_schema.md
-    docs/cp2_c_composite_and_readiness_clarification.md
-    docs/cp2_math_implementation_audit.md
-    docs/cp2_one_pass_contract.md
-    docs/cp2_recorded_evidence_contract.md
-    docs/iterated_update_spec.md
-    docs/schurvio_lite_execution_plan.md
-    project/cp0_baseline.json
-    project/cp1_gate.yaml
-    project/cp2_c_clarification_approval.json
-    project/cp2_gate.yaml
-    project/cp2_serial.launch
+    .
+    ':(exclude)project/datasets.yaml'
 )
 readonly -a cp1_tests=(
     test_cp1_schur_equivalence
@@ -69,8 +297,15 @@ readonly -a cp2_tests=(
     test_cp2_commit_boundary
     test_cp2_canonical
     test_cp2_feature_gate
+    test_cp2_offline_replay
+    test_cp2_recorded_assemble
+    test_cp2_runtime_context
+    test_cp2_ros1_runtime_parameters
+    test_cp2_serial_pairing
+    test_cp2_serial_runtime_trace
     test_cp2_updater_msckf_preview_snapshot
     test_cp2_shadow_math
+    test_cp2_trace_journal
     test_cp2_trace_codec
 )
 readonly -a all_tests=("${cp1_tests[@]}" "${cp2_tests[@]}")
@@ -101,7 +336,7 @@ sha256_path() {
 
 tree_metadata_signature() {
     /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 \
-        /usr/bin/python3 - "$1" <<'PY'
+        /usr/bin/python3 -I -B - "$1" <<'PY'
 import hashlib
 import os
 import stat
@@ -178,7 +413,7 @@ runner_self_test() {
     fi
     timestamp_sample="$(utc_now)"
     if ! /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 \
-        /usr/bin/python3 - "${timestamp_sample}" <<'PY'
+        /usr/bin/python3 -I -B - "${timestamp_sample}" <<'PY'
 import datetime
 import re
 import sys
@@ -200,7 +435,7 @@ PY
         self_status=1
     fi
     if ! /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC \
-        /usr/bin/python3 - "${BASH_SOURCE[0]}" <<'PY'
+        /usr/bin/python3 -I -B - "${BASH_SOURCE[0]}" <<'PY'
 from pathlib import Path
 import sys
 
@@ -229,8 +464,12 @@ PY
         echo "runner static invariant is missing: strict shell failure mode" >&2
         self_status=1
     fi
-    if ! grep -Eq -- '^/usr/bin/git -C .* archive --format=tar ' "${BASH_SOURCE[0]}"; then
+    if ! grep -Eq -- '^/usr/bin/git -c tar\.umask=0002 -C .* archive --format=tar ' "${BASH_SOURCE[0]}"; then
         echo "runner static invariant is missing: exact Git archive source" >&2
+        self_status=1
+    fi
+    if ! grep -F -- "':(exclude)project/datasets.yaml'" "${BASH_SOURCE[0]}" >/dev/null; then
+        echo "runner static invariant is missing: preauthorization registry archive exclusion" >&2
         self_status=1
     fi
     if ! grep -Eq -- '^[[:space:]]+/usr/bin/env -i "\$\{test_environment\[@\]\}"' \
@@ -289,7 +528,7 @@ PY
         self_status=1
     elif ! /usr/bin/env -i \
         PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 \
-        /usr/bin/python3 "${verifier}" --self-test >"${self_log}" 2>&1; then
+        /usr/bin/python3 -I -B "${verifier}" --unit-self-test >"${self_log}" 2>&1; then
         sed -n '1,240p' "${self_log}" >&2
         echo "verifier self-test failed" >&2
         self_status=1
@@ -341,7 +580,7 @@ done
 # beneath a validated existing directory; callers validate again after mkdir.
 validate_canonical_nonsymlink_path() {
     local path="$1"
-    /usr/bin/python3 - "${repo_root}" "${path}" <<'PY'
+    /usr/bin/python3 -I -B - "${repo_root}" "${path}" <<'PY'
 import os
 from pathlib import Path
 import stat
@@ -420,7 +659,7 @@ verifier_self_test_log="$(mktemp --tmpdir cp2-verifier-self-test.XXXXXXXX.log)" 
 verifier_self_test_started="$(utc_now)"
 if /usr/bin/env -i \
     PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 \
-    /usr/bin/python3 "${verifier}" --self-test >"${verifier_self_test_log}" 2>&1; then
+    /usr/bin/python3 -I -B "${verifier}" --unit-self-test >"${verifier_self_test_log}" 2>&1; then
     verifier_self_test_status=0
 else
     verifier_self_test_status=$?
@@ -430,6 +669,12 @@ if [[ "${verifier_self_test_status}" -ne 0 ]]; then
     sed -n '1,240p' "${verifier_self_test_log}" >&2
     rm -f -- "${verifier_self_test_log}"
     die "independent verifier self-test failed; no evidence directory was created"
+fi
+if ! grep -Eq -- '^CP2_READINESS_ENGINE_PROTECTING_TESTS count=39 passed=true module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$' \
+    "${verifier_self_test_log}"; then
+    sed -n '1,240p' "${verifier_self_test_log}" >&2
+    rm -f -- "${verifier_self_test_log}"
+    die "readiness-engine protecting tests are absent from the evidenced verifier gate"
 fi
 readonly verifier_self_test_started verifier_self_test_finished verifier_self_test_status
 
@@ -467,7 +712,13 @@ cleanup() {
         echo "CP2 diagnostic artifacts remain in the incomplete staging directory:" >&2
         echo "  ${run_dir}" >&2
     fi
-    if [[ -d "${workspace}" ]]; then
+    if [[ "${run_succeeded}" -eq 1 && -d "${workspace}" ]]; then
+        # A retained extracted tree would introduce untracked .gitignore/
+        # .gitattributes controls before C3 readiness.  The finalized unit
+        # artifact is self-contained and the hidden verifier is artifact-only.
+        chmod -R u+w -- "${workspace}"
+        rm -rf -- "${workspace}"
+    elif [[ -d "${workspace}" ]]; then
         echo "CP2 fresh build workspace was retained for reproducibility/diagnosis:" >&2
         echo "  ${workspace}" >&2
     fi
@@ -476,7 +727,7 @@ trap cleanup EXIT
 
 # The compilation source is a fresh, exact Git archive of only the recorded
 # package/build-script roots. It has no worktree overlay and is made read-only.
-/usr/bin/git -C "${repo_root}" archive --format=tar --output="${source_archive}" \
+/usr/bin/git -c tar.umask=0002 -C "${repo_root}" archive --format=tar --output="${source_archive}" \
     "${source_commit}" -- "${archive_roots[@]}"
 /usr/bin/tar --extract --file "${source_archive}" --directory "${source_space}" \
     --no-same-owner --no-same-permissions
@@ -619,7 +870,7 @@ readonly deterministic_link_flags="-Wl,--build-id=sha1"
 
 write_source_snapshot() {
     local destination="$1"
-    /usr/bin/python3 - "${repo_root}" "${destination}" <<'PY'
+    /usr/bin/python3 -I -B - "${repo_root}" "${destination}" <<'PY'
 import datetime
 import json
 import os
@@ -653,7 +904,7 @@ PY
 environment_json() {
     local include_unset="$1"
     shift
-    /usr/bin/python3 - "${include_unset}" "$@" <<'PY'
+    /usr/bin/python3 -I -B - "${include_unset}" "$@" <<'PY'
 import json
 import sys
 
@@ -678,7 +929,7 @@ readonly build_environment_json test_environment_json verifier_environment_json
 
 write_source_snapshot "${run_dir}/source_before.json"
 
-/usr/bin/python3 - "${run_dir}/verifier_self_test.json" "${verifier}" \
+/usr/bin/python3 -I -B - "${run_dir}/verifier_self_test.json" "${verifier}" \
     "${verifier_self_test_started}" "${verifier_self_test_finished}" \
     "${verifier_self_test_status}" "${verifier_environment_json}" <<'PY'
 import json
@@ -688,7 +939,7 @@ import sys
 
 destination = Path(sys.argv[1])
 record = {
-    "argv": ["/usr/bin/python3", sys.argv[2], "--self-test"],
+    "argv": ["/usr/bin/python3", "-I", "-B", sys.argv[2], "--unit-self-test"],
     "cwd": ".",
     "environment": json.loads(sys.argv[6]),
     "environment_mode": "env-i",
@@ -710,7 +961,7 @@ PY
 write_workspace_record() {
     local read_only_after="$1"
     local ceres_read_only_after="$2"
-    /usr/bin/python3 - "${run_dir}/workspace.json" "${repo_root}" \
+    /usr/bin/python3 -I -B - "${run_dir}/workspace.json" "${repo_root}" \
         "${repository_build_root}" "${workspace}" "${workspace_build_root}" \
         "${source_space}" "${source_commit}" "${source_tree}" \
         "${archive_sha256}" "${archive_size_bytes}" "${read_only_after}" \
@@ -736,7 +987,8 @@ ceres_archive_path = Path(sys.argv[4]) / "ceres_source_snapshot.tar"
 googletest_archive_path = Path(sys.argv[4]) / "googletest_source_snapshot.tar"
 record = {
     "archive_argv": [
-        "/usr/bin/git", "-C", sys.argv[2], "archive", "--format=tar",
+        "/usr/bin/git", "-c", "tar.umask=0002", "-C", sys.argv[2],
+        "archive", "--format=tar",
         "--output=" + str(archive_path), sys.argv[7], "--", *roots,
     ],
     "archive_artifact": "source_snapshot.tar",
@@ -808,7 +1060,7 @@ write_command_record() {
     local finished_utc="$5"
     local environment="$6"
     shift 6
-    /usr/bin/python3 - "${destination}" "${name}" "${exit_status}" \
+    /usr/bin/python3 -I -B - "${destination}" "${name}" "${exit_status}" \
         "${started_utc}" "${finished_utc}" "${environment}" "$@" <<'PY'
 import json
 import os
@@ -994,7 +1246,7 @@ declare -A dso_sources=(
     [libceres.so.1]="${ceres_prefix}/lib/libceres.so.1"
 )
 if [[ "${build_failures}" -eq 0 ]]; then
-    /usr/bin/python3 - "${workspace}" <<'PY'
+    /usr/bin/python3 -I -B - "${workspace}" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1047,7 +1299,7 @@ capture_loader_map() {
         sed -n '1,240p' "${ldd_output}" >&2
         return "${ldd_status}"
     fi
-    /usr/bin/python3 - "${run_dir}" "${ldd_output}" "${destination}" <<'PY'
+    /usr/bin/python3 -I -B - "${run_dir}" "${ldd_output}" "${destination}" <<'PY'
 import hashlib
 import json
 import os
@@ -1123,7 +1375,7 @@ PY
 
 execution_inputs_json() {
     local test_name="$1"
-    /usr/bin/python3 - "${run_dir}" "${test_name}" "${required_copied_dsos[@]}" <<'PY'
+    /usr/bin/python3 -I -B - "${run_dir}" "${test_name}" "${required_copied_dsos[@]}" <<'PY'
 import hashlib
 import json
 from pathlib import Path
@@ -1155,7 +1407,7 @@ write_test_record() {
     local before_json="$7"
     local after_json="$8"
     local loader_file="$9"
-    /usr/bin/python3 - "${destination}" "${name}" "${checkpoint}" "${exit_status}" \
+    /usr/bin/python3 -I -B - "${destination}" "${name}" "${checkpoint}" "${exit_status}" \
         "${started_utc}" "${finished_utc}" "${test_environment_json}" \
         "${before_json}" "${after_json}" "${loader_file}" <<'PY'
 import json
@@ -1257,7 +1509,7 @@ googletest_archive_size_bytes_after_build="$(stat -c %s -- "${googletest_after_a
 rm -f -- "${googletest_after_archive}"
 readonly googletest_archive_sha256_after_build googletest_archive_size_bytes_after_build
 
-/usr/bin/python3 - "${run_dir}/dependency_inventory.json" "${run_dir}" \
+/usr/bin/python3 -I -B - "${run_dir}/dependency_inventory.json" "${run_dir}" \
     "${workspace}" "${package_build}" "${ceres_source}" "${ceres_prefix}" \
     "${ceres_commit}" "${ceres_tag}" "${ceres_archive_sha256}" \
     "${googletest_archive_sha256}" "${googletest_archive_size_bytes}" \
@@ -1458,20 +1710,20 @@ write_source_snapshot "${run_dir}/source_after.json"
 # Assembly writes staging evidence only. CP2-C2 is a unit sub-gate, not CP2-C;
 # the CP2-C3/C/D/E entry points and their self-tests remain incomplete.
 if ! /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 \
-    /usr/bin/python3 "${verifier}" --assemble-unit "${run_dir}" "${repo_root}"; then
+    /usr/bin/python3 -I -B "${verifier}" --assemble-unit "${run_dir}" "${repo_root}"; then
     die "could not assemble the CP2-A/B plus CP2-C2 staging report; partial artifacts were retained"
 fi
 manifest_sha256="$(sha256_path "${run_dir}/SHA256SUMS")"
 
 if ! /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 \
-    /usr/bin/python3 "${verifier}" --finalize-staging-noreplace \
+    /usr/bin/python3 -I -B "${verifier}" --finalize-staging-noreplace \
     "${run_dir}" "${final_dir}"; then
     die "atomic no-overwrite staging finalization failed; partial artifacts were retained"
 fi
 run_dir=""
 
 if /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 \
-    /usr/bin/python3 "${verifier}" --expected-manifest-sha256 "${manifest_sha256}" \
+    /usr/bin/python3 -I -B "${verifier}" --expected-manifest-sha256 "${manifest_sha256}" \
     "${final_dir}" "${repo_root}"; then
     verify_status=0
 else

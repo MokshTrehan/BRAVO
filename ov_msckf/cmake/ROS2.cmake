@@ -69,9 +69,14 @@ list(APPEND LIBRARY_SOURCES
         src/update/CP2CommitOracle.cpp
         src/update/CP2CompositeState.cpp
         src/update/CP2FeatureGate.cpp
+        src/update/CP2OfflineReplay.cpp
+        src/update/CP2RuntimeContext.cpp
+        src/update/CP2SerialPairing.cpp
+        src/update/CP2SerialRuntimeTrace.cpp
         src/update/CP2ShadowMath.cpp
         src/update/CP2StateTraceCodec.cpp
         src/update/CP2TraceCodec.cpp
+        src/update/CP2TraceJournal.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
@@ -90,9 +95,15 @@ set_source_files_properties(
         src/update/CP2CommitOracle.cpp
         src/update/CP2CompositeState.cpp
         src/update/CP2FeatureGate.cpp
+        src/update/CP2OfflineReplay.cpp
+        src/update/CP2RecordedAssemble.cpp
+        src/update/CP2RuntimeContext.cpp
+        src/update/CP2SerialPairing.cpp
+        src/update/CP2SerialRuntimeTrace.cpp
         src/update/CP2ShadowMath.cpp
         src/update/CP2StateTraceCodec.cpp
         src/update/CP2TraceCodec.cpp
+        src/update/CP2TraceJournal.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
@@ -121,6 +132,11 @@ ament_export_libraries(ov_msckf_lib)
 ##################################################
 # Make binary files!
 ##################################################
+
+add_executable(cp2_recorded_assemble src/update/CP2RecordedAssemble.cpp)
+ament_target_dependencies(cp2_recorded_assemble ${ament_libraries})
+target_link_libraries(cp2_recorded_assemble ov_msckf_lib ${thirdparty_libraries})
+install(TARGETS cp2_recorded_assemble DESTINATION lib/${PROJECT_NAME})
 
 add_executable(run_subscribe_msckf src/run_subscribe_msckf.cpp)
 ament_target_dependencies(run_subscribe_msckf ${ament_libraries})

@@ -556,6 +556,10 @@ CP2TraceCodec::EncodeRawSystemFile(const std::vector<CP2RawSystemTraceFrame> &fr
     CP2TracePayloadReference reference;
     reference.offset = checked_u64(output.size(), "raw payload offset");
     reference.length = checked_u64(payload.size(), "raw payload length");
+    if (reference.length >
+        std::numeric_limits<std::uint64_t>::max() - reference.offset) {
+      throw CP2TraceCodecError("raw payload offset plus length overflows u64");
+    }
     reference.sha256 = sha256_hex(payload);
     encoded.payloads.push_back(reference);
     output.AppendRawBytes(payload);
@@ -587,6 +591,10 @@ CP2TraceCodec::DecodeRawSystemFile(const std::vector<std::uint8_t> &file,
     const std::uint64_t payload_length = input.ReadU64("raw frame payload length");
     frame.payload.offset = checked_u64(input.position(), "raw payload offset");
     frame.payload.length = payload_length;
+    if (frame.payload.length >
+        std::numeric_limits<std::uint64_t>::max() - frame.payload.offset) {
+      throw CP2TraceCodecError("raw payload offset plus length overflows u64");
+    }
     const std::vector<std::uint8_t> payload = input.ReadBytes(payload_length, "raw frame payload");
     frame.payload.sha256 = sha256_hex(payload);
     frame.raw_system =
@@ -622,6 +630,10 @@ CP2TraceCodec::EncodeProposalFile(const std::vector<CP2ProposalTraceFrame> &fram
     CP2TracePayloadReference reference;
     reference.offset = checked_u64(output.size(), "proposal payload offset");
     reference.length = checked_u64(payload.size(), "proposal payload length");
+    if (reference.length >
+        std::numeric_limits<std::uint64_t>::max() - reference.offset) {
+      throw CP2TraceCodecError("proposal payload offset plus length overflows u64");
+    }
     reference.sha256 = sha256_hex(payload);
     encoded.payloads.push_back(reference);
     output.AppendRawBytes(payload);
@@ -660,6 +672,10 @@ CP2TraceCodec::DecodeProposalFile(const std::vector<std::uint8_t> &file,
     const std::uint64_t payload_length = input.ReadU64("proposal frame payload length");
     frame.payload.offset = checked_u64(input.position(), "proposal payload offset");
     frame.payload.length = payload_length;
+    if (frame.payload.length >
+        std::numeric_limits<std::uint64_t>::max() - frame.payload.offset) {
+      throw CP2TraceCodecError("proposal payload offset plus length overflows u64");
+    }
     const std::vector<std::uint8_t> payload = input.ReadBytes(payload_length, "proposal frame payload");
     frame.payload.sha256 = sha256_hex(payload);
     frame.proposal =
@@ -703,13 +719,24 @@ CP2TraceCodec::AcceptedFeatureDigests(const std::vector<std::uint64_t> &accepted
 
 CP2TraceReplayResult
 CP2TraceCodec::ReplayInvocation(const CP2TraceReplayInput &input) {
-  if (input.raw_frames.empty()) {
-    throw CP2TraceCodecError("offline replay requires a nonzero raw-system invocation");
-  }
   const std::vector<CP2RawSystemTraceFrame> decoded_raw_frames =
       DecodeRawSystemFile(input.raw_system_file_bytes);
   const std::vector<CP2ProposalTraceFrame> decoded_proposal_frames =
       DecodeProposalFile(input.proposal_file_bytes);
+  return ReplayDecodedInvocation(input, decoded_raw_frames,
+                                 decoded_proposal_frames);
+}
+
+CP2TraceReplayResult CP2TraceCodec::ReplayDecodedInvocation(
+    const CP2TraceReplayInput &input,
+    const std::vector<CP2RawSystemTraceFrame> &decoded_raw_frames,
+    const std::vector<CP2ProposalTraceFrame> &decoded_proposal_frames) {
+  if (input.raw_frames.empty()) {
+    throw CP2TraceCodecError(
+        "offline replay requires a nonzero raw-system invocation");
+  }
+  validate_raw_frame_sequence(decoded_raw_frames);
+  validate_proposal_frame_sequence(decoded_proposal_frames);
 
   std::vector<const CP2RawSystemTraceFrame *> retained_raw_frames;
   for (const CP2RawSystemTraceFrame &frame : decoded_raw_frames) {

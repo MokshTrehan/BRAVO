@@ -31,9 +31,24 @@
 #include "utils/print.h"
 #include "utils/sensor_data.h"
 
+#include <exception>
+#include <stdexcept>
+#include <utility>
+
 using namespace ov_core;
 using namespace ov_type;
 using namespace ov_msckf;
+
+const char *ov_msckf::cp2_serial_enqueue_status_name(
+    CP2SerialEnqueueStatus status) noexcept {
+  switch (status) {
+  case CP2SerialEnqueueStatus::kQueued: return "queued";
+  case CP2SerialEnqueueStatus::kFrequencyDropped: return "frequency_dropped";
+  case CP2SerialEnqueueStatus::kCam0DecodeFailed: return "cam0_decode_failed";
+  case CP2SerialEnqueueStatus::kCam1DecodeFailed: return "cam1_decode_failed";
+  }
+  return "invalid";
+}
 
 ROS1Visualizer::ROS1Visualizer(std::shared_ptr<ros::NodeHandle> nh, std::shared_ptr<VioManager> app, std::shared_ptr<Simulator> sim)
     : _nh(nh), _app(app), _sim(sim), thread_update_running(false) {
@@ -146,6 +161,16 @@ ROS1Visualizer::ROS1Visualizer(std::shared_ptr<ros::NodeHandle> nh, std::shared_
     });
     thread.detach();
   }
+}
+
+bool ROS1Visualizer::set_cp2_serial_processing_observer(
+    CP2SerialProcessingObserver observer) {
+  const std::lock_guard<std::mutex> lock(camera_queue_mtx);
+  if (thread_update_running || !camera_queue.empty()) {
+    return false;
+  }
+  cp2_serial_processing_observer = std::move(observer);
+  return true;
 }
 
 void ROS1Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> parser) {
@@ -453,35 +478,91 @@ void ROS1Visualizer::callback_inertial(const sensor_msgs::Imu::ConstPtr &msg) {
   if (thread_update_running)
     return;
   thread_update_running = true;
-  std::thread thread([&] {
-    // Lock on the queue (prevents new images from appending)
-    std::lock_guard<std::mutex> lck(camera_queue_mtx);
+  const std::shared_ptr<std::exception_ptr> processing_failure =
+      std::make_shared<std::exception_ptr>();
+  std::thread thread([&, processing_failure] {
+    try {
+      // Lock on the queue (prevents new images from appending)
+      std::lock_guard<std::mutex> lck(camera_queue_mtx);
 
-    // Count how many unique image streams
-    std::map<int, bool> unique_cam_ids;
-    for (const auto &cam_msg : camera_queue) {
-      unique_cam_ids[cam_msg.sensor_ids.at(0)] = true;
-    }
-
-    // If we do not have enough unique cameras then we need to wait
-    // We should wait till we have one of each camera to ensure we propagate in the correct order
-    auto params = _app->get_params();
-    size_t num_unique_cameras = (params.state_options.num_cameras == 2) ? 1 : params.state_options.num_cameras;
-    if (unique_cam_ids.size() == num_unique_cameras) {
-
-      // Loop through our queue and see if we are able to process any of our camera measurements
-      // We are able to process if we have at least one IMU measurement greater than the camera time
-      double timestamp_imu_inC = message.timestamp - _app->get_state()->_calib_dt_CAMtoIMU->value()(0);
-      while (!camera_queue.empty() && camera_queue.at(0).timestamp < timestamp_imu_inC) {
-        auto rT0_1 = boost::posix_time::microsec_clock::local_time();
-        double update_dt = 100.0 * (timestamp_imu_inC - camera_queue.at(0).timestamp);
-        _app->feed_measurement_camera(camera_queue.at(0));
-        visualize();
-        camera_queue.pop_front();
-        auto rT0_2 = boost::posix_time::microsec_clock::local_time();
-        double time_total = (rT0_2 - rT0_1).total_microseconds() * 1e-6;
-        PRINT_INFO(BLUE "[TIME]: %.4f seconds total (%.1f hz, %.2f ms behind)\n" RESET, time_total, 1.0 / time_total, update_dt);
+      // Count how many unique image streams
+      std::map<int, bool> unique_cam_ids;
+      for (const auto &cam_msg : camera_queue) {
+        unique_cam_ids[cam_msg.message.sensor_ids.at(0)] = true;
       }
+
+      // If we do not have enough unique cameras then we need to wait
+      // We should wait till we have one of each camera to ensure we propagate in the correct order
+      auto params = _app->get_params();
+      size_t num_unique_cameras = (params.state_options.num_cameras == 2) ? 1 : params.state_options.num_cameras;
+      if (unique_cam_ids.size() == num_unique_cameras) {
+
+        // Loop through our queue and see if we are able to process any of our camera measurements
+        // We are able to process if we have at least one IMU measurement greater than the camera time
+        double timestamp_imu_inC = message.timestamp - _app->get_state()->_calib_dt_CAMtoIMU->value()(0);
+        while (!camera_queue.empty() && camera_queue.at(0).message.timestamp < timestamp_imu_inC) {
+          auto rT0_1 = boost::posix_time::microsec_clock::local_time();
+          double update_dt = 100.0 * (timestamp_imu_inC - camera_queue.at(0).message.timestamp);
+          QueuedCameraData &queued = camera_queue.at(0);
+          if (queued.cp2_context_available) {
+            CP2SerialProcessingEvent event;
+            event.context = queued.cp2_context;
+            event.processing_entered = true;
+            try {
+              if (!_app->feed_measurement_camera_with_cp2_context(
+                      queued.message, queued.cp2_context,
+                      event.updater_invoked)) {
+                throw std::logic_error(
+                    "CP2 serial camera context was rejected before processing");
+              }
+              const bool state_row_will_be_emitted =
+                  _app->initialized() &&
+                  last_visualization_timestamp !=
+                      _app->get_state()->_timestamp;
+              visualize();
+              event.processing_returned = true;
+              if (state_row_will_be_emitted) {
+                const std::shared_ptr<State> current = _app->get_state();
+                event.state_row_emitted = true;
+                for (std::size_t axis = 0U; axis < 3U; ++axis) {
+                  event.position_G[axis] = current->_imu->pos()(axis);
+                }
+                for (std::size_t coefficient = 0U; coefficient < 4U;
+                     ++coefficient) {
+                  event.quaternion_ItoG_xyzw[coefficient] =
+                      current->_imu->quat()(coefficient);
+                }
+              }
+            } catch (...) {
+              const std::exception_ptr original_failure =
+                  std::current_exception();
+              if (cp2_serial_processing_observer) {
+                try {
+                  (void)cp2_serial_processing_observer(event);
+                } catch (...) {
+                  // The estimator/processing exception is authoritative.  An
+                  // observer failure must not replace its type or message.
+                }
+              }
+              std::rethrow_exception(original_failure);
+            }
+            if (!cp2_serial_processing_observer ||
+                !cp2_serial_processing_observer(event)) {
+              throw std::runtime_error(
+                  "CP2 serial processing observer rejected an event");
+            }
+          } else {
+            _app->feed_measurement_camera(queued.message);
+            visualize();
+          }
+          camera_queue.pop_front();
+          auto rT0_2 = boost::posix_time::microsec_clock::local_time();
+          double time_total = (rT0_2 - rT0_1).total_microseconds() * 1e-6;
+          PRINT_INFO(BLUE "[TIME]: %.4f seconds total (%.1f hz, %.2f ms behind)\n" RESET, time_total, 1.0 / time_total, update_dt);
+        }
+      }
+    } catch (...) {
+      *processing_failure = std::current_exception();
     }
     thread_update_running = false;
   });
@@ -490,6 +571,9 @@ void ROS1Visualizer::callback_inertial(const sensor_msgs::Imu::ConstPtr &msg) {
   // Otherwise detach this thread so it runs in the background!
   if (!_app->get_params().use_multi_threading_subs) {
     thread.join();
+    if (*processing_failure) {
+      std::rethrow_exception(*processing_failure);
+    }
   } else {
     thread.detach();
   }
@@ -530,18 +614,37 @@ void ROS1Visualizer::callback_monocular(const sensor_msgs::ImageConstPtr &msg0, 
 
   // append it to our queue of images
   std::lock_guard<std::mutex> lck(camera_queue_mtx);
-  camera_queue.push_back(message);
-  std::sort(camera_queue.begin(), camera_queue.end());
+  QueuedCameraData queued;
+  queued.message = std::move(message);
+  camera_queue.push_back(std::move(queued));
+  std::sort(camera_queue.begin(), camera_queue.end(),
+            [](const QueuedCameraData &left, const QueuedCameraData &right) {
+              return left.message < right.message;
+            });
 }
 
 void ROS1Visualizer::callback_stereo(const sensor_msgs::ImageConstPtr &msg0, const sensor_msgs::ImageConstPtr &msg1, int cam_id0,
                                      int cam_id1) {
+  (void)callback_stereo_impl(msg0, msg1, cam_id0, cam_id1, nullptr);
+}
+
+CP2SerialEnqueueStatus ROS1Visualizer::callback_stereo_cp2(
+    const sensor_msgs::ImageConstPtr &msg0,
+    const sensor_msgs::ImageConstPtr &msg1, int cam_id0, int cam_id1,
+    const CP2UpdateInvocationContext &context) {
+  return callback_stereo_impl(msg0, msg1, cam_id0, cam_id1, &context);
+}
+
+CP2SerialEnqueueStatus ROS1Visualizer::callback_stereo_impl(
+    const sensor_msgs::ImageConstPtr &msg0,
+    const sensor_msgs::ImageConstPtr &msg1, int cam_id0, int cam_id1,
+    const CP2UpdateInvocationContext *context) {
 
   // Check if we should drop this image
   double timestamp = msg0->header.stamp.toSec();
   double time_delta = 1.0 / _app->get_params().track_frequency;
   if (camera_last_timestamp.find(cam_id0) != camera_last_timestamp.end() && timestamp < camera_last_timestamp.at(cam_id0) + time_delta) {
-    return;
+    return CP2SerialEnqueueStatus::kFrequencyDropped;
   }
   camera_last_timestamp[cam_id0] = timestamp;
 
@@ -551,7 +654,7 @@ void ROS1Visualizer::callback_stereo(const sensor_msgs::ImageConstPtr &msg0, con
     cv_ptr0 = cv_bridge::toCvShare(msg0, sensor_msgs::image_encodings::MONO8);
   } catch (cv_bridge::Exception &e) {
     PRINT_ERROR("cv_bridge exception: %s\n", e.what());
-    return;
+    return CP2SerialEnqueueStatus::kCam0DecodeFailed;
   }
 
   // Get the image
@@ -560,7 +663,7 @@ void ROS1Visualizer::callback_stereo(const sensor_msgs::ImageConstPtr &msg0, con
     cv_ptr1 = cv_bridge::toCvShare(msg1, sensor_msgs::image_encodings::MONO8);
   } catch (cv_bridge::Exception &e) {
     PRINT_ERROR("cv_bridge exception: %s\n", e.what());
-    return;
+    return CP2SerialEnqueueStatus::kCam1DecodeFailed;
   }
 
   // Create the measurement
@@ -584,8 +687,18 @@ void ROS1Visualizer::callback_stereo(const sensor_msgs::ImageConstPtr &msg0, con
 
   // append it to our queue of images
   std::lock_guard<std::mutex> lck(camera_queue_mtx);
-  camera_queue.push_back(message);
-  std::sort(camera_queue.begin(), camera_queue.end());
+  QueuedCameraData queued;
+  queued.message = std::move(message);
+  if (context != nullptr) {
+    queued.cp2_context_available = true;
+    queued.cp2_context = *context;
+  }
+  camera_queue.push_back(std::move(queued));
+  std::sort(camera_queue.begin(), camera_queue.end(),
+            [](const QueuedCameraData &left, const QueuedCameraData &right) {
+              return left.message < right.message;
+            });
+  return CP2SerialEnqueueStatus::kQueued;
 }
 
 void ROS1Visualizer::publish_state() {

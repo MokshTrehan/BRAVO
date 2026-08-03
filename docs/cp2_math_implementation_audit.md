@@ -279,3 +279,126 @@ remains part of CP2-C after authorization.
 
 This addendum is post-run checkpoint metadata. It records, but was not itself
 included in, the exact source tree tested by the artifact.
+
+## 2026-08-03 CP2-C3 mathematical re-audit addendum
+
+Independent conclusion: **GREEN for mathematical fidelity and implementation
+at synthetic/unit scope only.** The CP2-C3 source re-audit found no estimator
+equation, threshold, comparison-boundary, counter-unit, traversal-order, or
+floating-point operation-order drift in the offline replay, recorded assembly,
+or sequence-math paths. This conclusion is not recorded CP2-C evidence, does
+not authorize dataset access, and does not claim that CP2-D or CP2-E passed.
+
+The following estimator-math invariants were rechecked:
+
+- Offline replay does not contain a second estimator implementation. After
+  exact schema, payload, digest, layout, and population validation, it supplies
+  the one projected phase-0 prior, the retained raw systems, the exact
+  `sigma`, exact `sigma * sigma`, and the reconstructed 499-entry 0.95
+  chi-square table to the production `CP2ShadowMath::Process` kernel.
+- Raw feature frames are joined one-to-one to their owning
+  `(sequence_index, pair_index, invocation_id)` and traversed in strict
+  feature-ordinal order. The baseline and candidate therefore see the same
+  ordered raw population and the same projected prior; the baseline and
+  candidate proposals must retain their exact mode, invocation, prior, raw,
+  and proposal-payload joins.
+- The production kernel retains the approved arithmetic order: direct
+  elementwise whitening by `sigma`; ordered construction and symmetrization of
+  lambda; ordered eta and gamma evaluation; per-feature processing order;
+  ordered accepted-ID accumulation; independent baseline/candidate global
+  assembly; unchanged compression; and proposal construction from the shared
+  prior. Replay introduces no alternative threshold or acceptance path.
+- Gate thresholds, decisions, retained gamma values, accepted-ID sequences,
+  accepted-set and accepted-sequence digests, proposal presence, and proposal
+  bytes are compared exactly. A nonfinite prerequisite fails closed; candidate
+  gamma nonfiniteness cannot be converted into a candidate proposal.
+- Statistic comparisons retain `scaled = 1e-8 * reference_norm`, followed by
+  `tolerance = 1e-10 + scaled`, followed by the ratio under `FE_TONEAREST`.
+  The pass boundary remains inclusive: `error <= tolerance`. The retained
+  tolerance and ratio must match the recomputed binary64 values exactly.
+- Proposal-block comparisons retain `scaled = 1e-6 * reference_norm`, followed
+  by `tolerance = 1e-8 + scaled`, followed by the ratio under
+  `FE_TONEAREST`; that pass boundary is also inclusive. Reference, difference,
+  error, scaled tolerance, ratio, prior, raw systems, gamma, proposals, and
+  derived states must all satisfy their finite-domain checks.
+
+The recorded-assembly and transaction invariants were rechecked separately:
+
+- The assembler is evidence plumbing, not an estimator. It decodes and
+  re-encodes retained payloads, proves exact ownership and one-to-one joins,
+  validates recorded production-math fields, emits diagnostics, and evaluates
+  the detached commit oracle. It does not replace the live estimator kernel or
+  recompute an alternative live update.
+- Sequence, pair, invocation, feature, state-phase, raw-frame, and proposal
+  identities are contiguous where required, unique, and fully consumed. Raw
+  frames and feature summaries have equal exact populations and feature
+  ordinals; no orphan or duplicate payload group is accepted.
+- Zero-raw, noncommit, and commit phase populations remain exact: no state
+  phase for zero raw, `[0,1]` for a raw noncommit, and `[0,1,2,3]` for a
+  commit. A commit requires one baseline proposal, exact phase-0/phase-1
+  canonical equality, exact detached phase-2 construction, exact phase-2 and
+  live phase-3 equality, and exactly one baseline commit, mean commit, and
+  covariance commit. Candidate live EKF, Type, mean, covariance, and feature
+  write counters remain exactly zero.
+- All seven repair/fallback counter families remain exact and zero where the
+  contract requires it: jitter, repair, alternate solve, clamp,
+  regularization, silent fallback, and fallback. Preview and reducer counters
+  are included in the same proof; exact gate/row populations use checked u64
+  addition and multiplication.
+- The aggregate 99.9-percent agreement checks preserve integer arithmetic and
+  their inclusive boundary: nonzero denominators plus
+  `1000 * matches >= 999 * population` for both gate and raw-row counts. State
+  block population is exactly `N`, covariance block population is exactly
+  checked `N * N`, and emitted/expected counts must agree.
+- `math_passed` remains a conjunction, not a copied online flag: it requires
+  the online condition, phase and commit exactness, feature statistics,
+  complete passing block comparisons, valid retained gamma, zero candidate
+  writes, clean preview counters, candidate-proposal presence on a commit, no
+  internal-failure terminal, exact global row populations, no missing
+  candidate, no commit mismatch, and zero aggregate repair counters.
+
+The sequence-math source was also rechecked without promoting it to CP2-D
+evidence:
+
+- Camera timestamps use exact integer nanoseconds, strict mode-trace ordering,
+  exact baseline/candidate timestamp intersection, and nearest-ground-truth
+  association with deterministic lower-row tie retention. The 10 ms
+  association boundary is inclusive.
+- Ordered scalar centroid, covariance, norm, RMSE, and percentile operations
+  retain their specified binary64 evaluation order and finite checks. Counts
+  must be exactly representable and bounded by `2^53 - 1`; count and index
+  arithmetic remains checked.
+- Rank acceptance retains the exact threshold
+  `(max(count, 3) * epsilon) * largest_singular_value` and requires the second
+  singular value to be strictly greater than that threshold; equality is
+  rejected. Kabsch uses the approved SVD correction and deliberately
+  left-associated `(U * D) * V^T` rotation construction.
+- Alignment is derived from the nullspace baseline only and the exact same
+  transform is applied to both modes. Independently aligning the candidate is
+  forbidden unless the resulting transform is byte-identical. Proper-rotation
+  and orthogonality checks remain finite and bounded.
+- Stored JPL `xyzw` quaternions are neither reordered nor conjugated. Their
+  ordered norm gate includes both endpoints of `[1 - 1e-10, 1 + 1e-10]`,
+  normalization follows that gate, and the orientation residual retains the
+  specified trace, clamp, and `acos` order.
+- Linear-interpolation p95, translation RMSE, and relative ATE retain their
+  exact definitions. The final 0.01 m, 0.05 degree, and 0.01 relative-ATE
+  limits are inclusive; only a value strictly above its limit fails.
+
+The contemporaneous normal strict-FP diagnostic matrix reported **203/203**
+executions passing. The distinct UBSan diagnostic matrix reported **203/203**,
+and the ASan+LSan diagnostic matrix reported **189/189**. The composite-state
+supplemental UBSan run reported **14/14** because that test's intentional
+malloc interposition prevents ASan initialization; this is a test-harness
+incompatibility, not a production sanitizer finding. These are dirty-tree
+development diagnostics only: no approval-bound manifest, clean-commit
+source-to-binary attestation, or CP2 evidence status is claimed from them.
+
+CP2-C recorded execution remains **unauthorized**. Authorization still depends
+on approval-bound readiness at one exact clean commit: all five artifact-free
+entry-point self-tests, opaque source-provenance checks, one-to-one artifact
+joins, detached-replay plumbing and self-tests, and the required fresh unit
+anchor must pass and bind to the approved commit. Until that barrier and the
+required approval are satisfied, registry contents, bags, ground truth, and
+recorded payloads remain out of scope. CP2-D and CP2-E remain unexecuted and
+unpassed.

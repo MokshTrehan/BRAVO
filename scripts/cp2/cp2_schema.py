@@ -22,9 +22,11 @@ from typing import Any, BinaryIO, Iterable, List, Tuple
 U64_MAX = (1 << 64) - 1
 I64_MIN = -(1 << 63)
 I64_MAX = (1 << 63) - 1
+EXACT_BINARY64_INTEGER_MAX = (1 << 53) - 1
 
 SAFE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+MANIFEST_LINE_PATTERN = re.compile(rb"^([0-9a-f]{64})  ([^\r\n]+)\n$")
 
 ACCEPTED_SET_DOMAIN = b"SchurVIO-CP2-accepted-set-v1\0"
 ACCEPTED_SEQUENCE_DOMAIN = b"SchurVIO-CP2-accepted-sequence-v1\0"
@@ -38,10 +40,21 @@ ALLOWED_COMMAND_ENVIRONMENT_NAMES = frozenset(
         "CFLAGS",
         "CMAKE_PREFIX_PATH",
         "CP2_FORBID_BAG_ACCESS",
+        "CP2_POSTAUTH_PAIR_INDEX",
         "CP2_SELF_TEST",
         "CPATH",
         "CXX",
         "CXXFLAGS",
+        "GIT_ALLOW_PROTOCOL",
+        "GIT_ATTR_NOSYSTEM",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_LITERAL_PATHSPECS",
+        "GIT_NO_LAZY_FETCH",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_OPTIONAL_LOCKS",
+        "GIT_PAGER",
+        "GIT_PROTOCOL_FROM_USER",
+        "GIT_TERMINAL_PROMPT",
         "HOME",
         "LANG",
         "LC_ALL",
@@ -52,6 +65,8 @@ ALLOWED_COMMAND_ENVIRONMENT_NAMES = frozenset(
         "OMP_NUM_THREADS",
         "PATH",
         "PKG_CONFIG_PATH",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONNOUSERSITE",
         "PYTHONPATH",
         "ROS_DISTRO",
         "ROS_ETC_DIR",
@@ -185,6 +200,54 @@ def strict_json_load(stream: Any) -> Any:
     return strict_json_loads(stream.read())
 
 
+def strict_jsonl_loads(document: Any) -> List[dict]:
+    """Parse deterministic LF-terminated JSONL with no blank physical lines."""
+
+    if isinstance(document, (bytes, bytearray)):
+        raw = bytes(document)
+        try:
+            text = raw.decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise SchemaError("JSONL document is not UTF-8: {}".format(exc)) from exc
+    elif isinstance(document, str):
+        _utf8(document, "JSONL document")
+        text = document
+    else:
+        _fail("JSONL document must be str, bytes, or bytearray")
+    if "\r" in text:
+        _fail("JSONL document must use LF newlines only")
+    if text and not text.endswith("\n"):
+        _fail("nonempty JSONL document must end with one LF")
+
+    records = []
+    for physical_index, line in enumerate(text.splitlines(), 1):
+        if not line:
+            _fail("JSONL document contains a blank line at {}".format(physical_index))
+        value = strict_json_loads(line)
+        if not isinstance(value, Mapping):
+            _fail("JSONL line {} is not an object".format(physical_index))
+        records.append(dict(value))
+    return records
+
+
+def exact_object_keys(value: Any, expected_keys: Iterable[str], label: str = "object") -> Mapping:
+    """Require one mapping to have exactly the declared string-key inventory."""
+
+    if not isinstance(value, Mapping):
+        _fail(label + " must be an object")
+    try:
+        expected = list(expected_keys)
+    except TypeError as exc:
+        raise SchemaError(label + " expected keys must be iterable") from exc
+    if any(not isinstance(key, str) for key in expected) or len(set(expected)) != len(expected):
+        _fail(label + " expected keys must be unique strings")
+    if set(value) != set(expected):
+        missing = sorted(set(expected) - set(value))
+        extra = sorted(set(value) - set(expected))
+        _fail("{} key inventory differs (missing={!r}, extra={!r})".format(label, missing, extra))
+    return value
+
+
 def json_line_bytes(record: Any) -> bytes:
     """Emit one deterministic compact UTF-8 JSON object plus one newline."""
 
@@ -261,6 +324,112 @@ def validate_f64(value: Any, label: str = "f64") -> float:
     return converted
 
 
+def checked_u64_add(left: Any, right: Any, label: str = "u64 sum") -> int:
+    """Add two u64 values without wraparound, saturation, or clamping."""
+
+    lhs = validate_u64(left, label + " left operand")
+    rhs = validate_u64(right, label + " right operand")
+    if lhs > U64_MAX - rhs:
+        _fail(label + " overflows u64")
+    return lhs + rhs
+
+
+def checked_u64_multiply(left: Any, right: Any, label: str = "u64 product") -> int:
+    """Multiply two u64 values without wraparound, saturation, or clamping."""
+
+    lhs = validate_u64(left, label + " left operand")
+    rhs = validate_u64(right, label + " right operand")
+    if lhs != 0 and rhs > U64_MAX // lhs:
+        _fail(label + " overflows u64")
+    return lhs * rhs
+
+
+def checked_u64_sum(values: Iterable[Any], label: str = "u64 sum") -> int:
+    """Accumulate an iterable of u64 values, checking every addition."""
+
+    if isinstance(values, (str, bytes, bytearray)):
+        _fail(label + " values must be an iterable of integers")
+    total = 0
+    try:
+        for index, value in enumerate(values):
+            total = checked_u64_add(total, value, "{} at index {}".format(label, index))
+    except TypeError as exc:
+        raise SchemaError(label + " values must be iterable") from exc
+    return total
+
+
+def exact_count_ratio(numerator: Any, denominator: Any, label: str = "count ratio") -> float:
+    """Form the frozen one-conversion-per-operand binary64 diagnostic ratio.
+
+    The caller, rather than this rounded value, must use an exact integer
+    cross-product for every normative gate.  CP2 rejects operands above 2^53-1
+    so their individual conversions to binary64 are exact.
+    """
+
+    num = validate_u64(numerator, label + " numerator")
+    den = validate_u64(denominator, label + " denominator")
+    if den == 0:
+        _fail(label + " denominator must be nonzero")
+    if num > EXACT_BINARY64_INTEGER_MAX or den > EXACT_BINARY64_INTEGER_MAX:
+        _fail(label + " operand exceeds the exact binary64 integer range")
+    ratio = float(num) / float(den)
+    if not math.isfinite(ratio):
+        _fail(label + " is not finite")
+    return ratio
+
+
+def agreement_gate_999_per_1000(numerator: Any, denominator: Any) -> bool:
+    """Apply CP2's normative 99.9% gate using exact wide integer products."""
+
+    num = validate_u64(numerator, "agreement numerator")
+    den = validate_u64(denominator, "agreement denominator")
+    if den == 0 or num > den:
+        return False
+    # Python integers are arbitrary precision, so neither side can wrap.  This
+    # deliberately does not reuse the rounded diagnostic ratio.
+    return 1000 * num >= 999 * den
+
+
+def decimal_seconds_to_ns(value: Any, label: str = "decimal timestamp") -> int:
+    """Parse a nonnegative decimal timestamp exactly into integer nanoseconds."""
+
+    if not isinstance(value, str) or re.fullmatch(r"[0-9]+(?:\.[0-9]{1,9})?", value) is None:
+        _fail(label + " must be nonnegative decimal seconds with at most nine fractional digits")
+    whole_text, separator, fractional_text = value.partition(".")
+    whole = int(whole_text, 10)
+    fractional = int((fractional_text if separator else "").ljust(9, "0") or "0", 10)
+    whole_ns = checked_u64_multiply(whole, 1_000_000_000, label + " whole seconds")
+    return checked_u64_add(whole_ns, fractional, label)
+
+
+def linear_quantile_integer_ns(values: Iterable[Any], q: Any, label: str = "linear quantile") -> float:
+    """Compute the frozen numpy-linear quantile over sorted integer nanoseconds."""
+
+    if isinstance(values, (str, bytes, bytearray)):
+        _fail(label + " values must be an iterable of u64 integers")
+    try:
+        ordered = [validate_u64(value, label + " sample") for value in values]
+    except TypeError as exc:
+        raise SchemaError(label + " values must be iterable") from exc
+    if not ordered:
+        _fail(label + " requires a nonempty population")
+    if any(ordered[index] > ordered[index + 1] for index in range(len(ordered) - 1)):
+        _fail(label + " population must already be sorted")
+    quantile = validate_f64(q, label + " q")
+    if quantile < 0.0 or quantile > 1.0:
+        _fail(label + " q must be in [0,1]")
+    if any(value > EXACT_BINARY64_INTEGER_MAX for value in ordered):
+        _fail(label + " sample exceeds the exact binary64 integer range")
+
+    h = float(len(ordered) - 1) * quantile
+    lo = int(math.floor(h))
+    hi = int(math.ceil(h))
+    result = float(ordered[lo]) + (h - float(lo)) * float(ordered[hi] - ordered[lo])
+    if not math.isfinite(result):
+        _fail(label + " result is not finite")
+    return result
+
+
 def sha256_stream(stream: BinaryIO, chunk_size: int = 1024 * 1024) -> str:
     """Return lowercase SHA-256 for bytes read incrementally from ``stream``."""
 
@@ -283,6 +452,56 @@ def sha256_file(path: Any, chunk_size: int = 1024 * 1024) -> str:
 
     with Path(path).open("rb") as stream:
         return sha256_stream(stream, chunk_size=chunk_size)
+
+
+def manifest_bytes(entries: Any) -> bytes:
+    """Encode the exact bytewise-sorted CP2 SHA256SUMS record population."""
+
+    if not isinstance(entries, Mapping):
+        _fail("manifest entries must be a mapping")
+    records = []
+    for path, digest in entries.items():
+        normalized = validate_relpath(path, "manifest path")
+        if normalized == "SHA256SUMS":
+            _fail("SHA256SUMS must not list itself")
+        digest_value = validate_sha256(digest, "manifest digest for " + normalized)
+        encoded_path = _utf8(normalized, "manifest path", forbid_nul=True)
+        if b"\n" in encoded_path or b"\r" in encoded_path:
+            _fail("manifest path contains a newline")
+        records.append((encoded_path, digest_value.encode("ascii")))
+    records.sort(key=lambda item: item[0])
+    return b"".join(digest + b"  " + path + b"\n" for path, digest in records)
+
+
+def parse_manifest_bytes(document: Any) -> dict:
+    """Parse an exact sorted SHA256SUMS byte stream without path normalization."""
+
+    if not isinstance(document, (bytes, bytearray)):
+        _fail("manifest document must be bytes or bytearray")
+    raw = bytes(document)
+    if raw and not raw.endswith(b"\n"):
+        _fail("nonempty manifest must end with LF")
+    entries = {}
+    previous_path = None
+    for line_index, line in enumerate(raw.splitlines(keepends=True), 1):
+        match = MANIFEST_LINE_PATTERN.fullmatch(line)
+        if match is None:
+            _fail("manifest line {} does not have the exact format".format(line_index))
+        digest_bytes, path_bytes = match.groups()
+        try:
+            path = path_bytes.decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise SchemaError("manifest path is not UTF-8: {}".format(exc)) from exc
+        validate_relpath(path, "manifest path")
+        if path == "SHA256SUMS":
+            _fail("SHA256SUMS must not list itself")
+        if previous_path is not None and path_bytes <= previous_path:
+            _fail("manifest paths are duplicated or not strictly bytewise sorted")
+        previous_path = path_bytes
+        entries[path] = digest_bytes.decode("ascii")
+    if manifest_bytes(entries) != raw:
+        _fail("manifest bytes are not canonical")
+    return entries
 
 
 def _accepted_id_list(feature_ids: Iterable[Any], label: str) -> List[int]:
@@ -459,8 +678,10 @@ __all__ = [
     "ACCEPTED_SET_DOMAIN",
     "ALLOWED_COMMAND_ENVIRONMENT_NAMES",
     "COMMAND_ENVIRONMENT_DOMAIN",
+    "EXACT_BINARY64_INTEGER_MAX",
     "I64_MAX",
     "I64_MIN",
+    "MANIFEST_LINE_PATTERN",
     "RESOLVED_PARAMETERS_DOMAIN",
     "SAFE_ID_PATTERN",
     "SchemaError",
@@ -468,19 +689,30 @@ __all__ = [
     "U64_MAX",
     "accepted_sequence_sha256",
     "accepted_set_sha256",
+    "agreement_gate_999_per_1000",
+    "checked_u64_add",
+    "checked_u64_multiply",
+    "checked_u64_sum",
     "command_environment_sha256",
     "encode_accepted_sequence",
     "encode_accepted_set",
     "encode_command_environment",
     "encode_parameter_value",
     "encode_resolved_parameters",
+    "exact_count_ratio",
+    "exact_object_keys",
     "json_line_bytes",
     "jsonl_bytes",
+    "linear_quantile_integer_ns",
+    "manifest_bytes",
+    "parse_manifest_bytes",
     "resolved_parameters_sha256",
     "sha256_file",
     "sha256_stream",
     "strict_json_load",
+    "strict_jsonl_loads",
     "strict_json_loads",
+    "decimal_seconds_to_ns",
     "typed_parameter_value",
     "typed_resolved_parameters",
     "validate_f64",

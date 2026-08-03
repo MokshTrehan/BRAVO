@@ -167,8 +167,15 @@ if (CATKIN_ENABLE_TESTING)
     set(CP2_VALUE_ONLY_TEST_SOURCES
             test_cp2_canonical;test/cp2/test_cp2_canonical.cpp
             test_cp2_feature_gate;test/cp2/test_cp2_feature_gate.cpp
+            test_cp2_offline_replay;test/cp2/test_cp2_offline_replay.cpp
+            test_cp2_recorded_assemble;test/cp2/test_cp2_recorded_assemble.cpp
+            test_cp2_runtime_context;test/cp2/test_cp2_runtime_context.cpp
+            test_cp2_ros1_runtime_parameters;test/cp2/test_cp2_ros1_runtime_parameters.cpp
+            test_cp2_serial_pairing;test/cp2/test_cp2_serial_pairing.cpp
+            test_cp2_serial_runtime_trace;test/cp2/test_cp2_serial_runtime_trace.cpp
             test_cp2_updater_msckf_preview_snapshot;test/cp2/test_updater_msckf_preview_snapshot.cpp
             test_cp2_shadow_math;test/cp2/test_cp2_shadow_math.cpp
+            test_cp2_trace_journal;test/cp2/test_cp2_trace_journal.cpp
             test_cp2_trace_codec;test/cp2/test_cp2_trace_codec.cpp)
     list(LENGTH CP2_VALUE_ONLY_TEST_SOURCES CP2_VALUE_ONLY_TEST_SOURCE_COUNT)
     math(EXPR CP2_VALUE_ONLY_TEST_LAST "${CP2_VALUE_ONLY_TEST_SOURCE_COUNT} - 1")
@@ -191,4 +198,12 @@ if (CATKIN_ENABLE_TESTING)
                     -fsigned-zeros)
         endif ()
     endforeach ()
+    if (TARGET test_cp2_recorded_assemble)
+        add_dependencies(test_cp2_recorded_assemble cp2_recorded_assemble)
+        target_sources(test_cp2_recorded_assemble PRIVATE
+                src/update/CP2RecordedAssemble.cpp)
+        target_compile_definitions(test_cp2_recorded_assemble PRIVATE
+                CP2_RECORDED_ASSEMBLER_PATH="$<TARGET_FILE:cp2_recorded_assemble>"
+                CP2_RECORDED_ASSEMBLE_NO_MAIN=1)
+    endif ()
 endif ()

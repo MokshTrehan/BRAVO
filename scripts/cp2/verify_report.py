@@ -1,8 +1,17 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Assemble and verify CP2-A/B plus CP2-C2 updater-integration unit evidence."""
+"""Assemble/verify CP2 unit evidence and detached CP2-C/D actual artifacts.
+
+CP2-E remains deliberately fail-closed until its profile and complete artifact
+schema are separately committed.
+"""
 
 from __future__ import annotations
+
+import sys
+
+if not sys.flags.isolated:
+    raise SystemExit("CP2 verifier requires isolated Python (-I)")
 
 import argparse
 from collections import Counter
@@ -10,19 +19,23 @@ import ctypes
 import datetime as dt
 import errno
 import hashlib
+import importlib.util
 import json
 import math
 import os
 from pathlib import Path, PurePosixPath
 import platform
 import re
+import signal
 import shlex
 import shutil
 import socket
 import stat
+import struct
 import subprocess
 import tarfile
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 
 
@@ -37,12 +50,20 @@ OVERALL_STATUS = "in_progress_cp2_c3_cp2_c_cp2_d_cp2_e_unexecuted"
 UNIT_PASS_STATUS = "passed_cp2_a_b_cp2_c2_unit_only"
 UNIT_FAIL_STATUS = "failed_cp2_a_b_cp2_c2_unit"
 CP1_AUTHORIZATION_COMMIT = "8d80f483752411d34a3bc4c1ff6330b3a5c0fef3"
+PREAUTHORIZATION_REGISTRY_PATH = "project/datasets.yaml"
+PREVALIDATED_SOURCE_RECORD_TYPE = "cp2_prevalidated_unit_source_v1"
 CERES_COMMIT = "facb199f3eda902360f9e1d5271372b7e54febe1"
 CERES_TAG = "1.14.0"
 CERES_LICENSE_SHA256 = "065e9b9f40b65dfaeb421a8a1c0559d8305e3ce9394aa8b7dec609fa04e8318a"
 GOOGLETEST_LICENSE_SHA256 = "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
 GOOGLETEST_ARCHIVE_SHA256 = "53d536bbe4f5a4007a23ac1abdd58946fe0f0f30e70c2ddd24fd084a789a9b63"
 GOOGLETEST_ARCHIVE_SIZE_BYTES = 4454400
+
+
+def _schema_version_one(value):
+    """Return true only for the JSON integer 1, never Boolean true."""
+
+    return isinstance(value, int) and not isinstance(value, bool) and value == 1
 
 CP1_TESTS = {
     "test_cp1_schur_equivalence": 1,
@@ -55,15 +76,22 @@ CP2_TESTS = {
     "test_cp2_fej_golden": 1,
     "test_cp2_state_update_semantics": 2,
     "test_cp2_configuration_contract": 10,
-    "test_cp2_updater_msckf_end_to_end": 14,
-    "test_cp2_updater_msckf_fault_injection": 28,
+    "test_cp2_updater_msckf_end_to_end": 16,
+    "test_cp2_updater_msckf_fault_injection": 31,
     "test_cp2_composite_state": 14,
     "test_cp2_commit_oracle": 10,
     "test_cp2_commit_boundary": 4,
     "test_cp2_canonical": 5,
+    "test_cp2_offline_replay": 5,
+    "test_cp2_recorded_assemble": 3,
     "test_cp2_feature_gate": 13,
+    "test_cp2_runtime_context": 12,
+    "test_cp2_ros1_runtime_parameters": 6,
+    "test_cp2_serial_pairing": 6,
+    "test_cp2_serial_runtime_trace": 6,
     "test_cp2_updater_msckf_preview_snapshot": 4,
     "test_cp2_shadow_math": 14,
+    "test_cp2_trace_journal": 21,
     "test_cp2_trace_codec": 8,
 }
 ALL_TESTS = dict(CP1_TESTS)
@@ -86,11 +114,24 @@ TEST_SOURCE_BY_BINARY = {
     "test_cp2_commit_oracle": "ov_msckf/test/cp2/test_cp2_commit_oracle.cpp",
     "test_cp2_commit_boundary": "ov_msckf/test/cp2/test_cp2_commit_boundary.cpp",
     "test_cp2_canonical": "ov_msckf/test/cp2/test_cp2_canonical.cpp",
+    "test_cp2_offline_replay": "ov_msckf/test/cp2/test_cp2_offline_replay.cpp",
+    "test_cp2_recorded_assemble": (
+        "ov_msckf/test/cp2/test_cp2_recorded_assemble.cpp"
+    ),
     "test_cp2_feature_gate": "ov_msckf/test/cp2/test_cp2_feature_gate.cpp",
+    "test_cp2_runtime_context": "ov_msckf/test/cp2/test_cp2_runtime_context.cpp",
+    "test_cp2_ros1_runtime_parameters": (
+        "ov_msckf/test/cp2/test_cp2_ros1_runtime_parameters.cpp"
+    ),
+    "test_cp2_serial_pairing": "ov_msckf/test/cp2/test_cp2_serial_pairing.cpp",
+    "test_cp2_serial_runtime_trace": (
+        "ov_msckf/test/cp2/test_cp2_serial_runtime_trace.cpp"
+    ),
     "test_cp2_updater_msckf_preview_snapshot": (
         "ov_msckf/test/cp2/test_updater_msckf_preview_snapshot.cpp"
     ),
     "test_cp2_shadow_math": "ov_msckf/test/cp2/test_cp2_shadow_math.cpp",
+    "test_cp2_trace_journal": "ov_msckf/test/cp2/test_cp2_trace_journal.cpp",
     "test_cp2_trace_codec": "ov_msckf/test/cp2/test_cp2_trace_codec.cpp",
 }
 
@@ -166,7 +207,10 @@ EXPECTED_TEST_CASES = {
     "CP2UpdaterMSCKFTransaction.CompletePhase3ValueMismatchRemainsCountedFailedEvidence",
     "CP2UpdaterMSCKFTransaction.FinalPointerRejectionDiscardsInstalledPhase2",
     "CP2UpdaterMSCKFTransaction.IncompletePostcommitStorageIsFatalAfterCommitWithoutPublication",
+    "CP2UpdaterMSCKFTransaction.InvocationContextIsOneShotContiguousAndSettersFailClosed",
+    "CP2UpdaterMSCKFTransaction.InvocationIdOverflowIsFatalBeforeEstimatorWork",
     "CP2UpdaterMSCKFTransaction.InvalidPhase2IsDiscardedAndCannotCommit",
+    "CP2UpdaterMSCKFTransaction.MissingRecordedContextIsFatalBeforeEstimatorWork",
     "CP2UpdaterMSCKFTransaction.NonfinitePhase1IsSnapshotMismatchAndDiscardsPhase2",
     "CP2UpdaterMSCKFTransaction.PhasePairDurationFailureIsArithmeticFatalWithoutPublicationOrWrite",
     "CP2UpdaterMSCKFTransaction.PostcommitPointerTokenFailureIsFatalAfterCommitWithoutPublication",
@@ -181,6 +225,14 @@ EXPECTED_TEST_CASES = {
     "CP2CanonicalBytes.MatrixAndVectorUseLogicalRowMajorBinary64Order",
     "CP2CanonicalBytes.Utf8ValidationRejectsMalformedSequencesWithoutAppending",
     "CP2CanonicalBytes.SelfAppendStagesAliasedStorageBeforeGrowth",
+    "CP2OfflineReplay.AcceptsOnlyTheExactAbsoluteCommandSurface",
+    "CP2OfflineReplay.RejectsExtraMissingRelativeAndAliasedArguments",
+    "CP2OfflineReplay.StatusNamesAreFrozen",
+    "CP2OfflineReplay.DerivesEveryOnlineShadowMathConditionAndPreservesRejectedFeatures",
+    "CP2OfflineReplay.CommitRequiresCandidateAndRecomputedBlocksMustActuallyPass",
+    "CP2RecordedAssemble.EmptyCanonicalCampaignIsDeterministicAndUsesV101",
+    "CP2RecordedAssemble.OrphanStateProposalAndRawFramesFailClosed",
+    "CP2RecordedAssemble.WrongFrozenSequenceAndCorruptJournalFailClosed",
     "CP2FeatureGate.StageNamesAreFrozen",
     "CP2FeatureGate.ReductionUnavailablePublishesNoNumericOrDecisionEvidence",
     "CP2FeatureGate.GammaOverflowCanInvalidateEvidenceWithoutChangingBaselineLifecycleGate",
@@ -220,6 +272,90 @@ EXPECTED_TEST_CASES = {
     "CP2TraceProposal.FrozenPayloadAndRoleFramingRejectAllStructuralCorruption",
     "CP2TraceReplay.OwningDecodedFramesDriveTheSoleShadowMathKernel",
     "CP2TraceReplay.ContextDigestAndPriorLayoutDisconnectsFailBeforeMath",
+    "CP2SerialPairing.FirstForwardCandidateIsNeverReplacedByANearerMessage",
+    "CP2SerialPairing.IntegerNanosecondCompositionChecksRangeAndOverflow",
+    "CP2SerialPairing.InvalidMessageKindFailsAtomicallyWithFrozenStatus",
+    "CP2SerialPairing.StrictTwentyMillisecondBoundaryAndMetadataAreExact",
+    "CP2SerialPairing.UsedFirstForwardCandidateCannotBeReusedOrSearchedPast",
+    "CP2SerialPairing.EvidenceModeConsumesImuTailPastLastCamera",
+    "CP2RuntimeContext.RecordedFullAcceptsExactDocumentAndHashesBytes",
+    "CP2RuntimeContext.SequenceAndTimingCombinationsAreExact",
+    "CP2RuntimeContext.DuplicateMissingAndExtraKeysReject",
+    "CP2RuntimeContext.JsonTypesNeverCoerce",
+    "CP2RuntimeContext.SequenceAndLaunchExpectationsBindIdentity",
+    "CP2RuntimeContext.PathsRequireNormalizedDistinctStrictChildren",
+    "CP2RuntimeContext.OutputPresenceCannotCrossTraceLevels",
+    "CP2RuntimeContext.EscapesAreStrictAndDecodedBeforeValidation",
+    "CP2RuntimeContext.NonJsonNumbersConstantsAndTrailingBytesReject",
+    "CP2RuntimeContext.RejectionIsFailureAtomicAndStatusNamesAreStable",
+    "CP2RuntimeContext.DescriptorBoundFileReadAcceptsExactBytesAndBound",
+    "CP2RuntimeContext.DescriptorBoundFileReadRejectsRelativeSymlinkAndHardlink",
+    (
+        "CP2SerialRuntimeTrace."
+        "RecordedRowsJoinContiguousUpdaterIdentitiesAndWriteOnce"
+    ),
+    (
+        "CP2SerialRuntimeTrace."
+        "SequenceRowsRetainNonidentityQuaternionWithoutReordering"
+    ),
+    (
+        "CP2SerialRuntimeTrace."
+        "NoncontiguousWrongPairAndWrongTimestampUpdaterEventsFailSticky"
+    ),
+    (
+        "CP2SerialRuntimeTrace."
+        "DuplicateProcessingAndNonfiniteTrajectoryFailBeforeOutput"
+    ),
+    "CP2SerialRuntimeTrace.InitialPairPopulationRejectsBoundaryAndGaps",
+    "CP2SerialRuntimeTrace.OutputCreationRejectsOverwriteAndSymlink",
+    (
+        "CP2ROS1RuntimeParameters."
+        "FrozenDomainTagsOrderingSignedIntegerAndNegativeZeroAreExact"
+    ),
+    (
+        "CP2ROS1RuntimeParameters."
+        "NestedStructKeysUseUnsignedUtf8ByteOrderAndEscapeStrings"
+    ),
+    "CP2ROS1RuntimeParameters.BoolIntAndDoubleRemainDistinctTypedBytes",
+    "CP2ROS1RuntimeParameters.NonfiniteAndInvalidXmlRpcValuesFailClosed",
+    "CP2ROS1RuntimeParameters.NamesAndStringsRejectUnsafeOrInvalidInputs",
+    "CP2ROS1RuntimeParameters.EmptyPopulationCannotMasqueradeAsCapture",
+    "CP2TraceJournalFormat.FrozenBootstrapKnownAnswerAndEmptyDecode",
+    "CP2TraceJournalWriter.ShortWritesRemainExactAndFinalizeSeals",
+    "CP2TraceJournalWriter.PartialFailureIsCountedAndRejectionIsSticky",
+    "CP2TraceJournalWriter.SyncFailureIsStickyAndSealsPublication",
+    "CP2TraceJournalWriter.WriterWithoutExplicitSyncFailsClosed",
+    "CP2TraceJournalWriter.ByteBudgetOverflowWritesNoPartialUnit",
+    (
+        "CP2TraceJournalIdentity."
+        "ContiguousInvocationsAllowRepeatedPairAndRegressingNewTimestamp"
+    ),
+    "CP2TraceJournalIdentity.DuplicateSkippedAndReorderedIdentityAreSticky",
+    "CP2TraceJournalEvents.EveryLegalZeroRawTerminalRoundTrips",
+    "CP2TraceJournalEvents.ImpossibleTerminalAndHiddenPhaseSuffixReject",
+    "CP2TraceJournalEvents.DuplicateRawFeatureAndInvalidEnumRejectExplicitly",
+    (
+        "CP2TraceJournalPayloads."
+        "OwningStateRawAndProposalBytesReconstructExactly"
+    ),
+    "CP2TraceJournalPayloads.NonzeroRawAndCommittedDecodeAccepted",
+    "CP2TraceJournalPayloads.AnyPayloadByteMismatchRejectsBeforeWrite",
+    "CP2TraceJournalDecoder.HeaderBootstrapAndLimitCorruptionsReject",
+    (
+        "CP2TraceJournalDecoder."
+        "TruncationTrailingAndHostileSectionPopulationReject"
+    ),
+    (
+        "CP2TraceJournalDecoder."
+        "DuplicateUnknownMissingAndInvalidCoreSectionsReject"
+    ),
+    (
+        "CP2TraceJournalDecoder."
+        "CanonicalFragmentAndCrossIdentityCorruptionsReject"
+    ),
+    "CP2TraceJournalFile.PreopenedRegularFileFinalizesAtExactSize",
+    "CP2TraceJournalFile.ReadOnlyAndMultipleLinkFilesReject",
+    "CP2TraceJournalFile.CallerOffsetInterferenceFailsClosed",
 }
 
 EXPECTED_SUMMARIES = {
@@ -250,9 +386,16 @@ SUMMARIES_BY_BINARY = {
     "test_cp2_commit_oracle": set(),
     "test_cp2_commit_boundary": set(),
     "test_cp2_canonical": set(),
+    "test_cp2_offline_replay": set(),
+    "test_cp2_recorded_assemble": set(),
     "test_cp2_feature_gate": set(),
+    "test_cp2_runtime_context": set(),
+    "test_cp2_ros1_runtime_parameters": set(),
+    "test_cp2_serial_pairing": set(),
+    "test_cp2_serial_runtime_trace": set(),
     "test_cp2_updater_msckf_preview_snapshot": set(),
     "test_cp2_shadow_math": set(),
+    "test_cp2_trace_journal": set(),
     "test_cp2_trace_codec": set(),
 }
 
@@ -265,6 +408,8 @@ SOURCE_INPUTS = {
     "docs/conventions.md",
     "docs/cp2_artifact_schema.md",
     "docs/cp2_c_composite_and_readiness_clarification.md",
+    "docs/cp2_c_detached_readiness_binding_clarification_proposed.md",
+    "docs/cp2_d_evaluator_precision_clarification_proposed.md",
     "docs/cp2_math_implementation_audit.md",
     "docs/cp2_one_pass_contract.md",
     "docs/cp2_recorded_evidence_contract.md",
@@ -287,6 +432,8 @@ SOURCE_INPUTS = {
     "ov_msckf/cmake/ROS1.cmake",
     "ov_msckf/cmake/ROS2.cmake",
     "ov_msckf/package.xml",
+    "ov_msckf/src/ros/CP2ROS1RuntimeParameters.cpp",
+    "ov_msckf/src/ros/CP2ROS1RuntimeParameters.h",
     "ov_msckf/src/core/VioManagerOptions.h",
     "ov_msckf/src/state/State.cpp",
     "ov_msckf/src/state/State.h",
@@ -303,12 +450,24 @@ SOURCE_INPUTS = {
     "ov_msckf/src/update/CP2CompositeState.h",
     "ov_msckf/src/update/CP2FeatureGate.cpp",
     "ov_msckf/src/update/CP2FeatureGate.h",
+    "ov_msckf/src/update/CP2OfflineReplay.cpp",
+    "ov_msckf/src/update/CP2OfflineReplay.h",
+    "ov_msckf/src/update/CP2OfflineReplayInternal.inc",
+    "ov_msckf/src/update/CP2RecordedAssemble.cpp",
+    "ov_msckf/src/update/CP2RuntimeContext.cpp",
+    "ov_msckf/src/update/CP2RuntimeContext.h",
+    "ov_msckf/src/update/CP2SerialPairing.cpp",
+    "ov_msckf/src/update/CP2SerialPairing.h",
+    "ov_msckf/src/update/CP2SerialRuntimeTrace.cpp",
+    "ov_msckf/src/update/CP2SerialRuntimeTrace.h",
     "ov_msckf/src/update/CP2ShadowMath.cpp",
     "ov_msckf/src/update/CP2ShadowMath.h",
     "ov_msckf/src/update/CP2StateTraceCodec.cpp",
     "ov_msckf/src/update/CP2StateTraceCodec.h",
     "ov_msckf/src/update/CP2TraceCodec.cpp",
     "ov_msckf/src/update/CP2TraceCodec.h",
+    "ov_msckf/src/update/CP2TraceJournal.cpp",
+    "ov_msckf/src/update/CP2TraceJournal.h",
     "ov_msckf/src/update/SchurUpdate.cpp",
     "ov_msckf/src/update/SchurUpdate.h",
     "ov_msckf/src/update/UpdaterHelper.cpp",
@@ -331,8 +490,15 @@ SOURCE_INPUTS = {
     "ov_msckf/test/cp2/test_cp2_commit_oracle.cpp",
     "ov_msckf/test/cp2/test_cp2_composite_state.cpp",
     "ov_msckf/test/cp2/test_cp2_feature_gate.cpp",
+    "ov_msckf/test/cp2/test_cp2_offline_replay.cpp",
+    "ov_msckf/test/cp2/test_cp2_recorded_assemble.cpp",
+    "ov_msckf/test/cp2/test_cp2_runtime_context.cpp",
+    "ov_msckf/test/cp2/test_cp2_ros1_runtime_parameters.cpp",
+    "ov_msckf/test/cp2/test_cp2_serial_pairing.cpp",
+    "ov_msckf/test/cp2/test_cp2_serial_runtime_trace.cpp",
     "ov_msckf/test/cp2/test_cp2_shadow_math.cpp",
     "ov_msckf/test/cp2/test_cp2_trace_codec.cpp",
+    "ov_msckf/test/cp2/test_cp2_trace_journal.cpp",
     "ov_msckf/test/cp2/test_fej_golden.cpp",
     "ov_msckf/test/cp2/test_production_schur_reducer.cpp",
     "ov_msckf/test/cp2/test_state_update_semantics.cpp",
@@ -348,6 +514,25 @@ SOURCE_INPUTS = {
     "scripts/cp1/run_cp1.sh",
     "scripts/cp1/verify_report.py",
     "scripts/cp2/run_unit_gate.sh",
+    "scripts/cp2/cp2_pair_index_extract.py",
+    "scripts/cp2/cp2_postauth_registry.py",
+    "scripts/cp2/cp2_readiness.py",
+    "scripts/cp2/cp2_recorded_campaign.py",
+    "scripts/cp2/cp2_schema.py",
+    "scripts/cp2/cp2_sequence_actual.py",
+    "scripts/cp2/cp2_sequence_math.py",
+    "scripts/cp2/cp2_sequence_runner.py",
+    "scripts/cp2/run_recorded_parity.py",
+    "scripts/cp2/run_sequence_pair.py",
+    "scripts/cp2/run_timing_pair.py",
+    "scripts/cp2/tests/test_cp2_postauth_registry.py",
+    "scripts/cp2/tests/test_cp2_actual_readiness_binding.py",
+    "scripts/cp2/tests/test_cp2_readiness.py",
+    "scripts/cp2/tests/test_cp2_recorded_campaign.py",
+    "scripts/cp2/tests/test_cp2_schema.py",
+    "scripts/cp2/tests/test_cp2_sequence_actual.py",
+    "scripts/cp2/tests/test_cp2_sequence_math.py",
+    "scripts/cp2/tests/test_cp2_sequence_runner.py",
     "scripts/cp2/verify_report.py",
 }
 
@@ -407,15 +592,21 @@ RUNTIME_LIBRARY_SOURCES = (
     "ov_msckf/src/update/CP2CommitOracle.cpp",
     "ov_msckf/src/update/CP2CompositeState.cpp",
     "ov_msckf/src/update/CP2FeatureGate.cpp",
+    "ov_msckf/src/update/CP2OfflineReplay.cpp",
+    "ov_msckf/src/update/CP2RuntimeContext.cpp",
+    "ov_msckf/src/update/CP2SerialPairing.cpp",
+    "ov_msckf/src/update/CP2SerialRuntimeTrace.cpp",
     "ov_msckf/src/update/CP2ShadowMath.cpp",
     "ov_msckf/src/update/CP2StateTraceCodec.cpp",
     "ov_msckf/src/update/CP2TraceCodec.cpp",
+    "ov_msckf/src/update/CP2TraceJournal.cpp",
     "ov_msckf/src/update/SchurUpdate.cpp",
     "ov_msckf/src/update/UpdaterHelper.cpp",
     "ov_msckf/src/update/UpdaterMSCKF.cpp",
     "ov_msckf/src/update/UpdaterMSCKFPreview.cpp",
     "ov_msckf/src/update/UpdaterSLAM.cpp",
     "ov_msckf/src/update/UpdaterZeroVelocity.cpp",
+    "ov_msckf/src/ros/CP2ROS1RuntimeParameters.cpp",
     "ov_msckf/src/ros/ROS1Visualizer.cpp",
     "ov_msckf/src/ros/ROSVisualizerHelper.cpp",
 )
@@ -427,13 +618,19 @@ STRICT_PRODUCTION_SOURCES = (
     "ov_msckf/src/update/CP2CommitOracle.cpp",
     "ov_msckf/src/update/CP2CompositeState.cpp",
     "ov_msckf/src/update/CP2FeatureGate.cpp",
+    "ov_msckf/src/update/CP2OfflineReplay.cpp",
+    "ov_msckf/src/update/CP2RuntimeContext.cpp",
+    "ov_msckf/src/update/CP2SerialPairing.cpp",
+    "ov_msckf/src/update/CP2SerialRuntimeTrace.cpp",
     "ov_msckf/src/update/CP2ShadowMath.cpp",
     "ov_msckf/src/update/CP2StateTraceCodec.cpp",
     "ov_msckf/src/update/CP2TraceCodec.cpp",
+    "ov_msckf/src/update/CP2TraceJournal.cpp",
     "ov_msckf/src/update/UpdaterHelper.cpp",
     "ov_msckf/src/update/UpdaterMSCKF.cpp",
     "ov_msckf/src/update/UpdaterMSCKFPreview.cpp",
     "ov_msckf/src/state/StateHelper.cpp",
+    "ov_msckf/src/ros/CP2ROS1RuntimeParameters.cpp",
 )
 STRICT_REQUIRED_FLAGS = ("-fno-fast-math", "-ffp-contract=off", "-fsigned-zeros")
 STRICT_REQUIRED_MACRO_DEFINITIONS = {
@@ -496,31 +693,20 @@ TESTS_REQUIRING_PRODUCTION = set(ALL_TESTS) - {
     "test_cp1_schur_equivalence",
     FAULT_INJECTION_TEST,
 }
-ARCHIVE_ROOTS = [
-    "LICENSE",
-    "ov_core",
-    "ov_init",
-    "ov_msckf",
-    "scripts",
-    "config/euroc_mav",
-    "docs/checkpoints.md",
-    "docs/conventions.md",
-    "docs/cp2_artifact_schema.md",
-    "docs/cp2_c_composite_and_readiness_clarification.md",
-    "docs/cp2_math_implementation_audit.md",
-    "docs/cp2_one_pass_contract.md",
-    "docs/cp2_recorded_evidence_contract.md",
-    "docs/iterated_update_spec.md",
-    "docs/schurvio_lite_execution_plan.md",
-    "project/cp0_baseline.json",
-    "project/cp1_gate.yaml",
-    "project/cp2_c_clarification_approval.json",
-    "project/cp2_gate.yaml",
-    "project/cp2_serial.launch",
-]
+# Step 8 runs before registry access.  The unit archive is therefore the
+# complete committed tree with exactly one fixed exclusion; the readiness
+# context still carries that entry's opaque stage-0 identity/hash record.
+ARCHIVE_ROOTS = [".", ":(exclude)" + PREAUTHORIZATION_REGISTRY_PATH]
 WORKSPACE_RECORD_NAME = "workspace.json"
 DEPENDENCY_INVENTORY_NAME = "dependency_inventory.json"
 SOURCE_ARCHIVE_NAME = "source_snapshot.tar"
+READINESS_ENTRYPOINTS = (
+    "scripts/cp2/run_unit_gate.sh",
+    "scripts/cp2/run_recorded_parity.py",
+    "scripts/cp2/run_sequence_pair.py",
+    "scripts/cp2/run_timing_pair.py",
+    "scripts/cp2/verify_report.py",
+)
 CATKIN_PACKAGE_CMAKE_LOG_NAME = "catkin_ov_msckf_cmake.log"
 GOOGLETEST_DISCOVERY_PREFIX = "Found gtest sources under"
 GOOGLETEST_DISCOVERY_LINE = (
@@ -1313,7 +1499,11 @@ def strict_flag_record(tokens, workspace=None):
             "-fdebug-prefix-map={}=/cp2/reproducible-root".format(workspace),
             "-fmacro-prefix-map={}=/cp2/reproducible-root".format(workspace),
         ]
-        normalized_tokens = [token.replace('"', "") for token in tokens]
+        # ``command`` records have already been shell-tokenized, while an
+        # ``arguments`` record contains the literal compiler argv.  Removing
+        # quote bytes here would therefore let a non-effective literal token
+        # masquerade as a valid prefix-map option.
+        normalized_tokens = list(tokens)
         prefix_map_positions = {
             flag: [
                 index for index, token in enumerate(normalized_tokens) if token == flag
@@ -1354,19 +1544,28 @@ def strict_flag_record(tokens, workspace=None):
     }
 
 
-def relative_source(file_value, directory_value, repo_root):
+def relative_source(file_value, directory_value, repo_root, prevalidated=False):
     if not isinstance(file_value, str):
         return None
     path = Path(file_value)
     if not path.is_absolute() and isinstance(directory_value, str):
         path = Path(directory_value) / path
+    if prevalidated:
+        path = Path(os.path.normpath(str(path)))
+        root = Path(os.path.normpath(str(repo_root)))
+        try:
+            return path.relative_to(root).as_posix()
+        except ValueError:
+            return path.as_posix()
     try:
         return path.resolve().relative_to(repo_root.resolve()).as_posix()
     except (OSError, ValueError):
         return path.as_posix()
 
 
-def analyze_compile_commands(path, repo_root, errors, compiler_record=None):
+def analyze_compile_commands(
+    path, repo_root, errors, compiler_record=None, prevalidated=False
+):
     if not path.is_file():
         errors.append("missing compile_commands.json")
         return {
@@ -1409,7 +1608,9 @@ def analyze_compile_commands(path, repo_root, errors, compiler_record=None):
         if not isinstance(entry, dict):
             continue
         tokens = command_tokens(entry)
-        source = relative_source(entry.get("file"), entry.get("directory"), repo_root)
+        source = relative_source(
+            entry.get("file"), entry.get("directory"), repo_root, prevalidated
+        )
         record = strict_flag_record(tokens, workspace=repo_root.parent)
         structure_errors = []
         expected_compiler = None
@@ -1434,7 +1635,8 @@ def analyze_compile_commands(path, repo_root, errors, compiler_record=None):
             structure_errors.append("command does not contain exactly one -c source")
         else:
             command_source = relative_source(
-                tokens[compile_positions[0] + 1], entry.get("directory"), repo_root
+                tokens[compile_positions[0] + 1], entry.get("directory"), repo_root,
+                prevalidated,
             )
             if command_source != source:
                 structure_errors.append("entry file differs from actual -c source")
@@ -2026,7 +2228,7 @@ def collect_link_isolation(artifact_dir, errors, workspace_record=None):
 
 
 def analyze_dependency_compile_commands(
-    path, package, repo_root, workspace_build_root, errors
+    path, package, repo_root, workspace_build_root, errors, prevalidated=False
 ):
     label = package + " compile_commands.json"
     expected_count = DEPENDENCY_EXPECTED_COMMAND_COUNTS[package]
@@ -2057,9 +2259,18 @@ def analyze_dependency_compile_commands(
         )
 
     records = []
-    expected_build_directory = (workspace_build_root / package).resolve()
-    workspace_source_root = repo_root.resolve()
-    googletest_source_root = Path("/usr/src/googletest").resolve()
+    def normalized(candidate):
+        return Path(os.path.normpath(str(candidate)))
+
+    expected_build_directory = (
+        normalized(workspace_build_root / package)
+        if prevalidated else (workspace_build_root / package).resolve()
+    )
+    workspace_source_root = normalized(repo_root) if prevalidated else repo_root.resolve()
+    googletest_source_root = (
+        Path("/usr/src/googletest")
+        if prevalidated else Path("/usr/src/googletest").resolve()
+    )
     for index, entry in enumerate(entries):
         structure_errors = []
         output = None
@@ -2071,7 +2282,9 @@ def analyze_dependency_compile_commands(
             structure_errors.append("entry is not an object")
         else:
             tokens = command_tokens(entry)
-            source = relative_source(entry.get("file"), entry.get("directory"), repo_root)
+            source = relative_source(
+                entry.get("file"), entry.get("directory"), repo_root, prevalidated
+            )
             if not tokens:
                 structure_errors.append("entry has no parseable compiler argv")
 
@@ -2080,7 +2293,12 @@ def analyze_dependency_compile_commands(
                 structure_errors.append("entry has no build directory")
                 command_directory = None
             else:
-                command_directory = Path(directory_value).resolve()
+                command_directory = (
+                    normalized(directory_value)
+                    if prevalidated else Path(directory_value).resolve()
+                )
+                if prevalidated and not command_directory.is_absolute():
+                    structure_errors.append("entry build directory is not absolute")
                 try:
                     command_directory.relative_to(expected_build_directory)
                 except ValueError:
@@ -2092,14 +2310,19 @@ def analyze_dependency_compile_commands(
                 declared_path = Path(declared_source)
                 if not declared_path.is_absolute() and command_directory is not None:
                     declared_path = command_directory / declared_path
-                try:
-                    canonical_source = declared_path.resolve(strict=True)
-                except OSError:
-                    structure_errors.append("declared source is not an existing regular file")
+                if prevalidated:
+                    canonical_source = normalized(declared_path)
+                    if not canonical_source.is_absolute():
+                        structure_errors.append("declared source is not absolute")
+                else:
+                    try:
+                        canonical_source = declared_path.resolve(strict=True)
+                    except OSError:
+                        structure_errors.append("declared source is not an existing regular file")
             else:
                 structure_errors.append("entry has no declared source")
             if canonical_source is not None:
-                if not canonical_source.is_file():
+                if not prevalidated and not canonical_source.is_file():
                     structure_errors.append("declared source is not a regular file")
                 else:
                     try:
@@ -2127,15 +2350,19 @@ def analyze_dependency_compile_commands(
             else:
                 command_source_value = tokens[compile_positions[0] + 1]
                 command_source = relative_source(
-                    command_source_value, entry.get("directory"), repo_root
+                    command_source_value, entry.get("directory"), repo_root,
+                    prevalidated,
                 )
                 command_source_path = Path(command_source_value)
                 if not command_source_path.is_absolute() and command_directory is not None:
                     command_source_path = command_directory / command_source_path
-                try:
-                    canonical_command_source = command_source_path.resolve(strict=True)
-                except OSError:
-                    canonical_command_source = None
+                if prevalidated:
+                    canonical_command_source = normalized(command_source_path)
+                else:
+                    try:
+                        canonical_command_source = command_source_path.resolve(strict=True)
+                    except OSError:
+                        canonical_command_source = None
                 if command_source != source or canonical_command_source != canonical_source:
                     structure_errors.append("entry file differs from actual -c source")
 
@@ -2150,7 +2377,10 @@ def analyze_dependency_compile_commands(
                 if not output_path.is_absolute():
                     output_path = command_directory / output_path
                 try:
-                    output_relative = output_path.resolve().relative_to(
+                    canonical_output = (
+                        normalized(output_path) if prevalidated else output_path.resolve()
+                    )
+                    output_relative = canonical_output.relative_to(
                         expected_build_directory
                     )
                     output = output_relative.as_posix()
@@ -2183,7 +2413,14 @@ def analyze_dependency_compile_commands(
                     declared_output_path = Path(declared_output)
                     if not declared_output_path.is_absolute():
                         declared_output_path = command_directory / declared_output_path
-                    if declared_output_path.resolve() != output_path.resolve():
+                    canonical_declared_output = (
+                        normalized(declared_output_path)
+                        if prevalidated else declared_output_path.resolve()
+                    )
+                    canonical_output = (
+                        normalized(output_path) if prevalidated else output_path.resolve()
+                    )
+                    if canonical_declared_output != canonical_output:
                         structure_errors.append("entry output differs from actual -o output")
         macro_record = required_macro_record(tokens)
         exact_definitions = all(
@@ -2234,7 +2471,7 @@ def analyze_dependency_compile_commands(
 
 
 def analyze_dependency_eigen_abi(
-    artifact_dir, repo_root, workspace_build_root, errors
+    artifact_dir, repo_root, workspace_build_root, errors, prevalidated=False
 ):
     packages = {
         package: analyze_dependency_compile_commands(
@@ -2243,6 +2480,7 @@ def analyze_dependency_eigen_abi(
             repo_root,
             workspace_build_root,
             errors,
+            prevalidated,
         )
         for package, artifact in DEPENDENCY_COMPILE_COMMAND_ARTIFACTS.items()
     }
@@ -2443,15 +2681,20 @@ def validate_interval(record, errors, label):
     return started, finished
 
 
-def expected_build_environment(workspace_record, repo_root, commit, errors):
+def expected_build_environment(
+    workspace_record, repo_root, commit, errors, prevalidated_source_epoch=None
+):
     workspace = workspace_record.get("workspace")
     if not isinstance(workspace, str):
         workspace = ""
-    try:
-        source_epoch = git_text(repo_root, "show", "-s", "--format=%ct", commit)
-    except subprocess.CalledProcessError as exc:
-        errors.append("cannot determine SOURCE_DATE_EPOCH: " + str(exc))
-        source_epoch = ""
+    if prevalidated_source_epoch is not None:
+        source_epoch = str(prevalidated_source_epoch)
+    else:
+        try:
+            source_epoch = git_text(repo_root, "show", "-s", "--format=%ct", commit)
+        except subprocess.CalledProcessError as exc:
+            errors.append("cannot determine SOURCE_DATE_EPOCH: " + str(exc))
+            source_epoch = ""
     return {
         "CC": "/usr/bin/cc",
         "CMAKE_PREFIX_PATH": "/opt/ros/noetic",
@@ -2565,7 +2808,10 @@ def expected_build_argv(step, workspace_record, repo_root):
     ]
 
 
-def validate_build_command(step, record, repo_root, workspace_record, commit, errors):
+def validate_build_command(
+    step, record, repo_root, workspace_record, commit, errors,
+    prevalidated_source_epoch=None,
+):
     required_fields = {
         "argv", "cwd", "environment", "environment_mode", "exit_status",
         "finished_utc", "name", "serialized", "started_utc",
@@ -2581,7 +2827,7 @@ def validate_build_command(step, record, repo_root, workspace_record, commit, er
     if record.get("cwd") != "." or record.get("environment_mode") != "env-i":
         errors.append("build step {} does not record repo-root env-i execution".format(step))
     if record.get("environment") != expected_build_environment(
-        workspace_record, repo_root, commit, errors
+        workspace_record, repo_root, commit, errors, prevalidated_source_epoch
     ):
         errors.append("build step {} environment differs from the exact contract".format(step))
     validate_interval(record, errors, "build_" + step)
@@ -2593,13 +2839,19 @@ def validate_build_command(step, record, repo_root, workspace_record, commit, er
         errors.append("build step {} argv differs from the exact serialized contract".format(step))
 
 
-def collect_build_records(artifact_dir, repo_root, workspace_record, commit, errors):
+def collect_build_records(
+    artifact_dir, repo_root, workspace_record, commit, errors,
+    prevalidated_source_epoch=None,
+):
     records = []
     previous_finished = None
     for step in BUILD_STEPS:
         record_path = artifact_dir / ("build_" + step + ".json")
         record = read_json(record_path, errors, record_path.name)
-        validate_build_command(step, record, repo_root, workspace_record, commit, errors)
+        validate_build_command(
+            step, record, repo_root, workspace_record, commit, errors,
+            prevalidated_source_epoch,
+        )
         started, finished = validate_interval(record, [], "build_" + step)
         if previous_finished is not None and started is not None and started < previous_finished:
             errors.append("serialized build intervals overlap or are out of order at " + step)
@@ -2619,7 +2871,8 @@ def collect_build_records(artifact_dir, repo_root, workspace_record, commit, err
 
 
 def collect_workspace_record(
-    artifact_dir, repo_root, source, errors, allow_synthetic=False
+    artifact_dir, repo_root, source, errors, allow_synthetic=False,
+    prevalidated=False,
 ):
     record = read_json(artifact_dir / WORKSPACE_RECORD_NAME, errors, WORKSPACE_RECORD_NAME)
     required_fields = {
@@ -2644,9 +2897,23 @@ def collect_workspace_record(
         errors.append("workspace.json field inventory is not exact")
     workspace_text = record.get("workspace")
     workspace = Path(workspace_text) if isinstance(workspace_text, str) else Path("/")
-    expected_repository_build_root = repo_root / "build"
+    recorded_repo = record.get("repo_root")
+    if prevalidated:
+        if (
+            not isinstance(recorded_repo, str) or not Path(recorded_repo).is_absolute()
+            or ".." in Path(recorded_repo).parts
+        ):
+            errors.append("workspace repo_root is not a safe absolute path")
+            effective_repo_root = Path("/invalid-prevalidated-repository")
+        else:
+            effective_repo_root = Path(recorded_repo)
+    else:
+        effective_repo_root = repo_root
+    expected_repository_build_root = effective_repo_root / "build"
     shared_ceres_checkout = expected_repository_build_root / "vendor/ceres-src"
-    if allow_synthetic and shared_ceres_checkout.is_dir():
+    if prevalidated and allow_synthetic:
+        expected_ceres_commit = record.get("ceres_source_commit")
+    elif not prevalidated and allow_synthetic and shared_ceres_checkout.is_dir():
         try:
             expected_ceres_commit = git_text(
                 shared_ceres_checkout, "rev-parse", "--verify", "HEAD"
@@ -2677,7 +2944,7 @@ def collect_workspace_record(
         "googletest_source_root": "/usr/src/googletest",
         "googletest_unchanged_after_build": True,
         "kind": "unique_git_archive_cp2_catkin_workspace",
-        "repo_root": str(repo_root),
+        "repo_root": str(effective_repo_root),
         "repository_build_root": str(expected_repository_build_root),
         "reproducible_prefix": "/cp2/reproducible-root",
         "reused": False,
@@ -2699,12 +2966,13 @@ def collect_workspace_record(
         workspace.relative_to(workspace_parent)
     except ValueError:
         errors.append("workspace path is outside the dedicated CP2 workspace parent")
-    if not workspace.is_absolute() or workspace.resolve() != workspace:
+    if not workspace.is_absolute() or ".." in workspace.parts:
         errors.append("workspace path is not canonical and absolute")
     if not workspace.name.startswith(".cp2-unit-") or ".workspace." not in workspace.name:
         errors.append("workspace path does not have the unique CP2 workspace form")
     archive_argv = [
-        "/usr/bin/git", "-C", str(repo_root), "archive", "--format=tar",
+        "/usr/bin/git", "-c", "tar.umask=0002", "-C", str(effective_repo_root),
+        "archive", "--format=tar",
         "--output=" + str(workspace / SOURCE_ARCHIVE_NAME), source.get("commit"), "--",
         *ARCHIVE_ROOTS,
     ]
@@ -2746,21 +3014,22 @@ def collect_workspace_record(
         if retained_archive.is_file() and sha256_file(retained_archive) != archive_sha:
             errors.append("retained {} archive differs from evidence".format(label))
 
-    for retained_root, label in (
-        (workspace / "src", "workspace source"),
-        (workspace / "ceres-src", "Ceres source"),
-    ):
-        if retained_root.is_dir():
-            for path in [retained_root] + list(retained_root.rglob("*")):
-                try:
-                    status = path.lstat()
-                except OSError as exc:
-                    errors.append("cannot stat retained {} path: {}".format(label, exc))
-                    continue
-                if stat.S_ISLNK(status.st_mode):
-                    errors.append("retained {} archive contains a symlink: {}".format(label, path))
-                if status.st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
-                    errors.append("retained {} archive is writable: {}".format(label, path))
+    if not prevalidated:
+        for retained_root, label in (
+            (workspace / "src", "workspace source"),
+            (workspace / "ceres-src", "Ceres source"),
+        ):
+            if retained_root.is_dir():
+                for path in [retained_root] + list(retained_root.rglob("*")):
+                    try:
+                        status = path.lstat()
+                    except OSError as exc:
+                        errors.append("cannot stat retained {} path: {}".format(label, exc))
+                        continue
+                    if stat.S_ISLNK(status.st_mode):
+                        errors.append("retained {} archive contains a symlink: {}".format(label, path))
+                    if status.st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
+                        errors.append("retained {} archive is writable: {}".format(label, path))
     return record
 
 
@@ -2794,7 +3063,8 @@ def tar_member_sha256(path, member_name, errors, label):
 
 
 def collect_third_party_sources_and_notices(
-    artifact_dir, repo_root, workspace_record, errors, allow_synthetic=False
+    artifact_dir, repo_root, workspace_record, errors, allow_synthetic=False,
+    prevalidated=False,
 ):
     ceres_archive = artifact_dir / "ceres_source_snapshot.tar"
     googletest_archive = artifact_dir / "googletest_source_snapshot.tar"
@@ -2834,7 +3104,7 @@ def collect_third_party_sources_and_notices(
         errors.append("workspace Ceres source commit differs from the pinned commit")
     checkout = repo_root / "build/vendor/ceres-src"
     reproduced_ceres_sha = None
-    if checkout.is_dir() and isinstance(expected_ceres_commit, str):
+    if not prevalidated and checkout.is_dir() and isinstance(expected_ceres_commit, str):
         try:
             actual_commit = git_text(checkout, "rev-parse", "--verify", "HEAD")
             actual_tag = git_text(checkout, "describe", "--tags", "--exact-match")
@@ -2858,7 +3128,7 @@ def collect_third_party_sources_and_notices(
 
     installed_gtest_version = None
     dpkg_query = Path("/usr/bin/dpkg-query")
-    if dpkg_query.is_file():
+    if not prevalidated and dpkg_query.is_file():
         try:
             installed_gtest_version = subprocess.check_output(
                 [str(dpkg_query), "-W", "-f=${Version}", "googletest"],
@@ -2987,7 +3257,8 @@ def collect_test_records(artifact_dir, linkage, errors):
 
 
 def collect_dependency_inventory(
-    artifact_dir, repo_root, workspace_record, linkage, errors, allow_synthetic=False
+    artifact_dir, repo_root, workspace_record, linkage, errors, allow_synthetic=False,
+    prevalidated=False,
 ):
     record = read_json(
         artifact_dir / DEPENDENCY_INVENTORY_NAME, errors, DEPENDENCY_INVENTORY_NAME
@@ -2998,7 +3269,7 @@ def collect_dependency_inventory(
         "required_copied_dsos", "schema_version", "third_party_notices", "threat_model",
     }:
         errors.append("dependency_inventory.json field inventory is not exact")
-    if record.get("schema_version") != 1:
+    if not _schema_version_one(record.get("schema_version")):
         errors.append("dependency inventory schema version is not 1")
     if record.get("required_copied_dsos") != SNAPSHOTTED_LIBRARY_ORDER:
         errors.append("required copied DSO order/inventory differs from the runtime contract")
@@ -3029,9 +3300,7 @@ def collect_dependency_inventory(
     def expected_copy_entry(name, source_candidate, elf, recorded_entry):
         artifact_path = artifact_dir / "binaries" / name
         artifact_sha = sha256_file(artifact_path) if artifact_path.is_file() else None
-        try:
-            canonical_source = source_candidate.resolve(strict=True)
-        except OSError:
+        if prevalidated:
             recorded_source = recorded_entry.get("source_path")
             canonical_source = Path(recorded_source) if isinstance(recorded_source, str) else Path("/")
             if (
@@ -3042,11 +3311,25 @@ def collect_dependency_inventory(
                 errors.append(
                     "unretained source path is outside the recorded fresh workspace: " + name
                 )
-        if source_candidate.exists() and not source_candidate.is_file():
-            errors.append("retained build output is not regular: " + str(source_candidate))
-        if canonical_source.is_file() and artifact_sha is not None:
-            if sha256_file(canonical_source) != artifact_sha:
-                errors.append("artifact differs from retained fresh build output: " + name)
+        else:
+            try:
+                canonical_source = source_candidate.resolve(strict=True)
+            except OSError:
+                recorded_source = recorded_entry.get("source_path")
+                canonical_source = Path(recorded_source) if isinstance(recorded_source, str) else Path("/")
+                if (
+                    not canonical_source.is_absolute()
+                    or ".." in canonical_source.parts
+                    or (canonical_source != workspace_path and workspace_path not in canonical_source.parents)
+                ):
+                    errors.append(
+                        "unretained source path is outside the recorded fresh workspace: " + name
+                    )
+            if source_candidate.exists() and not source_candidate.is_file():
+                errors.append("retained build output is not regular: " + str(source_candidate))
+            if canonical_source.is_file() and artifact_sha is not None:
+                if sha256_file(canonical_source) != artifact_sha:
+                    errors.append("artifact differs from retained fresh build output: " + name)
         return {
             "artifact_path": "binaries/" + name,
             "artifact_sha256": artifact_sha,
@@ -3118,11 +3401,16 @@ def collect_dependency_inventory(
         "archive_artifact": "ceres_source_snapshot.tar",
         "archive_sha256": workspace_record.get("ceres_archive_sha256"),
         "snapshotted_soname": "libceres.so.1",
-        "source_checkout": str(ceres_source.resolve()) if ceres_source.exists() else str(ceres_source),
+        "source_checkout": (
+            str(ceres_source)
+            if prevalidated
+            else str(ceres_source.resolve()) if ceres_source.exists() else str(ceres_source)
+        ),
         "source_commit": workspace_record.get("ceres_source_commit"),
         "source_library_path": str(ceres_library),
         "source_library_sha256": (
-            sha256_file(ceres_library) if ceres_library.is_file()
+            sha256_file(artifact_ceres) if prevalidated and artifact_ceres.is_file()
+            else sha256_file(ceres_library) if ceres_library.is_file()
             else sha256_file(artifact_ceres) if artifact_ceres.is_file() else None
         ),
         "source_tag": CERES_TAG,
@@ -3172,7 +3460,7 @@ def collect_dependency_inventory(
                 "the exact controlled binding"
             )
         retained_log = workspace_path / "logs/ov_msckf/build.cmake.log"
-        if workspace_path.is_dir():
+        if not prevalidated and workspace_path.is_dir():
             if not retained_log.is_file() or retained_log.is_symlink():
                 errors.append("retained fresh workspace lacks its regular Catkin package CMake log")
             elif catkin_log.read_bytes() != retained_log.read_bytes():
@@ -3208,6 +3496,361 @@ def source_snapshot_contract(snapshot, expected_commit, expected_tree, errors, l
         errors.append(label + " branch differs from the CP2 branch")
     if snapshot.get("status_porcelain_v1") != []:
         errors.append(label + " records dirty source")
+
+
+def strict_json_bytes(content, label="JSON"):
+    """Decode bounded canonical-input JSON without duplicate/nonfinite values."""
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate object key: " + str(key))
+            result[key] = value
+        return result
+
+    def reject_constant(value):
+        raise ValueError("nonfinite numeric token: " + value)
+
+    try:
+        value = json.loads(
+            content.decode("utf-8", "strict"),
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+        )
+    except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("cannot parse strict {}: {}".format(label, exc)) from exc
+
+    def finite(node):
+        if isinstance(node, float) and not math.isfinite(node):
+            raise ValueError(label + " contains a nonfinite number")
+        if isinstance(node, list):
+            for item in node:
+                finite(item)
+        elif isinstance(node, dict):
+            for key, item in node.items():
+                if not isinstance(key, str):
+                    raise ValueError(label + " contains a non-string key")
+                finite(item)
+
+    finite(value)
+    return value
+
+
+def validate_prevalidated_source_context(value, errors):
+    required = {
+        "branch", "commit", "entries", "entrypoints", "index_tree",
+        "record_type", "schema_version", "status_porcelain_v1_hex", "tree",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        errors.append("prevalidated source context field inventory is not exact")
+        return {}
+    if (
+        not _schema_version_one(value.get("schema_version"))
+        or value.get("record_type") != PREVALIDATED_SOURCE_RECORD_TYPE
+    ):
+        errors.append("prevalidated source context identity is invalid")
+    if value.get("branch") != EXPECTED_BRANCH:
+        errors.append("prevalidated source branch is not the CP2 branch")
+    for field in ("commit", "tree", "index_tree"):
+        if not isinstance(value.get(field), str) or not re.fullmatch(r"[0-9a-f]{40}", value[field]):
+            errors.append("prevalidated source {} is not full lowercase hex".format(field))
+    if value.get("tree") != value.get("index_tree"):
+        errors.append("prevalidated source index tree differs from HEAD tree")
+    if value.get("status_porcelain_v1_hex") != "":
+        errors.append("prevalidated source status is not empty")
+
+    entries = value.get("entries")
+    exact_entry_fields = {"git_blob", "mode", "path", "sha256", "size"}
+    normalized_entries = []
+    if not isinstance(entries, list) or not entries:
+        errors.append("prevalidated tracked-entry inventory is empty or invalid")
+        entries = []
+    previous = None
+    seen = set()
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or set(entry) != exact_entry_fields:
+            errors.append("prevalidated tracked entry {} fields are not exact".format(index))
+            continue
+        path = entry.get("path")
+        pure = PurePosixPath(path) if isinstance(path, str) else PurePosixPath(".")
+        if (
+            not isinstance(path, str) or not path or "\\" in path or "\0" in path
+            or pure.is_absolute() or any(part in ("", ".", "..") for part in pure.parts)
+            or pure.as_posix() != path
+        ):
+            errors.append("prevalidated tracked entry has an unsafe path")
+            continue
+        encoded = path.encode("utf-8")
+        if previous is not None and encoded <= previous:
+            errors.append("prevalidated tracked entries are not strictly UTF-8 sorted")
+        previous = encoded
+        if path in seen:
+            errors.append("prevalidated tracked entry is duplicated: " + path)
+        seen.add(path)
+        mode = entry.get("mode")
+        size = entry.get("size")
+        if mode not in (0o100644, 0o100755):
+            errors.append("prevalidated tracked entry has a nonregular Git mode: " + path)
+        if isinstance(size, bool) or not isinstance(size, int) or not 0 <= size < (1 << 64):
+            errors.append("prevalidated tracked entry size is not u64: " + path)
+        if not isinstance(entry.get("git_blob"), str) or not re.fullmatch(
+            r"[0-9a-f]{40}", entry.get("git_blob", "")
+        ):
+            errors.append("prevalidated tracked entry blob is invalid: " + path)
+        if not isinstance(entry.get("sha256"), str) or not re.fullmatch(
+            r"[0-9a-f]{64}", entry.get("sha256", "")
+        ):
+            errors.append("prevalidated tracked entry SHA-256 is invalid: " + path)
+        normalized_entries.append(entry)
+    if PREAUTHORIZATION_REGISTRY_PATH not in seen:
+        errors.append("prevalidated source context omits the opaque registry record")
+
+    entrypoints = value.get("entrypoints")
+    exact_entrypoint_fields = {
+        "git_blob", "mode", "path", "regular_nonsymlink", "sha256",
+    }
+    if not isinstance(entrypoints, list) or len(entrypoints) != len(READINESS_ENTRYPOINTS):
+        errors.append("prevalidated entrypoint inventory count is not exact")
+        entrypoints = []
+    by_path = {entry["path"]: entry for entry in normalized_entries if "path" in entry}
+    for index, expected_path in enumerate(READINESS_ENTRYPOINTS):
+        entrypoint = entrypoints[index] if index < len(entrypoints) else {}
+        if not isinstance(entrypoint, dict) or set(entrypoint) != exact_entrypoint_fields:
+            errors.append("prevalidated entrypoint {} fields are not exact".format(index))
+            continue
+        source = by_path.get(expected_path, {})
+        if (
+            entrypoint.get("path") != expected_path
+            or entrypoint.get("regular_nonsymlink") is not True
+            or entrypoint.get("git_blob") != source.get("git_blob")
+            or entrypoint.get("sha256") != source.get("sha256")
+            or entrypoint.get("mode") != source.get("mode")
+        ):
+            errors.append("prevalidated entrypoint binding differs: " + expected_path)
+    return value
+
+
+def validate_source_archive_against_context(
+    archive_path, context, errors, registry_policy
+):
+    """Stream-bind a Git archive to one held source context.
+
+    Unit readiness uses ``forbid`` and therefore never opens the registry
+    member.  Detached postauthorization verification uses ``require`` and
+    treats those bytes only as opaque Git provenance.
+    """
+
+    if registry_policy not in ("forbid", "require"):
+        errors.append("source archive registry policy is invalid")
+        return {}
+
+    entries = context.get("entries", []) if isinstance(context, dict) else []
+    expected = {
+        entry.get("path"): entry
+        for entry in entries
+        if isinstance(entry, dict) and (
+            registry_policy == "require"
+            or entry.get("path") != PREAUTHORIZATION_REGISTRY_PATH
+        )
+    }
+    expected_directories = set()
+    for path in expected:
+        if not isinstance(path, str):
+            continue
+        parts = PurePosixPath(path).parts
+        expected_directories.update(
+            "/".join(parts[:length]) for length in range(1, len(parts))
+        )
+    observed_files = {}
+    observed_directories = set()
+    if not archive_path.is_file():
+        errors.append("missing " + SOURCE_ARCHIVE_NAME)
+        return observed_files
+    try:
+        with tarfile.open(str(archive_path), mode="r:") as archive:
+            if archive.pax_headers != {"comment": context.get("commit")}:
+                errors.append("source archive global commit binding is wrong")
+            seen = set()
+            for member in archive:
+                name = member.name
+                pure = PurePosixPath(name)
+                if (
+                    not name or pure.is_absolute() or "\\" in name
+                    or any(part in ("", ".", "..") for part in pure.parts)
+                    or pure.as_posix() != name or name in seen
+                ):
+                    errors.append("source archive has an unsafe or duplicate member: " + name)
+                    continue
+                seen.add(name)
+                if name == PREAUTHORIZATION_REGISTRY_PATH:
+                    if registry_policy == "forbid":
+                        # Fail before extractfile: registry content is never
+                        # read during preauthorization unit verification.
+                        errors.append("source archive contains the preauthorization registry")
+                        continue
+                if member.uid != 0 or member.gid != 0:
+                    errors.append("source archive member owner IDs are not canonical: " + name)
+                if member.pax_headers != {"comment": context.get("commit")}:
+                    errors.append("source archive member commit binding is wrong: " + name)
+                if member.isdir():
+                    observed_directories.add(name)
+                    if member.mode != 0o775 or member.size != 0:
+                        errors.append("source archive directory mode/size is wrong: " + name)
+                    continue
+                if not member.isfile():
+                    errors.append("source archive link or special member is forbidden: " + name)
+                    continue
+                source = expected.get(name)
+                if source is None:
+                    errors.append("source archive contains an untracked file member: " + name)
+                    continue
+                expected_mode = 0o775 if source.get("mode") == 0o100755 else 0o664
+                if member.mode != expected_mode:
+                    errors.append("source archive member mode differs: " + name)
+                if member.size != source.get("size"):
+                    errors.append("source archive member size differs: " + name)
+                stream = archive.extractfile(member)
+                digest = hashlib.sha256()
+                git_digest = hashlib.sha1(
+                    b"blob " + str(member.size).encode("ascii") + b"\0"
+                )
+                size = 0
+                if stream is None:
+                    errors.append("cannot stream source archive member: " + name)
+                else:
+                    while True:
+                        block = stream.read(1024 * 1024)
+                        if not block:
+                            break
+                        size += len(block)
+                        digest.update(block)
+                        git_digest.update(block)
+                observed_files[name] = digest.hexdigest()
+                if size != source.get("size") or digest.hexdigest() != source.get("sha256"):
+                    errors.append("source archive member bytes differ: " + name)
+                if git_digest.hexdigest() != source.get("git_blob"):
+                    errors.append("source archive member Git blob differs: " + name)
+    except (OSError, tarfile.TarError) as exc:
+        errors.append("cannot inspect source_snapshot.tar: " + str(exc))
+    if set(observed_files) != set(expected):
+        errors.append("source archive regular-member population differs from held source")
+    if observed_directories != expected_directories:
+        errors.append("source archive directory-member population differs from held source")
+    return observed_files
+
+
+def validate_prevalidated_source_archive(archive_path, context, errors):
+    """Hash every preauthorization member; never read a registry member."""
+
+    return validate_source_archive_against_context(
+        archive_path, context, errors, "forbid"
+    )
+
+
+def validate_postauthorized_source_archive(archive_path, context, errors):
+    """Bind the complete postauthorization archive, including opaque registry."""
+
+    return validate_source_archive_against_context(
+        archive_path, context, errors, "require"
+    )
+
+
+def collect_prevalidated_source_metadata(
+    artifact_dir, reported_source, context, errors, allow_synthetic=False
+):
+    context = validate_prevalidated_source_context(context, errors)
+    before = read_json(artifact_dir / "source_before.json", errors, "source_before.json")
+    after = read_json(artifact_dir / "source_after.json", errors, "source_after.json")
+    for label, snapshot in (("source_before", before), ("source_after", after)):
+        if set(snapshot) != {"branch", "commit", "recorded_utc", "status_porcelain_v1", "tree"}:
+            errors.append(label + " field inventory is not exact")
+        source_snapshot_contract(snapshot, context.get("commit"), context.get("tree"), errors, label)
+        parse_utc_timestamp(snapshot.get("recorded_utc"), errors, label + ".recorded_utc")
+    if any(before.get(field) != after.get(field) for field in ("branch", "commit", "tree", "status_porcelain_v1")):
+        errors.append("source identity/cleanliness changed while the unit gate ran")
+
+    entries = {
+        entry.get("path"): entry
+        for entry in context.get("entries", [])
+        if isinstance(entry, dict)
+    }
+    input_hashes = {path: entries.get(path, {}).get("sha256") for path in sorted(SOURCE_INPUTS)}
+    if any(value is None for value in input_hashes.values()):
+        errors.append("prevalidated source context omits a curated source input")
+    config_hashes = {name: input_hashes.get(name) for name in sorted(CONFIG_INPUTS)}
+    for relative, expected in FROZEN_CONFIG_SHA256.items():
+        if config_hashes.get(relative) != expected:
+            errors.append("frozen configuration hash mismatch: " + relative)
+    approval_blobs = {
+        path: entries.get(path, {}).get("git_blob")
+        for path in FROZEN_CP2_C_APPROVAL_BINDING
+    }
+    if not allow_synthetic:
+        validate_cp2_c_approval_binding(input_hashes, approval_blobs, errors)
+    contract_hashes = {name: input_hashes.get(name) for name in sorted(CONTRACT_INPUTS)}
+
+    archive_path = artifact_dir / SOURCE_ARCHIVE_NAME
+    archived_hashes = validate_prevalidated_source_archive(archive_path, context, errors)
+    archived_inputs = {name: archived_hashes.get(name) for name in sorted(SOURCE_INPUTS)}
+    archive_sha = sha256_file(archive_path) if archive_path.is_file() else None
+    archive_size = archive_path.stat().st_size if archive_path.is_file() else None
+    archive_record = {
+        "archive_roots": list(ARCHIVE_ROOTS),
+        "artifact_path": SOURCE_ARCHIVE_NAME,
+        "expected_sha256": archive_sha,
+        "expected_size_bytes": archive_size,
+        "input_sha256": archived_inputs,
+        "sha256": archive_sha,
+        "size_bytes": archive_size,
+    }
+    verifier_entry = entries.get("scripts/cp2/verify_report.py", {})
+    metadata = reported_source.get("commit_metadata") if isinstance(reported_source, dict) else None
+    if not isinstance(metadata, dict) or set(metadata) != {
+        "author_date", "author_email", "author_name", "committer_date",
+        "committer_email", "committer_name",
+    }:
+        errors.append("source commit metadata field inventory is not exact")
+        metadata = {}
+    else:
+        for field in ("author_date", "committer_date"):
+            value = metadata.get(field)
+            try:
+                parsed = dt.datetime.fromisoformat(
+                    value[:-1] + "+00:00"
+                    if isinstance(value, str) and value.endswith("Z") else value
+                )
+                if parsed.utcoffset() is None:
+                    raise ValueError("timezone-naive")
+            except (TypeError, ValueError):
+                errors.append("source commit metadata {} is not timezone-aware ISO-8601".format(field))
+        for field in ("author_email", "author_name", "committer_email", "committer_name"):
+            if not isinstance(metadata.get(field), str) or not metadata[field]:
+                errors.append("source commit metadata {} is empty or invalid".format(field))
+    current = {
+        "branch": context.get("branch"),
+        "commit": context.get("commit"),
+        "status_porcelain_v1": [],
+        "tree": context.get("tree"),
+    }
+    return {
+        "after": after,
+        "before": before,
+        "branch": context.get("branch"),
+        "commit": context.get("commit"),
+        "commit_metadata": metadata,
+        "configuration_sha256": config_hashes,
+        "contract_sha256": contract_hashes,
+        "current_repository": current,
+        "dirty": False,
+        "input_sha256": input_hashes,
+        "source_archive": archive_record,
+        "tree": context.get("tree"),
+        "verifier": {
+            "committed_sha256": verifier_entry.get("sha256"),
+            "running_sha256": verifier_entry.get("sha256"),
+        },
+    }
 
 
 def git_commit_metadata(repo_root, commit, errors):
@@ -3316,7 +3959,10 @@ def collect_source_metadata(artifact_dir, repo_root, errors, allow_synthetic=Fal
     if commit:
         try:
             expected_archive = subprocess.check_output(
-                ["git", "archive", "--format=tar", commit, "--", *ARCHIVE_ROOTS],
+                [
+                    "git", "-c", "tar.umask=0002", "archive", "--format=tar",
+                    commit, "--", *ARCHIVE_ROOTS,
+                ],
                 cwd=str(repo_root), stderr=subprocess.STDOUT,
             )
             archive_record["expected_sha256"] = sha256_bytes(expected_archive)
@@ -3739,7 +4385,7 @@ def expected_pre_report_files():
     return files
 
 
-def collect_verifier_self_test(artifact_dir, repo_root, errors):
+def collect_verifier_self_test(artifact_dir, repo_root, errors, verifier_path=None):
     record = read_json(artifact_dir / "verifier_self_test.json", errors, "verifier_self_test.json")
     required_fields = {
         "argv", "cwd", "environment", "environment_mode", "exit_status", "finished_utc",
@@ -3749,7 +4395,11 @@ def collect_verifier_self_test(artifact_dir, repo_root, errors):
         errors.append("verifier_self_test.json field inventory is not exact")
     expected = {
         "argv": [
-            "/usr/bin/python3", str(repo_root / "scripts/cp2/verify_report.py"), "--self-test"
+            "/usr/bin/python3",
+            "-I",
+            "-B",
+            str(verifier_path or (repo_root / "scripts/cp2/verify_report.py")),
+            "--unit-self-test",
         ],
         "cwd": ".",
         "environment": {
@@ -3777,6 +4427,15 @@ def collect_verifier_self_test(artifact_dir, repo_root, errors):
         errors.append("verifier self-test log lacks its successful /tmp-only execution claim")
     if "Synthetic corruptions rejected:" not in log_text:
         errors.append("verifier self-test log lacks negative-corruption results")
+    if re.search(
+        r"^CP2_READINESS_ENGINE_PROTECTING_TESTS count=39 passed=true "
+        r"module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$",
+        log_text,
+        flags=re.MULTILINE,
+    ) is None:
+        errors.append(
+            "verifier self-test log lacks the exact readiness protecting-test result"
+        )
     enriched = dict(record)
     enriched.update({
         "log": "verifier_self_test.log",
@@ -4003,11 +4662,17 @@ def require_report_fields(report, errors):
 
 
 def verify_unit_report(
-    artifact_dir, repo_root, quiet=False, expected_manifest_sha256=None,
-    require_finalized=True, allow_synthetic=False,
+    artifact_dir, repo_root=None, quiet=False, expected_manifest_sha256=None,
+    require_finalized=True, allow_synthetic=False, prevalidated_source=None,
 ):
     artifact_dir = artifact_dir.resolve()
-    repo_root = repo_root.resolve()
+    detached = prevalidated_source is not None
+    if detached:
+        repo_root = Path("/invalid-live-repository-is-forbidden")
+    elif repo_root is None:
+        raise ValueError("repository root is required without prevalidated source context")
+    else:
+        repo_root = repo_root.resolve()
     errors = []
     verify_manifest(artifact_dir, errors)
     anchor = validate_manifest_anchor(artifact_dir, expected_manifest_sha256, errors)
@@ -4020,7 +4685,7 @@ def verify_unit_report(
         )
     report = read_json(artifact_dir / REPORT_NAME, errors, REPORT_NAME)
     require_report_fields(report, errors)
-    if report.get("schema_version") != 1:
+    if not _schema_version_one(report.get("schema_version")):
         errors.append("unsupported CP2 report schema (expected 1)")
     if report.get("checkpoint") != "CP2-A/B/C2-unit":
         errors.append("report checkpoint is not the CP2-A/B/C2 unit sub-gate")
@@ -4053,9 +4718,16 @@ def verify_unit_report(
         errors.append("report overstates or misstates SHA256SUMS integrity")
     parse_utc_timestamp(report.get("generated_utc"), errors, "report.generated_utc")
 
-    independent_source = collect_source_metadata(
-        artifact_dir, repo_root, errors, allow_synthetic=allow_synthetic
-    )
+    if detached:
+        reported_source = report.get("source") if isinstance(report.get("source"), dict) else {}
+        independent_source = collect_prevalidated_source_metadata(
+            artifact_dir, reported_source, prevalidated_source, errors,
+            allow_synthetic=allow_synthetic,
+        )
+    else:
+        independent_source = collect_source_metadata(
+            artifact_dir, repo_root, errors, allow_synthetic=allow_synthetic
+        )
     if report.get("source") != independent_source:
         errors.append("reported source provenance differs from committed Git evidence")
     source = report.get("source") if isinstance(report.get("source"), dict) else {}
@@ -4075,18 +4747,39 @@ def verify_unit_report(
     independent_workspace = collect_workspace_record(
         artifact_dir, repo_root, independent_source, errors,
         allow_synthetic=allow_synthetic,
+        prevalidated=detached,
     )
+    if detached:
+        recorded_repo_root = independent_workspace.get("repo_root")
+        if isinstance(recorded_repo_root, str) and Path(recorded_repo_root).is_absolute():
+            repo_root = Path(recorded_repo_root)
     if report.get("workspace") != independent_workspace:
         errors.append("reported fresh workspace differs from workspace.json")
     independent_third_party = collect_third_party_sources_and_notices(
         artifact_dir, repo_root, independent_workspace, errors,
         allow_synthetic=allow_synthetic,
+        prevalidated=detached,
     )
     if report.get("third_party_sources_and_notices") != independent_third_party:
         errors.append("reported third-party source/license evidence differs from artifacts")
+    prevalidated_source_epoch = "" if detached else None
+    if detached:
+        committer_date = independent_source.get("commit_metadata", {}).get("committer_date")
+        if isinstance(committer_date, str):
+            try:
+                parsed_committer = dt.datetime.fromisoformat(
+                    committer_date[:-1] + "+00:00"
+                    if committer_date.endswith("Z") else committer_date
+                )
+                if parsed_committer.utcoffset() is None:
+                    raise ValueError("committer date is timezone-naive")
+                prevalidated_source_epoch = int(parsed_committer.timestamp())
+            except (OverflowError, ValueError):
+                errors.append("source committer date cannot derive SOURCE_DATE_EPOCH")
     independent_build = collect_build_records(
         artifact_dir, repo_root, independent_workspace,
         independent_source.get("commit", ""), errors,
+        prevalidated_source_epoch,
     )
     build = report.get("build") if isinstance(report.get("build"), dict) else {}
     if build.get("serialized") is not True or build.get("commands") != independent_build:
@@ -4096,7 +4789,11 @@ def verify_unit_report(
     if build.get("cmake_cache_sha256") != actual_cache_hash:
         errors.append("reported CMakeCache.txt hash is wrong")
 
-    independent_self_test = collect_verifier_self_test(artifact_dir, repo_root, errors)
+    verifier_record_path = repo_root / "scripts/cp2/verify_report.py"
+    independent_self_test = collect_verifier_self_test(
+        artifact_dir, repo_root, errors,
+        verifier_path=verifier_record_path if detached else None,
+    )
     if report.get("verifier_self_test") != independent_self_test:
         errors.append("verifier self-test evidence is missing, failed, or misreported")
 
@@ -4124,6 +4821,7 @@ def verify_unit_report(
         artifact_dir / "compile_commands.json",
         Path(independent_workspace.get("source_root", repo_root)), errors,
         independent_host.get("compiler"),
+        prevalidated=detached,
     )
     if report.get("strict_floating_point") != independent_fp:
         errors.append("reported strict-FP evidence differs from compile_commands.json")
@@ -4143,6 +4841,7 @@ def verify_unit_report(
         Path(independent_workspace.get("source_root", repo_root)),
         Path(independent_workspace.get("workspace_build_root", "")),
         errors,
+        prevalidated=detached,
     )
     if report.get("dependency_eigen_abi") != independent_dependency_eigen_abi:
         errors.append(
@@ -4157,6 +4856,7 @@ def verify_unit_report(
     independent_dependencies = collect_dependency_inventory(
         artifact_dir, repo_root, independent_workspace, independent_linkage, errors,
         allow_synthetic=allow_synthetic,
+        prevalidated=detached,
     )
     if report.get("dependency_inventory") != independent_dependencies:
         errors.append("reported dependency inventory differs from captured dependency evidence")
@@ -4223,6 +4923,38 @@ def verify_unit_report(
             "CP2-C2 is unit-only; CP2-C3, CP2-C, CP2-D, and CP2-E "
             "remain unexecuted and unpassed."
         )
+    return 0, []
+
+
+def verify_unit_anchor_prevalidated(
+    artifact_dir, expected_manifest_sha256, prevalidated_source,
+    quiet=False, allow_synthetic=False,
+):
+    """Verify a unit artifact without Git or any live source-tree access."""
+
+    status, errors = verify_unit_report(
+        artifact_dir,
+        None,
+        quiet=True,
+        expected_manifest_sha256=expected_manifest_sha256,
+        require_finalized=True,
+        allow_synthetic=allow_synthetic,
+        prevalidated_source=prevalidated_source,
+    )
+    if status != 0:
+        if not quiet:
+            for error in errors:
+                print("ERROR: " + error)
+        return status, errors
+    result = {
+        "commit": prevalidated_source.get("commit"),
+        "passed": True,
+        "record_type": "cp2_prevalidated_unit_verification_result",
+        "schema_version": 1,
+        "tree": prevalidated_source.get("tree"),
+    }
+    if not quiet:
+        print(json.dumps(result, allow_nan=False, separators=(",", ":"), sort_keys=True))
     return 0, []
 
 
@@ -4380,6 +5112,8 @@ TEST_CASES_BY_BINARY = {
         "CP2UpdaterMSCKFTransaction.PromotionFailureIsFatalBeforeAnyPublishOrBaselineWrite",
         "CP2UpdaterMSCKFTransaction.SinkRejectionAfterCommitLatchesFatalWithoutRollbackOrObserver",
         "CP2UpdaterMSCKFTransaction.RecordedSinkConfigurationIsNullspaceOnlyAndFreezesAtFirstUpdate",
+        "CP2UpdaterMSCKFTransaction.MissingRecordedContextIsFatalBeforeEstimatorWork",
+        "CP2UpdaterMSCKFTransaction.InvocationContextIsOneShotContiguousAndSettersFailClosed",
     ],
     "test_cp2_updater_msckf_fault_injection": [
         "CP2UpdaterMSCKFEndToEnd.ActualNullspaceAndSchurModesCommitEquivalentFullStateUpdates",
@@ -4410,6 +5144,9 @@ TEST_CASES_BY_BINARY = {
         "CP2UpdaterMSCKFTransaction.CommitOracleOverflowIsArithmeticFatalWithoutPublicationOrRollback",
         "CP2UpdaterMSCKFTransaction.CommitOracleInvalidPhaseRemainsDistinctPostcommitFatal",
         "CP2UpdaterMSCKFTransaction.RecordedSinkConfigurationIsNullspaceOnlyAndFreezesAtFirstUpdate",
+        "CP2UpdaterMSCKFTransaction.MissingRecordedContextIsFatalBeforeEstimatorWork",
+        "CP2UpdaterMSCKFTransaction.InvocationContextIsOneShotContiguousAndSettersFailClosed",
+        "CP2UpdaterMSCKFTransaction.InvocationIdOverflowIsFatalBeforeEstimatorWork",
     ],
     "test_cp2_composite_state": [
         "CP2CompositeStateCodec.FrozenFullRolePayloadRoundTripsBitExactly",
@@ -4467,6 +5204,18 @@ TEST_CASES_BY_BINARY = {
         "CP2CanonicalBytes.Utf8ValidationRejectsMalformedSequencesWithoutAppending",
         "CP2CanonicalBytes.SelfAppendStagesAliasedStorageBeforeGrowth",
     ],
+    "test_cp2_offline_replay": [
+        "CP2OfflineReplay.AcceptsOnlyTheExactAbsoluteCommandSurface",
+        "CP2OfflineReplay.RejectsExtraMissingRelativeAndAliasedArguments",
+        "CP2OfflineReplay.StatusNamesAreFrozen",
+        "CP2OfflineReplay.DerivesEveryOnlineShadowMathConditionAndPreservesRejectedFeatures",
+        "CP2OfflineReplay.CommitRequiresCandidateAndRecomputedBlocksMustActuallyPass",
+    ],
+    "test_cp2_recorded_assemble": [
+        "CP2RecordedAssemble.EmptyCanonicalCampaignIsDeterministicAndUsesV101",
+        "CP2RecordedAssemble.WrongFrozenSequenceAndCorruptJournalFailClosed",
+        "CP2RecordedAssemble.OrphanStateProposalAndRawFramesFailClosed",
+    ],
     "test_cp2_feature_gate": [
         "CP2FeatureGate.StageNamesAreFrozen",
         "CP2FeatureGate.ReductionUnavailablePublishesNoNumericOrDecisionEvidence",
@@ -4481,6 +5230,62 @@ TEST_CASES_BY_BINARY = {
         "CP2FeatureGate.NonfiniteThresholdNullsEvidenceButPreservesIEEEComparison",
         "CP2FeatureGate.MissingConstructorTableEntryIsUnavailableNotSubstituted",
         "CP2FeatureGate.FiveHundredRowsUseDynamicBoostQuantile",
+    ],
+    "test_cp2_runtime_context": [
+        "CP2RuntimeContext.RecordedFullAcceptsExactDocumentAndHashesBytes",
+        "CP2RuntimeContext.SequenceAndTimingCombinationsAreExact",
+        "CP2RuntimeContext.DuplicateMissingAndExtraKeysReject",
+        "CP2RuntimeContext.JsonTypesNeverCoerce",
+        "CP2RuntimeContext.SequenceAndLaunchExpectationsBindIdentity",
+        "CP2RuntimeContext.PathsRequireNormalizedDistinctStrictChildren",
+        "CP2RuntimeContext.OutputPresenceCannotCrossTraceLevels",
+        "CP2RuntimeContext.EscapesAreStrictAndDecodedBeforeValidation",
+        "CP2RuntimeContext.NonJsonNumbersConstantsAndTrailingBytesReject",
+        "CP2RuntimeContext.RejectionIsFailureAtomicAndStatusNamesAreStable",
+        "CP2RuntimeContext.DescriptorBoundFileReadAcceptsExactBytesAndBound",
+        "CP2RuntimeContext.DescriptorBoundFileReadRejectsRelativeSymlinkAndHardlink",
+    ],
+    "test_cp2_ros1_runtime_parameters": [
+        (
+            "CP2ROS1RuntimeParameters."
+            "FrozenDomainTagsOrderingSignedIntegerAndNegativeZeroAreExact"
+        ),
+        (
+            "CP2ROS1RuntimeParameters."
+            "NestedStructKeysUseUnsignedUtf8ByteOrderAndEscapeStrings"
+        ),
+        "CP2ROS1RuntimeParameters.BoolIntAndDoubleRemainDistinctTypedBytes",
+        "CP2ROS1RuntimeParameters.NonfiniteAndInvalidXmlRpcValuesFailClosed",
+        "CP2ROS1RuntimeParameters.NamesAndStringsRejectUnsafeOrInvalidInputs",
+        "CP2ROS1RuntimeParameters.EmptyPopulationCannotMasqueradeAsCapture",
+    ],
+    "test_cp2_serial_pairing": [
+        "CP2SerialPairing.StrictTwentyMillisecondBoundaryAndMetadataAreExact",
+        "CP2SerialPairing.FirstForwardCandidateIsNeverReplacedByANearerMessage",
+        "CP2SerialPairing.UsedFirstForwardCandidateCannotBeReusedOrSearchedPast",
+        "CP2SerialPairing.IntegerNanosecondCompositionChecksRangeAndOverflow",
+        "CP2SerialPairing.InvalidMessageKindFailsAtomicallyWithFrozenStatus",
+        "CP2SerialPairing.EvidenceModeConsumesImuTailPastLastCamera",
+    ],
+    "test_cp2_serial_runtime_trace": [
+        (
+            "CP2SerialRuntimeTrace."
+            "RecordedRowsJoinContiguousUpdaterIdentitiesAndWriteOnce"
+        ),
+        (
+            "CP2SerialRuntimeTrace."
+            "SequenceRowsRetainNonidentityQuaternionWithoutReordering"
+        ),
+        (
+            "CP2SerialRuntimeTrace."
+            "NoncontiguousWrongPairAndWrongTimestampUpdaterEventsFailSticky"
+        ),
+        (
+            "CP2SerialRuntimeTrace."
+            "DuplicateProcessingAndNonfiniteTrajectoryFailBeforeOutput"
+        ),
+        "CP2SerialRuntimeTrace.InitialPairPopulationRejectsBoundaryAndGaps",
+        "CP2SerialRuntimeTrace.OutputCreationRejectsOverwriteAndSymlink",
     ],
     "test_cp2_updater_msckf_preview_snapshot": [
         "CP2PreviewSnapshot.ExactAdapterParityAndInputImmutability",
@@ -4503,6 +5308,44 @@ TEST_CASES_BY_BINARY = {
         "CP2ShadowMath.CandidateGammaOverflowStillTraversesAndStacksLaterFeatures",
         "CP2ShadowMath.EmptyAndAllRejectedGammaStatesAreExact",
         "CP2ShadowMath.StatisticComparisonFirstFailurePrecedenceIsExact",
+    ],
+    "test_cp2_trace_journal": [
+        "CP2TraceJournalFormat.FrozenBootstrapKnownAnswerAndEmptyDecode",
+        "CP2TraceJournalWriter.ShortWritesRemainExactAndFinalizeSeals",
+        "CP2TraceJournalWriter.PartialFailureIsCountedAndRejectionIsSticky",
+        "CP2TraceJournalWriter.SyncFailureIsStickyAndSealsPublication",
+        "CP2TraceJournalWriter.WriterWithoutExplicitSyncFailsClosed",
+        "CP2TraceJournalWriter.ByteBudgetOverflowWritesNoPartialUnit",
+        (
+            "CP2TraceJournalIdentity."
+            "ContiguousInvocationsAllowRepeatedPairAndRegressingNewTimestamp"
+        ),
+        "CP2TraceJournalIdentity.DuplicateSkippedAndReorderedIdentityAreSticky",
+        "CP2TraceJournalEvents.EveryLegalZeroRawTerminalRoundTrips",
+        "CP2TraceJournalEvents.ImpossibleTerminalAndHiddenPhaseSuffixReject",
+        "CP2TraceJournalEvents.DuplicateRawFeatureAndInvalidEnumRejectExplicitly",
+        (
+            "CP2TraceJournalPayloads."
+            "OwningStateRawAndProposalBytesReconstructExactly"
+        ),
+        "CP2TraceJournalPayloads.NonzeroRawAndCommittedDecodeAccepted",
+        "CP2TraceJournalPayloads.AnyPayloadByteMismatchRejectsBeforeWrite",
+        "CP2TraceJournalDecoder.HeaderBootstrapAndLimitCorruptionsReject",
+        (
+            "CP2TraceJournalDecoder."
+            "TruncationTrailingAndHostileSectionPopulationReject"
+        ),
+        (
+            "CP2TraceJournalDecoder."
+            "DuplicateUnknownMissingAndInvalidCoreSectionsReject"
+        ),
+        (
+            "CP2TraceJournalDecoder."
+            "CanonicalFragmentAndCrossIdentityCorruptionsReject"
+        ),
+        "CP2TraceJournalFile.PreopenedRegularFileFinalizesAtExactSize",
+        "CP2TraceJournalFile.ReadOnlyAndMultipleLinkFilesReject",
+        "CP2TraceJournalFile.CallerOffsetInterferenceFailsClosed",
     ],
     "test_cp2_trace_codec": [
         "CP2TraceRawPayload.FrozenDomainRowMajorBitsAndLayoutRoundTripExactly",
@@ -4613,12 +5456,20 @@ def create_synthetic_repo(repo_root):
         destination = repo_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         actual = actual_repo / relative
-        if relative in CONFIG_INPUTS or relative in {"LICENSE", "scripts/cp2/verify_report.py"}:
+        if (
+            relative in CONFIG_INPUTS
+            or relative in FROZEN_CP2_C_APPROVAL_BINDING
+            or relative in {"LICENSE", *READINESS_ENTRYPOINTS}
+        ):
             if not actual.is_file():
                 raise RuntimeError("self-test needs frozen configuration: " + str(actual))
             shutil.copyfile(str(actual), str(destination))
+            destination.chmod(0o755 if actual.stat().st_mode & stat.S_IXUSR else 0o644)
         else:
             destination.write_text("synthetic source: " + relative + "\n", encoding="utf-8")
+    registry = repo_root / PREAUTHORIZATION_REGISTRY_PATH
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_bytes(b"DO_NOT_PARSE_SYNTHETIC_REGISTRY:\xff:\x00\n")
     for package, count in DEPENDENCY_EXPECTED_COMMAND_COUNTS.items():
         for index in range(count):
             source = repo_root / package / "src" / (
@@ -4962,7 +5813,8 @@ def create_synthetic_artifact(artifact_dir, repo_root):
         directory.mkdir(parents=True, exist_ok=True)
     workspace_archive = workspace / SOURCE_ARCHIVE_NAME
     subprocess.check_call(
-        ["/usr/bin/git", "-C", str(repo_root), "archive", "--format=tar",
+        ["/usr/bin/git", "-c", "tar.umask=0002", "-C", str(repo_root),
+         "archive", "--format=tar",
          "--output=" + str(workspace_archive), commit, "--", *ARCHIVE_ROOTS]
     )
     subprocess.check_call(
@@ -5049,7 +5901,10 @@ def create_synthetic_artifact(artifact_dir, repo_root):
     write_json_fixture(artifact_dir / "source_before.json", before)
     write_json_fixture(artifact_dir / "source_after.json", after)
     self_test = {
-        "argv": ["/usr/bin/python3", str(repo_root / "scripts/cp2/verify_report.py"), "--self-test"],
+        "argv": [
+            "/usr/bin/python3", "-I", "-B",
+            str(repo_root / "scripts/cp2/verify_report.py"), "--unit-self-test",
+        ],
         "cwd": ".",
         "environment": {
             "LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin",
@@ -5065,12 +5920,16 @@ def create_synthetic_artifact(artifact_dir, repo_root):
     write_json_fixture(artifact_dir / "verifier_self_test.json", self_test)
     (artifact_dir / "verifier_self_test.log").write_text(
         "CP2 verifier self-test passed using only: /tmp/synthetic\n"
-        "Synthetic corruptions rejected: synthetic-bootstrap\n", encoding="utf-8"
+        "Synthetic corruptions rejected: synthetic-bootstrap\n"
+        "CP2_READINESS_ENGINE_PROTECTING_TESTS count=39 passed=true "
+        "module_sha256={} output_sha256={}\n".format("0" * 64, "1" * 64),
+        encoding="utf-8",
     )
 
     workspace_record = {
         "archive_argv": [
-            "/usr/bin/git", "-C", str(repo_root), "archive", "--format=tar",
+            "/usr/bin/git", "-c", "tar.umask=0002", "-C", str(repo_root),
+            "archive", "--format=tar",
             "--output=" + str(workspace_archive), commit, "--", *ARCHIVE_ROOTS,
         ],
         "archive_artifact": SOURCE_ARCHIVE_NAME,
@@ -5160,6 +6019,12 @@ def create_synthetic_artifact(artifact_dir, repo_root):
     runtime_environment = controlled_runtime_environment(artifact_dir / "binaries")
     for index, test_name in enumerate(ALL_TESTS):
         started_second = 15 + 2 * index
+        started_utc = (
+            synthetic_epoch + dt.timedelta(seconds=started_second)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        finished_utc = (
+            synthetic_epoch + dt.timedelta(seconds=started_second + 1)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
         xml_name = test_name + ".xml"
         argv = ["binaries/" + test_name, *GTEST_OPTIONS, "--gtest_output=xml:" + xml_name]
         before_hashes = execution_input_hashes(artifact_dir, test_name)
@@ -5178,11 +6043,11 @@ def create_synthetic_artifact(artifact_dir, repo_root):
             "execution_inputs_sha256_after": after_hashes,
             "execution_inputs_sha256_before": before_hashes,
             "exit_status": completed.returncode,
-            "finished_utc": "2030-01-01T00:00:{:02d}Z".format(started_second + 1),
+            "finished_utc": finished_utc,
             "loader_map": linkage["executables"][test_name]["loader"],
             "name": test_name,
             "serialized": True,
-            "started_utc": "2030-01-01T00:00:{:02d}Z".format(started_second),
+            "started_utc": started_utc,
         }
         write_json_fixture(artifact_dir / (test_name + ".json"), record)
         if completed.returncode != 0:
@@ -5302,19 +6167,6141 @@ def mutate_json(path, callback):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def run_self_test():
+class ActualVerificationError(ValueError):
+    """A fail-closed CP2-C/D/E detached-verifier rejection."""
+
+
+ACTUAL_MAX_JSON_BYTES = 64 * 1024 * 1024
+ACTUAL_MAX_JSONL_BYTES = 4 * 1024 * 1024 * 1024
+ACTUAL_MAX_BINARY_BYTES = 16 * 1024 * 1024 * 1024
+ACTUAL_MAX_READINESS_GIT_OUTPUT_BYTES = 1024 * 1024 * 1024
+ACTUAL_OFFLINE_REPLAY_TIMEOUT_SECONDS = 300
+ACTUAL_PROCESS_GROUP_CLEANUP_SECONDS = 10.0
+ACTUAL_PROCESS_GROUP_POLL_SECONDS = 0.01
+ACTUAL_EXACT_BINARY64_INTEGER_MAX = (1 << 53) - 1
+ACTUAL_CP2_C_AUTHORIZED = False
+ACTUAL_CP2_C_BLOCK_REASON = (
+    "CP2-C actual verification is blocked before artifact access: the "
+    "detached-readiness replacement contract is pending exact-commit approval "
+    "and a separate approval-binding commit"
+)
+ACTUAL_SEQUENCE_IDS = ("MH_01_easy", "MH_03_medium", "V1_01_easy")
+ACTUAL_SEQUENCE_OFFSETS_SECONDS = (40.0, 5.0, 0.0)
+ACTUAL_PARAMETER_DIFF_KEYS = (
+    "/cp2_vio/up_msckf_landmark_elimination",
+    "/cp2_vio/filepath_est",
+    "/cp2_vio/filepath_std",
+    "/cp2_vio/record_timing_filepath",
+    "/cp2_vio/cp2_trace_directory",
+    "/cp2_vio/cp2_context_path",
+)
+ACTUAL_PROVENANCE_KEYS = (
+    "schema_version", "record_type", "checkpoint", "evidence_class",
+    "distribution_status", "eligible_for_cp2_seal", "created_utc", "branch",
+    "source_commit", "source_tree", "source_archive", "source_archive_sha256",
+    "clean", "cp1_authorization_commit", "contracts", "entrypoints",
+    "readiness_barrier", "unit_anchor", "build", "readiness_barrier_sha256",
+    "runtime", "configuration", "inputs", "environment", "host", "file_inventory",
+)
+ACTUAL_READINESS_KEYS = (
+    "schema_version", "record_type", "entrypoints", "source_before_sha256",
+    "build_before_sha256", "source_before_payload", "build_before_payload",
+    "results_before_payload", "results_before_sha256", "testing_before_payload",
+    "testing_before_sha256", "self_tests", "source_after_payload",
+    "source_after_sha256", "build_after_payload", "build_after_sha256",
+    "results_after_payload", "results_after_sha256", "testing_after_payload",
+    "testing_after_sha256", "post_lock_payload", "post_lock_recheck_sha256",
+    "post_unit_payload", "post_unit_recheck_sha256", "source_context_payload",
+    "source_context_sha256", "data_lock", "readiness_git_environment",
+    "readiness_git_commands", "unit_verification", "unit_artifact",
+    "unit_manifest_sha256", "unit_tested_commit", "unit_tested_tree",
+    "bag_provider_calls", "passed",
+)
+ACTUAL_READINESS_SELF_TEST_KEYS = (
+    "index", "path", "argv", "cwd", "entrypoint_sha256", "started_utc",
+    "finished_utc", "environment_sha256", "exit_code", "timed_out",
+    "process_group_complete", "stdout", "stdout_sha256", "stderr", "stderr_sha256",
+    "expected_case_names", "result", "bag_provider_calls", "temporary_root_removed",
+)
+ACTUAL_COMMAND_KEYS = (
+    "schema_version", "record_type", "command_id", "phase", "sequence_index",
+    "pair_index", "run_index", "argv", "cwd", "environment_sha256",
+    "started_utc", "finished_utc", "exit_code", "timed_out", "stdout",
+    "stdout_sha256", "stderr", "stderr_sha256",
+)
+ACTUAL_COMMAND_PHASES = frozenset((
+    "readiness", "source_archive", "configure", "build", "runtime_preflight",
+    "bag_identity", "pair_index", "ros_run", "trajectory", "evaluation",
+    "verification",
+))
+ACTUAL_INVENTORY_ROLES = frozenset((
+    "report", "provenance", "command", "trace", "payload", "source", "build",
+    "configuration", "readiness", "log", "trajectory", "evaluator",
+))
+ACTUAL_HOST_KEYS = (
+    "hostname", "os_release", "kernel_release", "architecture", "cpu_model",
+    "logical_cpu_count", "ros_distribution", "compiler_version", "cmake_version",
+    "catkin_version", "eigen_version", "opencv_version", "boost_version",
+    "ceres_version", "python_version", "evo_version",
+)
+ACTUAL_RUNTIME_CONTEXT_KEYS = (
+    "schema_version", "record_type", "checkpoint", "run_id", "sequence_index",
+    "sequence_id", "mode", "shadow_enabled", "trace_level", "source_commit",
+    "config_sha256", "bag_sha256", "pair_index_sha256",
+    "resolved_parameters_sha256", "trace_directory", "serial_trace_path",
+    "callback_trace_path", "trajectory_trace_path", "updater_trace_path",
+    "state_payload_path", "proposal_payload_path", "raw_system_payload_path",
+    "timing_trace_path", "runtime_parameters_path", "loader_map_before_path",
+    "loader_map_after_path", "legacy_state_path", "legacy_deviation_path",
+    "legacy_timing_path",
+)
+ACTUAL_STRICT_FP_SOURCE_TARGETS = {
+    "ov_msckf/src/ros/CP2ROS1RuntimeParameters.cpp": "ov_msckf_lib",
+    "ov_msckf/src/state/StateHelper.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2Canonical.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2CommitBoundary.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2CommitOracle.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2CompositeState.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2FeatureGate.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2OfflineReplay.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2RecordedAssemble.cpp": "cp2_recorded_assemble",
+    "ov_msckf/src/update/CP2RuntimeContext.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2SerialPairing.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2SerialRuntimeTrace.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2ShadowMath.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2StateTraceCodec.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2TraceCodec.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2TraceJournal.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/SchurUpdate.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/UpdaterHelper.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/UpdaterMSCKF.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/UpdaterMSCKFPreview.cpp": "ov_msckf_lib",
+}
+_ACTUAL_LOCAL_MODULE_PATHS = {
+    "cp2_schema": "scripts/cp2/cp2_schema.py",
+    "cp2_sequence_math": "scripts/cp2/cp2_sequence_math.py",
+}
+_ACTUAL_MODULE_CACHE = {}
+_ACTUAL_MODULE_SOURCE_BINDING = None
+_ACTUAL_MODULE_SOURCE_BINDING_ORIGIN = None
+
+
+def _actual_fail(message):
+    raise ActualVerificationError(message)
+
+
+def _actual_exact_keys(value, keys, label):
+    if not isinstance(value, dict) or set(value) != set(keys):
+        missing = sorted(set(keys) - set(value)) if isinstance(value, dict) else sorted(keys)
+        extra = sorted(set(value) - set(keys)) if isinstance(value, dict) else []
+        _actual_fail("{} key inventory differs (missing={!r}, extra={!r})".format(label, missing, extra))
+    return value
+
+
+def _actual_u64(value, label):
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < (1 << 64):
+        _actual_fail(label + " is not u64")
+    return value
+
+
+def _actual_i64(value, label):
+    if isinstance(value, bool) or not isinstance(value, int) or not -(1 << 63) <= value < (1 << 63):
+        _actual_fail(label + " is not i64")
+    return value
+
+
+def _actual_f64(value, label, nonnegative=False):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        _actual_fail(label + " is not a binary64 number")
+    try:
+        converted = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ActualVerificationError(label + " is not representable as binary64") from exc
+    if not math.isfinite(converted) or (nonnegative and converted < 0.0):
+        _actual_fail(label + " is not a valid finite binary64 number")
+    return converted
+
+
+def _actual_same_f64(left, right):
+    try:
+        return struct.pack(">d", _actual_f64(left, "left binary64")) == struct.pack(
+            ">d", _actual_f64(right, "right binary64")
+        )
+    except ActualVerificationError:
+        return False
+
+
+def _actual_sha256(value, label):
+    if not isinstance(value, str) or HEX64_PATTERN.fullmatch(value) is None:
+        _actual_fail(label + " is not lowercase SHA-256")
+    return value
+
+
+def _actual_hex40(value, label):
+    if not isinstance(value, str) or HEX40_PATTERN.fullmatch(value) is None:
+        _actual_fail(label + " is not a 40-character lowercase object ID")
+    return value
+
+
+def _actual_utc(value, label):
+    if not isinstance(value, str) or re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z",
+        value,
+    ) is None:
+        _actual_fail(label + " is not canonical UTC")
+    try:
+        return dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
+            tzinfo=dt.timezone.utc
+        )
+    except ValueError as exc:
+        raise ActualVerificationError(label + " is not a valid UTC instant") from exc
+
+
+def _actual_relpath(value, label):
+    if not isinstance(value, str) or not value or "\\" in value or "\0" in value:
+        _actual_fail(label + " is not a normalized POSIX relpath")
+    pure = PurePosixPath(value)
+    if pure.is_absolute() or pure.as_posix() != value or any(
+        part in ("", ".", "..") for part in pure.parts
+    ):
+        _actual_fail(label + " is not a normalized POSIX relpath")
+    return value
+
+
+def _actual_safe_absolute_path(value, label):
+    if not isinstance(value, str) or "\0" in value or not os.path.isabs(value):
+        _actual_fail(label + " is not absolute")
+    if os.path.normpath(value) != value or ".." in Path(value).parts:
+        _actual_fail(label + " is not normalized")
+    return Path(value)
+
+
+def _actual_checked_sum(values, label):
+    total = 0
+    for index, value in enumerate(values):
+        item = _actual_u64(value, "{}[{}]".format(label, index))
+        if total > (1 << 64) - 1 - item:
+            _actual_fail(label + " overflows u64")
+        total += item
+    return total
+
+
+def _actual_checked_product(left, right, label):
+    lhs = _actual_u64(left, label + " left")
+    rhs = _actual_u64(right, label + " right")
+    if lhs and rhs > ((1 << 64) - 1) // lhs:
+        _actual_fail(label + " overflows u64")
+    return lhs * rhs
+
+
+def _actual_require_tonearest(label):
+    """Require the Linux target's FE_TONEAREST immediately before division."""
+
+    try:
+        function = ctypes.CDLL(None, use_errno=True).fegetround
+        function.argtypes = []
+        function.restype = ctypes.c_int
+        observed = function()
+    except (AttributeError, OSError) as exc:
+        raise ActualVerificationError(
+            "cannot inspect floating-point rounding mode for " + label
+        ) from exc
+    # glibc (including the Jetson Nano aarch64 target) defines FE_TONEAREST as
+    # zero.  Failing rather than changing the process mode preserves detached
+    # verifier independence.
+    if observed != 0:
+        _actual_fail(label + " requires FE_TONEAREST")
+
+
+def _actual_exact_count_ratio(numerator, denominator, label):
+    numerator = _actual_u64(numerator, label + " numerator")
+    denominator = _actual_u64(denominator, label + " denominator")
+    if denominator == 0:
+        _actual_fail(label + " denominator is zero")
+    if (
+        numerator > ACTUAL_EXACT_BINARY64_INTEGER_MAX
+        or denominator > ACTUAL_EXACT_BINARY64_INTEGER_MAX
+    ):
+        _actual_fail(label + " operand exceeds the exact binary64 integer range")
+    _actual_require_tonearest(label)
+    result = float(numerator) / float(denominator)
+    if not math.isfinite(result):
+        _actual_fail(label + " result is nonfinite")
+    return result
+
+
+def _actual_checked_counter_add(counter, key, value, label):
+    counter[key] = _actual_checked_sum((counter[key], value), label)
+
+
+def _actual_install_module_source_binding(records, origin):
+    """Install the only source identities permitted for local helper execution."""
+
+    global _ACTUAL_MODULE_SOURCE_BINDING
+    global _ACTUAL_MODULE_SOURCE_BINDING_ORIGIN
+    if origin not in ("artifact_source_context", "explicit_self_test_fixture"):
+        _actual_fail("local-module source-binding origin is invalid")
+    binding = {}
+    for name, relative in _ACTUAL_LOCAL_MODULE_PATHS.items():
+        record = records.get(relative) if isinstance(records, dict) else None
+        if not isinstance(record, dict):
+            _actual_fail("local-module source binding omits " + relative)
+        binding[name] = {
+            "mode": _actual_u64(record.get("mode"), name + " source mode"),
+            "sha256": _actual_sha256(
+                record.get("sha256"), name + " source SHA-256"
+            ),
+            "size": _actual_u64(record.get("size"), name + " source size"),
+        }
+        if binding[name]["mode"] not in (0o100644, 0o100755):
+            _actual_fail(name + " source Git mode is invalid")
+    if _ACTUAL_MODULE_SOURCE_BINDING is None:
+        _ACTUAL_MODULE_SOURCE_BINDING = binding
+        _ACTUAL_MODULE_SOURCE_BINDING_ORIGIN = origin
+    elif (
+        _ACTUAL_MODULE_SOURCE_BINDING != binding
+        or _ACTUAL_MODULE_SOURCE_BINDING_ORIGIN != origin
+    ):
+        _actual_fail("local-module source binding changed within one verifier process")
+    for name, module in _ACTUAL_MODULE_CACHE.items():
+        if getattr(module, "__schurvio_source_binding__", None) != binding.get(name):
+            _actual_fail("cached local module predates or differs from its source binding")
+
+
+def _actual_install_self_test_module_source_binding():
+    """Bind local helpers explicitly for the artifact-free verifier self-test."""
+
+    base = Path(__file__).resolve().parents[2]
+    records = {}
+    for name, relative in _ACTUAL_LOCAL_MODULE_PATHS.items():
+        path = base / relative
+        status_value = path.lstat()
+        if not stat.S_ISREG(status_value.st_mode) or status_value.st_nlink != 1:
+            _actual_fail("self-test local module is not a protected regular file")
+        records[relative] = {
+            "mode": 0o100755 if status_value.st_mode & stat.S_IXUSR else 0o100644,
+            "sha256": sha256_file(path),
+            "size": status_value.st_size,
+        }
+    _actual_install_module_source_binding(records, "explicit_self_test_fixture")
+
+
+def _actual_load_module(name):
+    if name not in _ACTUAL_LOCAL_MODULE_PATHS:
+        _actual_fail("local verifier module is not allowlisted: " + str(name))
+    if _ACTUAL_MODULE_SOURCE_BINDING is None:
+        _actual_fail("local verifier module has no established source-context binding")
+    expected = _ACTUAL_MODULE_SOURCE_BINDING[name]
+    cached = _ACTUAL_MODULE_CACHE.get(name)
+    if cached is not None:
+        if getattr(cached, "__schurvio_source_binding__", None) != expected:
+            _actual_fail("cached local verifier module differs from source context")
+        return cached
+    directory_path = Path(__file__).resolve().parent
+    directory_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+    file_flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        file_flags |= os.O_NOFOLLOW
+    directory_fd = os.open(str(directory_path), directory_flags)
+    try:
+        filename = name + ".py"
+        descriptor = os.open(filename, file_flags, dir_fd=directory_fd)
+        try:
+            before = os.fstat(descriptor)
+            path_status = os.stat(
+                filename, dir_fd=directory_fd, follow_symlinks=False
+            )
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or (before.st_dev, before.st_ino) != (
+                    path_status.st_dev, path_status.st_ino
+                )
+                or before.st_size != expected["size"]
+                or bool(before.st_mode & stat.S_IXUSR)
+                != (expected["mode"] == 0o100755)
+            ):
+                _actual_fail(name + " held source identity differs from source context")
+            chunks = []
+            remaining = before.st_size
+            while remaining:
+                block = os.read(descriptor, min(remaining, 1024 * 1024))
+                if not block:
+                    _actual_fail(name + " held source is truncated")
+                chunks.append(block)
+                remaining -= len(block)
+            if os.read(descriptor, 1):
+                _actual_fail(name + " held source grew while being read")
+            after = os.fstat(descriptor)
+            if (
+                before.st_dev, before.st_ino, before.st_mode, before.st_nlink,
+                before.st_size, before.st_mtime_ns, before.st_ctime_ns,
+            ) != (
+                after.st_dev, after.st_ino, after.st_mode, after.st_nlink,
+                after.st_size, after.st_mtime_ns, after.st_ctime_ns,
+            ):
+                _actual_fail(name + " held source metadata changed while being read")
+            source = b"".join(chunks)
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(directory_fd)
+    if hashlib.sha256(source).hexdigest() != expected["sha256"]:
+        _actual_fail(name + " held source digest differs from source context")
+    display_path = str(directory_path / (name + ".py"))
+    spec = importlib.util.spec_from_file_location("_schurvio_" + name, display_path)
+    if spec is None or spec.loader is None:
+        _actual_fail("cannot construct loader for " + name)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        code = compile(source, display_path, "exec", dont_inherit=True)
+        exec(code, module.__dict__)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    module.__schurvio_source_binding__ = dict(expected)
+    _ACTUAL_MODULE_CACHE[name] = module
+    return module
+
+
+def _actual_read_bytes(path, label, maximum):
+    try:
+        status = path.lstat()
+    except OSError as exc:
+        raise ActualVerificationError("cannot stat {}: {}".format(label, exc)) from exc
+    if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
+        _actual_fail(label + " is not a single-link regular file")
+    if status.st_size > maximum:
+        _actual_fail(label + " exceeds the verifier bound")
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        raise ActualVerificationError("cannot read {}: {}".format(label, exc)) from exc
+    if len(content) != status.st_size:
+        _actual_fail(label + " changed while being read")
+    return content
+
+
+def _actual_json(path, label):
+    value = strict_json_bytes(_actual_read_bytes(path, label, ACTUAL_MAX_JSON_BYTES), label)
+    if not isinstance(value, dict):
+        _actual_fail(label + " is not a JSON object")
+    return value
+
+
+def _actual_jsonl(path, label):
+    content = _actual_read_bytes(path, label, ACTUAL_MAX_JSONL_BYTES)
+    if b"\r" in content or (content and not content.endswith(b"\n")):
+        _actual_fail(label + " is not exact LF-terminated JSONL")
+    records = []
+    for line_index, line in enumerate(content.splitlines(), 1):
+        if not line:
+            _actual_fail("{} contains a blank line at {}".format(label, line_index))
+        value = strict_json_bytes(line, "{} line {}".format(label, line_index))
+        if not isinstance(value, dict):
+            _actual_fail("{} line {} is not an object".format(label, line_index))
+        records.append(value)
+    return records, content
+
+
+def _actual_scan_and_verify_manifest(artifact, expected_digest):
+    raw = os.fspath(artifact)
+    if not os.path.isabs(raw) or os.path.normpath(raw) != raw:
+        _actual_fail("artifact path must be normalized and absolute")
+    try:
+        root_status = os.lstat(raw)
+    except OSError as exc:
+        raise ActualVerificationError("cannot stat artifact directory: " + str(exc)) from exc
+    if not stat.S_ISDIR(root_status.st_mode) or stat.S_ISLNK(root_status.st_mode):
+        _actual_fail("artifact root is not a real directory")
+    if root_status.st_mode & 0o222:
+        _actual_fail("artifact root is writable")
+
+    observed = {}
+    directories = {".": root_status}
+    for current, dirnames, filenames in os.walk(raw, topdown=True, followlinks=False):
+        dirnames.sort(key=lambda item: os.fsencode(item))
+        filenames.sort(key=lambda item: os.fsencode(item))
+        current_path = Path(current)
+        retained_dirs = []
+        for name in dirnames:
+            candidate = current_path / name
+            relative = candidate.relative_to(artifact).as_posix()
+            status = candidate.lstat()
+            if not stat.S_ISDIR(status.st_mode) or stat.S_ISLNK(status.st_mode):
+                _actual_fail("artifact directory entry is not a real directory: " + relative)
+            if status.st_mode & 0o222:
+                _actual_fail("artifact directory is writable: " + relative)
+            directories[relative] = status
+            retained_dirs.append(name)
+        dirnames[:] = retained_dirs
+        for name in filenames:
+            candidate = current_path / name
+            relative = candidate.relative_to(artifact).as_posix()
+            _actual_relpath(relative, "artifact file")
+            status = candidate.lstat()
+            if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
+                _actual_fail("artifact entry is not a single-link regular file: " + relative)
+            if status.st_mode & 0o222:
+                _actual_fail("artifact file is writable: " + relative)
+            observed[relative] = status
+    if MANIFEST_NAME not in observed:
+        _actual_fail("artifact lacks SHA256SUMS")
+    manifest_path = artifact / MANIFEST_NAME
+    manifest_bytes_value = _actual_read_bytes(
+        manifest_path, MANIFEST_NAME, ACTUAL_MAX_JSONL_BYTES
+    )
+    expected_anchor = _actual_sha256(expected_digest, "external manifest anchor")
+    if hashlib.sha256(manifest_bytes_value).hexdigest() != expected_anchor:
+        _actual_fail("SHA256SUMS differs from the supplied external digest anchor")
+    if b"\r" in manifest_bytes_value or (
+        manifest_bytes_value and not manifest_bytes_value.endswith(b"\n")
+    ):
+        _actual_fail("SHA256SUMS is not LF terminated")
+    manifest = {}
+    previous = None
+    for line_index, line in enumerate(manifest_bytes_value.splitlines(keepends=True), 1):
+        match = re.fullmatch(rb"([0-9a-f]{64})  ([^\r\n]+)\n", line)
+        if match is None:
+            _actual_fail("SHA256SUMS line {} is malformed".format(line_index))
+        digest_bytes, path_bytes = match.groups()
+        try:
+            relative = path_bytes.decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise ActualVerificationError("SHA256SUMS path is not UTF-8") from exc
+        _actual_relpath(relative, "SHA256SUMS path")
+        if relative == MANIFEST_NAME or previous is not None and path_bytes <= previous:
+            _actual_fail("SHA256SUMS paths are self-referential, duplicate, or unsorted")
+        previous = path_bytes
+        manifest[relative] = digest_bytes.decode("ascii")
+    actual_files = set(observed) - {MANIFEST_NAME}
+    if set(manifest) != actual_files:
+        _actual_fail("artifact file set differs from SHA256SUMS")
+    for relative, digest in manifest.items():
+        if sha256_file(artifact / relative) != digest:
+            _actual_fail("artifact checksum mismatch: " + relative)
+    return manifest, observed, directories
+
+
+def _actual_environment_classes(provenance):
+    environment = _actual_exact_keys(
+        provenance.get("environment"), ("classes",), "provenance.environment"
+    )
+    classes = environment["classes"]
+    if not isinstance(classes, list) or not classes:
+        _actual_fail("provenance environment class population is empty")
+    schema = _actual_load_module("cp2_schema")
+    result = {}
+    previous = None
+    for index, record in enumerate(classes):
+        _actual_exact_keys(
+            record, ("environment_id", "variables", "canonical_sha256"),
+            "environment class {}".format(index),
+        )
+        identifier = record["environment_id"]
+        if not isinstance(identifier, str) or re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", identifier
+        ) is None:
+            _actual_fail("environment ID is invalid")
+        encoded_identifier = identifier.encode("utf-8")
+        if previous is not None and encoded_identifier <= previous:
+            _actual_fail("environment classes are duplicate or unsorted")
+        previous = encoded_identifier
+        variables = record["variables"]
+        if not isinstance(variables, list):
+            _actual_fail("environment variables are not an array")
+        mapping = {}
+        previous_name = None
+        for variable in variables:
+            _actual_exact_keys(variable, ("name", "value"), "environment variable")
+            name = variable["name"]
+            value = variable["value"]
+            if not isinstance(name, str) or not isinstance(value, str) or "\0" in name + value:
+                _actual_fail("environment variable is not an exact UTF-8 string pair")
+            name_bytes = name.encode("utf-8", "strict")
+            if previous_name is not None and name_bytes <= previous_name:
+                _actual_fail("environment variables are duplicate or unsorted")
+            previous_name = name_bytes
+            mapping[name] = value
+        digest = schema.command_environment_sha256(mapping)
+        if record["canonical_sha256"] != digest:
+            _actual_fail("environment canonical SHA-256 mismatch")
+        if digest in result:
+            _actual_fail("environment classes contain duplicate canonical bytes")
+        result[digest] = mapping
+    return result
+
+
+def _actual_validate_commands(artifact, provenance, manifest):
+    records, content = _actual_jsonl(artifact / "commands.jsonl", "commands.jsonl")
+    classes = _actual_environment_classes(provenance)
+    readiness_git_digests = {
+        record["canonical_sha256"]
+        for record in provenance["environment"]["classes"]
+        if record["environment_id"] == "readiness_git_v1"
+    }
+    referenced_classes = set()
+    stream_paths = set()
+    for index, record in enumerate(records):
+        _actual_exact_keys(record, ACTUAL_COMMAND_KEYS, "command {}".format(index))
+        if (
+            not _schema_version_one(record.get("schema_version"))
+            or record.get("record_type") != "command"
+        ):
+            _actual_fail("command schema identity is invalid")
+        if _actual_u64(record.get("command_id"), "command ID") != index:
+            _actual_fail("command IDs are not contiguous")
+        if record.get("phase") not in ACTUAL_COMMAND_PHASES:
+            _actual_fail("command phase is invalid")
+        for field in ("sequence_index", "pair_index", "run_index"):
+            if record[field] is not None:
+                _actual_u64(record[field], "command " + field)
+        if not isinstance(record["argv"], list) or not record["argv"] or not all(
+            isinstance(item, str) and "\0" not in item for item in record["argv"]
+        ):
+            _actual_fail("command argv is invalid")
+        _actual_safe_absolute_path(record["cwd"], "command cwd")
+        environment_sha = _actual_sha256(record["environment_sha256"], "command environment")
+        if environment_sha not in classes:
+            _actual_fail("command references an unknown environment class")
+        command_environment = classes[environment_sha]
+        if (
+            "CP2_SELF_TEST" in command_environment
+            or "CP2_FORBID_BAG_ACCESS" in command_environment
+        ):
+            _actual_fail("commands.jsonl references the readiness-only self-test environment")
+        referenced_classes.add(environment_sha)
+        if record["exit_code"] is not None:
+            _actual_i64(record["exit_code"], "command exit code")
+        if not isinstance(record["timed_out"], bool):
+            _actual_fail("command timeout flag is not Boolean")
+        if record["exit_code"] != 0 or record["timed_out"]:
+            _actual_fail("passing actual artifact contains a failed/timed-out command")
+        for stream_name in ("stdout", "stderr"):
+            relative = _actual_relpath(record[stream_name], "command " + stream_name)
+            if relative in stream_paths:
+                _actual_fail("command stream path aliases another stream: " + relative)
+            stream_paths.add(relative)
+            if relative not in manifest:
+                _actual_fail("command stream is absent from manifest: " + relative)
+            if record[stream_name + "_sha256"] != manifest[relative]:
+                _actual_fail("command stream hash differs from manifest")
+        started = _actual_utc(record["started_utc"], "command started_utc")
+        finished = _actual_utc(record["finished_utc"], "command finished_utc")
+        if finished < started:
+            _actual_fail("command UTC interval is negative")
+    # The readiness-only class may be absent from commands, but every other
+    # retained class must be used by a top-level command.
+    for digest, mapping in classes.items():
+        is_self_test = "CP2_SELF_TEST" in mapping or "CP2_FORBID_BAG_ACCESS" in mapping
+        if is_self_test:
+            if mapping != {
+                "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+                "CP2_SELF_TEST": "1", "CP2_FORBID_BAG_ACCESS": "1",
+            }:
+                _actual_fail("readiness self-test environment is not exact")
+        elif digest in readiness_git_digests:
+            pass
+        elif digest not in referenced_classes:
+            _actual_fail("non-readiness environment class is unreferenced")
+    return records, content, classes
+
+
+def _actual_validate_readiness_command_zero(
+    commands, provenance, barrier, unit_environment_digest
+):
+    readiness_commands = [record for record in commands if record["phase"] == "readiness"]
+    if len(readiness_commands) != 1 or readiness_commands[0] is not commands[0]:
+        _actual_fail("commands.jsonl lacks one exact command-zero readiness verifier")
+    command = readiness_commands[0]
+    unit = barrier["unit_verification"]
+    if (
+        command["command_id"] != 0
+        or any(
+            command[field] is not None
+            for field in ("sequence_index", "pair_index", "run_index")
+        )
+        or command["argv"] != unit["argv"]
+        or command["cwd"] != unit["cwd"]
+        or command["environment_sha256"] != unit_environment_digest
+        or command["started_utc"] != unit["started_utc"]
+        or command["finished_utc"] != unit["finished_utc"]
+        or command["exit_code"] != unit["exit_code"]
+        or command["timed_out"] is not unit["timed_out"]
+        or command["stdout"] != unit["stdout"]
+        or command["stdout_sha256"] != unit["stdout_sha256"]
+        or command["stderr"] != unit["stderr"]
+        or command["stderr_sha256"] != unit["stderr_sha256"]
+    ):
+        _actual_fail("command zero differs from retained unit verification")
+    expected_environment_record = {
+        "environment_id": "unit_verifier_v1",
+        "variables": [
+            {"name": name, "value": unit["environment"][name]}
+            for name in sorted(
+                unit["environment"], key=lambda value: value.encode("utf-8")
+            )
+        ],
+        "canonical_sha256": unit_environment_digest,
+    }
+    if [
+        record for record in provenance["environment"]["classes"]
+        if record.get("environment_id") == "unit_verifier_v1"
+    ] != [expected_environment_record]:
+        _actual_fail("unit-verifier environment class differs")
+
+
+def _actual_elf_build_id(path):
+    command = ["/usr/bin/readelf", "-n", str(path)]
+    try:
+        completed = subprocess.run(
+            command, cwd="/tmp", env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            check=False, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ActualVerificationError("cannot independently read runtime ELF build ID") from exc
+    if completed.returncode != 0:
+        _actual_fail("runtime executable is not a readable ELF object")
+    matches = re.findall(rb"Build ID: ([0-9a-f]+)", completed.stdout)
+    if len(matches) != 1:
+        _actual_fail("runtime executable does not have exactly one build ID")
+    return matches[0].decode("ascii")
+
+
+def _actual_validate_static_bundle(artifact, configuration, manifest):
+    relative = _actual_relpath(
+        configuration["static_bundle_payload"], "static bundle payload"
+    )
+    content = _actual_read_bytes(
+        artifact / relative, "static bundle payload", ACTUAL_MAX_BINARY_BYTES
+    )
+    digest = hashlib.sha256(content).hexdigest()
+    if manifest.get(relative) != digest or configuration["static_bundle_sha256"] != digest:
+        _actual_fail("static bundle payload/digest identity differs")
+    domain = b"SchurVIO-CP2-static-config-v1\0"
+    if not content.startswith(domain):
+        _actual_fail("static bundle domain is invalid")
+    reader = _ActualByteReader(content[len(domain):], "static bundle payload")
+    if reader.u64("static record count") != 4:
+        _actual_fail("static bundle record count is not four")
+    records = list(configuration["static_files"]) + [configuration["launch"]]
+    for index, record in enumerate(records):
+        length = reader.u64("static path length")
+        try:
+            path = reader.take(length, "static path").decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise ActualVerificationError("static bundle path is not UTF-8") from exc
+        size = reader.u64("static file size")
+        sha256 = reader.take(32, "static file SHA-256").hex()
+        if (
+            path != record["path"]
+            or size != record["size"]
+            or sha256 != record["sha256"]
+        ):
+            _actual_fail(
+                "static bundle record {} differs from configuration provenance".format(index)
+            )
+    reader.finish()
+
+
+def _actual_compile_command_path(value, directory, label, must_exist):
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\0" in value
+        or not isinstance(directory, str)
+        or not directory
+        or "\0" in directory
+        or not os.path.isabs(directory)
+        or os.path.normpath(directory) != directory
+    ):
+        _actual_fail(label + " path/directory is invalid")
+    candidate = value if os.path.isabs(value) else os.path.join(directory, value)
+    if not os.path.isabs(candidate) or os.path.normpath(candidate) != candidate:
+        _actual_fail(label + " path is not normalized absolute")
+    path = Path(candidate)
+    if must_exist:
+        try:
+            status_value = path.lstat()
+        except OSError as exc:
+            raise ActualVerificationError(label + " path cannot be inspected") from exc
+        if not stat.S_ISREG(status_value.st_mode) or status_value.st_nlink != 1:
+            _actual_fail(label + " path is not a single-link regular file")
+    try:
+        return path.resolve(strict=must_exist)
+    except OSError as exc:
+        raise ActualVerificationError(label + " path cannot be resolved") from exc
+
+
+def _actual_validate_compile_commands(artifact, build):
+    relative = _actual_relpath(build["compile_commands"], "compile commands")
+    content = _actual_read_bytes(
+        artifact / relative, "compile_commands.json", 256 * 1024 * 1024
+    )
+    document = strict_json_bytes(content, "compile_commands.json")
+    if not isinstance(document, list) or not document:
+        _actual_fail("compile_commands.json is empty or not an array")
+
+    workspace = _actual_safe_absolute_path(build["workspace"], "fresh build workspace")
+    try:
+        workspace = workspace.resolve(strict=True)
+        source_space = (workspace / "src").resolve(strict=True)
+        build_space = (workspace / "build").resolve(strict=True)
+        compiler = Path("/usr/bin/c++").resolve(strict=True)
+    except OSError as exc:
+        raise ActualVerificationError("fresh-build compile roots cannot be resolved") from exc
+    expected_sources = {}
+    for source, target in ACTUAL_STRICT_FP_SOURCE_TARGETS.items():
+        expected_path = _actual_compile_command_path(
+            str(source_space / source), str(source_space),
+            "expected strict-FP source", True,
+        )
+        if expected_path in expected_sources:
+            _actual_fail("strict-FP expected source paths alias")
+        expected_sources[expected_path] = (source, target)
+    relevant_basenames = {
+        Path(source).name for source in ACTUAL_STRICT_FP_SOURCE_TARGETS
+    }
+    observed = {source: [] for source in ACTUAL_STRICT_FP_SOURCE_TARGETS}
+
+    for index, record in enumerate(document):
+        if not isinstance(record, dict):
+            _actual_fail("compile command {} is not an object".format(index))
+        declared_source = record.get("file")
+        if not isinstance(declared_source, str):
+            continue
+        basename = Path(declared_source).name
+        if basename not in relevant_basenames:
+            continue
+        directory = record.get("directory")
+        source_path = _actual_compile_command_path(
+            declared_source, directory, "compile-command source", True
+        )
+        expected = expected_sources.get(source_path)
+        if expected is None:
+            _actual_fail("strict-FP compile commands contain a basename spoof: " + basename)
+        source, expected_target = expected
+
+        has_arguments = "arguments" in record
+        has_command = "command" in record
+        if has_arguments == has_command:
+            _actual_fail("compile command must have exactly one argv representation")
+        if has_arguments:
+            tokens = record["arguments"]
+            if (
+                not isinstance(tokens, list)
+                or not tokens
+                or not all(isinstance(token, str) for token in tokens)
+            ):
+                _actual_fail("compile-command arguments are invalid")
+            tokens = list(tokens)
+        else:
+            command = record["command"]
+            if not isinstance(command, str) or not command or "\0" in command:
+                _actual_fail("compile-command command is invalid")
+            try:
+                tokens = shlex.split(command, posix=True)
+            except ValueError as exc:
+                raise ActualVerificationError(
+                    "compile-command command cannot be tokenized"
+                ) from exc
+        if not tokens or any("\0" in token for token in tokens):
+            _actual_fail("compile-command argv is empty or contains NUL")
+        try:
+            actual_compiler = Path(tokens[0]).resolve(strict=True)
+        except OSError as exc:
+            raise ActualVerificationError("compile-command compiler cannot be resolved") from exc
+        if actual_compiler != compiler:
+            _actual_fail("strict-FP command does not use the pinned compiler")
+
+        compile_positions = [
+            position for position, token in enumerate(tokens) if token == "-c"
+        ]
+        output_positions = [
+            position for position, token in enumerate(tokens) if token == "-o"
+        ]
+        if (
+            len(compile_positions) != 1
+            or compile_positions[0] + 1 >= len(tokens)
+            or len(output_positions) != 1
+            or output_positions[0] + 1 >= len(tokens)
+        ):
+            _actual_fail("strict-FP command lacks one exact -c/-o binding")
+        command_source = _actual_compile_command_path(
+            tokens[compile_positions[0] + 1], directory,
+            "actual compiler source", True,
+        )
+        if command_source != source_path:
+            _actual_fail("compile-command file differs from its -c source")
+        output = _actual_compile_command_path(
+            tokens[output_positions[0] + 1], directory, "compiler output", False
+        )
+        expected_output = (
+            build_space / "ov_msckf" / "CMakeFiles" /
+            (expected_target + ".dir") /
+            (source[len("ov_msckf/"):] + ".o")
+        )
+        if output != expected_output:
+            _actual_fail(
+                "strict-FP object does not bind its exact source and target: " + source
+            )
+        if record.get("output") is not None and _actual_compile_command_path(
+            record["output"], directory, "declared compiler output", False
+        ) != output:
+            _actual_fail("declared compile output differs from -o output")
+
+        strict = strict_flag_record(tokens, workspace=workspace)
+        if (
+            not strict["passed"]
+            or not cp2_testing_macro_record(tokens, False)["passed"]
+            or any(
+                token == "-wrapper"
+                or token.startswith("-fplugin=")
+                for token in tokens
+            )
+        ):
+            _actual_fail("strict-FP command is not effectively strict: " + source)
+        observed[source].append((expected_target, output))
+
+    invalid = [
+        source for source, records in observed.items()
+        if len(records) != 1
+        or records[0][0] != ACTUAL_STRICT_FP_SOURCE_TARGETS[source]
+    ]
+    if invalid:
+        _actual_fail(
+            "strict-FP exact source/target population is incomplete: "
+            + ",".join(sorted(invalid))
+        )
+
+
+def _actual_readiness_lp(reader, label):
+    return reader.take(reader.u64(label + " length"), label)
+
+
+def _actual_parse_readiness_snapshot(payload, expected_root, context=None):
+    """Verifier-local parser/re-encoder for one frozen readiness snapshot."""
+
+    reader = _ActualByteReader(payload, "readiness " + expected_root + " snapshot")
+    domain = b"SchurVIO-CP2-readiness-snapshot-v1\0"
+    if reader.take(len(domain), "domain") != domain:
+        _actual_fail("readiness snapshot domain differs")
+    try:
+        root_tag = _actual_readiness_lp(reader, "root tag").decode("ascii", "strict")
+    except UnicodeDecodeError as exc:
+        raise ActualVerificationError("readiness snapshot root tag is not ASCII") from exc
+    if root_tag != expected_root or root_tag not in {
+        "source", "build", "results", "testing", "post_lock"
+    }:
+        _actual_fail("readiness snapshot root tag differs")
+    existence = reader.take(1, "existence")
+    if existence not in (b"\0", b"\1"):
+        _actual_fail("readiness snapshot existence byte is invalid")
+    exists = existence == b"\1"
+    count = reader.u64("entry count")
+    if count > 10_000_000:
+        _actual_fail("readiness snapshot entry count exceeds bound")
+    entries = []
+    previous_path = None
+    for index in range(count):
+        raw_path = _actual_readiness_lp(reader, "entry path")
+        try:
+            path = raw_path.decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise ActualVerificationError("readiness snapshot path is not UTF-8") from exc
+        _actual_relpath(path, "readiness snapshot path")
+        if previous_path is not None and raw_path <= previous_path:
+            _actual_fail("readiness snapshot paths are duplicate or unsorted")
+        previous_path = raw_path
+        try:
+            entry_type = reader.take(1, "entry type").decode("ascii", "strict")
+        except UnicodeDecodeError as exc:
+            raise ActualVerificationError("readiness snapshot type is not ASCII") from exc
+        if entry_type not in ("f", "d", "l"):
+            _actual_fail("readiness snapshot entry type is invalid")
+        mode = reader.u64("entry mode")
+        size = reader.u64("entry size")
+        digest = reader.take(32, "entry SHA-256").hex()
+        if root_tag in ("source", "post_lock"):
+            if entry_type != "f" or mode not in (0o100644, 0o100755):
+                _actual_fail("readiness source snapshot contains a non-Git regular entry")
+        elif mode > 0o7777:
+            _actual_fail("readiness filesystem snapshot mode exceeds 07777")
+        if entry_type == "d" and (size != 0 or digest != "0" * 64):
+            _actual_fail("readiness directory snapshot entry has payload metadata")
+        entries.append({
+            "path": path, "path_bytes": raw_path, "entry_type": entry_type,
+            "mode": mode, "size": size, "sha256": digest,
+        })
+    if not exists and entries:
+        _actual_fail("absent readiness snapshot has entries")
+
+    identity = None
+    if root_tag in ("source", "post_lock"):
+        if context is None:
+            _actual_fail("source snapshot lacks its retained context")
+        identity = {
+            "commit": reader.take(20, "commit").hex(),
+            "tree": reader.take(20, "tree").hex(),
+            "index_tree": reader.take(20, "index tree").hex(),
+            "status": _actual_readiness_lp(reader, "status"),
+            "entrypoints": [],
+        }
+        for expected in context["entrypoints"]:
+            raw_entrypoint = _actual_readiness_lp(reader, "entrypoint path")
+            try:
+                entrypoint_path = raw_entrypoint.decode("utf-8", "strict")
+            except UnicodeDecodeError as exc:
+                raise ActualVerificationError(
+                    "readiness snapshot entrypoint path is not UTF-8"
+                ) from exc
+            identity["entrypoints"].append({
+                "path": entrypoint_path,
+                "git_blob": reader.take(20, "entrypoint Git blob").hex(),
+                "sha256": reader.take(32, "entrypoint SHA-256").hex(),
+            })
+    reader.finish()
+
+    encoded = bytearray(domain)
+
+    def append_lp(content):
+        encoded.extend(len(content).to_bytes(8, "big"))
+        encoded.extend(content)
+
+    append_lp(root_tag.encode("ascii"))
+    encoded.extend(b"\1" if exists else b"\0")
+    encoded.extend(len(entries).to_bytes(8, "big"))
+    for record in entries:
+        append_lp(record["path_bytes"])
+        encoded.extend(record["entry_type"].encode("ascii"))
+        encoded.extend(record["mode"].to_bytes(8, "big"))
+        encoded.extend(record["size"].to_bytes(8, "big"))
+        encoded.extend(bytes.fromhex(record["sha256"]))
+    if identity is not None:
+        encoded.extend(bytes.fromhex(identity["commit"]))
+        encoded.extend(bytes.fromhex(identity["tree"]))
+        encoded.extend(bytes.fromhex(identity["index_tree"]))
+        append_lp(identity["status"])
+        for record in identity["entrypoints"]:
+            append_lp(record["path"].encode("utf-8"))
+            encoded.extend(bytes.fromhex(record["git_blob"]))
+            encoded.extend(bytes.fromhex(record["sha256"]))
+    if bytes(encoded) != payload:
+        _actual_fail("readiness snapshot is not canonically encoded")
+    return exists, entries, identity
+
+
+def _actual_expected_readiness_cases():
+    return {
+        "scripts/cp2/run_unit_gate.sh": READINESS_COMMON_CASES,
+        "scripts/cp2/run_recorded_parity.py": (
+            READINESS_COMMON_CASES + READINESS_RECORDED_CASES
+        ),
+        "scripts/cp2/run_sequence_pair.py": (
+            READINESS_COMMON_CASES + READINESS_SEQUENCE_CASES
+        ),
+        "scripts/cp2/run_timing_pair.py": (
+            READINESS_COMMON_CASES + READINESS_TIMING_CASES
+        ),
+        "scripts/cp2/verify_report.py": READINESS_VERIFIER_CASES,
+    }
+
+
+def _actual_command_environment_sha256(mapping):
+    if not isinstance(mapping, dict) or any(
+        not isinstance(name, str) or not isinstance(value, str)
+        or "\0" in name or "\0" in value
+        for name, value in mapping.items()
+    ):
+        _actual_fail("command environment mapping is invalid")
+    encoded = bytearray(b"SchurVIO-CP2-command-environment-v1\0")
+    ordered = sorted(mapping.items(), key=lambda item: item[0].encode("utf-8"))
+    encoded.extend(len(ordered).to_bytes(8, "big"))
+    for name, value in ordered:
+        for text_value in (name, value):
+            content = text_value.encode("utf-8", "strict")
+            encoded.extend(len(content).to_bytes(8, "big"))
+            encoded.extend(content)
+    return hashlib.sha256(bytes(encoded)).hexdigest()
+
+
+def _actual_validate_readiness_result(result, expected_path, expected_names):
+    _actual_exact_keys(
+        result,
+        (
+            "schema_version", "record_type", "entrypoint", "temporary_root",
+            "bag_provider_calls", "cases", "case_count", "passed",
+        ),
+        "readiness self-test result",
+    )
+    temporary_root = result["temporary_root"]
+    if (
+        isinstance(result["schema_version"], bool)
+        or not isinstance(result["schema_version"], int)
+        or result["schema_version"] != 1
+        or result["record_type"] != "self_test_result"
+        or result["entrypoint"] != expected_path
+        or not isinstance(temporary_root, str)
+        or "\0" in temporary_root
+        or not os.path.isabs(temporary_root)
+        or os.path.normpath(temporary_root) != temporary_root
+        or Path(temporary_root).parent != Path("/tmp")
+        or _actual_u64(result["bag_provider_calls"], "self-test bag-provider calls") != 0
+        or result["passed"] is not True
+    ):
+        _actual_fail("readiness self-test result identity/outcome differs")
+    cases = result["cases"]
+    if (
+        not isinstance(cases, list)
+        or isinstance(result["case_count"], bool)
+        or not isinstance(result["case_count"], int)
+        or result["case_count"] != len(expected_names)
+        or len(cases) != len(expected_names)
+    ):
+        _actual_fail("readiness self-test case population differs")
+    for index, (case, expected_name) in enumerate(zip(cases, expected_names)):
+        _actual_exact_keys(
+            case,
+            ("index", "name", "expected_rejection", "observed_rejection", "passed"),
+            "readiness self-test case",
+        )
+        negative = expected_name != "valid_minimal_fixture"
+        if (
+            isinstance(case["index"], bool)
+            or case["index"] != index
+            or case["name"] != expected_name
+            or case["expected_rejection"] is not negative
+            or case["observed_rejection"] is not negative
+            or case["passed"] is not True
+        ):
+            _actual_fail("readiness self-test case outcome differs")
+    if tuple(expected_names).count("valid_minimal_fixture") != 1:
+        _actual_fail("readiness self-test positive-case inventory differs")
+    return result
+
+
+def _actual_source_archive_cat_file_sha256(archive_path, context):
+    """Reconstruct the exact successful ``git cat-file --batch`` stdout hash."""
+
+    expected = list(context["entries"])
+    digest = hashlib.sha256()
+    observed_index = 0
+    try:
+        with tarfile.open(str(archive_path), mode="r:") as archive:
+            for member in archive:
+                if not member.isfile():
+                    continue
+                if observed_index >= len(expected):
+                    _actual_fail("source archive has an extra cat-file leaf")
+                record = expected[observed_index]
+                if member.name != record["path"] or member.size != record["size"]:
+                    _actual_fail("source archive order differs from Git batch order")
+                digest.update(
+                    "{} blob {}\n".format(
+                        record["git_blob"], record["size"]
+                    ).encode("ascii")
+                )
+                stream = archive.extractfile(member)
+                if stream is None:
+                    _actual_fail("source archive cat-file member cannot be streamed")
+                remaining = record["size"]
+                while remaining:
+                    block = stream.read(min(remaining, 1024 * 1024))
+                    if not block:
+                        _actual_fail("source archive cat-file member is truncated")
+                    digest.update(block)
+                    remaining -= len(block)
+                if stream.read(1):
+                    _actual_fail("source archive cat-file member grew")
+                digest.update(b"\n")
+                observed_index += 1
+    except (OSError, tarfile.TarError) as exc:
+        raise ActualVerificationError("cannot reconstruct readiness cat-file hash") from exc
+    if observed_index != len(expected):
+        _actual_fail("source archive cat-file population is incomplete")
+    return digest.hexdigest()
+
+
+def _actual_validate_readiness_git_binding(
+    barrier, provenance, context, source_archive_path, artifact, manifest,
+    claim_readiness, expected_other_paths,
+):
+    environment_record = _actual_exact_keys(
+        barrier["readiness_git_environment"],
+        ("environment_id", "variables", "canonical_sha256"),
+        "readiness Git environment",
+    )
+    variables = environment_record["variables"]
+    if not isinstance(variables, list):
+        _actual_fail("readiness Git variables are not an array")
+    mapping = {}
+    previous = None
+    for record in variables:
+        _actual_exact_keys(record, ("name", "value"), "readiness Git variable")
+        name, value = record["name"], record["value"]
+        if (
+            not isinstance(name, str) or not isinstance(value, str)
+            or "\0" in name or "\0" in value
+        ):
+            _actual_fail("readiness Git variable is invalid")
+        encoded = name.encode("utf-8")
+        if previous is not None and encoded <= previous:
+            _actual_fail("readiness Git variables are duplicate or unsorted")
+        previous = encoded
+        mapping[name] = value
+    fixed = {
+        "GIT_ALLOW_PROTOCOL": "none", "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_CONFIG_NOSYSTEM": "1", "GIT_LITERAL_PATHSPECS": "1",
+        "GIT_NO_LAZY_FETCH": "1", "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0", "GIT_PAGER": "",
+        "GIT_PROTOCOL_FROM_USER": "0", "GIT_TERMINAL_PROMPT": "0",
+        "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PATH": "/usr/bin:/bin",
+    }
+    if set(mapping) != set(fixed) | {"HOME", "TMPDIR"} or any(
+        mapping.get(name) != value for name, value in fixed.items()
+    ):
+        _actual_fail("readiness Git environment variables differ")
+    home = _actual_safe_absolute_path(mapping["HOME"], "readiness Git HOME")
+    tmpdir = _actual_safe_absolute_path(mapping["TMPDIR"], "readiness Git TMPDIR")
+    if (
+        home.name != "git-home" or tmpdir.name != "git-tmp"
+        or home.parent != tmpdir.parent
+        or home.parent.parent != Path("/tmp")
+        or not home.parent.name.startswith("schurvio-cp2-readiness-")
+    ):
+        _actual_fail("readiness Git private HOME/TMPDIR binding differs")
+    if home == tmpdir:
+        _actual_fail("readiness Git private-directory identity differs")
+    environment_digest = _actual_command_environment_sha256(mapping)
+    if (
+        environment_record["environment_id"] != "readiness_git_v1"
+        or environment_record["canonical_sha256"] != environment_digest
+    ):
+        _actual_fail("readiness Git environment identity/digest differs")
+    matching_provenance_classes = [
+        record for record in provenance["environment"]["classes"]
+        if record.get("environment_id") == "readiness_git_v1"
+    ]
+    if matching_provenance_classes != [environment_record]:
+        _actual_fail("readiness Git environment is not exactly retained in provenance")
+
+    prefix_options = (
+        "color.ui=false", "core.attributesFile=/dev/null",
+        "core.commitGraph=false", "core.excludesFile=/dev/null",
+        "core.fileMode=true", "core.fsmonitor=false", "core.hooksPath=/dev/null",
+        "core.ignoreCase=false", "core.sparseCheckout=false",
+        "core.sparseCheckoutCone=false", "core.untrackedCache=false",
+        "diff.external=", "pager.status=false", "protocol.allow=never",
+        "protocol.file.allow=never", "status.submoduleSummary=false",
+        "submodule.recurse=false",
+    )
+    prefix = [
+        "/usr/bin/git", "--no-pager", "--no-optional-locks",
+        "--git-dir=/proc/self/fd/4", "--work-tree=/proc/self/fd/3",
+    ]
+    for option in prefix_options:
+        prefix.extend(("-c", option))
+    source_triplet = (
+        ("status", "--porcelain=v1", "-z", "--untracked-files=all"),
+        ("rev-parse", "--verify", "HEAD"),
+        ("rev-parse", "--verify", "HEAD^{tree}"),
+    )
+    expected_suffixes = [
+        ("ls-files", "--stage", "-z"),
+        ("ls-files", "--others", "-z"),
+        ("cat-file", "--batch"),
+        source_triplet[0],
+        ("ls-files", "--others", "--ignored", "--exclude-standard", "-z"),
+        source_triplet[1], source_triplet[2],
+        ("merge-base", "--is-ancestor", CP1_AUTHORIZATION_COMMIT, "HEAD"),
+    ] + list(source_triplet) * 4
+    commands = barrier["readiness_git_commands"]
+    if not isinstance(commands, list) or len(commands) != len(expected_suffixes):
+        _actual_fail("readiness Git command population is not exactly 20")
+
+    empty_sha = hashlib.sha256(b"").hexdigest()
+    stage_stdout = b"".join(
+        (
+            "{:o} {} 0\t".format(record["mode"], record["git_blob"]).encode("ascii")
+            + record["path"].encode("utf-8") + b"\0"
+        )
+        for record in context["entries"]
+    )
+    cat_request = b"".join(
+        (record["git_blob"] + "\n").encode("ascii")
+        for record in context["entries"]
+    )
+    cat_stdout_sha = _actual_source_archive_cat_file_sha256(
+        source_archive_path, context
+    )
+    expected_stdout = [
+        hashlib.sha256(stage_stdout).hexdigest(), None, cat_stdout_sha,
+        empty_sha, None,
+        hashlib.sha256((context["commit"] + "\n").encode("ascii")).hexdigest(),
+        hashlib.sha256((context["tree"] + "\n").encode("ascii")).hexdigest(),
+        empty_sha,
+    ]
+    for suffix in expected_suffixes[8:]:
+        if suffix == source_triplet[0]:
+            expected_stdout.append(empty_sha)
+        elif suffix == source_triplet[1]:
+            expected_stdout.append(
+                hashlib.sha256((context["commit"] + "\n").encode("ascii")).hexdigest()
+            )
+        else:
+            expected_stdout.append(
+                hashlib.sha256((context["tree"] + "\n").encode("ascii")).hexdigest()
+            )
+    previous_finished = None
+    retained_path_outputs = {}
+    for index, (record, suffix, stdout_sha) in enumerate(
+        zip(commands, expected_suffixes, expected_stdout)
+    ):
+        _actual_exact_keys(
+            record,
+            (
+                "command_index", "argv", "cwd", "environment_sha256",
+                "stdin_sha256", "stdout_sha256", "stderr_sha256",
+                "stdout_payload",
+                "started_utc", "finished_utc", "exit_code", "timed_out",
+                "process_group_complete",
+            ),
+            "readiness Git command",
+        )
+        expected_stdin_sha = (
+            hashlib.sha256(cat_request).hexdigest()
+            if suffix == ("cat-file", "--batch") else empty_sha
+        )
+        stdout_payload = record["stdout_payload"]
+        if suffix == ("cat-file", "--batch"):
+            if stdout_payload is not None:
+                _actual_fail("readiness cat-file content must not be retained")
+        else:
+            expected_payload = "readiness/git/{:02d}.stdout".format(index)
+            if stdout_payload != expected_payload:
+                _actual_fail("readiness Git stdout payload path differs")
+            claim = _actual_relpath(stdout_payload, "readiness Git stdout payload")
+            claim_readiness(claim, "readiness Git stdout payload")
+            content = _actual_read_bytes(
+                artifact / claim, "readiness Git stdout payload",
+                ACTUAL_MAX_READINESS_GIT_OUTPUT_BYTES,
+            )
+            content_sha = hashlib.sha256(content).hexdigest()
+            if manifest.get(claim) != content_sha or record["stdout_sha256"] != content_sha:
+                _actual_fail("readiness Git retained stdout digest differs")
+            if index in (1, 4):
+                if content and not content.endswith(b"\0"):
+                    _actual_fail("readiness Git path output is not NUL-terminated")
+                parsed_paths = []
+                previous_path = None
+                for raw_path in content.split(b"\0")[:-1]:
+                    if not raw_path:
+                        _actual_fail("readiness Git path output contains an empty path")
+                    if previous_path is not None and raw_path <= previous_path:
+                        _actual_fail(
+                            "readiness Git path output is duplicate or not bytewise sorted"
+                        )
+                    previous_path = raw_path
+                    try:
+                        path = raw_path.decode("utf-8", "strict")
+                    except UnicodeDecodeError as exc:
+                        raise ActualVerificationError(
+                            "readiness Git path output is not UTF-8"
+                        ) from exc
+                    _actual_relpath(path, "readiness Git other/ignored path")
+                    parts = PurePosixPath(path).parts
+                    if parts[0] not in {"build", "results", "Testing"}:
+                        _actual_fail("readiness Git other/ignored path leaves allowed roots")
+                    if parts[-1] in {".gitignore", ".gitattributes"}:
+                        _actual_fail("readiness Git path output names a forbidden control file")
+                    parsed_paths.append(path)
+                retained_path_outputs[index] = parsed_paths
+        if (
+            isinstance(record["command_index"], bool)
+            or record["command_index"] != index
+            or record["argv"] != prefix + list(suffix)
+            or record["cwd"] != "/proc/self/fd/3"
+            or record["environment_sha256"] != environment_digest
+            or record["stdin_sha256"] != expected_stdin_sha
+            or (stdout_sha is not None and record["stdout_sha256"] != stdout_sha)
+            or record["stderr_sha256"] != empty_sha
+            or isinstance(record["exit_code"], bool)
+            or _actual_i64(record["exit_code"], "readiness Git exit code") != 0
+            or record["timed_out"] is not False
+            or record["process_group_complete"] is not True
+        ):
+            _actual_fail("readiness Git command {} binding differs".format(index))
+        started = _actual_utc(record["started_utc"], "readiness Git command started")
+        finished = _actual_utc(record["finished_utc"], "readiness Git command finished")
+        if finished < started or (
+            previous_finished is not None and started < previous_finished
+        ):
+            _actual_fail("readiness Git command chronology differs")
+        previous_finished = finished
+    if retained_path_outputs.get(1) != expected_other_paths:
+        _actual_fail(
+            "readiness Git all-other paths differ from retained root snapshots"
+        )
+    if not set(retained_path_outputs.get(4, ())).issubset(
+        set(retained_path_outputs.get(1, ()))
+    ):
+        _actual_fail("readiness Git ignored paths are not a subset of all-other paths")
+    return environment_digest, commands
+
+
+def _actual_validate_source_unit_approval_binding(
+    artifact, manifest, provenance, unit_anchor, readiness_relative
+):
+    """Reconstruct the actual artifact's source/readiness/unit trust chain."""
+
+    if readiness_relative != "readiness/barrier.json":
+        _actual_fail("readiness barrier path differs from the frozen path")
+    barrier = _actual_json(
+        artifact / readiness_relative, "readiness barrier"
+    )
+    _actual_exact_keys(barrier, ACTUAL_READINESS_KEYS, "readiness barrier")
+    if (
+        not _schema_version_one(barrier["schema_version"])
+        or barrier["record_type"] != "readiness_barrier"
+        or barrier["passed"] is not True
+        or _actual_u64(barrier["bag_provider_calls"], "readiness bag-provider calls") != 0
+    ):
+        _actual_fail("readiness barrier identity/outcome is invalid")
+
+    context_relative = _actual_relpath(
+        barrier["source_context_payload"], "readiness source context"
+    )
+    if context_relative != "readiness/source_context.json":
+        _actual_fail("readiness source-context path differs from the frozen path")
+    readiness_references = {readiness_relative}
+
+    def claim_readiness(relative, label):
+        if not relative.startswith("readiness/") or relative in readiness_references:
+            _actual_fail(label + " readiness path aliases or leaves its namespace")
+        readiness_references.add(relative)
+
+    claim_readiness(context_relative, "source context")
+    if context_relative not in manifest:
+        _actual_fail("readiness source context is absent from the manifest")
+    context_bytes = _actual_read_bytes(
+        artifact / context_relative,
+        "readiness source context",
+        ACTUAL_MAX_JSON_BYTES,
+    )
+    context_digest = hashlib.sha256(context_bytes).hexdigest()
+    if (
+        barrier["source_context_sha256"] != context_digest
+        or manifest[context_relative] != context_digest
+    ):
+        _actual_fail("readiness source-context digest differs")
+    context = strict_json_bytes(context_bytes, "readiness source context")
+    canonical_context = json.dumps(
+        context,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    if context_bytes != canonical_context:
+        _actual_fail("readiness source context is not canonical JSON")
+    context_errors = []
+    context = validate_prevalidated_source_context(context, context_errors)
+    if context_errors:
+        _actual_fail(
+            "readiness source context is invalid: " + "; ".join(context_errors)
+        )
+    if (
+        context.get("commit") != provenance["source_commit"]
+        or context.get("tree") != provenance["source_tree"]
+        or context.get("branch") != provenance["branch"]
+    ):
+        _actual_fail("readiness source context differs from provenance identity")
+
+    context_entries = {
+        record["path"]: record for record in context["entries"]
+    }
+    if not SOURCE_INPUTS.issubset(context_entries):
+        missing = sorted(SOURCE_INPUTS - set(context_entries))
+        _actual_fail("readiness source context omits curated inputs: " + ",".join(missing))
+    _actual_install_module_source_binding(
+        context_entries, "artifact_source_context"
+    )
+    expected_entrypoints = [
+        {
+            "path": record["path"],
+            "sha256": record["sha256"],
+            "git_blob": record["git_blob"],
+        }
+        for record in context["entrypoints"]
+    ]
+    if provenance["entrypoints"] != expected_entrypoints:
+        _actual_fail("provenance entrypoints differ from held source context")
+    if barrier["entrypoints"] != context["entrypoints"]:
+        _actual_fail("readiness entrypoints differ from held source context")
+
+    running_sources = (
+        "scripts/cp2/cp2_readiness.py",
+        "scripts/cp2/verify_report.py",
+    )
+    for relative in running_sources:
+        path = Path(__file__).resolve().parent / Path(relative).name
+        try:
+            status_value = path.lstat()
+        except OSError as exc:
+            raise ActualVerificationError(
+                "running verifier dependency is unavailable: " + relative
+            ) from exc
+        if (
+            not stat.S_ISREG(status_value.st_mode)
+            or status_value.st_nlink != 1
+            or sha256_file(path) != context_entries[relative]["sha256"]
+        ):
+            _actual_fail("running verifier dependency differs from source context: " + relative)
+
+    source_archive = _actual_relpath(
+        provenance["source_archive"], "source archive"
+    )
+    archive_errors = []
+    archived_hashes = validate_postauthorized_source_archive(
+        artifact / source_archive, context, archive_errors
+    )
+    if archive_errors:
+        _actual_fail("postauthorization source archive is invalid: " + "; ".join(archive_errors))
+    if set(archived_hashes) != set(context_entries):
+        _actual_fail("postauthorization source archive/context population differs")
+
+    input_hashes = {
+        relative: context_entries[relative]["sha256"]
+        for relative in SOURCE_INPUTS
+    }
+    git_blobs = {
+        relative: context_entries[relative]["git_blob"]
+        for relative in FROZEN_CP2_C_APPROVAL_BINDING
+    }
+    approval_errors = []
+    validate_cp2_c_approval_binding(input_hashes, git_blobs, approval_errors)
+    if approval_errors:
+        _actual_fail("actual CP2-C approval binding is invalid: " + "; ".join(approval_errors))
+    expected_contracts = [
+        {"path": relative, "sha256": input_hashes[relative]}
+        for relative in sorted(CONTRACT_INPUTS, key=lambda value: value.encode("utf-8"))
+    ]
+    if provenance["contracts"] != expected_contracts:
+        _actual_fail("provenance contract inventory differs from held governing bytes")
+
+    provenance_environment = _actual_exact_keys(
+        provenance["environment"], ("classes",), "provenance environment"
+    )
+    if not isinstance(provenance_environment["classes"], list):
+        _actual_fail("provenance environment classes are not an array")
+    self_test_environment = {
+        "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+        "CP2_SELF_TEST": "1", "CP2_FORBID_BAG_ACCESS": "1",
+    }
+    expected_self_test_environment = {
+        "environment_id": "readiness_self_test_v1",
+        "variables": [
+            {"name": name, "value": self_test_environment[name]}
+            for name in sorted(self_test_environment, key=lambda value: value.encode("utf-8"))
+        ],
+        "canonical_sha256": _actual_command_environment_sha256(
+            self_test_environment
+        ),
+    }
+    if [
+        record for record in provenance_environment["classes"]
+        if isinstance(record, dict)
+        and record.get("environment_id") == "readiness_self_test_v1"
+    ] != [expected_self_test_environment]:
+        _actual_fail("readiness self-test environment is not exactly retained")
+
+    data_lock = _actual_exact_keys(
+        barrier["data_lock"],
+        (
+            "path", "device", "inode", "mode", "owner_uid", "link_count",
+            "acquired_exclusive",
+        ),
+        "readiness data lock",
+    )
+    if (
+        data_lock["path"] != "/tmp/schurvio-lite-cp2-data.lock"
+        or _actual_u64(data_lock["device"], "data-lock device") < 0
+        or _actual_u64(data_lock["inode"], "data-lock inode") == 0
+        or _actual_u64(data_lock["mode"], "data-lock mode") != 0o600
+        or _actual_u64(data_lock["owner_uid"], "data-lock owner") < 0
+        or _actual_u64(data_lock["link_count"], "data-lock link count") != 1
+        or data_lock["acquired_exclusive"] is not True
+    ):
+        _actual_fail("readiness data-lock evidence differs")
+
+    def retained_payload(path_field, digest_field, label):
+        relative = _actual_relpath(barrier[path_field], label + " path")
+        claim_readiness(relative, label)
+        if relative not in manifest:
+            _actual_fail(label + " is absent from the manifest")
+        payload = _actual_read_bytes(
+            artifact / relative, label, ACTUAL_MAX_JSONL_BYTES
+        )
+        digest = hashlib.sha256(payload).hexdigest()
+        if barrier[digest_field] != digest or manifest[relative] != digest:
+            _actual_fail(label + " digest differs")
+        return payload
+
+    source_before = retained_payload(
+        "source_before_payload", "source_before_sha256", "readiness source-before"
+    )
+    source_after = retained_payload(
+        "source_after_payload", "source_after_sha256", "readiness source-after"
+    )
+    post_lock = retained_payload(
+        "post_lock_payload", "post_lock_recheck_sha256", "readiness post-lock source"
+    )
+    post_unit = retained_payload(
+        "post_unit_payload", "post_unit_recheck_sha256", "readiness post-unit source"
+    )
+    if source_before != source_after:
+        _actual_fail("readiness source snapshots are not byte-identical")
+
+    expected_source_rows = [
+        (record["path"], "f", record["mode"], record["size"], record["sha256"])
+        for record in context["entries"]
+    ]
+    for payload, expected_tag, label in (
+        (source_before, "source", "source-before"),
+        (source_after, "source", "source-after"),
+        (post_lock, "post_lock", "post-lock"),
+        (post_unit, "post_lock", "post-unit"),
+    ):
+        _, entries, identity = _actual_parse_readiness_snapshot(
+            payload, expected_tag, context
+        )
+        observed_rows = [
+            (
+                row["path"], row["entry_type"], row["mode"], row["size"],
+                row["sha256"],
+            ) for row in entries
+        ]
+        if observed_rows != expected_source_rows:
+            _actual_fail("readiness {} source population differs".format(label))
+        expected_identity_entrypoints = [
+            {
+                "path": record["path"], "git_blob": record["git_blob"],
+                "sha256": record["sha256"],
+            }
+            for record in context["entrypoints"]
+        ]
+        if (
+            identity["commit"] != context["commit"]
+            or identity["tree"] != context["tree"]
+            or identity["index_tree"] != context["index_tree"]
+            or identity["status"] != b""
+            or identity["entrypoints"] != expected_identity_entrypoints
+        ):
+            _actual_fail("readiness {} source identity differs".format(label))
+    if post_lock != post_unit:
+        _actual_fail("readiness post-lock/post-unit snapshots are not byte-identical")
+
+    retained_root_entries = {}
+    for root_name in ("build", "results", "testing"):
+        before = retained_payload(
+            root_name + "_before_payload",
+            root_name + "_before_sha256",
+            "readiness {}-before".format(root_name),
+        )
+        after = retained_payload(
+            root_name + "_after_payload",
+            root_name + "_after_sha256",
+            "readiness {}-after".format(root_name),
+        )
+        if before != after:
+            _actual_fail("readiness {} snapshots are not byte-identical".format(root_name))
+        before_parsed = _actual_parse_readiness_snapshot(before, root_name)
+        after_parsed = _actual_parse_readiness_snapshot(after, root_name)
+        if before_parsed != after_parsed:
+            _actual_fail("readiness {} snapshot semantics differ".format(root_name))
+        retained_root_entries[root_name] = before_parsed[1]
+
+    repository_root_names = {
+        "build": "build", "results": "results", "testing": "Testing",
+    }
+    tracked_paths = set(context_entries)
+    expected_other_paths = []
+    for root_tag in ("build", "results", "testing"):
+        root_name = repository_root_names[root_tag]
+        for record in retained_root_entries[root_tag]:
+            if record["entry_type"] not in ("f", "l"):
+                continue
+            relative = root_name + "/" + record["path"]
+            if relative not in tracked_paths:
+                expected_other_paths.append(relative)
+    expected_other_paths.sort(key=lambda value: value.encode("utf-8"))
+    if len(expected_other_paths) != len(set(expected_other_paths)):
+        _actual_fail("readiness root snapshots yield duplicate other paths")
+
+    git_environment_sha, git_commands = _actual_validate_readiness_git_binding(
+        barrier, provenance, context, artifact / source_archive,
+        artifact, manifest, claim_readiness, expected_other_paths,
+    )
+
+    self_tests = barrier["self_tests"]
+    if not isinstance(self_tests, list) or len(self_tests) != len(READINESS_ENTRYPOINTS):
+        _actual_fail("readiness self-test population differs")
+    expected_environment_sha = _actual_command_environment_sha256(
+        self_test_environment
+    )
+    expected_cases = _actual_expected_readiness_cases()
+    previous_finished = None
+    for index, (record, expected_path) in enumerate(
+        zip(self_tests, READINESS_ENTRYPOINTS)
+    ):
+        _actual_exact_keys(
+            record, ACTUAL_READINESS_SELF_TEST_KEYS,
+            "readiness self-test {}".format(index),
+        )
+        descriptor_pattern = r"/proc/self/fd/(?:[3-9]|[1-9][0-9]+)"
+        expected_argv_shape = (
+            len(record["argv"]) == 5
+            and record["argv"][:3] == ["/usr/bin/python3", "-I", "-B"]
+            and re.fullmatch(descriptor_pattern, record["argv"][3]) is not None
+            and record["argv"][4] == "--self-test"
+        ) if expected_path.endswith(".py") else (
+            len(record["argv"]) == 2
+            and re.fullmatch(descriptor_pattern, record["argv"][0]) is not None
+            and record["argv"][1] == "--self-test"
+        )
+        expected_names = list(expected_cases[expected_path])
+        if (
+            _actual_u64(record["index"], "readiness self-test index") != index
+            or record["path"] != expected_path
+            or record["entrypoint_sha256"] != context["entrypoints"][index]["sha256"]
+            or not expected_argv_shape
+            or record["cwd"] != "/tmp"
+            or record["environment_sha256"] != expected_environment_sha
+            or isinstance(record["exit_code"], bool)
+            or _actual_i64(record["exit_code"], "readiness self-test exit code") != 0
+            or record["timed_out"] is not False
+            or record["process_group_complete"] is not True
+            or record["expected_case_names"] != expected_names
+            or _actual_u64(
+                record["bag_provider_calls"], "readiness self-test bag-provider calls"
+            ) != 0
+            or record["temporary_root_removed"] is not True
+        ):
+            _actual_fail("readiness self-test {} identity/outcome differs".format(index))
+        started = _actual_utc(record["started_utc"], "readiness self-test started")
+        finished = _actual_utc(record["finished_utc"], "readiness self-test finished")
+        if finished < started:
+            _actual_fail("readiness self-test interval is negative")
+        if previous_finished is not None and started < previous_finished:
+            _actual_fail("readiness self-tests overlap or are out of order")
+        previous_finished = finished
+        expected_stdout_relative = "readiness/self_tests/{:02d}.stdout".format(index)
+        expected_stderr_relative = "readiness/self_tests/{:02d}.stderr".format(index)
+        stdout = None
+        stdout_relative = _actual_relpath(record["stdout"], "readiness self-test stdout")
+        stderr_relative = _actual_relpath(record["stderr"], "readiness self-test stderr")
+        if (
+            stdout_relative != expected_stdout_relative
+            or stderr_relative != expected_stderr_relative
+        ):
+            _actual_fail("readiness self-test stream path differs")
+        claim_readiness(stdout_relative, "self-test stdout")
+        claim_readiness(stderr_relative, "self-test stderr")
+        for relative, digest, label in (
+            (stdout_relative, record["stdout_sha256"], "readiness self-test stdout"),
+            (stderr_relative, record["stderr_sha256"], "readiness self-test stderr"),
+        ):
+            content = _actual_read_bytes(artifact / relative, label, ACTUAL_MAX_JSON_BYTES)
+            observed_digest = hashlib.sha256(content).hexdigest()
+            if manifest.get(relative) != observed_digest or digest != observed_digest:
+                _actual_fail(label + " digest differs")
+            if label.endswith("stdout"):
+                stdout = content
+        if not stdout or not stdout.endswith(b"\n"):
+            _actual_fail("readiness self-test stdout is not LF-terminated")
+        stdout_lines = stdout[:-1].split(b"\n")
+        if not stdout_lines or not stdout_lines[-1]:
+            _actual_fail("readiness self-test stdout lacks a final result")
+        parsed_result = strict_json_bytes(
+            stdout_lines[-1], "readiness self-test final stdout line"
+        )
+        validated_result = _actual_validate_readiness_result(
+            parsed_result, expected_path, tuple(expected_names)
+        )
+        if record["result"] != validated_result:
+            _actual_fail("readiness self-test retained result differs from stdout")
+
+    unit_verification = _actual_exact_keys(
+        barrier["unit_verification"],
+        (
+            "argv", "cwd", "environment", "started_utc", "finished_utc",
+            "exit_code", "timed_out", "process_group_complete", "stdout",
+            "stdout_sha256", "stderr", "stderr_sha256", "source_context_sha256",
+        ),
+        "readiness unit verification",
+    )
+    unit_environment = {
+        "PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
+    }
+    unit_environment_digest = _actual_command_environment_sha256(unit_environment)
+    unit_argv = unit_verification["argv"]
+    descriptor_pattern = r"/proc/self/fd/(?:[3-9]|[1-9][0-9]+)"
+    frozen_unit_pattern = (
+        r"/tmp/schurvio-cp2-readiness-[^/]+/unit-artifact-frozen"
+    )
+    if (
+        not isinstance(unit_argv, list)
+        or len(unit_argv) != 8
+        or unit_argv[:3] != ["/usr/bin/python3", "-I", "-B"]
+        or re.fullmatch(descriptor_pattern, unit_argv[3]) is None
+        or unit_argv[4] != "--verify-unit-anchor-prevalidated"
+        or re.fullmatch(frozen_unit_pattern, unit_argv[5]) is None
+        or unit_argv[6] != "--expected-manifest-sha256"
+        or unit_argv[7] != barrier["unit_manifest_sha256"]
+        or unit_verification["cwd"] != "/tmp"
+        or unit_verification["environment"] != unit_environment
+        or isinstance(unit_verification["exit_code"], bool)
+        or _actual_i64(
+            unit_verification["exit_code"], "unit-verifier exit code"
+        ) != 0
+        or unit_verification["timed_out"] is not False
+        or unit_verification["process_group_complete"] is not True
+        or unit_verification["source_context_sha256"] != context_digest
+    ):
+        _actual_fail("readiness unit-verifier execution binding differs")
+    git_private_root = Path(
+        next(
+            item["value"]
+            for item in barrier["readiness_git_environment"]["variables"]
+            if item["name"] == "HOME"
+        )
+    ).parent
+    if Path(unit_argv[5]).parent != git_private_root:
+        _actual_fail("unit-verifier frozen artifact is outside its readiness root")
+    unit_started = _actual_utc(
+        unit_verification["started_utc"], "unit-verifier started"
+    )
+    unit_finished = _actual_utc(
+        unit_verification["finished_utc"], "unit-verifier finished"
+    )
+    if unit_finished < unit_started:
+        _actual_fail("unit-verifier interval is negative")
+    if (
+        _actual_utc(git_commands[10]["finished_utc"], "pre-self-test Git finish")
+        > _actual_utc(self_tests[0]["started_utc"], "first self-test start")
+        or _actual_utc(self_tests[-1]["finished_utc"], "last self-test finish")
+        > _actual_utc(git_commands[11]["started_utc"], "post-self-test Git start")
+        or _actual_utc(git_commands[16]["finished_utc"], "pre-unit Git finish")
+        > unit_started
+        or unit_finished
+        > _actual_utc(git_commands[17]["started_utc"], "post-unit Git start")
+    ):
+        _actual_fail("readiness Git/self-test/unit chronology differs")
+
+    unit_streams = {}
+    for stream_name, expected_relative in (
+        ("stdout", "readiness/unit_verifier.stdout"),
+        ("stderr", "readiness/unit_verifier.stderr"),
+    ):
+        relative = _actual_relpath(
+            unit_verification[stream_name], "unit-verifier " + stream_name
+        )
+        if relative != expected_relative:
+            _actual_fail("unit-verifier stream path differs")
+        claim_readiness(relative, "unit-verifier " + stream_name)
+        content = _actual_read_bytes(
+            artifact / relative, "unit-verifier " + stream_name,
+            ACTUAL_MAX_JSON_BYTES,
+        )
+        digest = hashlib.sha256(content).hexdigest()
+        if (
+            manifest.get(relative) != digest
+            or unit_verification[stream_name + "_sha256"] != digest
+        ):
+            _actual_fail("unit-verifier stream digest differs")
+        unit_streams[stream_name] = content
+    if not unit_streams["stdout"].endswith(b"\n"):
+        _actual_fail("unit-verifier stdout is not LF-terminated")
+    unit_lines = unit_streams["stdout"][:-1].split(b"\n")
+    if not unit_lines or not unit_lines[-1]:
+        _actual_fail("unit-verifier stdout lacks its result")
+    unit_result = strict_json_bytes(
+        unit_lines[-1], "unit-verifier final stdout line"
+    )
+    _actual_exact_keys(
+        unit_result,
+        ("commit", "passed", "record_type", "schema_version", "tree"),
+        "unit-verifier result",
+    )
+    if (
+        isinstance(unit_result["schema_version"], bool)
+        or not isinstance(unit_result["schema_version"], int)
+        or unit_result["schema_version"] != 1
+        or unit_result["record_type"]
+        != "cp2_prevalidated_unit_verification_result"
+        or unit_result["passed"] is not True
+        or unit_result["commit"] != context["commit"]
+        or unit_result["tree"] != context["tree"]
+    ):
+        _actual_fail("unit-verifier result differs from readiness source")
+
+    if (
+        barrier["unit_artifact"] != unit_anchor["artifact"]
+        or barrier["unit_manifest_sha256"] != unit_anchor["manifest_sha256"]
+        or barrier["unit_tested_commit"] != unit_anchor["tested_commit"]
+        or barrier["unit_tested_tree"] != unit_anchor["tested_tree"]
+    ):
+        _actual_fail("readiness barrier and provenance unit anchor differ")
+    unit_artifact = _actual_safe_absolute_path(
+        unit_anchor["artifact"], "unit anchor artifact"
+    )
+    unit_report = unit_artifact / REPORT_NAME
+    if (
+        not unit_report.is_file()
+        or unit_report.is_symlink()
+        or sha256_file(unit_report) != unit_anchor["report_sha256"]
+    ):
+        _actual_fail("unit anchor report identity differs")
+    status, unit_errors = verify_unit_anchor_prevalidated(
+        unit_artifact,
+        unit_anchor["manifest_sha256"],
+        context,
+        quiet=True,
+    )
+    if status != 0 or unit_errors:
+        _actual_fail(
+            "referenced unit anchor failed detached re-verification: "
+            + "; ".join(unit_errors)
+        )
+    readiness_manifest_paths = {
+        relative for relative in manifest if relative.startswith("readiness/")
+    }
+    if readiness_manifest_paths != readiness_references:
+        _actual_fail("readiness namespace has missing, aliased, or orphan files")
+    inventory_by_path = {
+        record.get("path"): record
+        for record in provenance["file_inventory"]
+        if isinstance(record, dict)
+    }
+    for relative in readiness_references:
+        inventory_record = inventory_by_path.get(relative)
+        if (
+            not isinstance(inventory_record, dict)
+            or inventory_record.get("role") != "readiness"
+            or inventory_record.get("mode") != 0o444
+        ):
+            _actual_fail("readiness inventory role/mode differs: " + relative)
+    return barrier, context, unit_environment_digest
+
+
+def _actual_validate_provenance(artifact, manifest, observed, expected_checkpoint):
+    provenance = _actual_json(artifact / "provenance.json", "provenance.json")
+    _actual_exact_keys(provenance, ACTUAL_PROVENANCE_KEYS, "provenance")
+    if (
+        not _schema_version_one(provenance.get("schema_version"))
+        or provenance.get("record_type") != "provenance"
+        or provenance.get("checkpoint") != expected_checkpoint
+    ):
+        _actual_fail("provenance schema/checkpoint identity is invalid")
+    if provenance.get("evidence_class") != "trusted_runner_local_staging_evidence":
+        _actual_fail("provenance evidence class overstates its scope")
+    if provenance.get("distribution_status") != "internal_non_conveyable_staging":
+        _actual_fail("provenance distribution status is invalid")
+    if provenance.get("eligible_for_cp2_seal") is not False:
+        _actual_fail("actual staging evidence must remain ineligible for a CP2 seal")
+    if provenance.get("branch") != EXPECTED_BRANCH or provenance.get("clean") is not True:
+        _actual_fail("provenance source branch/clean identity is invalid")
+    _actual_hex40(provenance.get("source_commit"), "provenance source commit")
+    _actual_hex40(provenance.get("source_tree"), "provenance source tree")
+    if provenance.get("cp1_authorization_commit") != CP1_AUTHORIZATION_COMMIT:
+        _actual_fail("provenance CP1 authorization differs")
+    _actual_utc(provenance.get("created_utc"), "provenance created_utc")
+    host = _actual_exact_keys(provenance.get("host"), ACTUAL_HOST_KEYS, "provenance.host")
+    for field in ACTUAL_HOST_KEYS:
+        value = host[field]
+        if field == "logical_cpu_count":
+            if value is not None and _actual_u64(value, "host logical CPU count") == 0:
+                _actual_fail("host logical CPU count is zero")
+        elif value is not None and (
+            not isinstance(value, str) or not value or "\0" in value
+        ):
+            _actual_fail("host {} is not a nonempty string or null".format(field))
+    source_archive = _actual_relpath(provenance.get("source_archive"), "source archive")
+    if source_archive not in manifest or provenance.get("source_archive_sha256") != manifest[source_archive]:
+        _actual_fail("source archive identity differs from manifest")
+    readiness = _actual_relpath(provenance.get("readiness_barrier"), "readiness barrier")
+    if readiness not in manifest or provenance.get("readiness_barrier_sha256") != manifest[readiness]:
+        _actual_fail("readiness barrier identity differs from manifest")
+
+    contracts = provenance.get("contracts")
+    if not isinstance(contracts, list) or not contracts:
+        _actual_fail("provenance contract inventory is empty")
+    previous_contract = None
+    for record in contracts:
+        _actual_exact_keys(record, ("path", "sha256"), "provenance contract")
+        relative = _actual_relpath(record["path"], "contract path")
+        encoded = relative.encode("utf-8")
+        if previous_contract is not None and encoded <= previous_contract:
+            _actual_fail("provenance contracts are duplicate or unsorted")
+        previous_contract = encoded
+        _actual_sha256(record["sha256"], "contract SHA-256")
+    entrypoints = provenance.get("entrypoints")
+    expected_entrypoints = (
+        "scripts/cp2/run_unit_gate.sh", "scripts/cp2/run_recorded_parity.py",
+        "scripts/cp2/run_sequence_pair.py", "scripts/cp2/run_timing_pair.py",
+        "scripts/cp2/verify_report.py",
+    )
+    if not isinstance(entrypoints, list) or len(entrypoints) != len(expected_entrypoints):
+        _actual_fail("provenance entrypoint population differs")
+    for record, expected_path in zip(entrypoints, expected_entrypoints):
+        _actual_exact_keys(record, ("path", "sha256", "git_blob"), "provenance entrypoint")
+        if record["path"] != expected_path:
+            _actual_fail("provenance entrypoint inventory/order differs")
+        _actual_sha256(record["sha256"], "entrypoint SHA-256")
+        _actual_hex40(record["git_blob"], "entrypoint Git blob")
+
+    unit_anchor = _actual_exact_keys(
+        provenance.get("unit_anchor"),
+        ("artifact", "manifest_sha256", "tested_commit", "tested_tree", "report_sha256", "verified"),
+        "provenance.unit_anchor",
+    )
+    _actual_safe_absolute_path(unit_anchor["artifact"], "unit anchor artifact")
+    _actual_sha256(unit_anchor["manifest_sha256"], "unit anchor manifest")
+    _actual_sha256(unit_anchor["report_sha256"], "unit anchor report")
+    if (
+        unit_anchor["tested_commit"] != provenance["source_commit"]
+        or unit_anchor["tested_tree"] != provenance["source_tree"]
+        or unit_anchor["verified"] is not True
+    ):
+        _actual_fail("unit anchor does not bind the actual source identity")
+    (
+        readiness_record,
+        source_context,
+        unit_environment_digest,
+    ) = _actual_validate_source_unit_approval_binding(
+        artifact, manifest, provenance, unit_anchor, readiness
+    )
+    build = _actual_exact_keys(
+        provenance.get("build"),
+        ("fresh_git_archive", "workspace", "commands_sha256", "compile_commands",
+         "compile_commands_sha256", "cmake_cache", "cmake_cache_sha256",
+         "strict_fp_verified"),
+        "provenance.build",
+    )
+    if build["strict_fp_verified"] is not True:
+        _actual_fail("actual runtime build lacks strict-FP verification")
+    if build["fresh_git_archive"] is not True:
+        _actual_fail("actual build is not marked as originating from a fresh Git archive")
+    _actual_safe_absolute_path(build["workspace"], "fresh build workspace")
+    for path_field in ("compile_commands", "cmake_cache"):
+        relative = _actual_relpath(build[path_field], "build provenance path")
+        if relative not in manifest:
+            _actual_fail("build provenance path is absent from manifest")
+    if build["compile_commands_sha256"] != manifest[build["compile_commands"]]:
+        _actual_fail("build compile_commands digest differs")
+    if build["cmake_cache_sha256"] != manifest[build["cmake_cache"]]:
+        _actual_fail("build CMake cache digest differs")
+    _actual_sha256(build["commands_sha256"], "build commands SHA-256")
+    _actual_validate_compile_commands(artifact, build)
+
+    inventory = provenance.get("file_inventory")
+    if not isinstance(inventory, list):
+        _actual_fail("provenance file inventory is not an array")
+    expected_inventory_paths = set(manifest) - {"cp2_report.json", "provenance.json"}
+    observed_inventory_paths = []
+    previous = None
+    for index, record in enumerate(inventory):
+        _actual_exact_keys(record, ("path", "role", "size", "mode", "sha256"),
+                           "file inventory {}".format(index))
+        relative = _actual_relpath(record["path"], "inventory path")
+        encoded = relative.encode("utf-8")
+        if previous is not None and encoded <= previous:
+            _actual_fail("file inventory is duplicate or not bytewise sorted")
+        previous = encoded
+        if record["role"] not in ACTUAL_INVENTORY_ROLES:
+            _actual_fail("file inventory role is invalid")
+        status = observed.get(relative)
+        if status is None:
+            _actual_fail("file inventory references an absent artifact file")
+        if (
+            _actual_u64(record["size"], "inventory size") != status.st_size
+            or _actual_u64(record["mode"], "inventory mode") != stat.S_IMODE(status.st_mode)
+            or record["sha256"] != manifest.get(relative)
+        ):
+            _actual_fail("file inventory metadata differs from retained file: " + relative)
+        observed_inventory_paths.append(relative)
+    if set(observed_inventory_paths) != expected_inventory_paths:
+        _actual_fail("file inventory path set differs from manifest")
+
+    runtime = _actual_exact_keys(
+        provenance.get("runtime"),
+        ("executable", "executable_size", "executable_sha256_before",
+         "executable_sha256_after", "build_id_before", "build_id_after", "runs"),
+        "provenance.runtime",
+    )
+    executable = _actual_safe_absolute_path(runtime["executable"], "runtime executable")
+    executable_status = executable.lstat()
+    if (
+        not stat.S_ISREG(executable_status.st_mode)
+        or executable_status.st_nlink != 1
+        or not executable_status.st_mode & stat.S_IXUSR
+    ):
+        _actual_fail("runtime executable is not a single-link executable regular file")
+    executable_digest = sha256_file(executable)
+    if (
+        _actual_u64(runtime["executable_size"], "runtime executable size") != executable_status.st_size
+        or runtime["executable_sha256_before"] != executable_digest
+        or runtime["executable_sha256_after"] != executable_digest
+        or runtime["build_id_before"] != runtime["build_id_after"]
+    ):
+        _actual_fail("runtime executable before/after identity differs")
+    if not isinstance(runtime["build_id_before"], str) or re.fullmatch(
+        r"[0-9a-f]+", runtime["build_id_before"]
+    ) is None:
+        _actual_fail("runtime executable build ID is invalid")
+    if _actual_elf_build_id(executable) != runtime["build_id_before"]:
+        _actual_fail("runtime executable build ID differs from independent ELF notes")
+
+    configuration = _actual_exact_keys(
+        provenance.get("configuration"),
+        ("static_files", "static_bundle_payload", "static_bundle_sha256", "launch",
+         "resolved_parameters", "runtime_contexts"),
+        "provenance.configuration",
+    )
+    launch = _actual_exact_keys(configuration["launch"], ("path", "size", "sha256"),
+                                "provenance launch")
+    if launch.get("path") != "project/cp2_serial.launch":
+        _actual_fail("actual run did not use the frozen launch path")
+    if launch.get("sha256") != "bede519721575d769a1fcef67c5527661cb39ba05ab77faa6c20771b0756c49a":
+        _actual_fail("actual run launch SHA-256 differs from the frozen launch")
+    _actual_u64(launch.get("size"), "launch size")
+    _actual_sha256(configuration.get("static_bundle_sha256"), "static bundle SHA-256")
+    static_files = configuration.get("static_files")
+    expected_static_paths = (
+        "config/euroc_mav/estimator_config.yaml",
+        "config/euroc_mav/kalibr_imu_chain.yaml",
+        "config/euroc_mav/kalibr_imucam_chain.yaml",
+    )
+    if not isinstance(static_files, list) or len(static_files) != 3:
+        _actual_fail("static configuration inventory is not exactly three")
+    for record, expected_path in zip(static_files, expected_static_paths):
+        _actual_exact_keys(record, ("path", "size", "sha256"), "static configuration")
+        if record["path"] != expected_path:
+            _actual_fail("static configuration path/order differs")
+        _actual_u64(record["size"], "static configuration size")
+        _actual_sha256(record["sha256"], "static configuration SHA-256")
+    _actual_validate_static_bundle(artifact, configuration, manifest)
+
+    commands, command_bytes, classes = _actual_validate_commands(artifact, provenance, manifest)
+    _actual_validate_readiness_command_zero(
+        commands, provenance, readiness_record, unit_environment_digest
+    )
+    if build["commands_sha256"] != hashlib.sha256(command_bytes).hexdigest():
+        _actual_fail("build commands digest differs from commands.jsonl")
+    return {
+        "provenance": provenance,
+        "runtime": runtime,
+        "configuration": configuration,
+        "commands": commands,
+        "command_bytes": command_bytes,
+        "environment_classes": classes,
+        "readiness": readiness_record,
+        "source_context": source_context,
+        "unit_environment_digest": unit_environment_digest,
+        "executable": executable,
+        "executable_sha256": executable_digest,
+    }
+
+
+ACTUAL_RECORDED_REPORT_KEYS = (
+    "schema_version", "record_type", "checkpoint", "status", "evidence_class",
+    "distribution_status", "eligible_for_cp2_seal", "created_utc",
+    "provenance_sha256", "commands_sha256", "serial_pairs_sha256", "updates_sha256",
+    "features_sha256", "state_blocks_sha256", "covariance_blocks_sha256",
+    "state_snapshot_payloads_sha256", "proposal_payloads_sha256",
+    "raw_system_payloads_sha256", "replay_report_sha256",
+    "proposal_derivation_passed", "sequence_summaries", "attempted_updates",
+    "empty_input", "all_rejected", "empty_after_compression", "preflight_rejected",
+    "internal_failure", "committing_updates", "minimum_committing_updates",
+    "raw_systems", "nullspace_gate_attempts", "schur_gate_attempts",
+    "gate_union_denominator", "gate_intersection", "gate_match_numerator",
+    "gate_ratio", "row_denominator", "row_match_numerator", "row_ratio",
+    "disagreement_counts", "per_feature_statistics_passed", "state_blocks_expected",
+    "state_blocks_seen", "covariance_blocks_expected", "covariance_blocks_seen",
+    "maximum_state_ratio", "maximum_covariance_ratio", "candidate_missing_proposals",
+    "baseline_commit_mismatches", "shadow_write_totals", "repair_fallback_totals",
+    "gate_passed", "math_passed", "passed",
+)
+ACTUAL_SEQUENCE_SUMMARY_KEYS = (
+    "sequence_index", "sequence_id", "attempted_updates", "committing_updates",
+    "empty_input", "all_rejected", "empty_after_compression", "preflight_rejected",
+    "internal_failure", "first_pair_index", "last_pair_index",
+    "first_camera_timestamp_ns", "last_camera_timestamp_ns",
+)
+ACTUAL_SERIAL_PAIR_KEYS = (
+    "schema_version", "record_type", "sequence_index", "sequence_id", "pair_index",
+    "anchor_filtered_index", "anchor_camera_id", "cam0_filtered_index",
+    "cam1_filtered_index", "cam0_record_time_ns", "cam1_record_time_ns",
+    "cam0_header_time_ns", "cam1_header_time_ns", "camera_timestamp_ns",
+    "absolute_record_delta_ns", "selected", "enqueue_entered", "enqueue_returned",
+    "enqueue_status", "processing_entered", "processing_returned", "processing_status",
+    "updater_invocation_ids",
+)
+ACTUAL_PAIR_INDEX_PROJECTION_KEYS = (
+    "schema_version", "record_type", "sequence_index", "sequence_id", "pair_index",
+    "anchor_filtered_index", "anchor_camera_id", "cam0_filtered_index",
+    "cam1_filtered_index", "cam0_record_time_ns", "cam1_record_time_ns",
+    "cam0_header_time_ns", "cam1_header_time_ns", "absolute_record_delta_ns",
+)
+ACTUAL_PAIR_INDEX_ENVIRONMENT = {
+    "CP2_POSTAUTH_PAIR_INDEX": "held-readiness-bound-fd-v1",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "PATH": "/usr/bin:/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONNOUSERSITE": "1",
+    "PYTHONPATH": "/opt/ros/noetic/lib/python3/dist-packages",
+}
+ACTUAL_UPDATE_KEYS = (
+    "schema_version", "record_type", "sequence_index", "sequence_id", "pair_index",
+    "camera_timestamp_ns", "invocation_id", "live_mode", "shadow_mode", "shadow_enabled",
+    "timing_evidence_eligible", "duration_ns", "terminal_status", "terminal_subreason",
+    "input_feature_count", "raw_system_count", "prior_snapshot_sha256",
+    "precommit_snapshot_sha256", "prior_payload_offset", "prior_payload_length",
+    "precommit_payload_offset", "precommit_payload_length",
+    "expected_postcommit_snapshot_sha256", "expected_postcommit_payload_offset",
+    "expected_postcommit_payload_length", "live_postcommit_snapshot_sha256",
+    "live_postcommit_payload_offset", "live_postcommit_payload_length",
+    "baseline_proposal_sha256", "baseline_proposal_payload_offset",
+    "baseline_proposal_payload_length", "candidate_proposal_sha256",
+    "candidate_proposal_payload_offset", "candidate_proposal_payload_length",
+    "zero_write_snapshot_equal", "baseline_accepted_ids", "baseline_accepted_set_sha256",
+    "baseline_accepted_sequence_sha256", "candidate_accepted_ids",
+    "candidate_accepted_set_sha256", "candidate_accepted_sequence_sha256",
+    "baseline_gamma_status", "baseline_gamma", "candidate_gamma",
+    "baseline_precompression_rows", "baseline_compressed_rows",
+    "candidate_precompression_rows", "candidate_compressed_rows",
+    "baseline_preview_status", "baseline_preview_stage", "candidate_outcome",
+    "candidate_preview_status", "candidate_preview_stage", "candidate_proposal_available",
+    "baseline_preview_counters", "candidate_preview_counters", "baseline_commit_count",
+    "baseline_transaction_mean_commits", "baseline_covariance_commits",
+    "baseline_expected_type_update_calls", "baseline_verified_nominal_fields",
+    "baseline_nominal_mismatches", "baseline_covariance_mismatches",
+    "baseline_fej_mismatches", "candidate_ekf_update_calls", "candidate_type_update_calls",
+    "candidate_mean_writes", "candidate_covariance_writes", "candidate_feature_writes",
+    "state_block_rows", "covariance_block_rows", "all_block_rows_present", "math_passed",
+    "config_sha256", "bag_sha256", "pair_index_sha256", "resolved_parameters_sha256",
+)
+ACTUAL_FEATURE_KEYS = (
+    "schema_version", "record_type", "sequence_index", "pair_index",
+    "camera_timestamp_ns", "invocation_id", "feature_ordinal", "feature_id",
+    "pass_index", "raw_rows", "raw_system_sha256", "jacobian_layout",
+    "raw_payload_offset", "raw_payload_length", "prior_snapshot_sha256", "config_sha256",
+    "bag_sha256", "pair_index_sha256", "resolved_parameters_sha256",
+    "baseline_accepted_set_sha256", "baseline_accepted_sequence_sha256",
+    "candidate_accepted_set_sha256", "candidate_accepted_sequence_sha256",
+    "baseline_retained_gamma", "candidate_retained_gamma", "nullspace_reduction_status",
+    "nullspace_reduction_stage", "nullspace_reduced_rows",
+    "nullspace_raw_lambda_symmetry_error_inf", "nullspace_gamma", "nullspace_nis",
+    "nullspace_threshold", "nullspace_gate_stage", "nullspace_decision",
+    "schur_reduction_status", "schur_reduction_stage", "schur_reduced_rows",
+    "schur_singular_values_available", "schur_singular_values", "schur_ratio_available",
+    "schur_ratio", "schur_raw_lambda_symmetry_error_inf", "schur_gamma", "schur_nis",
+    "schur_threshold", "schur_gate_stage", "schur_decision",
+    "statistics_comparison_required", "lambda_comparison_available",
+    "eta_comparison_available", "gamma_comparison_available", "lambda_comparison_status",
+    "eta_comparison_status", "gamma_comparison_status", "lambda_reference_norm",
+    "lambda_error", "lambda_tolerance", "lambda_ratio", "lambda_pass",
+    "eta_reference_norm", "eta_error", "eta_tolerance", "eta_ratio", "eta_pass",
+    "gamma_reference_norm", "gamma_error", "gamma_tolerance", "gamma_ratio", "gamma_pass",
+    "agreement_class", "raw_row_match_weight", "nullspace_reducer_counters",
+    "schur_reducer_counters",
+)
+ACTUAL_STATE_BLOCK_KEYS = (
+    "schema_version", "record_type", "sequence_index", "pair_index",
+    "camera_timestamp_ns", "invocation_id", "block_index", "block_kind",
+    "block_identity", "covariance_id", "size", "candidate_available",
+    "comparison_available", "comparison_status", "reference_norm", "error", "tolerance",
+    "ratio", "prior_snapshot_sha256", "config_sha256", "bag_sha256",
+    "pair_index_sha256", "resolved_parameters_sha256", "baseline_accepted_set_sha256",
+    "baseline_accepted_sequence_sha256", "candidate_accepted_set_sha256",
+    "candidate_accepted_sequence_sha256", "baseline_retained_gamma",
+    "candidate_retained_gamma", "passed",
+)
+ACTUAL_COVARIANCE_BLOCK_KEYS = (
+    "schema_version", "record_type", "sequence_index", "pair_index",
+    "camera_timestamp_ns", "invocation_id", "row_block_index", "column_block_index",
+    "row_covariance_id", "column_covariance_id", "row_size", "column_size",
+    "candidate_available", "comparison_available", "comparison_status", "reference_norm",
+    "error", "tolerance", "ratio", "prior_snapshot_sha256", "config_sha256", "bag_sha256",
+    "pair_index_sha256", "resolved_parameters_sha256", "baseline_accepted_set_sha256",
+    "baseline_accepted_sequence_sha256", "candidate_accepted_set_sha256",
+    "candidate_accepted_sequence_sha256", "baseline_retained_gamma",
+    "candidate_retained_gamma", "passed",
+)
+ACTUAL_COUNTER_KEYS = (
+    "jitter", "repair", "alternate_solve", "clamp", "regularization",
+    "silent_fallback", "fallback",
+)
+ACTUAL_SHADOW_WRITE_KEYS = (
+    "ekf_update_calls", "type_update_calls", "mean_writes", "covariance_writes",
+    "feature_writes",
+)
+ACTUAL_AGREEMENT_CLASSES = (
+    "both_match_accept", "both_match_reject", "boolean_nullspace_accept_schur_reject",
+    "boolean_nullspace_reject_schur_accept", "nullspace_only", "schur_only",
+    "neither_decision",
+)
+ACTUAL_REPLAY_KEYS = (
+    "schema_version", "record_type", "checkpoint", "source_commit", "source_tree",
+    "executable_sha256", "executable_build_id", "strict_fp_verified", "bag_provider_calls",
+    "input_sha256", "resolved_parameters", "replayed_invocations", "replayed_raw_systems",
+    "baseline_expected_proposals", "candidate_expected_proposals",
+    "baseline_exact_proposal_matches", "candidate_exact_proposal_matches",
+    "failure_counts", "passed",
+)
+ACTUAL_REPLAY_INPUT_KEYS = (
+    "serial_pairs", "updates", "features", "state_blocks", "covariance_blocks",
+    "state_snapshot_payloads", "proposal_payloads", "raw_system_payloads",
+)
+ACTUAL_REPLAY_FAILURE_KEYS = (
+    "layout", "reduction", "statistics", "gate", "accepted_sequence", "gamma", "stack",
+    "compression", "preview_status", "proposal_presence", "proposal_bytes", "commit_oracle",
+    "block_metrics",
+)
+
+
+def _actual_hash_file_fields(report, manifest, mapping):
+    for field, relative in mapping.items():
+        if relative not in manifest or report.get(field) != manifest[relative]:
+            _actual_fail("report {} differs from retained {}".format(field, relative))
+
+
+def _actual_read_exact(stream, length, label):
+    content = stream.read(length)
+    if len(content) != length:
+        _actual_fail(label + " is truncated")
+    return content
+
+
+def _actual_hash_payload(stream, length, required_domain, label):
+    if length < len(required_domain):
+        _actual_fail(label + " is shorter than its domain")
+    prefix = _actual_read_exact(stream, len(required_domain), label + " domain")
+    if prefix != required_domain:
+        _actual_fail(label + " domain is invalid")
+    digest = hashlib.sha256(prefix)
+    remaining = length - len(prefix)
+    while remaining:
+        block = _actual_read_exact(stream, min(1024 * 1024, remaining), label)
+        digest.update(block)
+        remaining -= len(block)
+    return digest.hexdigest()
+
+
+def _actual_parse_state_payloads(path):
+    frames = {}
+    previous = None
+    header = b"SchurVIO-CP2-state-file-v1\n\0\0\0\0\0"
+    with path.open("rb") as stream:
+        if _actual_read_exact(stream, len(header), "state payload header") != header:
+            _actual_fail("state payload file header is invalid")
+        while True:
+            first = stream.read(1)
+            if first == b"":
+                break
+            phase = first[0]
+            rest = _actual_read_exact(stream, 39, "state frame header")
+            if phase not in (0, 1, 2, 3) or rest[:7] != b"\0" * 7:
+                _actual_fail("state frame phase/reserved bytes are invalid")
+            sequence_index, pair_index, invocation_id, length = struct.unpack(">QQQQ", rest[7:])
+            key = (sequence_index, pair_index, invocation_id, phase)
+            if previous is not None and key <= previous:
+                _actual_fail("state frames are duplicate or out of order")
+            previous = key
+            payload_offset = stream.tell()
+            domain = (
+                b"SchurVIO-CP2-prior-snapshot-v1\0"
+                if phase in (0, 1)
+                else b"SchurVIO-CP2-postcommit-state-v1\0"
+            )
+            digest = _actual_hash_payload(stream, length, domain, "state frame payload")
+            frames[key] = {
+                "offset": payload_offset, "length": length, "sha256": digest,
+            }
+    return frames
+
+
+def _actual_parse_proposal_payloads(path):
+    frames = {}
+    previous = None
+    header = b"SchurVIO-CP2-proposal-file-v1\n\0\0"
+    with path.open("rb") as stream:
+        if _actual_read_exact(stream, len(header), "proposal payload header") != header:
+            _actual_fail("proposal payload file header is invalid")
+        while True:
+            first = stream.read(1)
+            if first == b"":
+                break
+            role = first[0]
+            rest = _actual_read_exact(stream, 39, "proposal frame header")
+            if role not in (0, 1) or rest[:7] != b"\0" * 7:
+                _actual_fail("proposal frame role/reserved bytes are invalid")
+            sequence_index, pair_index, invocation_id, length = struct.unpack(">QQQQ", rest[7:])
+            key = (sequence_index, pair_index, invocation_id, role)
+            if previous is not None and key <= previous:
+                _actual_fail("proposal frames are duplicate or out of order")
+            previous = key
+            payload_offset = stream.tell()
+            digest = _actual_hash_payload(
+                stream, length, b"SchurVIO-CP2-proposal-v1\0", "proposal frame payload"
+            )
+            frames[key] = {
+                "offset": payload_offset, "length": length, "sha256": digest,
+            }
+    return frames
+
+
+def _actual_parse_raw_payloads(path):
+    frames = {}
+    previous = None
+    header = b"SchurVIO-CP2-raw-file-v1\n\0\0\0\0\0\0\0"
+    with path.open("rb") as stream:
+        if _actual_read_exact(stream, len(header), "raw payload header") != header:
+            _actual_fail("raw-system payload file header is invalid")
+        while True:
+            first = stream.read(1)
+            if first == b"":
+                break
+            rest = _actual_read_exact(stream, 47, "raw-system frame header")
+            values = struct.unpack(">QQQQQQ", first + rest)
+            sequence_index, pair_index, invocation_id, feature_ordinal, feature_id, length = values
+            key = (sequence_index, pair_index, invocation_id, feature_ordinal, feature_id)
+            if previous is not None and key <= previous:
+                _actual_fail("raw-system frames are duplicate or out of order")
+            previous = key
+            payload_offset = stream.tell()
+            digest = _actual_hash_payload(
+                stream, length, b"SchurVIO-CP2-raw-system-v1\0", "raw-system frame payload"
+            )
+            frames[key] = {
+                "offset": payload_offset, "length": length, "sha256": digest,
+            }
+    return frames
+
+
+def _actual_ranges_equal(path, first_offset, second_offset, length):
+    with path.open("rb") as stream:
+        remaining = length
+        while remaining:
+            amount = min(1024 * 1024, remaining)
+            stream.seek(first_offset)
+            left = stream.read(amount)
+            stream.seek(second_offset)
+            right = stream.read(amount)
+            if len(left) != amount or len(right) != amount or left != right:
+                return False
+            first_offset += amount
+            second_offset += amount
+            remaining -= amount
+    return True
+
+
+def _actual_nullable_frame(record, hash_name, offset_name, length_name, frame, label):
+    values = (record.get(hash_name), record.get(offset_name), record.get(length_name))
+    if frame is None:
+        if values != (None, None, None):
+            _actual_fail(label + " has a dangling hash/offset/length triple")
+        return
+    _actual_sha256(values[0], label + " SHA-256")
+    _actual_u64(values[1], label + " payload offset")
+    _actual_u64(values[2], label + " payload length")
+    if (
+        values[0] != frame["sha256"]
+        or values[1] != frame["offset"]
+        or values[2] != frame["length"]
+    ):
+        _actual_fail(label + " hash/offset/length differs from its payload frame")
+
+
+def _actual_counter_object(value, label):
+    _actual_exact_keys(value, ACTUAL_COUNTER_KEYS, label)
+    return {key: _actual_u64(value[key], label + "." + key) for key in ACTUAL_COUNTER_KEYS}
+
+
+def _actual_validate_comparison(record, prefix, tolerance_scale, tolerance_floor, required, label):
+    available = record[prefix + "_comparison_available"]
+    status = record[prefix + "_comparison_status"]
+    reference = record[prefix + "_reference_norm"]
+    error = record[prefix + "_error"]
+    tolerance = record[prefix + "_tolerance"]
+    ratio = record[prefix + "_ratio"]
+    passed = record[prefix + "_pass"] if prefix + "_pass" in record else record["passed"]
+    if not isinstance(available, bool) or not isinstance(passed, bool):
+        _actual_fail(label + " comparison flags are not Boolean")
+    if not required:
+        if status != "not_required" or available or any(
+            value is not None for value in (reference, error, tolerance, ratio)
+        ) or passed:
+            _actual_fail(label + " not-required comparison contains evaluated evidence")
+        return False, None
+    statuses = {
+        "available", "reference_unavailable", "candidate_unavailable",
+        "reference_norm_nonfinite", "error_nonfinite", "tolerance_nonfinite",
+        "ratio_nonfinite",
+    }
+    if status not in statuses:
+        _actual_fail(label + " comparison status is invalid")
+    if status != "available":
+        if available or any(value is not None for value in (reference, error, tolerance, ratio)) or passed:
+            _actual_fail(label + " unavailable comparison contains later-stage evidence")
+        return False, None
+    if not available:
+        _actual_fail(label + " available comparison has availability=false")
+    reference_value = _actual_f64(reference, label + " reference", nonnegative=True)
+    error_value = _actual_f64(error, label + " error", nonnegative=True)
+    _actual_require_tonearest(label + " tolerance arithmetic")
+    product = float(tolerance_scale * reference_value)
+    expected_tolerance = float(tolerance_floor + product)
+    tolerance_value = _actual_f64(tolerance, label + " tolerance", nonnegative=True)
+    _actual_require_tonearest(label + " diagnostic ratio")
+    expected_ratio = float(error_value / expected_tolerance)
+    if (
+        not _actual_same_f64(tolerance_value, expected_tolerance)
+        or not _actual_same_f64(ratio, expected_ratio)
+        or passed is not (error_value <= expected_tolerance)
+    ):
+        _actual_fail(label + " comparison arithmetic/decision differs")
+    return passed, expected_ratio
+
+
+def _actual_validate_block_comparison(record, label):
+    available = record["comparison_available"]
+    status = record["comparison_status"]
+    numeric = tuple(record[name] for name in ("reference_norm", "error", "tolerance", "ratio"))
+    if not isinstance(record["candidate_available"], bool) or not isinstance(available, bool):
+        _actual_fail(label + " availability flags are not Boolean")
+    if not isinstance(record["passed"], bool):
+        _actual_fail(label + " pass flag is not Boolean")
+    allowed = {
+        "available", "candidate_unavailable", "reference_norm_nonfinite", "error_nonfinite",
+        "tolerance_nonfinite", "ratio_nonfinite",
+    }
+    if status not in allowed:
+        _actual_fail(label + " comparison status is invalid")
+    if status != "available":
+        if available or any(value is not None for value in numeric) or record["passed"]:
+            _actual_fail(label + " unavailable comparison contains evaluated evidence")
+        if status == "candidate_unavailable" and record["candidate_available"]:
+            _actual_fail(label + " candidate-unavailable status contradicts availability")
+        return False, None
+    if not available or not record["candidate_available"]:
+        _actual_fail(label + " available comparison lacks its candidate")
+    reference = _actual_f64(record["reference_norm"], label + " reference", nonnegative=True)
+    error = _actual_f64(record["error"], label + " error", nonnegative=True)
+    _actual_require_tonearest(label + " tolerance arithmetic")
+    product = float(1.0e-6 * reference)
+    expected_tolerance = float(1.0e-8 + product)
+    _actual_require_tonearest(label + " diagnostic ratio")
+    expected_ratio = float(error / expected_tolerance)
+    if (
+        not _actual_same_f64(record["tolerance"], expected_tolerance)
+        or not _actual_same_f64(record["ratio"], expected_ratio)
+        or record["passed"] is not (error <= expected_tolerance)
+    ):
+        _actual_fail(label + " comparison arithmetic/decision differs")
+    return record["passed"], expected_ratio
+
+
+def _actual_update_identity(record):
+    return tuple(record[name] for name in (
+        "sequence_index", "pair_index", "camera_timestamp_ns", "invocation_id"
+    ))
+
+
+def _actual_repeat_update_fields(record, update, label):
+    for field in (
+        "prior_snapshot_sha256", "config_sha256", "bag_sha256", "pair_index_sha256",
+        "resolved_parameters_sha256", "baseline_accepted_set_sha256",
+        "baseline_accepted_sequence_sha256", "candidate_accepted_set_sha256",
+        "candidate_accepted_sequence_sha256",
+    ):
+        if record[field] != update[field]:
+            _actual_fail("{} repeated {} differs from its update".format(label, field))
+    for field, update_field in (
+        ("baseline_retained_gamma", "baseline_gamma"),
+        ("candidate_retained_gamma", "candidate_gamma"),
+    ):
+        left = record[field]
+        right = update[update_field]
+        if left is None or right is None:
+            if left is not right:
+                _actual_fail("{} repeated {} nullability differs".format(label, field))
+        elif not _actual_same_f64(left, right):
+            _actual_fail("{} repeated {} differs at binary64".format(label, field))
+
+
+def _actual_validate_block_identity(record, label):
+    identity = record["block_identity"]
+    if not isinstance(identity, dict) or identity.get("kind") != record["block_kind"]:
+        _actual_fail(label + " block identity/kind differs")
+    keys = set(identity)
+    if "timestamp_bits" in keys:
+        expected = {"kind", "timestamp_bits"}
+    elif "feature_id" in keys or "representation" in keys or "anchor_camera_id" in keys:
+        expected = {
+            "kind", "feature_id", "representation", "anchor_camera_id",
+            "anchor_timestamp_bits",
+        }
+    else:
+        expected = {"kind"}
+    if keys != expected:
+        _actual_fail(label + " block identity field inventory differs")
+    for bits_name in ("timestamp_bits", "anchor_timestamp_bits"):
+        if bits_name in identity and (
+            not isinstance(identity[bits_name], str)
+            or re.fullmatch(r"[0-9a-f]{16}", identity[bits_name]) is None
+        ):
+            _actual_fail(label + " block timestamp bits are invalid")
+    if "feature_id" in identity:
+        _actual_u64(identity["feature_id"], label + " landmark feature ID")
+        _actual_u64(identity["anchor_camera_id"], label + " landmark anchor camera ID")
+        if not isinstance(identity["representation"], str) or not identity["representation"]:
+            _actual_fail(label + " landmark representation is invalid")
+
+
+def _actual_terminal_mapping(status, subreason):
+    mapping = {
+        "empty_input": {"input_empty"},
+        "all_rejected": {
+            "no_features_after_cleaning", "no_features_after_triangulation",
+            "no_raw_systems", "all_baseline_features_rejected",
+        },
+        "empty_after_compression": {"measurement_compression_empty"},
+        "preflight_rejected": {"baseline_preflight_rejected"},
+        "committed_counted": {"none"},
+        "internal_failure": {"invalid_live_mode", "snapshot_mismatch", "trace_invariant_failure"},
+    }
+    return status in mapping and subreason in mapping[status]
+
+
+def _actual_validate_runtime_context(
+    artifact, manifest, context_record, expected, trace_level,
+):
+    relative = _actual_relpath(context_record["path"], "runtime context path")
+    context_path = artifact / relative
+    status_value = context_path.lstat()
+    if (
+        _actual_u64(context_record["size"], "runtime context size")
+        != status_value.st_size
+        or manifest.get(relative) != context_record["sha256"]
+    ):
+        _actual_fail("runtime context size/hash differs from its retained file")
+    context = _actual_json(context_path, "runtime context")
+    _actual_exact_keys(context, ACTUAL_RUNTIME_CONTEXT_KEYS, "runtime context")
+    if (
+        not _schema_version_one(context["schema_version"])
+        or context["record_type"] != "cp2_runtime_context"
+        or context["checkpoint"] != expected["checkpoint"]
+        or context["run_id"] != expected["run_id"]
+        or context["sequence_index"] != expected["sequence_index"]
+        or context["sequence_id"] != expected["sequence_id"]
+        or context["mode"] != expected["mode"]
+        or context["shadow_enabled"] is not expected["shadow_enabled"]
+        or context["trace_level"] != trace_level
+        or context["source_commit"] != expected["source_commit"]
+        or context["config_sha256"] != expected["config_sha256"]
+        or context["bag_sha256"] != expected["bag_sha256"]
+        or context["resolved_parameters_sha256"]
+        != expected["resolved_parameters_sha256"]
+    ):
+        _actual_fail("runtime context identity/configuration join differs")
+    _actual_u64(context["sequence_index"], "runtime context sequence index")
+    if context["pair_index_sha256"] is not None:
+        _actual_fail("immutable pre-run runtime context has a nonnull pair-index digest")
+    for field in (
+        "source_commit", "config_sha256", "bag_sha256",
+        "resolved_parameters_sha256",
+    ):
+        if field == "source_commit":
+            _actual_hex40(context[field], "runtime context source commit")
+        else:
+            _actual_sha256(context[field], "runtime context " + field)
+
+    if trace_level == "recorded_full":
+        required_nonnull = {
+            "serial_trace_path", "updater_trace_path", "state_payload_path",
+            "proposal_payload_path", "raw_system_payload_path",
+            "runtime_parameters_path", "loader_map_before_path",
+            "loader_map_after_path",
+        }
+    elif trace_level == "sequence":
+        required_nonnull = {
+            "serial_trace_path", "callback_trace_path", "trajectory_trace_path",
+            "runtime_parameters_path", "loader_map_before_path",
+            "loader_map_after_path", "legacy_state_path", "legacy_deviation_path",
+            "legacy_timing_path",
+        }
+    else:
+        _actual_fail("runtime context verifier received an unauthorized trace level")
+    path_fields = {
+        "serial_trace_path", "callback_trace_path", "trajectory_trace_path",
+        "updater_trace_path", "state_payload_path", "proposal_payload_path",
+        "raw_system_payload_path", "timing_trace_path", "runtime_parameters_path",
+        "loader_map_before_path", "loader_map_after_path", "legacy_state_path",
+        "legacy_deviation_path", "legacy_timing_path",
+    }
+    if any((context[field] is not None) is not (field in required_nonnull)
+           for field in path_fields):
+        _actual_fail("runtime context trace-level path nullability differs")
+    trace_directory = _actual_safe_absolute_path(
+        context["trace_directory"], "runtime context trace directory"
+    )
+    retained_parent = PurePosixPath(relative).parent.as_posix()
+    if not trace_directory.as_posix().endswith("/" + retained_parent):
+        _actual_fail("runtime context trace directory is disconnected from retained run path")
+    children = []
+    for field in sorted(required_nonnull):
+        child = _actual_safe_absolute_path(context[field], "runtime context " + field)
+        try:
+            child.relative_to(trace_directory)
+        except ValueError as exc:
+            raise ActualVerificationError(
+                "runtime context child is outside trace_directory: " + field
+            ) from exc
+        if child == trace_directory:
+            _actual_fail("runtime context child aliases trace_directory")
+        children.append(child)
+    if len(set(children)) != len(children):
+        _actual_fail("runtime context output paths alias")
+    return context
+
+
+def _actual_validate_recorded_provenance(artifact, common, manifest):
+    provenance = common["provenance"]
+    inputs = provenance.get("inputs")
+    input_keys = (
+        "sequence_index", "sequence_id", "offset_seconds", "bag_path", "bag_size",
+        "bag_sha256_before", "bag_sha256_after", "ground_truth_path",
+        "ground_truth_sha256",
+    )
+    if not isinstance(inputs, list) or len(inputs) != 3:
+        _actual_fail("CP2-C provenance must contain exactly three sequence inputs")
+    bag_hashes = {}
+    for index, record in enumerate(inputs):
+        _actual_exact_keys(record, input_keys, "recorded input {}".format(index))
+        if record["sequence_index"] != index or record["sequence_id"] != ACTUAL_SEQUENCE_IDS[index]:
+            _actual_fail("recorded input sequence identity/order differs")
+        if not _actual_same_f64(
+            record["offset_seconds"], ACTUAL_SEQUENCE_OFFSETS_SECONDS[index]
+        ):
+            _actual_fail("recorded input offset differs from the frozen sequence offset")
+        _actual_safe_absolute_path(record["bag_path"], "recorded bag path")
+        _actual_u64(record["bag_size"], "recorded bag size")
+        before = _actual_sha256(record["bag_sha256_before"], "recorded bag SHA-256")
+        if record["bag_sha256_after"] != before:
+            _actual_fail("recorded bag before/after identities differ")
+        if record["ground_truth_path"] is not None or record["ground_truth_sha256"] is not None:
+            _actual_fail("CP2-C input unexpectedly contains ground-truth identity")
+        bag_hashes[index] = before
+
+    runtime_runs = common["runtime"].get("runs")
+    if not isinstance(runtime_runs, list) or len(runtime_runs) != 3:
+        _actual_fail("CP2-C runtime provenance must contain exactly three runs")
+    run_ids = []
+    run_modes = []
+    runtime_run_keys = (
+        "run_id", "sequence_index", "mode", "loader_map_before",
+        "loader_map_before_sha256", "loader_map_after", "loader_map_after_sha256",
+        "dso_records_before", "dso_records_after",
+    )
+    for index, record in enumerate(runtime_runs):
+        _actual_exact_keys(record, runtime_run_keys, "runtime run {}".format(index))
+        if record["sequence_index"] != index:
+            _actual_fail("CP2-C runtime sequence order differs")
+        if not isinstance(record["run_id"], str) or re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", record["run_id"]
+        ) is None:
+            _actual_fail("CP2-C runtime run ID is invalid")
+        if record["run_id"] in run_ids:
+            _actual_fail("CP2-C runtime run ID is duplicate")
+        run_ids.append(record["run_id"])
+        run_modes.append(record["mode"])
+        for map_name in ("loader_map_before", "loader_map_after"):
+            relative = _actual_relpath(record[map_name], "runtime loader map")
+            if manifest.get(relative) != record[map_name + "_sha256"]:
+                _actual_fail("runtime loader-map identity differs from manifest")
+        if record["dso_records_before"] != record["dso_records_after"]:
+            _actual_fail("runtime DSO identity changed during a run")
+        previous = None
+        for dso in record["dso_records_before"]:
+            _actual_exact_keys(dso, ("path", "soname", "size", "sha256", "build_id"),
+                               "runtime DSO")
+            path = _actual_safe_absolute_path(dso["path"], "runtime DSO path")
+            encoded = str(path).encode("utf-8")
+            if previous is not None and encoded <= previous:
+                _actual_fail("runtime DSO records are duplicate or unsorted")
+            previous = encoded
+            if not isinstance(dso["soname"], str) or not dso["soname"]:
+                _actual_fail("runtime DSO SONAME is invalid")
+            _actual_u64(dso["size"], "runtime DSO size")
+            _actual_sha256(dso["sha256"], "runtime DSO SHA-256")
+            if not isinstance(dso["build_id"], str) or re.fullmatch(r"[0-9a-f]+", dso["build_id"]) is None:
+                _actual_fail("runtime DSO build ID is invalid")
+    if run_modes != ["nullspace", "nullspace", "nullspace"]:
+        _actual_fail("CP2-C runtime modes are not exactly nullspace in sequence order")
+
+    resolved = common["configuration"].get("resolved_parameters")
+    contexts = common["configuration"].get("runtime_contexts")
+    if not isinstance(resolved, list) or len(resolved) != 3:
+        _actual_fail("CP2-C resolved-parameter population is not three")
+    if not isinstance(contexts, list) or len(contexts) != 3:
+        _actual_fail("CP2-C runtime-context population is not three")
+    resolved_hashes = {}
+    resolved_keys = (
+        "run_id", "prelaunch_raw_path", "prelaunch_raw_sha256", "runtime_raw_path",
+        "runtime_raw_sha256", "canonical_path", "canonical_sha256", "normalized_path",
+        "normalized_sha256",
+    )
+    for index, record in enumerate(resolved):
+        _actual_exact_keys(record, resolved_keys, "resolved parameters {}".format(index))
+        if record["run_id"] != run_ids[index]:
+            _actual_fail("resolved parameters do not join runtime run order")
+        for path_field in ("prelaunch_raw_path", "runtime_raw_path", "canonical_path"):
+            relative = _actual_relpath(record[path_field], "resolved parameter artifact")
+            hash_field = path_field.replace("_path", "_sha256")
+            if manifest.get(relative) != record[hash_field]:
+                _actual_fail("resolved-parameter artifact differs from manifest")
+        if record["normalized_path"] is not None or record["normalized_sha256"] is not None:
+            _actual_fail("CP2-C normalized-parameter fields must be null")
+        resolved_hashes[index] = _actual_sha256(
+            record["canonical_sha256"], "resolved canonical SHA-256"
+        )
+    for index, record in enumerate(contexts):
+        _actual_exact_keys(record, ("run_id", "path", "size", "sha256"),
+                           "runtime context {}".format(index))
+        if record["run_id"] != run_ids[index]:
+            _actual_fail("runtime context does not join run order")
+        _actual_validate_runtime_context(
+            artifact, manifest, record,
+            {
+                "checkpoint": "CP2-C", "run_id": run_ids[index],
+                "sequence_index": index, "sequence_id": ACTUAL_SEQUENCE_IDS[index],
+                "mode": "nullspace", "shadow_enabled": True,
+                "source_commit": provenance["source_commit"],
+                "config_sha256": common["configuration"]["static_bundle_sha256"],
+                "bag_sha256": bag_hashes[index],
+                "resolved_parameters_sha256": resolved_hashes[index],
+            },
+            "recorded_full",
+        )
+    return bag_hashes, resolved_hashes
+
+
+def _actual_validate_recorded_rows(
+    artifact, manifest, report, serial_rows, update_rows, feature_rows,
+    state_rows, covariance_rows, state_frames, proposal_frames, raw_frames,
+    bag_hashes, resolved_hashes, expected_config_sha256,
+):
+    schema = _actual_load_module("cp2_schema")
+    serial_by_pair = {}
+    invocation_owners = {}
+    pair_indices_by_sequence = {index: [] for index in range(3)}
+    previous_serial = None
+    enqueue_statuses = {
+        "queued", "frequency_dropped", "cam0_decode_failed", "cam1_decode_failed",
+        "not_entered", "process_terminated", "trace_failure",
+    }
+    processing_statuses = {
+        "processed", "not_queued", "queued_unprocessed", "process_terminated",
+        "trace_failure",
+    }
+    for row_index, row in enumerate(serial_rows):
+        _actual_exact_keys(row, ACTUAL_SERIAL_PAIR_KEYS, "serial pair {}".format(row_index))
+        if (
+            not _schema_version_one(row["schema_version"])
+            or row["record_type"] != "serial_pair"
+        ):
+            _actual_fail("serial-pair schema identity is invalid")
+        sequence_index = _actual_u64(row["sequence_index"], "serial sequence index")
+        pair_index = _actual_u64(row["pair_index"], "serial pair index")
+        if sequence_index >= 3 or row["sequence_id"] != ACTUAL_SEQUENCE_IDS[sequence_index]:
+            _actual_fail("serial sequence identity is invalid")
+        key = (sequence_index, pair_index)
+        if previous_serial is not None and key <= previous_serial:
+            _actual_fail("serial-pair rows are duplicate or out of order")
+        previous_serial = key
+        pair_indices_by_sequence[sequence_index].append(pair_index)
+        for field in (
+            "anchor_filtered_index", "anchor_camera_id", "cam0_filtered_index",
+            "cam1_filtered_index", "cam0_record_time_ns", "cam1_record_time_ns",
+            "cam0_header_time_ns", "cam1_header_time_ns", "camera_timestamp_ns",
+            "absolute_record_delta_ns",
+        ):
+            _actual_u64(row[field], "serial " + field)
+        if row["anchor_camera_id"] not in (0, 1):
+            _actual_fail("serial anchor camera is invalid")
+        if row["camera_timestamp_ns"] != row["cam0_header_time_ns"]:
+            _actual_fail("serial camera timestamp differs from cam0 header time")
+        expected_delta = abs(row["cam1_record_time_ns"] - row["cam0_record_time_ns"])
+        if row["absolute_record_delta_ns"] != expected_delta or expected_delta >= 20_000_000:
+            _actual_fail("serial record-time delta violates the strict 20 ms rule")
+        if row["selected"] is not True:
+            _actual_fail("serial-pair row is not selected")
+        for field in ("enqueue_entered", "enqueue_returned", "processing_entered", "processing_returned"):
+            if not isinstance(row[field], bool):
+                _actual_fail("serial event flag is not Boolean")
+        if row["enqueue_status"] not in enqueue_statuses or row["processing_status"] not in processing_statuses:
+            _actual_fail("serial status enum is invalid")
+        transition = (
+            row["enqueue_status"], row["processing_status"], row["enqueue_entered"],
+            row["enqueue_returned"], row["processing_entered"], row["processing_returned"],
+        )
+        if transition not in (
+            ("queued", "processed", True, True, True, True),
+            ("frequency_dropped", "not_queued", True, True, False, False),
+        ):
+            _actual_fail("serial status/event transition is not passing")
+        ids = row["updater_invocation_ids"]
+        if not isinstance(ids, list) or len(set(ids)) != len(ids):
+            _actual_fail("serial updater invocation IDs are invalid")
+        for invocation_id in ids:
+            _actual_u64(invocation_id, "serial updater invocation ID")
+            owner = (sequence_index, invocation_id)
+            if owner in invocation_owners:
+                _actual_fail("updater invocation is owned by multiple serial pairs")
+            invocation_owners[owner] = key
+        if row["processing_status"] != "processed" and ids:
+            _actual_fail("unprocessed serial row owns updater invocations")
+        serial_by_pair[key] = row
+    for sequence_index, values in pair_indices_by_sequence.items():
+        if values != list(range(len(values))):
+            _actual_fail("serial pair indices are noncontiguous for sequence {}".format(sequence_index))
+
+    update_by_identity = {}
+    update_by_invocation = {}
+    features_by_update = {}
+    previous_update = None
+    terminal_counts = Counter()
+    sequence_terminal_counts = {index: Counter() for index in range(3)}
+    invocation_ids_by_sequence = {index: [] for index in range(3)}
+    expected_state_keys = set()
+    expected_proposal_keys = set()
+    expected_raw_keys = set()
+    repair_totals = Counter({key: 0 for key in ACTUAL_COUNTER_KEYS})
+    shadow_writes = Counter({key: 0 for key in ACTUAL_SHADOW_WRITE_KEYS})
+    counted_updates = []
+    config_hash = None
+    for row_index, row in enumerate(update_rows):
+        _actual_exact_keys(row, ACTUAL_UPDATE_KEYS, "update {}".format(row_index))
+        if (
+            not _schema_version_one(row["schema_version"])
+            or row["record_type"] != "updater_invocation"
+        ):
+            _actual_fail("update schema identity is invalid")
+        identity = _actual_update_identity(row)
+        for field, value in zip(("sequence", "pair", "timestamp", "invocation"), identity):
+            _actual_u64(value, "update " + field)
+        if previous_update is not None and identity <= previous_update:
+            _actual_fail("update rows are duplicate or out of order")
+        previous_update = identity
+        sequence_index, pair_index, camera_timestamp_ns, invocation_id = identity
+        if sequence_index >= 3 or row["sequence_id"] != ACTUAL_SEQUENCE_IDS[sequence_index]:
+            _actual_fail("update sequence identity is invalid")
+        pair = serial_by_pair.get((sequence_index, pair_index))
+        if pair is None or pair["camera_timestamp_ns"] != camera_timestamp_ns:
+            _actual_fail("update does not join its serial-pair camera identity")
+        if invocation_owners.get((sequence_index, invocation_id)) != (sequence_index, pair_index):
+            _actual_fail("update does not have exactly one serial-pair owner")
+        invocation_ids_by_sequence[sequence_index].append(invocation_id)
+        update_by_identity[identity] = row
+        update_by_invocation[(sequence_index, pair_index, invocation_id)] = row
+        terminal = row["terminal_status"]
+        if not _actual_terminal_mapping(terminal, row["terminal_subreason"]):
+            _actual_fail("update terminal/subreason mapping is invalid")
+        _actual_checked_counter_add(
+            terminal_counts, terminal, 1, "campaign terminal count"
+        )
+        _actual_checked_counter_add(
+            sequence_terminal_counts[sequence_index], terminal, 1,
+            "sequence terminal count",
+        )
+        if row["live_mode"] != "nullspace" or row["shadow_mode"] != "schur":
+            _actual_fail("CP2-C update modes are not nullspace-live/Schur-shadow")
+        if row["shadow_enabled"] is not True or row["timing_evidence_eligible"] is not False:
+            _actual_fail("CP2-C shadow/timing flags are invalid")
+        for field in (
+            "duration_ns", "input_feature_count", "raw_system_count", "baseline_commit_count",
+            "baseline_transaction_mean_commits", "baseline_covariance_commits",
+            "baseline_expected_type_update_calls", "baseline_verified_nominal_fields",
+            "baseline_nominal_mismatches", "baseline_covariance_mismatches",
+            "baseline_fej_mismatches", "candidate_ekf_update_calls", "candidate_type_update_calls",
+            "candidate_mean_writes", "candidate_covariance_writes", "candidate_feature_writes",
+            "state_block_rows", "covariance_block_rows",
+        ):
+            _actual_u64(row[field], "update " + field)
+        if row["raw_system_count"] > row["input_feature_count"]:
+            _actual_fail("update raw-system count exceeds input feature count")
+        for field in (
+            "zero_write_snapshot_equal", "candidate_proposal_available",
+            "all_block_rows_present", "math_passed",
+        ):
+            if not isinstance(row[field], bool):
+                _actual_fail("update " + field + " is not Boolean")
+        if row["math_passed"] is not True:
+            _actual_fail("passing CP2-C artifact contains an update with math_passed=false")
+        for hash_field in ("config_sha256", "bag_sha256", "pair_index_sha256", "resolved_parameters_sha256"):
+            _actual_sha256(row[hash_field], "update " + hash_field)
+        if row["bag_sha256"] != bag_hashes[sequence_index]:
+            _actual_fail("update bag identity differs from provenance")
+        if row["resolved_parameters_sha256"] != resolved_hashes[sequence_index]:
+            _actual_fail("update parameter identity differs from provenance")
+        if row["pair_index_sha256"] != manifest["serial_pairs.jsonl"]:
+            _actual_fail("update pair-index digest differs from final serial trace")
+        if row["config_sha256"] != expected_config_sha256:
+            _actual_fail("update configuration identity differs from static bundle")
+        if config_hash is None:
+            config_hash = row["config_sha256"]
+        if row["config_sha256"] != config_hash:
+            _actual_fail("update configuration identity drifts")
+        for name in ("baseline_accepted_ids", "candidate_accepted_ids"):
+            values = row[name]
+            if not isinstance(values, list) or len(set(values)) != len(values):
+                _actual_fail("update accepted-ID array is invalid")
+            for value in values:
+                _actual_u64(value, "accepted feature ID")
+        if row["baseline_accepted_set_sha256"] != schema.accepted_set_sha256(row["baseline_accepted_ids"]):
+            _actual_fail("baseline accepted-set digest differs")
+        if row["baseline_accepted_sequence_sha256"] != schema.accepted_sequence_sha256(row["baseline_accepted_ids"]):
+            _actual_fail("baseline accepted-sequence digest differs")
+        if row["candidate_accepted_set_sha256"] != schema.accepted_set_sha256(row["candidate_accepted_ids"]):
+            _actual_fail("candidate accepted-set digest differs")
+        if row["candidate_accepted_sequence_sha256"] != schema.accepted_sequence_sha256(row["candidate_accepted_ids"]):
+            _actual_fail("candidate accepted-sequence digest differs")
+        for counters_name in ("baseline_preview_counters", "candidate_preview_counters"):
+            counters = _actual_counter_object(row[counters_name], "update " + counters_name)
+            for key, value in counters.items():
+                _actual_checked_counter_add(
+                    repair_totals, key, value, "repair/fallback aggregate"
+                )
+        for key, value in (
+            ("ekf_update_calls", row["candidate_ekf_update_calls"]),
+            ("type_update_calls", row["candidate_type_update_calls"]),
+            ("mean_writes", row["candidate_mean_writes"]),
+            ("covariance_writes", row["candidate_covariance_writes"]),
+            ("feature_writes", row["candidate_feature_writes"]),
+        ):
+            _actual_checked_counter_add(
+                shadow_writes, key, value, "shadow-write aggregate"
+            )
+
+        compact_identity = (sequence_index, pair_index, invocation_id)
+        state_for_update = {
+            phase: state_frames.get(compact_identity + (phase,)) for phase in range(4)
+        }
+        raw_count = row["raw_system_count"]
+        if raw_count > 0:
+            if state_for_update[0] is None or state_for_update[1] is None:
+                _actual_fail("nonzero-raw update lacks phase-0/1 snapshots")
+            expected_state_keys.update(compact_identity + (phase,) for phase in (0, 1))
+            if not _actual_ranges_equal(
+                artifact / "state_snapshot_payloads.bin", state_for_update[0]["offset"],
+                state_for_update[1]["offset"], state_for_update[0]["length"],
+            ) or state_for_update[0]["length"] != state_for_update[1]["length"]:
+                _actual_fail("phase-0/1 snapshot payloads are not byte-identical")
+        elif any(state_for_update[phase] is not None for phase in (0, 1)):
+            _actual_fail("zero-raw update unexpectedly has phase-0/1 snapshots")
+        committed = terminal == "committed_counted"
+        if committed:
+            counted_updates.append(row)
+            if state_for_update[2] is None or state_for_update[3] is None:
+                _actual_fail("committed update lacks phase-2/3 snapshots")
+            expected_state_keys.update(compact_identity + (phase,) for phase in (2, 3))
+            if (
+                state_for_update[2]["length"] != state_for_update[3]["length"]
+                or not _actual_ranges_equal(
+                    artifact / "state_snapshot_payloads.bin", state_for_update[2]["offset"],
+                    state_for_update[3]["offset"], state_for_update[2]["length"],
+                )
+            ):
+                _actual_fail("phase-2/3 snapshot payloads are not byte-identical")
+        elif any(state_for_update[phase] is not None for phase in (2, 3)):
+            _actual_fail("noncommitting update unexpectedly has phase-2/3 snapshots")
+        for phase, names in (
+            (0, ("prior_snapshot_sha256", "prior_payload_offset", "prior_payload_length")),
+            (1, ("precommit_snapshot_sha256", "precommit_payload_offset", "precommit_payload_length")),
+            (2, ("expected_postcommit_snapshot_sha256", "expected_postcommit_payload_offset", "expected_postcommit_payload_length")),
+            (3, ("live_postcommit_snapshot_sha256", "live_postcommit_payload_offset", "live_postcommit_payload_length")),
+        ):
+            _actual_nullable_frame(row, names[0], names[1], names[2], state_for_update[phase],
+                                   "update state phase {}".format(phase))
+        if row["zero_write_snapshot_equal"] is not True:
+            _actual_fail("update phase-0/1 zero-write equality did not pass")
+
+        baseline_frame = proposal_frames.get(compact_identity + (0,))
+        candidate_frame = proposal_frames.get(compact_identity + (1,))
+        baseline_expected = row["baseline_preview_status"] == "accepted"
+        candidate_expected = row["candidate_preview_status"] == "accepted"
+        if baseline_expected:
+            expected_proposal_keys.add(compact_identity + (0,))
+        if candidate_expected:
+            expected_proposal_keys.add(compact_identity + (1,))
+        _actual_nullable_frame(
+            row, "baseline_proposal_sha256", "baseline_proposal_payload_offset",
+            "baseline_proposal_payload_length", baseline_frame, "baseline proposal",
+        )
+        _actual_nullable_frame(
+            row, "candidate_proposal_sha256", "candidate_proposal_payload_offset",
+            "candidate_proposal_payload_length", candidate_frame, "candidate proposal",
+        )
+        if (baseline_frame is not None) is not baseline_expected:
+            _actual_fail("baseline proposal presence differs from preview status")
+        if (candidate_frame is not None) is not candidate_expected:
+            _actual_fail("candidate proposal presence differs from preview status")
+        if row["candidate_proposal_available"] is not candidate_expected:
+            _actual_fail("candidate proposal availability differs from its payload")
+        if committed and (baseline_frame is None or row["baseline_commit_count"] != 1):
+            _actual_fail("committed update lacks exactly one baseline proposal/commit")
+        if not committed and row["baseline_commit_count"] != 0:
+            _actual_fail("noncommitting update records a baseline commit")
+        if any(row[name] != 0 for name in (
+            "baseline_nominal_mismatches", "baseline_covariance_mismatches",
+            "baseline_fej_mismatches",
+        )):
+            _actual_fail("update records a live-commit mismatch")
+        if row["baseline_gamma_status"] not in ("not_reached", "available", "nonfinite"):
+            _actual_fail("baseline gamma status is invalid")
+        if (row["baseline_gamma_status"] == "available") is not (row["baseline_gamma"] is not None):
+            _actual_fail("baseline gamma status/value nullability differs")
+        if row["baseline_gamma"] is not None:
+            _actual_f64(row["baseline_gamma"], "baseline gamma", nonnegative=True)
+        if row["candidate_gamma"] is not None:
+            _actual_f64(row["candidate_gamma"], "candidate gamma", nonnegative=True)
+        features_by_update[identity] = []
+    for sequence_index, values in invocation_ids_by_sequence.items():
+        if values != list(range(len(values))):
+            _actual_fail("invocation IDs are noncontiguous for sequence {}".format(sequence_index))
+    if set(invocation_owners) != set(update_by_invocation):
+        _actual_fail("serial/update invocation ownership is not one-to-one")
+
+    disagreement_counts = Counter({name: 0 for name in ACTUAL_AGREEMENT_CLASSES})
+    nullspace_gate_attempts = 0
+    schur_gate_attempts = 0
+    gate_union = 0
+    gate_intersection = 0
+    gate_matches = 0
+    row_denominator = 0
+    row_matches = 0
+    statistics_all_passed = True
+    previous_feature = None
+    for row_index, row in enumerate(feature_rows):
+        _actual_exact_keys(row, ACTUAL_FEATURE_KEYS, "feature {}".format(row_index))
+        if (
+            not _schema_version_one(row["schema_version"])
+            or row["record_type"] != "feature_comparison"
+        ):
+            _actual_fail("feature schema identity is invalid")
+        update_identity = tuple(row[name] for name in (
+            "sequence_index", "pair_index", "camera_timestamp_ns", "invocation_id"
+        ))
+        for field, value in zip(
+            ("sequence index", "pair index", "camera timestamp", "invocation ID"),
+            update_identity,
+        ):
+            _actual_u64(value, "feature " + field)
+        ordinal = _actual_u64(row["feature_ordinal"], "feature ordinal")
+        feature_id = _actual_u64(row["feature_id"], "feature ID")
+        feature_key = update_identity + (ordinal,)
+        if previous_feature is not None and feature_key <= previous_feature:
+            _actual_fail("feature rows are duplicate or out of order")
+        previous_feature = feature_key
+        update = update_by_identity.get(update_identity)
+        if update is None:
+            _actual_fail("feature does not join an update")
+        group = features_by_update[update_identity]
+        if ordinal != len(group):
+            _actual_fail("feature ordinals are noncontiguous within an update")
+        group.append(row)
+        if _actual_u64(row["pass_index"], "feature pass index") != 1:
+            _actual_fail("feature pass index is not one")
+        raw_rows = _actual_u64(row["raw_rows"], "feature raw rows")
+        raw_key = (update_identity[0], update_identity[1], update_identity[3], ordinal, feature_id)
+        raw_frame = raw_frames.get(raw_key)
+        if raw_frame is None:
+            _actual_fail("feature lacks its one-to-one raw-system frame")
+        expected_raw_keys.add(raw_key)
+        _actual_sha256(row["raw_system_sha256"], "feature raw-system SHA-256")
+        _actual_u64(row["raw_payload_offset"], "feature raw payload offset")
+        _actual_u64(row["raw_payload_length"], "feature raw payload length")
+        if (
+            row["raw_system_sha256"] != raw_frame["sha256"]
+            or row["raw_payload_offset"] != raw_frame["offset"]
+            or row["raw_payload_length"] != raw_frame["length"]
+        ):
+            _actual_fail("feature raw-system payload identity differs")
+        _actual_repeat_update_fields(row, update, "feature")
+        layout = row["jacobian_layout"]
+        if not isinstance(layout, list) or not layout:
+            _actual_fail("feature Jacobian layout is empty or invalid")
+        covariance_ids = set()
+        for entry in layout:
+            _actual_exact_keys(entry, ("covariance_id", "size"), "Jacobian layout entry")
+            covariance_id = _actual_u64(entry["covariance_id"], "Jacobian covariance ID")
+            size = _actual_u64(entry["size"], "Jacobian block size")
+            if size == 0 or covariance_id in covariance_ids:
+                _actual_fail("Jacobian layout contains a zero/duplicate block")
+            covariance_ids.add(covariance_id)
+        null_decision = row["nullspace_decision"]
+        schur_decision = row["schur_decision"]
+        if null_decision is not None and not isinstance(null_decision, bool):
+            _actual_fail("nullspace decision is not nullable Boolean")
+        if schur_decision is not None and not isinstance(schur_decision, bool):
+            _actual_fail("Schur decision is not nullable Boolean")
+        if null_decision is not None:
+            nullspace_gate_attempts = _actual_checked_sum(
+                (nullspace_gate_attempts, 1), "nullspace gate attempts"
+            )
+        if schur_decision is not None:
+            schur_gate_attempts = _actual_checked_sum(
+                (schur_gate_attempts, 1), "Schur gate attempts"
+            )
+        if null_decision is None and schur_decision is None:
+            agreement = "neither_decision"
+        elif null_decision is None:
+            agreement = "schur_only"
+        elif schur_decision is None:
+            agreement = "nullspace_only"
+        elif null_decision and schur_decision:
+            agreement = "both_match_accept"
+        elif not null_decision and not schur_decision:
+            agreement = "both_match_reject"
+        elif null_decision:
+            agreement = "boolean_nullspace_accept_schur_reject"
+        else:
+            agreement = "boolean_nullspace_reject_schur_accept"
+        if row["agreement_class"] != agreement:
+            _actual_fail("feature agreement class differs from decisions")
+        _actual_checked_counter_add(
+            disagreement_counts, agreement, 1, "agreement-class aggregate"
+        )
+        if agreement != "neither_decision":
+            gate_union = _actual_checked_sum(
+                (gate_union, 1), "gate-union denominator"
+            )
+            row_denominator = _actual_checked_sum(
+                (row_denominator, raw_rows), "raw-row denominator"
+            )
+        if null_decision is not None and schur_decision is not None:
+            gate_intersection = _actual_checked_sum(
+                (gate_intersection, 1), "gate intersection"
+            )
+        if agreement in ("both_match_accept", "both_match_reject"):
+            gate_matches = _actual_checked_sum(
+                (gate_matches, 1), "gate-match numerator"
+            )
+            row_matches = _actual_checked_sum(
+                (row_matches, raw_rows), "raw-row match numerator"
+            )
+            if row["raw_row_match_weight"] != raw_rows:
+                _actual_fail("matching feature raw-row weight differs")
+        elif row["raw_row_match_weight"] != 0:
+            _actual_fail("nonmatching feature has nonzero raw-row match weight")
+        mode_valid = (
+            row["nullspace_reduction_status"] == "accepted"
+            and row["schur_reduction_status"] == "accepted"
+        )
+        if row["statistics_comparison_required"] is not mode_valid:
+            _actual_fail("feature statistics-required flag differs from reduction validity")
+        feature_stats_pass = True
+        for prefix in ("lambda", "eta", "gamma"):
+            passed, _ = _actual_validate_comparison(
+                row, prefix, 1.0e-8, 1.0e-10, mode_valid,
+                "feature {}".format(prefix),
+            )
+            feature_stats_pass = feature_stats_pass and (passed if mode_valid else True)
+        statistics_all_passed = statistics_all_passed and feature_stats_pass
+        for counter_name in ("nullspace_reducer_counters", "schur_reducer_counters"):
+            counters = _actual_counter_object(row[counter_name], "feature " + counter_name)
+            for key, value in counters.items():
+                _actual_checked_counter_add(
+                    repair_totals, key, value, "repair/fallback aggregate"
+                )
+    for identity, group in features_by_update.items():
+        update = update_by_identity[identity]
+        if len(group) != update["raw_system_count"]:
+            _actual_fail("update raw-system count differs from its feature rows")
+        baseline_ids = [row["feature_id"] for row in group if row["nullspace_decision"] is True]
+        candidate_ids = [row["feature_id"] for row in group if row["schur_decision"] is True]
+        if baseline_ids != update["baseline_accepted_ids"]:
+            _actual_fail("baseline accepted sequence differs from raw feature decisions")
+        if candidate_ids != update["candidate_accepted_ids"]:
+            _actual_fail("candidate accepted sequence differs from raw feature decisions")
+    if set(raw_frames) != expected_raw_keys:
+        _actual_fail("raw-system frame population is not one-to-one with features")
+    if set(state_frames) != expected_state_keys:
+        _actual_fail("state frame population differs from terminal-required phases")
+    if set(proposal_frames) != expected_proposal_keys:
+        _actual_fail("proposal frame population differs from preview-derived presence")
+
+    state_by_update = {identity: [] for identity in update_by_identity}
+    covariance_by_update = {identity: [] for identity in update_by_identity}
+    previous_state = None
+    state_ratios = []
+    for row_index, row in enumerate(state_rows):
+        _actual_exact_keys(row, ACTUAL_STATE_BLOCK_KEYS, "state block {}".format(row_index))
+        if (
+            not _schema_version_one(row["schema_version"])
+            or row["record_type"] != "state_block_comparison"
+        ):
+            _actual_fail("state-block schema identity is invalid")
+        identity = _actual_update_identity(row)
+        for field, value in zip(
+            ("sequence index", "pair index", "camera timestamp", "invocation ID"), identity
+        ):
+            _actual_u64(value, "state block " + field)
+        block_index = _actual_u64(row["block_index"], "state block index")
+        key = identity + (block_index,)
+        if previous_state is not None and key <= previous_state:
+            _actual_fail("state-block rows are duplicate or out of order")
+        previous_state = key
+        update = update_by_identity.get(identity)
+        if update is None:
+            _actual_fail("state block does not join an update")
+        if update["terminal_status"] != "committed_counted":
+            _actual_fail("noncommitting update has a state-block row")
+        _actual_u64(row["covariance_id"], "state covariance ID")
+        if _actual_u64(row["size"], "state block size") == 0:
+            _actual_fail("state block size is zero")
+        if not isinstance(row["block_kind"], str) or not row["block_kind"]:
+            _actual_fail("state block kind is invalid")
+        _actual_validate_block_identity(row, "state block")
+        _actual_repeat_update_fields(row, update, "state block")
+        passed, ratio = _actual_validate_block_comparison(row, "state block")
+        if not passed:
+            _actual_fail("passing CP2-C artifact contains a failed state-block comparison")
+        state_ratios.append(ratio)
+        state_by_update[identity].append(row)
+    previous_covariance = None
+    covariance_ratios = []
+    for row_index, row in enumerate(covariance_rows):
+        _actual_exact_keys(row, ACTUAL_COVARIANCE_BLOCK_KEYS,
+                           "covariance block {}".format(row_index))
+        if (
+            not _schema_version_one(row["schema_version"])
+            or row["record_type"] != "covariance_block_comparison"
+        ):
+            _actual_fail("covariance-block schema identity is invalid")
+        identity = _actual_update_identity(row)
+        for field, value in zip(
+            ("sequence index", "pair index", "camera timestamp", "invocation ID"), identity
+        ):
+            _actual_u64(value, "covariance block " + field)
+        row_index_value = _actual_u64(row["row_block_index"], "covariance row index")
+        column_index = _actual_u64(row["column_block_index"], "covariance column index")
+        key = identity + (row_index_value, column_index)
+        if previous_covariance is not None and key <= previous_covariance:
+            _actual_fail("covariance-block rows are duplicate or out of order")
+        previous_covariance = key
+        update = update_by_identity.get(identity)
+        if update is None or update["terminal_status"] != "committed_counted":
+            _actual_fail("covariance block does not join a committed update")
+        for field in ("row_covariance_id", "column_covariance_id", "row_size", "column_size"):
+            _actual_u64(row[field], "covariance " + field)
+        _actual_repeat_update_fields(row, update, "covariance block")
+        passed, ratio = _actual_validate_block_comparison(row, "covariance block")
+        if not passed:
+            _actual_fail("passing CP2-C artifact contains a failed covariance comparison")
+        covariance_ratios.append(ratio)
+        covariance_by_update[identity].append(row)
+
+    state_expected = 0
+    covariance_expected = 0
+    for identity, update in update_by_identity.items():
+        state_group = state_by_update[identity]
+        covariance_group = covariance_by_update[identity]
+        if update["terminal_status"] != "committed_counted":
+            if state_group or covariance_group or update["state_block_rows"] or update["covariance_block_rows"]:
+                _actual_fail("noncommitting update has block evidence")
+            if update["all_block_rows_present"] is not True:
+                _actual_fail("empty terminal-dependent block population is not marked complete")
+            continue
+        block_count = len(state_group)
+        if [row["block_index"] for row in state_group] != list(range(block_count)):
+            _actual_fail("state-block indices are noncontiguous")
+        if len({row["covariance_id"] for row in state_group}) != block_count:
+            _actual_fail("state-block covariance IDs are duplicate")
+        expected_pairs = [(row_index, column_index)
+                          for row_index in range(block_count)
+                          for column_index in range(block_count)]
+        actual_pairs = [(row["row_block_index"], row["column_block_index"])
+                        for row in covariance_group]
+        if actual_pairs != expected_pairs:
+            _actual_fail("covariance blocks do not contain the ordered Cartesian product")
+        for covariance in covariance_group:
+            row_state = state_group[covariance["row_block_index"]]
+            column_state = state_group[covariance["column_block_index"]]
+            if (
+                covariance["row_covariance_id"] != row_state["covariance_id"]
+                or covariance["column_covariance_id"] != column_state["covariance_id"]
+                or covariance["row_size"] != row_state["size"]
+                or covariance["column_size"] != column_state["size"]
+            ):
+                _actual_fail("covariance block identity/size differs from state partition")
+        if (
+            update["state_block_rows"] != block_count
+            or update["covariance_block_rows"] != _actual_checked_product(
+                block_count, block_count, "per-update covariance-block population"
+            )
+            or update["all_block_rows_present"] is not True
+        ):
+            _actual_fail("update block-row summary differs from exact population")
+        state_expected = _actual_checked_sum(
+            (state_expected, block_count), "campaign expected state blocks"
+        )
+        covariance_population = _actual_checked_product(
+            block_count, block_count, "per-update covariance-block population"
+        )
+        covariance_expected = _actual_checked_sum(
+            (covariance_expected, covariance_population),
+            "campaign expected covariance blocks",
+        )
+
+    report_count_fields = {
+        "attempted_updates": len(update_rows),
+        "empty_input": terminal_counts["empty_input"],
+        "all_rejected": terminal_counts["all_rejected"],
+        "empty_after_compression": terminal_counts["empty_after_compression"],
+        "preflight_rejected": terminal_counts["preflight_rejected"],
+        "internal_failure": terminal_counts["internal_failure"],
+        "committing_updates": terminal_counts["committed_counted"],
+        "raw_systems": len(feature_rows),
+        "nullspace_gate_attempts": nullspace_gate_attempts,
+        "schur_gate_attempts": schur_gate_attempts,
+        "gate_union_denominator": gate_union,
+        "gate_intersection": gate_intersection,
+        "gate_match_numerator": gate_matches,
+        "row_denominator": row_denominator,
+        "row_match_numerator": row_matches,
+        "state_blocks_expected": state_expected,
+        "state_blocks_seen": len(state_rows),
+        "covariance_blocks_expected": covariance_expected,
+        "covariance_blocks_seen": len(covariance_rows),
+    }
+    for field, expected in report_count_fields.items():
+        if report[field] != expected:
+            _actual_fail("campaign {} differs from independently reconstructed value".format(field))
+    if report["minimum_committing_updates"] != 1000 or len(counted_updates) < 1000:
+        _actual_fail("campaign does not meet the frozen thousand-counted-update minimum")
+    _actual_exact_keys(report["disagreement_counts"], ACTUAL_AGREEMENT_CLASSES,
+                       "campaign disagreement counts")
+    if report["disagreement_counts"] != dict(disagreement_counts):
+        _actual_fail("campaign disagreement counts differ from feature classes")
+    if gate_union == 0 or row_denominator == 0:
+        _actual_fail("campaign agreement population is empty")
+    expected_gate_ratio = _actual_exact_count_ratio(
+        gate_matches, gate_union, "campaign gate ratio"
+    )
+    expected_row_ratio = _actual_exact_count_ratio(
+        row_matches, row_denominator, "campaign raw-row ratio"
+    )
+    if not _actual_same_f64(report["gate_ratio"], expected_gate_ratio):
+        _actual_fail("campaign gate ratio differs")
+    if not _actual_same_f64(report["row_ratio"], expected_row_ratio):
+        _actual_fail("campaign raw-row ratio differs")
+    gate_passed = 1000 * gate_matches >= 999 * gate_union and 1000 * row_matches >= 999 * row_denominator
+    if report["gate_passed"] is not gate_passed or not gate_passed:
+        _actual_fail("campaign exact integer agreement gate did not pass")
+    if report["per_feature_statistics_passed"] is not statistics_all_passed or not statistics_all_passed:
+        _actual_fail("campaign feature-statistics conjunction did not pass")
+    expected_max_state = max(state_ratios) if state_ratios else None
+    expected_max_covariance = max(covariance_ratios) if covariance_ratios else None
+    for field, expected in (
+        ("maximum_state_ratio", expected_max_state),
+        ("maximum_covariance_ratio", expected_max_covariance),
+    ):
+        if expected is None or not _actual_same_f64(report[field], expected):
+            _actual_fail("campaign {} differs from comparison rows".format(field))
+    _actual_exact_keys(report["shadow_write_totals"], ACTUAL_SHADOW_WRITE_KEYS,
+                       "campaign shadow writes")
+    if report["shadow_write_totals"] != dict(shadow_writes) or any(shadow_writes.values()):
+        _actual_fail("campaign contains or misreports shadow writes")
+    _actual_exact_keys(report["repair_fallback_totals"], ACTUAL_COUNTER_KEYS,
+                       "campaign repair/fallback totals")
+    if report["repair_fallback_totals"] != dict(repair_totals) or any(repair_totals.values()):
+        _actual_fail("campaign contains or misreports repair/fallback counters")
+    candidate_missing = sum(
+        1 for row in counted_updates if not row["candidate_proposal_available"]
+    )
+    if report["candidate_missing_proposals"] != candidate_missing or candidate_missing:
+        _actual_fail("campaign contains or misreports candidate-missing counted updates")
+    if report["baseline_commit_mismatches"] != 0:
+        _actual_fail("campaign reports baseline commit mismatches")
+    if report["internal_failure"] != 0:
+        _actual_fail("campaign contains an internal-failure terminal")
+
+    summaries = report["sequence_summaries"]
+    if not isinstance(summaries, list) or len(summaries) != 3:
+        _actual_fail("campaign sequence summary population is not three")
+    for sequence_index, summary in enumerate(summaries):
+        _actual_exact_keys(summary, ACTUAL_SEQUENCE_SUMMARY_KEYS,
+                           "sequence summary {}".format(sequence_index))
+        for field in (
+            "sequence_index", "attempted_updates", "committing_updates", "empty_input",
+            "all_rejected", "empty_after_compression", "preflight_rejected",
+            "internal_failure",
+        ):
+            _actual_u64(summary[field], "sequence summary " + field)
+        for field in (
+            "first_pair_index", "last_pair_index", "first_camera_timestamp_ns",
+            "last_camera_timestamp_ns",
+        ):
+            if summary[field] is not None:
+                _actual_u64(summary[field], "sequence summary " + field)
+        if summary["sequence_index"] != sequence_index or summary["sequence_id"] != ACTUAL_SEQUENCE_IDS[sequence_index]:
+            _actual_fail("sequence summary identity/order differs")
+        rows = [row for row in update_rows if row["sequence_index"] == sequence_index]
+        expected = sequence_terminal_counts[sequence_index]
+        values = {
+            "attempted_updates": len(rows),
+            "committing_updates": expected["committed_counted"],
+            "empty_input": expected["empty_input"],
+            "all_rejected": expected["all_rejected"],
+            "empty_after_compression": expected["empty_after_compression"],
+            "preflight_rejected": expected["preflight_rejected"],
+            "internal_failure": expected["internal_failure"],
+        }
+        if any(summary[field] != value for field, value in values.items()):
+            _actual_fail("sequence summary terminal counts differ")
+        if rows:
+            expected_bounds = (
+                rows[0]["pair_index"], rows[-1]["pair_index"],
+                rows[0]["camera_timestamp_ns"], rows[-1]["camera_timestamp_ns"],
+            )
+        else:
+            expected_bounds = (None, None, None, None)
+        actual_bounds = tuple(summary[field] for field in (
+            "first_pair_index", "last_pair_index", "first_camera_timestamp_ns",
+            "last_camera_timestamp_ns",
+        ))
+        if actual_bounds != expected_bounds:
+            _actual_fail("sequence summary first/last identities differ")
+    return {
+        "replayed_invocations": sum(row["raw_system_count"] > 0 for row in update_rows),
+        "replayed_raw_systems": len(feature_rows),
+        "baseline_expected_proposals": sum(key[-1] == 0 for key in proposal_frames),
+        "candidate_expected_proposals": sum(key[-1] == 1 for key in proposal_frames),
+        "resolved_parameters": resolved_hashes,
+    }
+
+
+def _actual_canonical_jsonl_bytes(records, label):
+    encoded = bytearray()
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            _actual_fail("{} row {} is not an object".format(label, index))
+        try:
+            line = json.dumps(
+                record, allow_nan=False, ensure_ascii=False,
+                separators=(",", ":"), sort_keys=True,
+            )
+            encoded.extend(line.encode("utf-8", "strict"))
+        except (TypeError, ValueError, UnicodeEncodeError) as exc:
+            raise ActualVerificationError(
+                "{} row {} cannot be encoded canonically".format(label, index)
+            ) from exc
+        encoded.extend(b"\n")
+    return bytes(encoded)
+
+
+def _actual_canonical_u64_argument(value, label):
+    if not isinstance(value, str) or re.fullmatch(r"0|[1-9][0-9]*", value) is None:
+        _actual_fail(label + " is not a canonical unsigned decimal argument")
+    converted = int(value, 10)
+    _actual_u64(converted, label)
+    if str(converted) != value:
+        _actual_fail(label + " is not a canonical unsigned decimal argument")
+    return converted
+
+
+def _actual_validate_pair_index_population(rows, sequence_index):
+    if len(rows) < 2:
+        _actual_fail("independent pair-index population has fewer than two rows")
+    sequence_id = ACTUAL_SEQUENCE_IDS[sequence_index]
+    used_camera_indices = set()
+    previous_anchor = None
+    selected_cam0_times = []
+    for pair_index, row in enumerate(rows):
+        _actual_exact_keys(
+            row, ACTUAL_PAIR_INDEX_PROJECTION_KEYS,
+            "independent pair-index row {}:{}".format(sequence_index, pair_index),
+        )
+        if (
+            not _schema_version_one(row["schema_version"])
+            or row["record_type"] != "pair_index"
+            or _actual_u64(row["sequence_index"], "pair-index sequence")
+            != sequence_index
+            or row["sequence_id"] != sequence_id
+            or _actual_u64(row["pair_index"], "pair-index ordinal") != pair_index
+        ):
+            _actual_fail("independent pair-index identity/order differs")
+        anchor = _actual_u64(row["anchor_filtered_index"], "pair-index anchor")
+        camera_id = _actual_u64(row["anchor_camera_id"], "pair-index anchor camera")
+        cam0 = _actual_u64(row["cam0_filtered_index"], "pair-index cam0 index")
+        cam1 = _actual_u64(row["cam1_filtered_index"], "pair-index cam1 index")
+        if camera_id not in (0, 1) or anchor != (cam0 if camera_id == 0 else cam1):
+            _actual_fail("independent pair-index anchor relation differs")
+        if previous_anchor is not None and anchor <= previous_anchor:
+            _actual_fail("independent pair-index anchors are not strictly ordered")
+        previous_anchor = anchor
+        if cam0 == cam1 or cam0 in used_camera_indices or cam1 in used_camera_indices:
+            _actual_fail("independent pair-index reuses a camera message")
+        used_camera_indices.update((cam0, cam1))
+        cam0_record = _actual_u64(
+            row["cam0_record_time_ns"], "pair-index cam0 record time"
+        )
+        cam1_record = _actual_u64(
+            row["cam1_record_time_ns"], "pair-index cam1 record time"
+        )
+        _actual_u64(row["cam0_header_time_ns"], "pair-index cam0 header time")
+        _actual_u64(row["cam1_header_time_ns"], "pair-index cam1 header time")
+        delta = _actual_u64(
+            row["absolute_record_delta_ns"], "pair-index absolute record delta"
+        )
+        if delta != abs(cam0_record - cam1_record) or delta >= 20_000_000:
+            _actual_fail("independent pair-index violates the strict record-time rule")
+        candidate_index = cam1 if camera_id == 0 else cam0
+        anchor_time = cam0_record if camera_id == 0 else cam1_record
+        candidate_time = cam1_record if camera_id == 0 else cam0_record
+        if candidate_index <= anchor or candidate_time < anchor_time:
+            _actual_fail("independent pair-index candidate is not forward of its anchor")
+        selected_cam0_times.append(cam0_record)
+    if any(
+        left > right
+        for left, right in zip(selected_cam0_times, selected_cam0_times[1:])
+    ):
+        _actual_fail("independent pair-index selected cam0 record times reverse")
+    if selected_cam0_times[-1] <= selected_cam0_times[0]:
+        _actual_fail("independent pair-index has no positive selected duration")
+
+
+def _actual_validate_recorded_pair_index_commands(
+    artifact, common, manifest, serial_rows,
+):
+    pair_commands = [
+        record for record in common["commands"] if record["phase"] == "pair_index"
+    ]
+    if len(pair_commands) != len(ACTUAL_SEQUENCE_IDS):
+        _actual_fail("CP2-C must retain exactly three pair-index commands")
+
+    provenance = common["provenance"]
+    environment_records = provenance["environment"]["classes"]
+    workspace = _actual_safe_absolute_path(
+        provenance["build"]["workspace"], "pair-index fresh workspace"
+    )
+    helper = str(workspace / "src/scripts/cp2/cp2_pair_index_extract.py")
+    inputs = provenance["inputs"]
+    expected_flags = (
+        "--sequence-index", "--sequence-id", "--bag-path",
+        "--parent-bag-fd", "--bag-identity",
+    )
+    previous_pair_command_id = None
+
+    for sequence_index, record in enumerate(pair_commands):
+        sequence_id = ACTUAL_SEQUENCE_IDS[sequence_index]
+        command_id = _actual_u64(record["command_id"], "pair-index command ID")
+        if (
+            record["sequence_index"] != sequence_index
+            or record["pair_index"] is not None
+            or record["run_index"] is not None
+            or record["exit_code"] != 0
+            or record["timed_out"] is not False
+            or (
+                previous_pair_command_id is not None
+                and command_id <= previous_pair_command_id
+            )
+        ):
+            _actual_fail("pair-index command identity/order/success differs")
+        previous_pair_command_id = command_id
+        for phase in ("runtime_preflight", "ros_run"):
+            matching_runtime_commands = [
+                candidate for candidate in common["commands"]
+                if candidate["phase"] == phase
+                and candidate["sequence_index"] == sequence_index
+            ]
+            if (
+                len(matching_runtime_commands) != 1
+                or matching_runtime_commands[0]["pair_index"] is not None
+                or matching_runtime_commands[0]["run_index"] != sequence_index
+                or _actual_u64(
+                    matching_runtime_commands[0]["command_id"],
+                    "{} command ID".format(phase),
+                ) <= command_id
+            ):
+                _actual_fail(
+                    "pair-index command does not precede exactly one {}".format(phase)
+                )
+
+        environment_sha = record["environment_sha256"]
+        matching_classes = [
+            item for item in environment_records
+            if item["canonical_sha256"] == environment_sha
+        ]
+        if (
+            len(matching_classes) != 1
+            or matching_classes[0]["environment_id"] != "pair_index_v1"
+            or common["environment_classes"].get(environment_sha)
+            != ACTUAL_PAIR_INDEX_ENVIRONMENT
+        ):
+            _actual_fail("pair-index command environment is not exact pair_index_v1")
+
+        argv = record["argv"]
+        if (
+            len(argv) != 14
+            or argv[:4] != ["/usr/bin/python3", "-I", "-B", helper]
+            or tuple(argv[4::2]) != expected_flags
+        ):
+            _actual_fail("pair-index command differs from the exact extractor CLI")
+        arguments = dict(zip(argv[4::2], argv[5::2]))
+        if (
+            arguments["--sequence-index"] != str(sequence_index)
+            or arguments["--sequence-id"] != sequence_id
+            or arguments["--bag-path"] != inputs[sequence_index]["bag_path"]
+        ):
+            _actual_fail("pair-index command does not join its frozen input identity")
+        descriptor = _actual_canonical_u64_argument(
+            arguments["--parent-bag-fd"], "pair-index parent descriptor"
+        )
+        if descriptor > (1 << 31) - 1:
+            _actual_fail("pair-index parent descriptor exceeds the supported range")
+        identity_fields = arguments["--bag-identity"].split(":")
+        if len(identity_fields) != 9:
+            _actual_fail("pair-index bag identity has the wrong field population")
+        identity = [
+            _actual_canonical_u64_argument(value, "pair-index bag identity")
+            for value in identity_fields
+        ]
+        if (
+            not stat.S_ISREG(identity[2])
+            or identity[3] != 1
+            or identity[6] != inputs[sequence_index]["bag_size"]
+        ):
+            _actual_fail(
+                "pair-index retained bag identity is not single-link regular or size-bound"
+            )
+
+        streams = {}
+        for stream_name in ("stdout", "stderr"):
+            relative = _actual_relpath(
+                record[stream_name], "pair-index command " + stream_name
+            )
+            if (
+                relative not in manifest
+                or record[stream_name + "_sha256"] != manifest[relative]
+            ):
+                _actual_fail("pair-index command stream does not join the manifest")
+            payload = _actual_read_bytes(
+                artifact / relative,
+                "pair-index command " + stream_name,
+                ACTUAL_MAX_JSONL_BYTES,
+            )
+            if hashlib.sha256(payload).hexdigest() != manifest[relative]:
+                _actual_fail("pair-index command stream digest differs")
+            streams[stream_name] = payload
+        if streams["stderr"] != b"":
+            _actual_fail("successful pair-index command retained nonempty stderr")
+
+        stdout_rows, stdout_bytes = _actual_jsonl(
+            artifact / record["stdout"],
+            "pair-index command stdout {}".format(sequence_index),
+        )
+        if stdout_bytes != streams["stdout"]:
+            _actual_fail("pair-index stdout changed between retained reads")
+        if _actual_canonical_jsonl_bytes(
+            stdout_rows, "pair-index command stdout"
+        ) != stdout_bytes:
+            _actual_fail("pair-index command stdout is not canonical JSONL")
+        _actual_validate_pair_index_population(stdout_rows, sequence_index)
+
+        projection = []
+        for serial_row in serial_rows:
+            if serial_row["sequence_index"] != sequence_index:
+                continue
+            projected = {
+                key: serial_row[key] for key in ACTUAL_PAIR_INDEX_PROJECTION_KEYS
+            }
+            projected["record_type"] = "pair_index"
+            projection.append(projected)
+        projected_bytes = _actual_canonical_jsonl_bytes(
+            projection, "serial-pair source projection"
+        )
+        if projected_bytes != stdout_bytes:
+            _actual_fail(
+                "serial-pair source projection differs from independent pair-index stdout"
+            )
+
+
+def _actual_validate_replay_report(
+    replay, common, manifest, derived, replay_bytes, retained_digest,
+):
+    _actual_exact_keys(replay, ACTUAL_REPLAY_KEYS, "offline replay report")
+    if (
+        not _schema_version_one(replay["schema_version"])
+        or replay["record_type"] != "cp2_offline_replay"
+        or replay["checkpoint"] != "CP2-C"
+    ):
+        _actual_fail("offline replay schema identity is invalid")
+    provenance = common["provenance"]
+    runtime = common["runtime"]
+    if replay["source_commit"] != provenance["source_commit"] or replay["source_tree"] != provenance["source_tree"]:
+        _actual_fail("offline replay source identity differs from provenance")
+    if (
+        replay["executable_sha256"] != common["executable_sha256"]
+        or replay["executable_build_id"] != runtime["build_id_before"]
+    ):
+        _actual_fail("offline replay executable identity differs")
+    if replay["strict_fp_verified"] is not True or replay["bag_provider_calls"] != 0:
+        _actual_fail("offline replay strict-FP/bag-provider proof is invalid")
+    _actual_u64(replay["bag_provider_calls"], "offline replay bag-provider calls")
+    _actual_exact_keys(replay["input_sha256"], ACTUAL_REPLAY_INPUT_KEYS,
+                       "offline replay inputs")
+    file_by_key = {
+        "serial_pairs": "serial_pairs.jsonl", "updates": "updates.jsonl",
+        "features": "features.jsonl", "state_blocks": "state_blocks.jsonl",
+        "covariance_blocks": "covariance_blocks.jsonl",
+        "state_snapshot_payloads": "state_snapshot_payloads.bin",
+        "proposal_payloads": "proposal_payloads.bin",
+        "raw_system_payloads": "raw_system_payloads.bin",
+    }
+    if any(replay["input_sha256"][key] != manifest[path] for key, path in file_by_key.items()):
+        _actual_fail("offline replay input hashes differ from final artifact bytes")
+    resolved = replay["resolved_parameters"]
+    if not isinstance(resolved, list) or len(resolved) != 3:
+        _actual_fail("offline replay resolved-parameter population differs")
+    for sequence_index, record in enumerate(resolved):
+        _actual_exact_keys(record, ("sequence_index", "sha256"), "replay resolved parameter")
+        if record["sequence_index"] != sequence_index or record["sha256"] != derived["resolved_parameters"][sequence_index]:
+            _actual_fail("offline replay resolved-parameter identity differs")
+    for field in (
+        "replayed_invocations", "replayed_raw_systems", "baseline_expected_proposals",
+        "candidate_expected_proposals",
+    ):
+        _actual_u64(replay[field], "offline replay " + field)
+        if replay[field] != derived[field] or replay[field] == 0:
+            _actual_fail("offline replay {} is zero or differs from reconstruction".format(field))
+    if (
+        _actual_u64(replay["baseline_exact_proposal_matches"], "baseline exact proposal matches")
+        != replay["baseline_expected_proposals"]
+        or _actual_u64(replay["candidate_exact_proposal_matches"], "candidate exact proposal matches")
+        != replay["candidate_expected_proposals"]
+    ):
+        _actual_fail("offline replay exact proposal match counts differ")
+    _actual_exact_keys(replay["failure_counts"], ACTUAL_REPLAY_FAILURE_KEYS,
+                       "offline replay failure counts")
+    if any(_actual_u64(value, "offline replay failure count") != 0
+           for value in replay["failure_counts"].values()):
+        _actual_fail("offline replay contains a mathematical/structural failure")
+    if replay["passed"] is not True:
+        _actual_fail("offline replay report did not pass")
+    if hashlib.sha256(replay_bytes).hexdigest() != retained_digest:
+        _actual_fail("retained offline replay bytes differ from report hash")
+
+
+def _actual_offline_environment(common, temporary):
+    executable = str(common["executable"])
+    candidates = []
+    for record in common["commands"]:
+        argv = record["argv"]
+        if (
+            record["phase"] == "verification"
+            and len(argv) == 5
+            and argv[0] == executable
+            and argv[1] == "--cp2-offline-replay"
+            and argv[3] == "--output"
+        ):
+            candidates.append(record)
+    if len(candidates) != 1:
+        _actual_fail("artifact does not retain exactly one prior offline-replay command")
+    record = candidates[0]
+    original_artifact = _actual_safe_absolute_path(
+        record["argv"][2], "retained offline-replay artifact"
+    )
+    original_output = _actual_safe_absolute_path(
+        record["argv"][4], "retained offline-replay output"
+    )
+    if original_output != original_artifact / "replay_report.json":
+        _actual_fail("retained offline-replay output is not its artifact replay report")
+    if record["exit_code"] != 0 or record["timed_out"] is not False:
+        _actual_fail("retained offline-replay command did not complete successfully")
+    environment = dict(common["environment_classes"][record["environment_sha256"]])
+    environment["HOME"] = str(temporary)
+    environment["TMPDIR"] = str(temporary)
+    environment.pop("CP2_SELF_TEST", None)
+    environment.pop("CP2_FORBID_BAG_ACCESS", None)
+    return environment
+
+
+def _actual_process_group_exists(process_group):
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _actual_terminate_reap_and_wait_for_group_absence(process, label):
+    """Kill an owned session, reap its leader, and prove group absence."""
+
+    process_group = process.pid
+    group_was_present = _actual_process_group_exists(process_group)
+    if group_was_present:
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + ACTUAL_PROCESS_GROUP_CLEANUP_SECONDS
+    while process.returncode is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            _actual_fail(label + " leader could not be reaped")
+        try:
+            process.wait(
+                timeout=min(ACTUAL_PROCESS_GROUP_POLL_SECONDS, remaining)
+            )
+        except subprocess.TimeoutExpired:
+            continue
+        except InterruptedError:
+            continue
+    while _actual_process_group_exists(process_group):
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            _actual_fail(label + " process group did not disappear after SIGKILL")
+        time.sleep(min(ACTUAL_PROCESS_GROUP_POLL_SECONDS, remaining))
+    return group_was_present
+
+
+def _actual_wait_owned_process_group(process, timeout, label):
+    """Wait once and unconditionally close the complete owned process group."""
+
+    timed_out = False
+    completed_normally = False
+    group_was_present = False
+    try:
+        try:
+            process.wait(timeout=timeout)
+            completed_normally = True
+        except subprocess.TimeoutExpired:
+            timed_out = True
+    finally:
+        # BaseException-wide by design: cleanup precedes propagation of a
+        # timeout, RuntimeError, KeyboardInterrupt, or SystemExit.
+        group_was_present = _actual_terminate_reap_and_wait_for_group_absence(
+            process, label
+        )
+    if process.returncode is None:
+        _actual_fail(label + " lacks an exit status after process-group cleanup")
+    return int(process.returncode), timed_out, (
+        completed_normally and group_was_present
+    )
+
+
+def _actual_rerun_offline_replay(artifact, retained_bytes, common):
+    temporary = Path(tempfile.mkdtemp(prefix="schurvio-cp2-detached-replay-", dir="/tmp"))
+    os.chmod(str(temporary), 0o700)
+    output = temporary / "replay_report.json"
+    stdout_path = temporary / "stdout.bin"
+    stderr_path = temporary / "stderr.bin"
+    descriptor = os.open(str(output), os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_CLOEXEC, 0o600)
+    os.close(descriptor)
+    before = output.lstat()
+    command = [
+        str(common["executable"]), "--cp2-offline-replay", str(artifact),
+        "--output", str(output),
+    ]
+    environment = _actual_offline_environment(common, temporary)
+    process = None
+    try:
+        with stdout_path.open("wb") as stdout_stream, stderr_path.open("wb") as stderr_stream:
+            process = subprocess.Popen(
+                command, cwd="/tmp", env=environment, stdin=subprocess.DEVNULL,
+                stdout=stdout_stream, stderr=stderr_stream, start_new_session=True,
+                close_fds=True,
+            )
+            return_code, timed_out, surviving_descendants = (
+                _actual_wait_owned_process_group(
+                    process,
+                    ACTUAL_OFFLINE_REPLAY_TIMEOUT_SECONDS,
+                    "detached offline replay",
+                )
+            )
+            if timed_out:
+                _actual_fail("detached offline replay timed out")
+            if surviving_descendants:
+                _actual_fail(
+                    "detached offline replay retained a process-group descendant"
+                )
+        if return_code != 0:
+            _actual_fail("detached offline replay returned nonzero")
+        after = output.lstat()
+        if (
+            not stat.S_ISREG(after.st_mode) or after.st_nlink != 1
+            or (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino)
+        ):
+            _actual_fail("detached offline replay replaced its precreated output")
+        reproduced = _actual_read_bytes(output, "detached replay report", ACTUAL_MAX_JSON_BYTES)
+        _actual_read_bytes(stdout_path, "detached replay stdout", ACTUAL_MAX_JSON_BYTES)
+        _actual_read_bytes(stderr_path, "detached replay stderr", ACTUAL_MAX_JSON_BYTES)
+        strict_json_bytes(reproduced, "detached replay report")
+        if reproduced != retained_bytes:
+            _actual_fail("detached offline replay report is not byte-identical")
+        if sha256_file(common["executable"]) != common["executable_sha256"]:
+            _actual_fail("runtime executable changed during detached replay")
+        if {path.name for path in temporary.iterdir()} != {
+            output.name, stdout_path.name, stderr_path.name
+        }:
+            _actual_fail("detached offline replay created an undeclared /tmp output")
+    finally:
+        try:
+            if process is not None:
+                _actual_terminate_reap_and_wait_for_group_absence(
+                    process, "detached offline replay"
+                )
+        finally:
+            shutil.rmtree(str(temporary), ignore_errors=False)
+
+
+def verify_recorded_artifact(artifact, manifest_sha256, quiet=False, run_offline_replay=True):
+    raw = os.fspath(artifact)
+    if not os.path.isabs(raw) or os.path.normpath(raw) != raw:
+        _actual_fail("recorded artifact path must be normalized and absolute")
+    _actual_sha256(manifest_sha256, "recorded manifest anchor")
+    if ACTUAL_CP2_C_AUTHORIZED is not True:
+        _actual_fail(ACTUAL_CP2_C_BLOCK_REASON)
+
+    # Unreachable until an approval-bound replacement deliberately removes the
+    # pre-access block above; retained implementation remains reviewable.
+    artifact = Path(artifact)
+    manifest, observed, _ = _actual_scan_and_verify_manifest(artifact, manifest_sha256)
+    required = {
+        "cp2_report.json", "provenance.json", "commands.jsonl", "serial_pairs.jsonl",
+        "updates.jsonl", "features.jsonl", "state_blocks.jsonl", "covariance_blocks.jsonl",
+        "replay_report.json", "state_snapshot_payloads.bin", "proposal_payloads.bin",
+        "raw_system_payloads.bin",
+    }
+    if not required.issubset(manifest):
+        _actual_fail("CP2-C artifact lacks a fixed core file")
+    common = _actual_validate_provenance(artifact, manifest, observed, "CP2-C")
+    report = _actual_json(artifact / "cp2_report.json", "cp2_report.json")
+    _actual_exact_keys(report, ACTUAL_RECORDED_REPORT_KEYS, "CP2-C report")
+    if (
+        not _schema_version_one(report["schema_version"])
+        or report["record_type"] != "recorded_parity_campaign"
+        or report["checkpoint"] != "CP2-C"
+        or report["status"] != "passed"
+        or report["evidence_class"] != "trusted_runner_local_staging_evidence"
+        or report["distribution_status"] != "internal_non_conveyable_staging"
+        or report["eligible_for_cp2_seal"] is not False
+    ):
+        _actual_fail("CP2-C report identity/status is invalid")
+    _actual_utc(report["created_utc"], "CP2-C report created_utc")
+    if report["created_utc"] != common["provenance"]["created_utc"]:
+        _actual_fail("CP2-C report/provenance creation instants differ")
+    for field in (
+        "attempted_updates", "empty_input", "all_rejected", "empty_after_compression",
+        "preflight_rejected", "internal_failure", "committing_updates",
+        "minimum_committing_updates", "raw_systems", "nullspace_gate_attempts",
+        "schur_gate_attempts", "gate_union_denominator", "gate_intersection",
+        "gate_match_numerator", "row_denominator", "row_match_numerator",
+        "state_blocks_expected", "state_blocks_seen", "covariance_blocks_expected",
+        "covariance_blocks_seen", "candidate_missing_proposals",
+        "baseline_commit_mismatches",
+    ):
+        _actual_u64(report[field], "CP2-C report " + field)
+    for field in (
+        "proposal_derivation_passed", "per_feature_statistics_passed", "gate_passed",
+        "math_passed", "passed",
+    ):
+        if not isinstance(report[field], bool):
+            _actual_fail("CP2-C report " + field + " is not Boolean")
+    _actual_hash_file_fields(report, manifest, {
+        "provenance_sha256": "provenance.json", "commands_sha256": "commands.jsonl",
+        "serial_pairs_sha256": "serial_pairs.jsonl", "updates_sha256": "updates.jsonl",
+        "features_sha256": "features.jsonl", "state_blocks_sha256": "state_blocks.jsonl",
+        "covariance_blocks_sha256": "covariance_blocks.jsonl",
+        "state_snapshot_payloads_sha256": "state_snapshot_payloads.bin",
+        "proposal_payloads_sha256": "proposal_payloads.bin",
+        "raw_system_payloads_sha256": "raw_system_payloads.bin",
+        "replay_report_sha256": "replay_report.json",
+    })
+    bag_hashes, resolved_hashes = _actual_validate_recorded_provenance(
+        artifact, common, manifest
+    )
+    serial_rows, _ = _actual_jsonl(artifact / "serial_pairs.jsonl", "serial_pairs.jsonl")
+    update_rows, _ = _actual_jsonl(artifact / "updates.jsonl", "updates.jsonl")
+    feature_rows, _ = _actual_jsonl(artifact / "features.jsonl", "features.jsonl")
+    state_rows, _ = _actual_jsonl(artifact / "state_blocks.jsonl", "state_blocks.jsonl")
+    covariance_rows, _ = _actual_jsonl(
+        artifact / "covariance_blocks.jsonl", "covariance_blocks.jsonl"
+    )
+    state_frames = _actual_parse_state_payloads(artifact / "state_snapshot_payloads.bin")
+    proposal_frames = _actual_parse_proposal_payloads(artifact / "proposal_payloads.bin")
+    raw_frames = _actual_parse_raw_payloads(artifact / "raw_system_payloads.bin")
+    derived = _actual_validate_recorded_rows(
+        artifact, manifest, report, serial_rows, update_rows, feature_rows, state_rows,
+        covariance_rows, state_frames, proposal_frames, raw_frames, bag_hashes,
+        resolved_hashes, common["configuration"]["static_bundle_sha256"],
+    )
+    _actual_validate_recorded_pair_index_commands(
+        artifact, common, manifest, serial_rows
+    )
+    replay_bytes = _actual_read_bytes(
+        artifact / "replay_report.json", "replay_report.json", ACTUAL_MAX_JSON_BYTES
+    )
+    replay = strict_json_bytes(replay_bytes, "replay_report.json")
+    if not isinstance(replay, dict):
+        _actual_fail("replay_report.json is not an object")
+    _actual_validate_replay_report(
+        replay, common, manifest, derived, replay_bytes, report["replay_report_sha256"]
+    )
+    if report["proposal_derivation_passed"] is not replay["passed"]:
+        _actual_fail("campaign proposal-derivation flag differs from replay")
+    if (
+        report["math_passed"] is not True or report["passed"] is not True
+        or report["gate_passed"] is not True
+    ):
+        _actual_fail("CP2-C campaign did not satisfy its mathematical/report conjunction")
+    if run_offline_replay:
+        _actual_rerun_offline_replay(artifact, replay_bytes, common)
+    result = {
+        "checkpoint": "CP2-C", "manifest_sha256": manifest_sha256,
+        "passed": True, "provenance": common["provenance"], "report": report,
+        "runtime_identity": (
+            common["provenance"]["source_commit"], common["provenance"]["source_tree"],
+            common["runtime"]["executable_sha256_before"], common["runtime"]["build_id_before"],
+            common["configuration"]["static_bundle_sha256"],
+            common["configuration"]["launch"]["sha256"],
+        ),
+    }
+    if not quiet:
+        print("CP2-C recorded artifact independently verified: " + str(artifact))
+        print("SHA256SUMS SHA-256: " + manifest_sha256)
+    return result
+
+
+ACTUAL_SEQUENCE_REPORT_KEYS = (
+    "schema_version", "record_type", "checkpoint", "status", "sequence_index",
+    "sequence_id", "offset_seconds", "provenance_sha256", "pair_index_sha256",
+    "valid_pair_count", "runs", "normalized_parameter_diff", "shared_timestamp_count",
+    "shared_timestamp_sha256", "shared_population_sha256", "baseline_alignment",
+    "position_p95_m", "orientation_p95_deg", "ate_nullspace_m", "ate_schur_m",
+    "relative_ate_difference", "coverage_passed", "trajectory_passed", "passed",
+)
+ACTUAL_SEQUENCE_RUN_KEYS = (
+    "run_index", "mode", "executable_sha256", "loader_map_sha256",
+    "resolved_parameters_sha256", "callback_trace_sha256", "trajectory_sha256",
+    "processed_unique_pairs", "processing_fraction", "first_selected_timestamp_ns",
+    "last_selected_timestamp_ns", "first_processed_timestamp_ns",
+    "last_processed_timestamp_ns", "selected_duration_ns", "processed_duration_ns",
+    "time_coverage", "completed", "exit_code",
+)
+ACTUAL_PAIR_INDEX_KEYS = ACTUAL_PAIR_INDEX_PROJECTION_KEYS
+ACTUAL_CALLBACK_KEYS = (
+    "schema_version", "record_type", "sequence_index", "sequence_id", "mode",
+    "callback_index", "pair_index", "anchor_filtered_index", "cam0_filtered_index",
+    "cam1_filtered_index", "cam0_record_time_ns", "cam1_record_time_ns",
+    "cam0_header_time_ns", "cam1_header_time_ns", "camera_timestamp_ns",
+    "enqueue_entered", "enqueue_returned", "enqueue_status", "processing_entered",
+    "processing_returned", "processing_status", "state_row_emitted", "trajectory_index",
+)
+ACTUAL_TRAJECTORY_KEYS = (
+    "schema_version", "record_type", "sequence_index", "sequence_id", "mode",
+    "trajectory_index", "callback_index", "pair_index", "camera_timestamp_ns",
+    "position_G", "quaternion_ItoG_xyzw",
+)
+ACTUAL_ALIGNMENT_KEYS = (
+    "source", "shared_population_sha256", "rotation_row_major", "translation",
+    "quaternion_xyzw", "source_singular_values", "source_rank_threshold", "determinant",
+    "orthogonality_error_frobenius", "applied_identically_to_both_modes",
+)
+
+
+class _ActualByteReader:
+    def __init__(self, content, label):
+        self.content = content
+        self.label = label
+        self.offset = 0
+
+    def take(self, length, label):
+        if isinstance(length, bool) or not isinstance(length, int) or length < 0:
+            _actual_fail(self.label + " has an invalid " + label + " length")
+        end = self.offset + length
+        if end > len(self.content):
+            _actual_fail(self.label + " is truncated at " + label)
+        value = self.content[self.offset:end]
+        self.offset = end
+        return value
+
+    def u64(self, label):
+        return int.from_bytes(self.take(8, label), "big")
+
+    def finish(self):
+        if self.offset != len(self.content):
+            _actual_fail(self.label + " has trailing bytes")
+
+
+def _actual_decode_parameter_value(reader, label, depth=0):
+    if depth > 128:
+        _actual_fail(label + " nesting exceeds 128")
+    tag = reader.take(1, label + " tag")
+    if tag == b"b":
+        value = reader.take(1, label + " Boolean")
+        if value not in (b"\0", b"\1"):
+            _actual_fail(label + " Boolean payload is invalid")
+        return value == b"\1"
+    if tag == b"i":
+        return int.from_bytes(reader.take(8, label + " integer"), "big", signed=True)
+    if tag == b"f":
+        value = struct.unpack(">d", reader.take(8, label + " binary64"))[0]
+        if not math.isfinite(value):
+            _actual_fail(label + " binary64 value is nonfinite")
+        return value
+    if tag == b"s":
+        length = reader.u64(label + " string length")
+        try:
+            value = reader.take(length, label + " string").decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise ActualVerificationError(label + " string is not UTF-8") from exc
+        if "\0" in value:
+            _actual_fail(label + " string contains NUL")
+        return value
+    if tag == b"l":
+        count = reader.u64(label + " list count")
+        if count > len(reader.content) - reader.offset:
+            _actual_fail(label + " list count exceeds remaining bytes")
+        return [
+            _actual_decode_parameter_value(reader, "{}[{}]".format(label, index), depth + 1)
+            for index in range(count)
+        ]
+    if tag == b"m":
+        count = reader.u64(label + " map count")
+        if count > (len(reader.content) - reader.offset) // 10:
+            _actual_fail(label + " map count exceeds remaining bytes")
+        result = {}
+        previous = None
+        for index in range(count):
+            length = reader.u64(label + " map-key length")
+            encoded = reader.take(length, label + " map key")
+            if previous is not None and encoded <= previous:
+                _actual_fail(label + " map keys are duplicate or not bytewise sorted")
+            previous = encoded
+            try:
+                name = encoded.decode("utf-8", "strict")
+            except UnicodeDecodeError as exc:
+                raise ActualVerificationError(label + " map key is not UTF-8") from exc
+            if "\0" in name:
+                _actual_fail(label + " map key contains NUL")
+            result[name] = _actual_decode_parameter_value(
+                reader, "{}[{!r}]".format(label, name), depth + 1
+            )
+        return result
+    _actual_fail(label + " has an unknown canonical parameter tag")
+
+
+def _actual_decode_resolved_parameters(content, label):
+    domain = b"SchurVIO-CP2-ros-params-v1\0"
+    if not content.startswith(domain):
+        _actual_fail(label + " lacks the resolved-parameter domain")
+    reader = _ActualByteReader(content[len(domain):], label)
+    result = _actual_decode_parameter_value(reader, label)
+    reader.finish()
+    if not isinstance(result, dict):
+        _actual_fail(label + " top-level value is not a map")
+    if any(
+        not name.startswith("/cp2_vio/") or len(name) == len("/cp2_vio/")
+        for name in result
+    ):
+        _actual_fail(label + " contains a key outside /cp2_vio/")
+    return result
+
+
+def _actual_f64_vector(value, length, label):
+    if not isinstance(value, list) or len(value) != length:
+        _actual_fail("{} is not a {}-vector".format(label, length))
+    return [_actual_f64(item, label + " component") for item in value]
+
+
+def _actual_exact_ns_timestamp(value, label, require_nine=False):
+    if not isinstance(value, str):
+        _actual_fail(label + " timestamp is not a string")
+    pattern = r"[0-9]+\.[0-9]{9}" if require_nine else r"[0-9]+(?:\.[0-9]{1,9})?"
+    if re.fullmatch(pattern, value) is None:
+        _actual_fail(label + " timestamp is not exact nonnegative decimal seconds")
+    whole, separator, fraction = value.partition(".")
+    result = int(whole) * 1_000_000_000 + int((fraction if separator else "").ljust(9, "0") or "0")
+    return _actual_u64(result, label + " timestamp nanoseconds")
+
+
+def _actual_parse_tum(content, label, estimator=False):
+    header = b"# timestamp tx ty tz qx qy qz qw\n"
+    if not content.startswith(header) or b"\r" in content or not content.endswith(b"\n"):
+        _actual_fail(label + " does not have the exact TUM header/newlines")
+    rows = []
+    for line_index, raw in enumerate(content[len(header):].splitlines(), 1):
+        try:
+            fields = raw.decode("ascii", "strict").split(" ")
+        except UnicodeDecodeError as exc:
+            raise ActualVerificationError(label + " contains non-ASCII bytes") from exc
+        if len(fields) != 8 or any(field == "" for field in fields):
+            _actual_fail("{} row {} does not contain eight single-space fields".format(label, line_index))
+        timestamp = _actual_exact_ns_timestamp(
+            fields[0], "{} row {}".format(label, line_index), require_nine=estimator
+        )
+        try:
+            pose = [float(field) for field in fields[1:]]
+        except ValueError as exc:
+            raise ActualVerificationError(label + " contains a nonnumeric pose field") from exc
+        if not all(math.isfinite(value) for value in pose):
+            _actual_fail(label + " contains a nonfinite pose")
+        norm = math.sqrt(sum(value * value for value in pose[3:]))
+        if not 1.0 - 1.0e-10 <= norm <= 1.0 + 1.0e-10:
+            _actual_fail(label + " quaternion norm is outside [1-1e-10,1+1e-10]")
+        rows.append({"timestamp_ns": timestamp, "position": pose[:3], "quaternion": pose[3:]})
+    return rows
+
+
+def _actual_estimator_tum_bytes(trajectory):
+    lines = ["# timestamp tx ty tz qx qy qz qw\n"]
+    for row in trajectory:
+        timestamp = row["camera_timestamp_ns"]
+        timestamp_text = "{}.{:09d}".format(timestamp // 1_000_000_000, timestamp % 1_000_000_000)
+        values = row["position_G"] + row["quaternion_ItoG_xyzw"]
+        lines.append(timestamp_text + " " + " ".join(format(float(value), ".17g") for value in values) + "\n")
+    return "".join(lines).encode("ascii")
+
+
+def _actual_parse_shared_timestamps(content):
+    domain = b"SchurVIO-CP2-shared-timestamps-v1\0"
+    if not content.startswith(domain):
+        _actual_fail("shared timestamp payload domain is invalid")
+    reader = _ActualByteReader(content[len(domain):], "shared_timestamps.bin")
+    count = reader.u64("shared timestamp count")
+    if count > (len(reader.content) - reader.offset) // 8:
+        _actual_fail("shared timestamp count exceeds payload")
+    values = [reader.u64("shared timestamp") for _ in range(count)]
+    reader.finish()
+    if any(values[index] <= values[index - 1] for index in range(1, len(values))):
+        _actual_fail("shared timestamps are not strictly increasing")
+    return values
+
+
+def _actual_parse_shared_population(content):
+    domain = b"SchurVIO-CP2-shared-population-v1\0"
+    if not content.startswith(domain):
+        _actual_fail("shared population payload domain is invalid")
+    reader = _ActualByteReader(content[len(domain):], "shared_population.bin")
+    count = reader.u64("shared population count")
+    row_bytes = 16 + 21 * 8
+    if count != (len(reader.content) - reader.offset) // row_bytes:
+        _actual_fail("shared population count/byte length differs")
+    rows = []
+    for index in range(count):
+        timestamp = reader.u64("shared estimator timestamp")
+        ground_truth_timestamp = reader.u64("shared ground-truth timestamp")
+        values = []
+        for component in range(21):
+            value = struct.unpack(">d", reader.take(8, "shared pose component"))[0]
+            if not math.isfinite(value):
+                _actual_fail("shared population contains a nonfinite pose component")
+            values.append(value)
+        rows.append({
+            "timestamp_ns": timestamp,
+            "ground_truth_timestamp_ns": ground_truth_timestamp,
+            "nullspace_position": values[0:3], "nullspace_quaternion": values[3:7],
+            "schur_position": values[7:10], "schur_quaternion": values[10:14],
+            "ground_truth_position": values[14:17], "ground_truth_quaternion": values[17:21],
+        })
+    reader.finish()
+    return rows
+
+
+def _actual_matrix_close(left, right, tolerance=1.0e-10):
+    if len(left) != len(right):
+        return False
+    return all(abs(float(lhs) - float(rhs)) <= tolerance for lhs, rhs in zip(left, right))
+
+
+def _actual_validate_sequence_provenance(artifact, common, manifest, report):
+    provenance = common["provenance"]
+    sequence_index = report["sequence_index"]
+    sequence_id = report["sequence_id"]
+    input_keys = (
+        "sequence_index", "sequence_id", "offset_seconds", "bag_path", "bag_size",
+        "bag_sha256_before", "bag_sha256_after", "ground_truth_path",
+        "ground_truth_sha256",
+    )
+    inputs = provenance.get("inputs")
+    if not isinstance(inputs, list) or len(inputs) != 1:
+        _actual_fail("CP2-D sequence provenance must contain one input")
+    input_record = _actual_exact_keys(inputs[0], input_keys, "sequence input")
+    if (
+        input_record["sequence_index"] != sequence_index
+        or input_record["sequence_id"] != sequence_id
+        or not _actual_same_f64(input_record["offset_seconds"], report["offset_seconds"])
+    ):
+        _actual_fail("sequence report/input identity differs")
+    _actual_safe_absolute_path(input_record["bag_path"], "sequence bag path")
+    _actual_u64(input_record["bag_size"], "sequence bag size")
+    bag_digest = _actual_sha256(input_record["bag_sha256_before"], "sequence bag SHA-256")
+    if input_record["bag_sha256_after"] != bag_digest:
+        _actual_fail("sequence bag before/after identity differs")
+    _actual_safe_absolute_path(input_record["ground_truth_path"], "sequence ground-truth path")
+    _actual_sha256(input_record["ground_truth_sha256"], "sequence ground-truth SHA-256")
+
+    runtime_runs = common["runtime"].get("runs")
+    runtime_run_keys = (
+        "run_id", "sequence_index", "mode", "loader_map_before",
+        "loader_map_before_sha256", "loader_map_after", "loader_map_after_sha256",
+        "dso_records_before", "dso_records_after",
+    )
+    if not isinstance(runtime_runs, list) or len(runtime_runs) != 2:
+        _actual_fail("CP2-D runtime run population is not two")
+    run_ids = []
+    for run_index, (record, mode) in enumerate(zip(runtime_runs, ("nullspace", "schur"))):
+        _actual_exact_keys(record, runtime_run_keys, "sequence runtime run")
+        if record["sequence_index"] != sequence_index or record["mode"] != mode:
+            _actual_fail("sequence runtime run identity/order differs")
+        if not isinstance(record["run_id"], str) or re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", record["run_id"]
+        ) is None or record["run_id"] in run_ids:
+            _actual_fail("sequence runtime run ID is invalid/duplicate")
+        run_ids.append(record["run_id"])
+        for path_field in ("loader_map_before", "loader_map_after"):
+            relative = _actual_relpath(record[path_field], "sequence loader map")
+            if manifest.get(relative) != record[path_field + "_sha256"]:
+                _actual_fail("sequence loader-map identity differs from manifest")
+        if record["dso_records_before"] != record["dso_records_after"]:
+            _actual_fail("sequence DSO identities changed during a run")
+
+    configuration = common["configuration"]
+    resolved = configuration.get("resolved_parameters")
+    contexts = configuration.get("runtime_contexts")
+    resolved_keys = (
+        "run_id", "prelaunch_raw_path", "prelaunch_raw_sha256", "runtime_raw_path",
+        "runtime_raw_sha256", "canonical_path", "canonical_sha256", "normalized_path",
+        "normalized_sha256",
+    )
+    if not isinstance(resolved, list) or len(resolved) != 2:
+        _actual_fail("CP2-D resolved-parameter population is not two")
+    if not isinstance(contexts, list) or len(contexts) != 2:
+        _actual_fail("CP2-D runtime-context population is not two")
+    schema = _actual_load_module("cp2_schema")
+    full_maps = []
+    normalized_maps = []
+    canonical_hashes = []
+    for run_index, record in enumerate(resolved):
+        _actual_exact_keys(record, resolved_keys, "sequence resolved parameters")
+        if record["run_id"] != run_ids[run_index]:
+            _actual_fail("sequence resolved parameters do not join run order")
+        for path_field in (
+            "prelaunch_raw_path", "runtime_raw_path", "canonical_path", "normalized_path"
+        ):
+            if record[path_field] is None:
+                _actual_fail("CP2-D resolved parameter path is null")
+            relative = _actual_relpath(record[path_field], "sequence parameter artifact")
+            hash_field = path_field.replace("_path", "_sha256")
+            if manifest.get(relative) != record[hash_field]:
+                _actual_fail("sequence parameter artifact differs from manifest")
+        canonical_content = _actual_read_bytes(
+            artifact / record["canonical_path"], "sequence canonical parameters",
+            ACTUAL_MAX_BINARY_BYTES,
+        )
+        normalized_content = _actual_read_bytes(
+            artifact / record["normalized_path"], "sequence normalized parameters",
+            ACTUAL_MAX_BINARY_BYTES,
+        )
+        full_map = _actual_decode_resolved_parameters(
+            canonical_content, "sequence canonical parameters"
+        )
+        normalized_map = _actual_decode_resolved_parameters(
+            normalized_content, "sequence normalized parameters"
+        )
+        expected_normalized = dict(full_map)
+        for key in ACTUAL_PARAMETER_DIFF_KEYS:
+            if key not in expected_normalized:
+                _actual_fail("sequence canonical parameters lack allowlisted difference key: " + key)
+            del expected_normalized[key]
+        expected_bytes = schema.encode_resolved_parameters(expected_normalized)
+        if normalized_content != expected_bytes or normalized_map != expected_normalized:
+            _actual_fail("sequence normalized parameters are not exact six-key deletion")
+        full_maps.append(full_map)
+        normalized_maps.append(normalized_map)
+        canonical_hashes.append(record["canonical_sha256"])
+    if normalized_maps[0] != normalized_maps[1]:
+        _actual_fail("sequence normalized parameter maps differ")
+    for index, context in enumerate(contexts):
+        _actual_exact_keys(context, ("run_id", "path", "size", "sha256"),
+                           "sequence runtime context")
+        if context["run_id"] != run_ids[index]:
+            _actual_fail("sequence runtime context does not join run order")
+        _actual_validate_runtime_context(
+            artifact, manifest, context,
+            {
+                "checkpoint": "CP2-D", "run_id": run_ids[index],
+                "sequence_index": sequence_index, "sequence_id": sequence_id,
+                "mode": ("nullspace", "schur")[index], "shadow_enabled": False,
+                "source_commit": provenance["source_commit"],
+                "config_sha256": configuration["static_bundle_sha256"],
+                "bag_sha256": bag_digest,
+                "resolved_parameters_sha256": canonical_hashes[index],
+            },
+            "sequence",
+        )
+
+    diff = report["normalized_parameter_diff"]
+    if not isinstance(diff, list) or len(diff) != len(ACTUAL_PARAMETER_DIFF_KEYS):
+        _actual_fail("sequence normalized-parameter diff population differs")
+    path_values = []
+    for index, key in enumerate(ACTUAL_PARAMETER_DIFF_KEYS):
+        record = diff[index]
+        _actual_exact_keys(
+            record, ("key", "nullspace_typed_value", "schur_typed_value"),
+            "normalized-parameter diff",
+        )
+        if record["key"] != key:
+            _actual_fail("normalized-parameter diff key/order differs")
+        expected_nullspace = schema.typed_parameter_value(full_maps[0][key])
+        expected_schur = schema.typed_parameter_value(full_maps[1][key])
+        if (
+            record["nullspace_typed_value"] != expected_nullspace
+            or record["schur_typed_value"] != expected_schur
+        ):
+            _actual_fail("normalized-parameter typed value differs from canonical payload")
+        if key == ACTUAL_PARAMETER_DIFF_KEYS[0]:
+            if full_maps[0][key] != "nullspace" or full_maps[1][key] != "schur":
+                _actual_fail("sequence mode parameter values are invalid")
+        else:
+            for value in (full_maps[0][key], full_maps[1][key]):
+                path_values.append(str(_actual_safe_absolute_path(value, "sequence output parameter")))
+    if len(set(path_values)) != len(path_values):
+        _actual_fail("sequence mode output/context paths alias")
+    return {
+        "bag_sha256": bag_digest,
+        "canonical_hashes": canonical_hashes,
+        "runtime_runs": runtime_runs,
+        "run_ids": run_ids,
+        "executable_sha256": common["executable_sha256"],
+    }
+
+
+def _actual_validate_sequence_traces(artifact, manifest, report, provenance_details):
+    pair_rows, _ = _actual_jsonl(artifact / "pair_index.jsonl", "pair_index.jsonl")
+    if not pair_rows:
+        _actual_fail("sequence pair-index population is empty")
+    pair_by_index = {}
+    used_camera_indices = set()
+    previous_anchor = None
+    previous_cam0_record_time = None
+    for row_index, row in enumerate(pair_rows):
+        _actual_exact_keys(row, ACTUAL_PAIR_INDEX_KEYS, "pair-index row")
+        if (
+            not _schema_version_one(row["schema_version"])
+            or row["record_type"] != "pair_index"
+        ):
+            _actual_fail("pair-index schema identity is invalid")
+        if (
+            row["sequence_index"] != report["sequence_index"]
+            or row["sequence_id"] != report["sequence_id"]
+            or row["pair_index"] != row_index
+        ):
+            _actual_fail("pair-index identity/order differs")
+        for field in (
+            "sequence_index", "pair_index", "anchor_filtered_index", "anchor_camera_id", "cam0_filtered_index",
+            "cam1_filtered_index", "cam0_record_time_ns", "cam1_record_time_ns",
+            "cam0_header_time_ns", "cam1_header_time_ns", "absolute_record_delta_ns",
+        ):
+            _actual_u64(row[field], "pair-index " + field)
+        if row["anchor_camera_id"] not in (0, 1):
+            _actual_fail("pair-index anchor camera is invalid")
+        anchor_index = row["cam0_filtered_index"] if row["anchor_camera_id"] == 0 else row["cam1_filtered_index"]
+        if row["anchor_filtered_index"] != anchor_index:
+            _actual_fail("pair-index anchor filtered index differs from its camera")
+        if previous_anchor is not None and row["anchor_filtered_index"] <= previous_anchor:
+            _actual_fail("pair-index anchors are not in strict selection order")
+        previous_anchor = row["anchor_filtered_index"]
+        anchor_time = row["cam0_record_time_ns"] if row["anchor_camera_id"] == 0 else row["cam1_record_time_ns"]
+        candidate_time = row["cam1_record_time_ns"] if row["anchor_camera_id"] == 0 else row["cam0_record_time_ns"]
+        candidate_index = row["cam1_filtered_index"] if row["anchor_camera_id"] == 0 else row["cam0_filtered_index"]
+        if candidate_time < anchor_time or candidate_index <= row["anchor_filtered_index"]:
+            _actual_fail("pair-index candidate is not forward of its anchor")
+        delta = abs(row["cam1_record_time_ns"] - row["cam0_record_time_ns"])
+        if row["absolute_record_delta_ns"] != delta or delta >= 20_000_000:
+            _actual_fail("pair-index violates strict first-forward 20 ms acceptance")
+        if (
+            row["cam0_filtered_index"] in used_camera_indices
+            or row["cam1_filtered_index"] in used_camera_indices
+            or row["cam0_filtered_index"] == row["cam1_filtered_index"]
+        ):
+            _actual_fail("pair-index reuses a filtered image")
+        used_camera_indices.update((row["cam0_filtered_index"], row["cam1_filtered_index"]))
+        if (
+            previous_cam0_record_time is not None
+            and row["cam0_record_time_ns"] < previous_cam0_record_time
+        ):
+            _actual_fail("pair-index selected cam0 record times reverse")
+        previous_cam0_record_time = row["cam0_record_time_ns"]
+        pair_by_index[row_index] = row
+    if report["valid_pair_count"] != len(pair_rows):
+        _actual_fail("sequence valid-pair count differs from pair-index rows")
+
+    runs = report["runs"]
+    if not isinstance(runs, list) or len(runs) != 2:
+        _actual_fail("sequence report run population is not two")
+    mode_details = {}
+    callback_statuses = {
+        "queued", "frequency_dropped", "cam0_decode_failed", "cam1_decode_failed",
+        "not_entered", "process_terminated", "trace_failure",
+    }
+    processing_statuses = {
+        "processed", "not_queued", "queued_unprocessed", "process_terminated",
+        "trace_failure",
+    }
+    sequence_math = _actual_load_module("cp2_sequence_math")
+    for run_index, mode in enumerate(("nullspace", "schur")):
+        run = runs[run_index]
+        _actual_exact_keys(run, ACTUAL_SEQUENCE_RUN_KEYS, "sequence run")
+        for field in (
+            "run_index", "processed_unique_pairs", "first_selected_timestamp_ns",
+            "last_selected_timestamp_ns", "first_processed_timestamp_ns",
+            "last_processed_timestamp_ns", "selected_duration_ns", "processed_duration_ns",
+        ):
+            _actual_u64(run[field], "sequence run " + field)
+        for field in ("processing_fraction", "time_coverage"):
+            _actual_f64(run[field], "sequence run " + field, nonnegative=True)
+        _actual_i64(run["exit_code"], "sequence run exit code")
+        if not isinstance(run["completed"], bool):
+            _actual_fail("sequence run completed flag is not Boolean")
+        if run["run_index"] != run_index or run["mode"] != mode:
+            _actual_fail("sequence report mode/run order differs")
+        if run["executable_sha256"] != provenance_details["executable_sha256"]:
+            _actual_fail("sequence run executable digest differs from runtime provenance")
+        if run["resolved_parameters_sha256"] != provenance_details["canonical_hashes"][run_index]:
+            _actual_fail("sequence run resolved-parameter digest differs")
+        runtime_record = provenance_details["runtime_runs"][run_index]
+        if run["loader_map_sha256"] not in (
+            runtime_record["loader_map_before_sha256"], runtime_record["loader_map_after_sha256"]
+        ):
+            _actual_fail("sequence run loader-map digest is not retained in provenance")
+        callback_name = mode + "_callbacks.jsonl"
+        trajectory_name = mode + "_trajectory.jsonl"
+        if run["callback_trace_sha256"] != manifest[callback_name]:
+            _actual_fail("sequence callback trace hash differs")
+        if run["trajectory_sha256"] != manifest[trajectory_name]:
+            _actual_fail("sequence trajectory trace hash differs")
+        callbacks, _ = _actual_jsonl(artifact / callback_name, callback_name)
+        if len(callbacks) != len(pair_rows):
+            _actual_fail("sequence callback population is not one-to-one with pair index")
+        callback_by_index = {}
+        seen_pairs = set()
+        processed = []
+        for callback_index, callback in enumerate(callbacks):
+            _actual_exact_keys(callback, ACTUAL_CALLBACK_KEYS, mode + " callback")
+            for field in (
+                "sequence_index", "callback_index", "pair_index", "anchor_filtered_index",
+                "cam0_filtered_index", "cam1_filtered_index", "cam0_record_time_ns",
+                "cam1_record_time_ns", "cam0_header_time_ns", "cam1_header_time_ns",
+                "camera_timestamp_ns",
+            ):
+                _actual_u64(callback[field], "callback " + field)
+            if (
+                not _schema_version_one(callback["schema_version"])
+                or callback["record_type"] != "serial_callback"
+                or callback["sequence_index"] != report["sequence_index"]
+                or callback["sequence_id"] != report["sequence_id"]
+                or callback["mode"] != mode
+                or callback["callback_index"] != callback_index
+            ):
+                _actual_fail("sequence callback identity/order differs")
+            pair_index = _actual_u64(callback["pair_index"], "callback pair index")
+            pair = pair_by_index.get(pair_index)
+            if pair is None or pair_index in seen_pairs:
+                _actual_fail("callback references an absent/duplicate pair")
+            seen_pairs.add(pair_index)
+            for field in (
+                "anchor_filtered_index", "cam0_filtered_index", "cam1_filtered_index",
+                "cam0_record_time_ns", "cam1_record_time_ns", "cam0_header_time_ns",
+                "cam1_header_time_ns",
+            ):
+                if callback[field] != pair[field]:
+                    _actual_fail("callback source field differs from pair index: " + field)
+            if callback["camera_timestamp_ns"] != pair["cam0_header_time_ns"]:
+                _actual_fail("callback camera timestamp differs from cam0 header time")
+            for field in (
+                "enqueue_entered", "enqueue_returned", "processing_entered",
+                "processing_returned", "state_row_emitted",
+            ):
+                if not isinstance(callback[field], bool):
+                    _actual_fail("callback event flag is not Boolean")
+            if callback["enqueue_status"] not in callback_statuses or callback["processing_status"] not in processing_statuses:
+                _actual_fail("callback status enum is invalid")
+            transition = (
+                callback["enqueue_status"], callback["processing_status"],
+                callback["enqueue_entered"], callback["enqueue_returned"],
+                callback["processing_entered"], callback["processing_returned"],
+            )
+            if transition not in (
+                ("queued", "processed", True, True, True, True),
+                ("frequency_dropped", "not_queued", True, True, False, False),
+            ):
+                _actual_fail("callback status/event transition is not passing")
+            if (callback["trajectory_index"] is None) is not (not callback["state_row_emitted"]):
+                _actual_fail("callback trajectory-index nullability differs from state emission")
+            if callback["trajectory_index"] is not None:
+                _actual_u64(callback["trajectory_index"], "callback trajectory index")
+            if callback["processing_status"] == "processed":
+                processed.append(callback)
+            elif callback["state_row_emitted"]:
+                _actual_fail("unprocessed callback emits a state row")
+            callback_by_index[callback_index] = callback
+        if seen_pairs != set(pair_by_index):
+            _actual_fail("callback pair population differs from pair index")
+        if not processed:
+            _actual_fail("sequence mode has no processed callback")
+
+        trajectories, _ = _actual_jsonl(artifact / trajectory_name, trajectory_name)
+        trajectory_by_index = {}
+        previous_timestamp = None
+        seen_callback_indices = set()
+        for trajectory_index, trajectory in enumerate(trajectories):
+            _actual_exact_keys(trajectory, ACTUAL_TRAJECTORY_KEYS, mode + " trajectory")
+            for field in (
+                "sequence_index", "trajectory_index", "callback_index", "pair_index",
+                "camera_timestamp_ns",
+            ):
+                _actual_u64(trajectory[field], "trajectory " + field)
+            if (
+                not _schema_version_one(trajectory["schema_version"])
+                or trajectory["record_type"] != "trajectory_pose"
+                or trajectory["sequence_index"] != report["sequence_index"]
+                or trajectory["sequence_id"] != report["sequence_id"]
+                or trajectory["mode"] != mode
+                or trajectory["trajectory_index"] != trajectory_index
+            ):
+                _actual_fail("trajectory identity/order differs")
+            callback_index = _actual_u64(trajectory["callback_index"], "trajectory callback index")
+            callback = callback_by_index.get(callback_index)
+            if callback is None or callback_index in seen_callback_indices:
+                _actual_fail("trajectory references an absent/duplicate callback")
+            seen_callback_indices.add(callback_index)
+            if (
+                callback["processing_status"] != "processed"
+                or callback["trajectory_index"] != trajectory_index
+                or trajectory["pair_index"] != callback["pair_index"]
+                or trajectory["camera_timestamp_ns"] != callback["camera_timestamp_ns"]
+            ):
+                _actual_fail("trajectory/callback bidirectional join differs")
+            timestamp = _actual_u64(trajectory["camera_timestamp_ns"], "trajectory timestamp")
+            if previous_timestamp is not None and timestamp <= previous_timestamp:
+                _actual_fail("trajectory timestamps are duplicate or nonincreasing")
+            previous_timestamp = timestamp
+            trajectory["position_G"] = _actual_f64_vector(
+                trajectory["position_G"], 3, "trajectory position"
+            )
+            trajectory["quaternion_ItoG_xyzw"] = _actual_f64_vector(
+                trajectory["quaternion_ItoG_xyzw"], 4, "trajectory quaternion"
+            )
+            sequence_math.jpl_stored_xyzw_to_hamilton_inverse_rotation(
+                trajectory["quaternion_ItoG_xyzw"]
+            )
+            trajectory_by_index[trajectory_index] = trajectory
+        emitted = [callback for callback in callbacks if callback["state_row_emitted"]]
+        if len(emitted) != len(trajectories) or set(seen_callback_indices) != {
+            callback["callback_index"] for callback in emitted
+        }:
+            _actual_fail("trajectory population differs from emitting callbacks")
+        raw_tum_name = mode + "_raw.tum"
+        raw_tum_bytes = _actual_read_bytes(
+            artifact / raw_tum_name, raw_tum_name, ACTUAL_MAX_JSONL_BYTES
+        )
+        if raw_tum_bytes != _actual_estimator_tum_bytes(trajectories):
+            _actual_fail("raw estimator TUM is not the exact trajectory projection")
+
+        selected_first = pair_rows[0]["cam0_record_time_ns"]
+        selected_last = pair_rows[-1]["cam0_record_time_ns"]
+        processed_first = processed[0]["cam0_record_time_ns"]
+        processed_last = processed[-1]["cam0_record_time_ns"]
+        selected_duration = selected_last - selected_first
+        processed_duration = processed_last - processed_first
+        if selected_duration <= 0 or processed_duration <= 0:
+            _actual_fail("sequence selected/processed duration is not strictly positive")
+        processing_fraction = _actual_exact_count_ratio(
+            len(processed), len(pair_rows), "sequence processing fraction"
+        )
+        time_coverage = _actual_exact_count_ratio(
+            processed_duration, selected_duration, "sequence time coverage"
+        )
+        expected_run_values = {
+            "processed_unique_pairs": len(processed),
+            "processing_fraction": processing_fraction,
+            "first_selected_timestamp_ns": selected_first,
+            "last_selected_timestamp_ns": selected_last,
+            "first_processed_timestamp_ns": processed_first,
+            "last_processed_timestamp_ns": processed_last,
+            "selected_duration_ns": selected_duration,
+            "processed_duration_ns": processed_duration,
+            "time_coverage": time_coverage,
+        }
+        for field, expected in expected_run_values.items():
+            if isinstance(expected, float):
+                if not _actual_same_f64(run[field], expected):
+                    _actual_fail("sequence run {} differs".format(field))
+            elif run[field] != expected:
+                _actual_fail("sequence run {} differs".format(field))
+        if (
+            1000 * len(processed) < 995 * len(pair_rows)
+            or 1000 * processed_duration < 995 * selected_duration
+        ):
+            _actual_fail("sequence mode coverage is below 0.995")
+        if run["completed"] is not True or run["exit_code"] != 0:
+            _actual_fail("sequence mode did not complete successfully")
+        mode_details[mode] = {
+            "callbacks": callbacks, "trajectories": trajectories,
+            "processed": processed, "raw_tum": raw_tum_bytes,
+        }
+    return pair_rows, mode_details
+
+
+def _actual_sequence_shared_math(artifact, manifest, report, mode_details, common):
+    sequence_math = _actual_load_module("cp2_sequence_math")
+    shared_timestamp_bytes = _actual_read_bytes(
+        artifact / "shared_timestamps.bin", "shared_timestamps.bin",
+        ACTUAL_MAX_BINARY_BYTES,
+    )
+    shared_population_bytes = _actual_read_bytes(
+        artifact / "shared_population.bin", "shared_population.bin",
+        ACTUAL_MAX_BINARY_BYTES,
+    )
+    if hashlib.sha256(shared_timestamp_bytes).hexdigest() != report["shared_timestamp_sha256"]:
+        _actual_fail("shared timestamp payload hash differs from report")
+    if hashlib.sha256(shared_population_bytes).hexdigest() != report["shared_population_sha256"]:
+        _actual_fail("shared population payload hash differs from report")
+    shared_timestamps = _actual_parse_shared_timestamps(shared_timestamp_bytes)
+    shared_rows = _actual_parse_shared_population(shared_population_bytes)
+    if (
+        len(shared_timestamps) != len(shared_rows)
+        or report["shared_timestamp_count"] != len(shared_rows)
+        or len(shared_rows) < 3
+    ):
+        _actual_fail("shared trajectory population/count is invalid")
+    if [row["timestamp_ns"] for row in shared_rows] != shared_timestamps:
+        _actual_fail("shared timestamp and population payloads differ")
+    nullspace_trajectory = mode_details["nullspace"]["trajectories"]
+    schur_trajectory = mode_details["schur"]["trajectories"]
+    expected_intersection = sequence_math.shared_timestamp_intersection(
+        [row["camera_timestamp_ns"] for row in nullspace_trajectory],
+        [row["camera_timestamp_ns"] for row in schur_trajectory],
+    )
+    sequence_math.validate_shared_timestamp_intersection(
+        [row["camera_timestamp_ns"] for row in nullspace_trajectory],
+        [row["camera_timestamp_ns"] for row in schur_trajectory],
+        shared_timestamps,
+    )
+    if tuple(shared_timestamps) != expected_intersection:
+        _actual_fail("shared population is not the exact mode intersection")
+    nullspace_by_timestamp = {
+        row["camera_timestamp_ns"]: row for row in nullspace_trajectory
+    }
+    schur_by_timestamp = {row["camera_timestamp_ns"]: row for row in schur_trajectory}
+    for shared in shared_rows:
+        nullspace = nullspace_by_timestamp[shared["timestamp_ns"]]
+        schur = schur_by_timestamp[shared["timestamp_ns"]]
+        for retained_name, trajectory, source_name in (
+            ("nullspace_position", nullspace, "position_G"),
+            ("nullspace_quaternion", nullspace, "quaternion_ItoG_xyzw"),
+            ("schur_position", schur, "position_G"),
+            ("schur_quaternion", schur, "quaternion_ItoG_xyzw"),
+        ):
+            if len(shared[retained_name]) != len(trajectory[source_name]) or any(
+                not _actual_same_f64(left, right)
+                for left, right in zip(shared[retained_name], trajectory[source_name])
+            ):
+                _actual_fail("shared population pose differs from trajectory: " + retained_name)
+
+    ground_truth_bytes = _actual_read_bytes(
+        artifact / "ground_truth_shared.tum", "ground_truth_shared.tum",
+        ACTUAL_MAX_JSONL_BYTES,
+    )
+    ground_truth_tum = _actual_parse_tum(
+        ground_truth_bytes, "ground_truth_shared.tum", estimator=False
+    )
+    if len(ground_truth_tum) != len(shared_rows):
+        _actual_fail("ground-truth shared TUM population differs")
+    for retained, tum in zip(shared_rows, ground_truth_tum):
+        if retained["ground_truth_timestamp_ns"] != tum["timestamp_ns"]:
+            _actual_fail("shared ground-truth timestamp differs from retained TUM")
+        for retained_values, tum_values in (
+            (retained["ground_truth_position"], tum["position"]),
+            (retained["ground_truth_quaternion"], tum["quaternion"]),
+        ):
+            if any(not _actual_same_f64(left, right) for left, right in zip(retained_values, tum_values)):
+                _actual_fail("shared ground-truth pose differs from retained TUM")
+
+    nullspace_positions = [row["nullspace_position"] for row in shared_rows]
+    nullspace_quaternions = [row["nullspace_quaternion"] for row in shared_rows]
+    schur_positions = [row["schur_position"] for row in shared_rows]
+    schur_quaternions = [row["schur_quaternion"] for row in shared_rows]
+    ground_truth_positions = [row["ground_truth_position"] for row in shared_rows]
+    alignment = sequence_math.baseline_kabsch_alignment(
+        nullspace_positions, ground_truth_positions
+    )
+    retained_alignment = report["baseline_alignment"]
+    _actual_exact_keys(retained_alignment, ACTUAL_ALIGNMENT_KEYS, "baseline alignment")
+    if (
+        retained_alignment["source"] != "nullspace_to_ground_truth"
+        or retained_alignment["shared_population_sha256"] != report["shared_population_sha256"]
+        or retained_alignment["applied_identically_to_both_modes"] is not True
+    ):
+        _actual_fail("baseline alignment identity/common-application flags differ")
+    rotation_values = _actual_f64_vector(
+        retained_alignment["rotation_row_major"], 9, "baseline alignment rotation"
+    )
+    translation_values = _actual_f64_vector(
+        retained_alignment["translation"], 3, "baseline alignment translation"
+    )
+    quaternion_values = _actual_f64_vector(
+        retained_alignment["quaternion_xyzw"], 4, "baseline alignment quaternion"
+    )
+    singular_values = _actual_f64_vector(
+        retained_alignment["source_singular_values"], 3,
+        "baseline source singular values",
+    )
+    computed_rotation = alignment.rotation.reshape(9).tolist()
+    if any(not _actual_same_f64(left, right) for left, right in zip(rotation_values, computed_rotation)):
+        _actual_fail("retained baseline rotation differs from independent Kabsch result")
+    if any(not _actual_same_f64(left, right) for left, right in zip(translation_values, alignment.translation.tolist())):
+        _actual_fail("retained baseline translation differs from independent Kabsch result")
+    if any(not _actual_same_f64(left, right) for left, right in zip(singular_values, alignment.source_singular_values.tolist())):
+        _actual_fail("retained source singular values differ")
+    for field, expected in (
+        ("source_rank_threshold", alignment.source_rank_threshold),
+        ("determinant", alignment.determinant),
+        ("orthogonality_error_frobenius", alignment.orthogonality_error_frobenius),
+    ):
+        if not _actual_same_f64(retained_alignment[field], expected):
+            _actual_fail("retained baseline alignment {} differs".format(field))
+    quaternion_rotation = sequence_math.jpl_stored_xyzw_to_hamilton_inverse_rotation(
+        quaternion_values
+    ).reshape(9).tolist()
+    if not _actual_matrix_close(quaternion_rotation, rotation_values, tolerance=1.0e-10):
+        _actual_fail("baseline alignment quaternion does not encode its rotation")
+
+    aligned = sequence_math.apply_common_alignment(
+        alignment, nullspace_positions, nullspace_quaternions,
+        schur_positions, schur_quaternions,
+    )
+    position_differences = sequence_math.position_differences_m(
+        aligned.nullspace_positions, aligned.schur_positions
+    )
+    orientation_differences = sequence_math.orientation_differences_deg(
+        aligned.nullspace_inverse_rotations, aligned.schur_inverse_rotations
+    )
+    position_p95 = sequence_math.linear_p95(position_differences)
+    orientation_p95 = sequence_math.linear_p95(orientation_differences)
+    ate_nullspace = sequence_math.translation_rmse_m(
+        aligned.nullspace_positions, ground_truth_positions
+    )
+    ate_schur = sequence_math.translation_rmse_m(
+        aligned.schur_positions, ground_truth_positions
+    )
+    relative_ate = sequence_math.relative_ate_difference(ate_nullspace, ate_schur)
+    sequence_math.validate_metric_limits(position_p95, orientation_p95, relative_ate)
+    for field, expected in (
+        ("position_p95_m", position_p95),
+        ("orientation_p95_deg", orientation_p95),
+        ("ate_nullspace_m", ate_nullspace),
+        ("ate_schur_m", ate_schur),
+        ("relative_ate_difference", relative_ate),
+    ):
+        if not _actual_same_f64(report[field], expected):
+            _actual_fail("sequence trajectory metric {} differs".format(field))
+
+    for mode, positions, rotations in (
+        ("nullspace", aligned.nullspace_positions, aligned.nullspace_inverse_rotations),
+        ("schur", aligned.schur_positions, aligned.schur_inverse_rotations),
+    ):
+        name = mode + "_shared_aligned.tum"
+        rows = _actual_parse_tum(
+            _actual_read_bytes(artifact / name, name, ACTUAL_MAX_JSONL_BYTES),
+            name, estimator=True,
+        )
+        if len(rows) != len(shared_rows):
+            _actual_fail(mode + " aligned TUM population differs")
+        for index, row in enumerate(rows):
+            if row["timestamp_ns"] != shared_timestamps[index]:
+                _actual_fail(mode + " aligned TUM timestamp differs")
+            if any(
+                not _actual_same_f64(left, right)
+                for left, right in zip(row["position"], positions[index].tolist())
+            ):
+                _actual_fail(mode + " aligned TUM position differs")
+            tum_rotation = sequence_math.jpl_stored_xyzw_to_hamilton_inverse_rotation(
+                row["quaternion"]
+            ).reshape(9).tolist()
+            if not _actual_matrix_close(
+                tum_rotation, rotations[index].reshape(9).tolist(), tolerance=1.0e-10
+            ):
+                _actual_fail(mode + " aligned TUM orientation differs")
+
+    evaluator = [record for record in common["commands"] if record["phase"] == "evaluation"]
+    ape_commands = [record for record in evaluator if Path(record["argv"][0]).name == "evo_ape"]
+    if len(ape_commands) != 2:
+        _actual_fail("sequence artifact lacks exactly two evo_ape evaluations")
+    for record, mode, expected_ate in zip(
+        ape_commands, ("nullspace", "schur"), (ate_nullspace, ate_schur)
+    ):
+        argv = record["argv"]
+        if (
+            len(argv) != 8 or argv[1] != "tum"
+            or Path(argv[2]).name != "ground_truth_shared.tum"
+            or Path(argv[3]).name != mode + "_shared_aligned.tum"
+            or argv[4:] != ["-r", "trans_part", "--t_max_diff", "0.01"]
+            or record["exit_code"] != 0 or record["timed_out"] is not False
+        ):
+            _actual_fail("sequence evaluator command differs from frozen evo_ape invocation")
+        stdout = _actual_read_bytes(
+            artifact / record["stdout"], "evo_ape stdout", ACTUAL_MAX_JSON_BYTES
+        )
+        try:
+            text_value = stdout.decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise ActualVerificationError("evo_ape stdout is not UTF-8") from exc
+        matches = re.findall(
+            r"(?m)^\s*rmse\s+([-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)\s*$",
+            text_value,
+        )
+        if len(matches) != 1:
+            _actual_fail("evo_ape stdout does not contain exactly one parsed RMSE")
+        parsed = _actual_f64(float(matches[0]), "evo_ape parsed RMSE", nonnegative=True)
+        if abs(parsed - float(expected_ate)) > 1.0e-12 + 1.0e-10 * abs(float(expected_ate)):
+            _actual_fail("evo_ape parsed RMSE differs from independent ATE")
+    if report["coverage_passed"] is not True or report["trajectory_passed"] is not True:
+        _actual_fail("sequence coverage/trajectory conjunction did not pass")
+
+
+def verify_sequence_artifact(artifact, manifest_sha256, quiet=False):
+    raw = os.fspath(artifact)
+    if not os.path.isabs(raw) or os.path.normpath(raw) != raw:
+        _actual_fail("sequence artifact path must be normalized and absolute")
+    _actual_sha256(manifest_sha256, "sequence manifest anchor")
+    _actual_fail(
+        "CP2-D actual verification is blocked before artifact access: the evaluator "
+        "precision/provenance and direct numerical-stack replacement contract is "
+        "pending explicit approval"
+    )
+
+    # Unreachable until an approval-bound replacement deliberately removes the
+    # pre-access block above; retained implementation remains reviewable.
+    artifact = Path(artifact)
+    manifest, observed, _ = _actual_scan_and_verify_manifest(artifact, manifest_sha256)
+    required = {
+        "cp2_report.json", "provenance.json", "commands.jsonl", "pair_index.jsonl",
+        "nullspace_callbacks.jsonl", "schur_callbacks.jsonl",
+        "nullspace_trajectory.jsonl", "schur_trajectory.jsonl",
+        "parameters/nullspace_prelaunch_raw.yaml", "parameters/nullspace_runtime_raw.yaml",
+        "parameters/nullspace_canonical.bin", "parameters/nullspace_normalized.bin",
+        "parameters/schur_prelaunch_raw.yaml", "parameters/schur_runtime_raw.yaml",
+        "parameters/schur_canonical.bin", "parameters/schur_normalized.bin",
+        "nullspace_state.txt", "nullspace_deviation.txt", "nullspace_openvins_timing.csv",
+        "schur_state.txt", "schur_deviation.txt", "schur_openvins_timing.csv",
+        "nullspace_raw.tum", "schur_raw.tum", "ground_truth_shared.tum",
+        "nullspace_shared_aligned.tum", "schur_shared_aligned.tum",
+        "shared_population.bin", "shared_timestamps.bin",
+    }
+    if not required.issubset(manifest):
+        _actual_fail("CP2-D artifact lacks a fixed core file")
+    common = _actual_validate_provenance(artifact, manifest, observed, "CP2-D")
+    report = _actual_json(artifact / "cp2_report.json", "cp2_report.json")
+    _actual_exact_keys(report, ACTUAL_SEQUENCE_REPORT_KEYS, "CP2-D sequence report")
+    if (
+        not _schema_version_one(report["schema_version"])
+        or report["record_type"] != "sequence_pair"
+        or report["checkpoint"] != "CP2-D"
+        or report["status"] != "passed"
+    ):
+        _actual_fail("CP2-D report identity/status is invalid")
+    sequence_index = _actual_u64(report["sequence_index"], "sequence index")
+    if sequence_index >= 3 or report["sequence_id"] != ACTUAL_SEQUENCE_IDS[sequence_index]:
+        _actual_fail("CP2-D report sequence identity is invalid")
+    if not _actual_same_f64(
+        report["offset_seconds"], ACTUAL_SEQUENCE_OFFSETS_SECONDS[sequence_index]
+    ):
+        _actual_fail("CP2-D report offset differs from the frozen sequence offset")
+    _actual_u64(report["valid_pair_count"], "sequence valid-pair count")
+    _actual_u64(report["shared_timestamp_count"], "sequence shared timestamp count")
+    for field in (
+        "position_p95_m", "orientation_p95_deg", "ate_nullspace_m", "ate_schur_m",
+        "relative_ate_difference",
+    ):
+        _actual_f64(report[field], "sequence report " + field, nonnegative=True)
+    for field in ("coverage_passed", "trajectory_passed", "passed"):
+        if not isinstance(report[field], bool):
+            _actual_fail("sequence report " + field + " is not Boolean")
+    if report["provenance_sha256"] != manifest["provenance.json"]:
+        _actual_fail("sequence provenance hash differs")
+    if report["pair_index_sha256"] != manifest["pair_index.jsonl"]:
+        _actual_fail("sequence pair-index hash differs")
+    if report["shared_timestamp_sha256"] != manifest["shared_timestamps.bin"]:
+        _actual_fail("sequence shared-timestamp hash differs")
+    if report["shared_population_sha256"] != manifest["shared_population.bin"]:
+        _actual_fail("sequence shared-population hash differs")
+    provenance_details = _actual_validate_sequence_provenance(
+        artifact, common, manifest, report
+    )
+    pair_rows, mode_details = _actual_validate_sequence_traces(
+        artifact, manifest, report, provenance_details
+    )
+    del pair_rows
+    _actual_sequence_shared_math(artifact, manifest, report, mode_details, common)
+    if report["passed"] is not True:
+        _actual_fail("CP2-D sequence report did not pass")
+    identity = (
+        common["provenance"]["source_commit"], common["provenance"]["source_tree"],
+        common["runtime"]["executable_sha256_before"], common["runtime"]["build_id_before"],
+        common["configuration"]["static_bundle_sha256"],
+        common["configuration"]["launch"]["sha256"],
+    )
+    result = {
+        "checkpoint": "CP2-D", "manifest_sha256": manifest_sha256,
+        "passed": True, "report": report, "provenance": common["provenance"],
+        "cross_identity": identity,
+    }
+    if not quiet:
+        print("CP2-D sequence artifact independently verified: " + str(artifact))
+        print("SHA256SUMS SHA-256: " + manifest_sha256)
+    return result
+
+
+def verify_sequence_set(artifacts, manifest_sha256):
+    if len(artifacts) != 3 or len(manifest_sha256) != 3:
+        _actual_fail("sequence-set verification requires exactly three artifacts and anchors")
+    results = [
+        verify_sequence_artifact(Path(path), digest, quiet=True)
+        for path, digest in zip(artifacts, manifest_sha256)
+    ]
+    indices = [result["report"]["sequence_index"] for result in results]
+    if indices != [0, 1, 2]:
+        _actual_fail("sequence-set artifact order/identity is not exactly 0,1,2")
+    identities = [result["cross_identity"] for result in results]
+    cross_equal = identities[0] == identities[1] == identities[2]
+    individually_passed = all(result["passed"] for result in results)
+    if not cross_equal or not individually_passed:
+        _actual_fail("sequence-set source/runtime/config/launch identity differs")
+    aggregate = {
+        "schema_version": 1,
+        "record_type": "sequence_set",
+        "checkpoint": "CP2-D",
+        "sequence_indices": indices,
+        "sequence_manifest_sha256": list(manifest_sha256),
+        "all_individually_passed": individually_passed,
+        "cross_sequence_identity_equal": cross_equal,
+        "passed": individually_passed and cross_equal,
+    }
+    print(json.dumps(aggregate, allow_nan=False, ensure_ascii=False,
+                     separators=(",", ":"), sort_keys=True))
+    return aggregate
+
+
+def verify_timing_preprofile_blocked(artifact, manifest_sha256):
+    # CP2-E's committed section is explicitly non-authorizing.  Deliberately
+    # do not stat either caller-supplied path: no timing artifact can be read,
+    # internally verified, or accepted until the profile and full schema are
+    # separately committed.
+    raw = os.fspath(artifact)
+    if not os.path.isabs(raw) or os.path.normpath(raw) != raw:
+        _actual_fail("timing artifact path must be normalized and absolute")
+    _actual_sha256(manifest_sha256, "timing manifest anchor")
+    _actual_fail(
+        "CP2-E actual verification is blocked before artifact access: the frozen timing "
+        "profile and complete authorizing artifact schema are not committed"
+    )
+
+
+READINESS_COMMON_CASES = (
+    "valid_minimal_fixture", "cli_exclusivity", "forbidden_bag_provider",
+    "non_tmp_write", "schema_extra_key", "schema_missing_key",
+    "duplicate_json_key", "unsafe_path", "symlink", "hardlink",
+    "manifest_missing_entry", "manifest_extra_entry", "manifest_digest_mismatch",
+    "readiness_order", "readiness_timeout", "readiness_process_group",
+    "readiness_lock_identity", "readiness_snapshot_mutation", "ignored_source_path",
+    "snapshotted_root_symlink", "launch_output_combination",
+    "unit_anchor_commit_mismatch",
+)
+READINESS_RECORDED_CASES = (
+    "duplicate_noncontiguous_ids", "wrong_terminal_reconciliation",
+    "wrong_counted_category", "denominator_mismatch", "raw_row_weight_mismatch",
+    "missing_unclassified_disagreement", "bad_statistics_tolerance_edge",
+    "missing_state_block", "missing_ordered_covariance_pair",
+    "candidate_missing_row_omission", "nonzero_shadow_write",
+    "baseline_commit_count_not_one", "live_preview_mismatch",
+    "nonzero_repair_fallback", "prior_raw_config_hash_drift",
+    "raw_prior_layout_disconnect", "flipped_gate_decision",
+    "permuted_accepted_sequence", "candidate_proposal_copied_from_baseline",
+    "proposal_disconnected_from_raw_or_phase0", "replay_noop",
+    "replay_skipped_invocation", "phase2_phase3_disconnected",
+    "replay_report_mismatch", "nonzero_internal_failure_terminal",
+    "manifest_corruption",
+)
+READINESS_SEQUENCE_CASES = (
+    "exact_20_ms_boundary", "nearest_not_first_forward", "reused_image_message",
+    "missing_duplicate_pair_index", "callback_source_mismatch", "identity_hash_drift",
+    "wrong_mode_order", "coverage_below_0_995", "unequal_shared_populations",
+    "independent_alignment", "invalid_nonorthogonal_transform",
+    "position_metric_limit", "orientation_metric_limit", "relative_ate_metric_limit",
+)
+READINESS_TIMING_CASES = (
+    "wrong_pair_order", "wrong_pair_index", "runtime_drift", "config_drift",
+    "profile_drift", "changed_clock_snapshot", "affinity_mismatch",
+    "warm_up_boundary_error", "unilateral_noncommon_samples", "duplicate_timestamp",
+    "negative_duration", "noninteger_duration", "nonprimary_inclusion",
+    "incorrect_linear_quantiles", "median_ratio_limit", "p95_ratio_limit",
+)
+READINESS_VERIFIER_CASES = tuple(dict.fromkeys(
+    READINESS_COMMON_CASES + READINESS_RECORDED_CASES
+    + READINESS_SEQUENCE_CASES + READINESS_TIMING_CASES
+))
+
+
+class _ReadinessSelfTestRejection(ValueError):
+    pass
+
+
+def run_readiness_self_test():
+    """Independent stdlib-only C/D/E verifier corruption oracle."""
+
+    def reject(message):
+        raise _ReadinessSelfTestRejection(message)
+
+    def exact_keys(value, keys):
+        if not isinstance(value, dict) or set(value) != set(keys):
+            reject("schema field inventory differs")
+
+    def safe_relpath(value):
+        pure = PurePosixPath(value) if isinstance(value, str) else PurePosixPath(".")
+        if (
+            not isinstance(value, str) or not value or "\\" in value or "\0" in value
+            or pure.is_absolute() or pure.as_posix() != value
+            or any(part in ("", ".", "..") for part in pure.parts)
+        ):
+            reject("unsafe relative path")
+
+    def validate_common(name, root):
+        digest = sha256_bytes(b"a")
+        if name == "cli_exclusivity":
+            if ("--self-test", "extra") != ("--self-test",):
+                reject("CLI modes are not exclusive")
+        elif name == "forbidden_bag_provider":
+            reject("bag provider call is forbidden")
+        elif name == "non_tmp_write":
+            candidate = "/var/tmp/forbidden"
+            if os.path.commonpath((candidate, str(root))) != str(root):
+                reject("write escaped fresh /tmp root")
+        elif name == "schema_extra_key":
+            exact_keys({"required": 1, "extra": 2}, ("required",))
+        elif name == "schema_missing_key":
+            exact_keys({}, ("required",))
+        elif name == "duplicate_json_key":
+            try:
+                strict_json_bytes(b'{"x":1,"x":2}', "self-test JSON")
+            except ValueError:
+                reject("duplicate JSON key")
+        elif name == "unsafe_path":
+            safe_relpath("../escape")
+        elif name in ("symlink", "hardlink"):
+            path = root / ("link" if name == "symlink" else "file-a")
+            status_value = os.lstat(str(path))
+            if not stat.S_ISREG(status_value.st_mode) or status_value.st_nlink != 1:
+                reject("path is not a single-link regular file")
+        elif name.startswith("manifest_"):
+            expected = {"a": digest}
+            observed = {
+                "manifest_missing_entry": {},
+                "manifest_extra_entry": {"a": digest, "b": digest},
+                "manifest_digest_mismatch": {"a": "0" * 64},
+            }[name]
+            if observed != expected:
+                reject("manifest population/digest differs")
+        elif name == "readiness_order":
+            if [1, 0] != [0, 1]:
+                reject("readiness records are out of order")
+        elif name == "readiness_timeout":
+            reject("readiness subprocess timed out")
+        elif name == "readiness_process_group":
+            reject("readiness subprocess retained descendants")
+        elif name == "readiness_lock_identity":
+            exact_keys({"regular": True, "owner": False, "mode": 0o600}, ("regular", "owner", "mode"))
+            reject("readiness lock identity differs")
+        elif name == "readiness_snapshot_mutation":
+            if b"before" != b"after":
+                reject("readiness snapshot changed")
+        elif name == "ignored_source_path":
+            if "cache/file".split("/", 1)[0] not in ("build", "results", "Testing"):
+                reject("ignored source path is outside snapshotted roots")
+        elif name == "snapshotted_root_symlink":
+            if stat.S_ISLNK(os.lstat(str(root / "root-link")).st_mode):
+                reject("snapshotted root is a symlink")
+        elif name == "launch_output_combination":
+            record = {"unit_only": True, "bag_provider_calls": 0, "artifact_created": True}
+            if record["artifact_created"]:
+                reject("self-test created an evidence artifact")
+        elif name == "unit_anchor_commit_mismatch":
+            if ("a" * 40, "b" * 40) != ("c" * 40, "b" * 40):
+                reject("unit commit/tree anchor differs")
+        else:
+            reject("unknown common self-test case")
+
+    def valid_recorded():
+        return {
+            "ids": [0, 1], "terminals": {"accepted": 1, "rejected": 1, "raw": 2},
+            "counted": ["committed_counted", "rejected_counted"],
+            "denominator": 2, "weights": [1, 1], "unclassified": 0,
+            "statistics_error": 0.0, "statistics_tolerance": 1e-12,
+            "state_blocks": ["imu", "clone"],
+            "covariance_pairs": [[0, 0], [0, 1], [1, 0], [1, 1]],
+            "candidate_omissions": [], "shadow_writes": 0, "baseline_commits": 1,
+            "live_preview_match": True, "repair_fallbacks": 0,
+            "prior_config_hash": "1" * 64, "raw_config_hash": "1" * 64,
+            "prior_layout_connected": True, "gate_match": True,
+            "accepted_sequence": [0], "expected_accepted_sequence": [0],
+            "candidate_digest": "2" * 64, "baseline_digest": "3" * 64,
+            "proposal_connected": True, "replay_invocations": 1,
+            "replay_skipped": False, "phase23_connected": True,
+            "replay_report_match": True, "internal_failure_terminals": 0,
+            "manifest_ok": True,
+        }
+
+    def check_recorded(value):
+        if value["ids"] != list(range(len(value["ids"]))) or len(set(value["ids"])) != len(value["ids"]): reject("record IDs")
+        if value["terminals"]["raw"] != value["terminals"]["accepted"] + value["terminals"]["rejected"]: reject("terminal reconciliation")
+        if value["counted"] != ["committed_counted", "rejected_counted"]: reject("counted categories")
+        if value["denominator"] != len(value["ids"]): reject("denominator")
+        if sum(value["weights"]) != value["denominator"]: reject("raw row weights")
+        if value["unclassified"] != 0: reject("unclassified disagreement")
+        if value["statistics_error"] > value["statistics_tolerance"]: reject("statistics tolerance")
+        if value["state_blocks"] != ["imu", "clone"]: reject("state blocks")
+        if value["covariance_pairs"] != [[0, 0], [0, 1], [1, 0], [1, 1]]: reject("covariance pairs")
+        if value["candidate_omissions"]: reject("candidate row omission")
+        if value["shadow_writes"] != 0: reject("shadow write")
+        if value["baseline_commits"] != 1: reject("baseline commit count")
+        if value["live_preview_match"] is not True: reject("live preview")
+        if value["repair_fallbacks"] != 0: reject("repair/fallback")
+        if value["prior_config_hash"] != value["raw_config_hash"]: reject("config hash drift")
+        if value["prior_layout_connected"] is not True: reject("raw/prior layout")
+        if value["gate_match"] is not True: reject("gate decision")
+        if value["accepted_sequence"] != value["expected_accepted_sequence"]: reject("accepted sequence")
+        if value["candidate_digest"] == value["baseline_digest"]: reject("copied candidate")
+        if value["proposal_connected"] is not True: reject("proposal connection")
+        if value["replay_invocations"] != 1: reject("replay invocation")
+        if value["replay_skipped"] is not False: reject("replay skipped")
+        if value["phase23_connected"] is not True: reject("phase 2/3 connection")
+        if value["replay_report_match"] is not True: reject("replay report")
+        if value["internal_failure_terminals"] != 0: reject("internal failure terminal")
+        if value["manifest_ok"] is not True: reject("manifest corruption")
+
+    recorded_mutations = {
+        "duplicate_noncontiguous_ids": ("ids", [0, 0]),
+        "wrong_terminal_reconciliation": ("terminals", {"accepted": 1, "rejected": 0, "raw": 2}),
+        "wrong_counted_category": ("counted", ["committed_counted", "wrong"]),
+        "denominator_mismatch": ("denominator", 3), "raw_row_weight_mismatch": ("weights", [1, 0]),
+        "missing_unclassified_disagreement": ("unclassified", 1),
+        "bad_statistics_tolerance_edge": ("statistics_error", 2e-12),
+        "missing_state_block": ("state_blocks", ["imu"]),
+        "missing_ordered_covariance_pair": ("covariance_pairs", [[0, 0], [1, 1]]),
+        "candidate_missing_row_omission": ("candidate_omissions", [1]),
+        "nonzero_shadow_write": ("shadow_writes", 1),
+        "baseline_commit_count_not_one": ("baseline_commits", 2),
+        "live_preview_mismatch": ("live_preview_match", False),
+        "nonzero_repair_fallback": ("repair_fallbacks", 1),
+        "prior_raw_config_hash_drift": ("raw_config_hash", "4" * 64),
+        "raw_prior_layout_disconnect": ("prior_layout_connected", False),
+        "flipped_gate_decision": ("gate_match", False),
+        "permuted_accepted_sequence": ("accepted_sequence", [1]),
+        "candidate_proposal_copied_from_baseline": ("candidate_digest", "3" * 64),
+        "proposal_disconnected_from_raw_or_phase0": ("proposal_connected", False),
+        "replay_noop": ("replay_invocations", 0), "replay_skipped_invocation": ("replay_skipped", True),
+        "phase2_phase3_disconnected": ("phase23_connected", False),
+        "replay_report_mismatch": ("replay_report_match", False),
+        "nonzero_internal_failure_terminal": ("internal_failure_terminals", 1),
+        "manifest_corruption": ("manifest_ok", False),
+    }
+
+    def check_sequence(value):
+        if value["delta_ns"] >= 20_000_000: reject("20 ms boundary")
+        if value["chosen"] != value["first_forward"]: reject("first-forward image")
+        if len(set(value["images"])) != len(value["images"]): reject("reused image")
+        if value["pair_indices"] != list(range(len(value["pair_indices"]))): reject("pair indices")
+        if value["callback_source"] != value["expected_callback_source"]: reject("callback source")
+        if value["identity_hash_match"] is not True: reject("identity hash")
+        if value["modes"] != ["nullspace", "schur"]: reject("mode order")
+        if value["coverage"] < 0.995: reject("coverage")
+        if value["populations"][0] != value["populations"][1]: reject("populations")
+        if value["common_alignment"] is not True: reject("independent alignment")
+        if value["orthogonality_error"] > 1e-10: reject("transform")
+        if value["position"] > 0.01: reject("position metric")
+        if value["orientation"] > 0.05: reject("orientation metric")
+        if value["relative_ate"] > 0.01: reject("relative ATE")
+
+    sequence_mutations = {
+        "exact_20_ms_boundary": ("delta_ns", 20_000_000),
+        "nearest_not_first_forward": ("chosen", 2), "reused_image_message": ("images", [1, 1]),
+        "missing_duplicate_pair_index": ("pair_indices", [0, 2]),
+        "callback_source_mismatch": ("callback_source", "wrong"),
+        "identity_hash_drift": ("identity_hash_match", False),
+        "wrong_mode_order": ("modes", ["schur", "nullspace"]),
+        "coverage_below_0_995": ("coverage", 0.994999999),
+        "unequal_shared_populations": ("populations", [2, 1]),
+        "independent_alignment": ("common_alignment", False),
+        "invalid_nonorthogonal_transform": ("orthogonality_error", 1.0000000000000002e-10),
+        "position_metric_limit": ("position", 0.010000000000000002),
+        "orientation_metric_limit": ("orientation", 0.05000000000000001),
+        "relative_ate_metric_limit": ("relative_ate", 0.010000000000000002),
+    }
+
+    def valid_sequence():
+        return {"delta_ns": 19_999_999, "chosen": 1, "first_forward": 1, "nearest": 2,
+                "images": [1, 2],
+                "pair_indices": [0, 1], "callback_source": "camera", "expected_callback_source": "camera",
+                "identity_hash_match": True, "modes": ["nullspace", "schur"], "coverage": 0.995,
+                "populations": [2, 2], "common_alignment": True, "orthogonality_error": 1e-10,
+                "position": 0.01, "orientation": 0.05, "relative_ate": 0.01}
+
+    def linear_quantile(values, probability):
+        ordered = sorted(values)
+        position = (len(ordered) - 1) * probability
+        low = int(math.floor(position)); high = int(math.ceil(position))
+        return ordered[low] if low == high else ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+
+    def check_timing(value):
+        if value["pairs"] != [["nullspace", "schur"], ["schur", "nullspace"], ["nullspace", "schur"]]: reject("pair order")
+        if value["indices"] != [0, 1, 2]: reject("pair indices")
+        if not all(value[key] for key in ("runtime_match", "config_match", "profile_match", "clock_match", "affinity_match")): reject("provenance drift")
+        if value["warmups_included"]: reject("warm-up inclusion")
+        if value["populations"][0] != value["populations"][1]: reject("noncommon samples")
+        if len(set(value["timestamps"])) != len(value["timestamps"]): reject("timestamps")
+        if any(isinstance(item, bool) or not isinstance(item, int) or item < 0 for item in value["durations"]): reject("duration")
+        if not all(value["primary"]): reject("nonprimary inclusion")
+        if value["median"] != linear_quantile(value["durations"], 0.5) or value["p95"] != linear_quantile(value["durations"], 0.95): reject("quantiles")
+        if value["median_ratio"] > 1.10: reject("median ratio")
+        if value["p95_ratio"] > 1.15: reject("p95 ratio")
+
+    def valid_timing():
+        values = [1, 2, 3, 4]
+        return {"pairs": [["nullspace", "schur"], ["schur", "nullspace"], ["nullspace", "schur"]],
+                "indices": [0, 1, 2], "runtime_match": True, "config_match": True,
+                "profile_match": True, "clock_match": True, "affinity_match": True,
+                "warmups_included": False, "populations": [4, 4], "timestamps": [1, 2, 3, 4],
+                "durations": values, "primary": [True] * 4,
+                "median": linear_quantile(values, 0.5), "p95": linear_quantile(values, 0.95),
+                "median_ratio": 1.10, "p95_ratio": 1.15}
+
+    timing_mutations = {
+        "wrong_pair_order": ("pairs", [["schur", "nullspace"]]),
+        "wrong_pair_index": ("indices", [0, 2, 1]), "runtime_drift": ("runtime_match", False),
+        "config_drift": ("config_match", False), "profile_drift": ("profile_match", False),
+        "changed_clock_snapshot": ("clock_match", False), "affinity_mismatch": ("affinity_match", False),
+        "warm_up_boundary_error": ("warmups_included", True),
+        "unilateral_noncommon_samples": ("populations", [4, 3]),
+        "duplicate_timestamp": ("timestamps", [1, 1, 3, 4]), "negative_duration": ("durations", [1, -1, 3, 4]),
+        "noninteger_duration": ("durations", [1, 2.5, 3, 4]),
+        "nonprimary_inclusion": ("primary", [True, False, True, True]),
+        "incorrect_linear_quantiles": ("median", 2.0), "median_ratio_limit": ("median_ratio", 1.100000001),
+        "p95_ratio_limit": ("p95_ratio", 1.150000001),
+    }
+
+    def validate_actual_mode_primitives(root):
+        _actual_install_self_test_module_source_binding()
+        parameters = {
+            "/cp2_vio/a_bool": True,
+            "/cp2_vio/a_double": -0.0,
+            "/cp2_vio/a_int": -7,
+            "/cp2_vio/a_list": ["x", 2],
+        }
+        # Keep the public verifier self-test self-contained: readiness executes
+        # this held entrypoint from a synthetic repository whose neighbouring
+        # helper modules are deliberately not the live workspace files.  This
+        # byte string is an independent golden vector for the frozen recursive
+        # parameter grammar, rather than a round-trip through cp2_schema.
+        canonical = bytearray(b"SchurVIO-CP2-ros-params-v1\0")
+        canonical.extend(b"m" + struct.pack(">Q", 4))
+        for name, encoded_value in (
+            (b"/cp2_vio/a_bool", b"b\x01"),
+            (b"/cp2_vio/a_double", b"f" + struct.pack(">d", -0.0)),
+            (b"/cp2_vio/a_int", b"i" + (-7).to_bytes(8, "big", signed=True)),
+            (
+                b"/cp2_vio/a_list",
+                b"l" + struct.pack(">Q", 2)
+                + b"s" + struct.pack(">Q", 1) + b"x"
+                + b"i" + (2).to_bytes(8, "big", signed=True),
+            ),
+        ):
+            canonical.extend(struct.pack(">Q", len(name)) + name + encoded_value)
+        canonical = bytes(canonical)
+        if _actual_decode_resolved_parameters(canonical, "self-test parameters") != parameters:
+            raise RuntimeError("actual parameter decoder round-trip differs")
+
+        manifest_root = root / "actual-manifest"
+        manifest_root.mkdir(mode=0o700)
+        payload = manifest_root / "payload.bin"
+        payload.write_bytes(b"payload")
+        payload.chmod(0o444)
+        line = "{}  payload.bin\n".format(hashlib.sha256(b"payload").hexdigest()).encode("ascii")
+        manifest_path = manifest_root / MANIFEST_NAME
+        manifest_path.write_bytes(line)
+        manifest_path.chmod(0o444)
+        manifest_root.chmod(0o555)
+        try:
+            parsed, _, _ = _actual_scan_and_verify_manifest(
+                manifest_root, hashlib.sha256(line).hexdigest()
+            )
+            if parsed != {"payload.bin": hashlib.sha256(b"payload").hexdigest()}:
+                raise RuntimeError("actual manifest primitive differs")
+        finally:
+            manifest_root.chmod(0o700)
+            payload.chmod(0o600)
+            manifest_path.chmod(0o600)
+
+        state_path = root / "state-payload.bin"
+        prior = b"SchurVIO-CP2-prior-snapshot-v1\0fixture"
+        state_bytes = bytearray(b"SchurVIO-CP2-state-file-v1\n\0\0\0\0\0")
+        for phase in (0, 1):
+            state_bytes.extend(bytes((phase,)) + b"\0" * 7 + struct.pack(">QQQQ", 0, 0, 0, len(prior)))
+            state_bytes.extend(prior)
+        state_path.write_bytes(bytes(state_bytes))
+        frames = _actual_parse_state_payloads(state_path)
+        if len(frames) != 2 or not _actual_ranges_equal(
+            state_path, frames[(0, 0, 0, 0)]["offset"],
+            frames[(0, 0, 0, 1)]["offset"], len(prior),
+        ):
+            raise RuntimeError("actual state-frame primitive differs")
+
+        comparison = {
+            "lambda_comparison_available": True,
+            "lambda_comparison_status": "available",
+            "lambda_reference_norm": 0.0,
+            "lambda_error": 0.0,
+            "lambda_tolerance": 1.0e-10,
+            "lambda_ratio": 0.0,
+            "lambda_pass": True,
+        }
+        _actual_validate_comparison(
+            comparison, "lambda", 1.0e-8, 1.0e-10, True,
+            "self-test statistics",
+        )
+
+        repeated_identity_fields = (
+            "prior_snapshot_sha256", "config_sha256", "bag_sha256",
+            "pair_index_sha256", "resolved_parameters_sha256",
+            "baseline_accepted_set_sha256",
+            "baseline_accepted_sequence_sha256",
+            "candidate_accepted_set_sha256",
+            "candidate_accepted_sequence_sha256",
+        )
+        gamma_update = {
+            field: format(index + 1, "064x")
+            for index, field in enumerate(repeated_identity_fields)
+        }
+        gamma_update.update({
+            "baseline_gamma": -0.0,
+            "candidate_gamma": 1.25,
+        })
+        gamma_child = {
+            field: gamma_update[field] for field in repeated_identity_fields
+        }
+        gamma_child.update({
+            "baseline_retained_gamma": -0.0,
+            "candidate_retained_gamma": 1.25,
+        })
+        _actual_repeat_update_fields(
+            gamma_child, gamma_update, "self-test gamma value copies"
+        )
+        null_gamma_update = dict(gamma_update)
+        null_gamma_update.update({"baseline_gamma": None, "candidate_gamma": None})
+        null_gamma_child = dict(gamma_child)
+        null_gamma_child.update({
+            "baseline_retained_gamma": None,
+            "candidate_retained_gamma": None,
+        })
+        _actual_repeat_update_fields(
+            null_gamma_child, null_gamma_update, "self-test gamma null copies"
+        )
+
+        def require_gamma_copy_rejection(label, child, update):
+            try:
+                _actual_repeat_update_fields(child, update, label)
+            except ActualVerificationError:
+                return
+            raise RuntimeError("gamma referential-copy corruption was accepted: " + label)
+
+        changed_gamma_child = dict(gamma_child)
+        changed_gamma_child["baseline_retained_gamma"] = 0.0
+        require_gamma_copy_rejection(
+            "baseline signed-zero bits", changed_gamma_child, gamma_update
+        )
+        changed_gamma_child = dict(gamma_child)
+        changed_gamma_child["candidate_retained_gamma"] = 1.5
+        require_gamma_copy_rejection(
+            "candidate binary64 value", changed_gamma_child, gamma_update
+        )
+        changed_gamma_child = dict(gamma_child)
+        changed_gamma_child["baseline_retained_gamma"] = None
+        require_gamma_copy_rejection(
+            "baseline nullability", changed_gamma_child, gamma_update
+        )
+        changed_null_gamma_child = dict(null_gamma_child)
+        changed_null_gamma_child["candidate_retained_gamma"] = 0.0
+        require_gamma_copy_rejection(
+            "candidate nullability", changed_null_gamma_child, null_gamma_update
+        )
+
+        exact_max = ACTUAL_EXACT_BINARY64_INTEGER_MAX
+        exact_boundary_ratio = _actual_exact_count_ratio(
+            exact_max, exact_max, "self-test exact count boundary"
+        )
+        if struct.pack(">d", exact_boundary_ratio) != struct.pack(">d", 1.0):
+            raise RuntimeError("actual exact-count maximum boundary differs")
+
+        def require_count_ratio_rejection(label, numerator, denominator):
+            try:
+                _actual_exact_count_ratio(numerator, denominator, label)
+            except ActualVerificationError:
+                return
+            raise RuntimeError("actual count-ratio corruption was accepted: " + label)
+
+        require_count_ratio_rejection(
+            "self-test numerator above exact range", exact_max + 1, exact_max
+        )
+        require_count_ratio_rejection(
+            "self-test denominator above exact range", exact_max, exact_max + 1
+        )
+        require_count_ratio_rejection(
+            "self-test zero count denominator", 0, 0
+        )
+
+        try:
+            process_libc = ctypes.CDLL(None, use_errno=True)
+            get_rounding = process_libc.fegetround
+            set_rounding = process_libc.fesetround
+            get_rounding.argtypes = []
+            get_rounding.restype = ctypes.c_int
+            set_rounding.argtypes = [ctypes.c_int]
+            set_rounding.restype = ctypes.c_int
+            original_rounding = get_rounding()
+        except (AttributeError, OSError) as exc:
+            raise RuntimeError("self-test cannot inspect the process rounding mode") from exc
+        if original_rounding != 0:
+            raise RuntimeError("self-test did not begin in FE_TONEAREST")
+        selected_nonnearest = None
+        for candidate in (0x400, 0x800, 0xC00):
+            if set_rounding(candidate) == 0 and get_rounding() == candidate:
+                selected_nonnearest = candidate
+                break
+        if selected_nonnearest is None:
+            if set_rounding(original_rounding) != 0:
+                raise RuntimeError("self-test cannot restore FE_TONEAREST")
+            raise RuntimeError("self-test cannot select a non-nearest rounding mode")
+        nonnearest_rejected = False
+        restoration_failed = False
+        try:
+            _actual_exact_count_ratio(
+                1, 1, "self-test non-nearest exact count ratio"
+            )
+        except ActualVerificationError:
+            nonnearest_rejected = True
+        finally:
+            restoration_failed = (
+                set_rounding(original_rounding) != 0
+                or get_rounding() != original_rounding
+            )
+        if restoration_failed:
+            raise RuntimeError("self-test failed to restore FE_TONEAREST")
+        if not nonnearest_rejected:
+            raise RuntimeError("actual count ratio accepted non-nearest rounding")
+
+        shared_payload = (
+            b"SchurVIO-CP2-shared-timestamps-v1\0"
+            + struct.pack(">Q", 2)
+            + struct.pack(">QQ", 2, 4)
+        )
+        if _actual_parse_shared_timestamps(shared_payload) != [2, 4]:
+            raise RuntimeError("actual shared-timestamp primitive differs")
+        static_records = [
+            {"path": path, "size": index + 1, "sha256": format(index + 1, "064x")}
+            for index, path in enumerate((
+                "config/euroc_mav/estimator_config.yaml",
+                "config/euroc_mav/kalibr_imu_chain.yaml",
+                "config/euroc_mav/kalibr_imucam_chain.yaml",
+                "project/cp2_serial.launch",
+            ))
+        ]
+        static_payload = bytearray(b"SchurVIO-CP2-static-config-v1\0")
+        static_payload.extend(struct.pack(">Q", len(static_records)))
+        for record in static_records:
+            encoded_path = record["path"].encode("utf-8")
+            static_payload.extend(struct.pack(">Q", len(encoded_path)))
+            static_payload.extend(encoded_path)
+            static_payload.extend(struct.pack(">Q", record["size"]))
+            static_payload.extend(bytes.fromhex(record["sha256"]))
+        static_path = root / "static-bundle.bin"
+        static_path.write_bytes(bytes(static_payload))
+        static_digest = hashlib.sha256(bytes(static_payload)).hexdigest()
+        _actual_validate_static_bundle(
+            root,
+            {
+                "static_bundle_payload": static_path.name,
+                "static_bundle_sha256": static_digest,
+                "static_files": static_records[:3],
+                "launch": static_records[3],
+            },
+            {static_path.name: static_digest},
+        )
+
+        pair_root = root / "actual-pair-index"
+        pair_root.mkdir(mode=0o700)
+        pair_workspace = root / "actual-pair-workspace"
+        pair_environment_sha = "e" * 64
+        serial_rows = []
+        pair_commands = []
+        runtime_commands = []
+        pair_manifest = {}
+        pair_inputs = []
+        for sequence_index, sequence_id in enumerate(ACTUAL_SEQUENCE_IDS):
+            base_index = sequence_index * 100
+            base_time = (sequence_index + 1) * 1_000_000_000
+            sequence_serial = []
+            for pair_index in range(2):
+                if pair_index == 0:
+                    anchor_camera = 0
+                    cam0_index = base_index
+                    cam1_index = base_index + 1
+                    cam0_record = base_time + 100
+                    cam1_record = base_time + 101
+                else:
+                    anchor_camera = 1
+                    cam1_index = base_index + 2
+                    cam0_index = base_index + 3
+                    cam1_record = base_time + 200
+                    cam0_record = base_time + 201
+                row = {
+                    "schema_version": 1, "record_type": "serial_pair",
+                    "sequence_index": sequence_index, "sequence_id": sequence_id,
+                    "pair_index": pair_index,
+                    "anchor_filtered_index": (
+                        cam0_index if anchor_camera == 0 else cam1_index
+                    ),
+                    "anchor_camera_id": anchor_camera,
+                    "cam0_filtered_index": cam0_index,
+                    "cam1_filtered_index": cam1_index,
+                    "cam0_record_time_ns": cam0_record,
+                    "cam1_record_time_ns": cam1_record,
+                    "cam0_header_time_ns": cam0_record + 10,
+                    "cam1_header_time_ns": cam1_record + 10,
+                    "camera_timestamp_ns": cam0_record + 10,
+                    "absolute_record_delta_ns": abs(cam0_record - cam1_record),
+                    "selected": True,
+                    "enqueue_entered": True, "enqueue_returned": True,
+                    "enqueue_status": "queued", "processing_entered": True,
+                    "processing_returned": True, "processing_status": "processed",
+                    "updater_invocation_ids": [],
+                }
+                sequence_serial.append(row)
+                serial_rows.append(row)
+            projected = []
+            for row in sequence_serial:
+                source = {
+                    key: row[key] for key in ACTUAL_PAIR_INDEX_PROJECTION_KEYS
+                }
+                source["record_type"] = "pair_index"
+                projected.append(source)
+            stdout = _actual_canonical_jsonl_bytes(projected, "self-test pair index")
+            stdout_relative = "actual-pair-index/stdout-{}.jsonl".format(sequence_index)
+            stderr_relative = "actual-pair-index/stderr-{}.txt".format(sequence_index)
+            (root / stdout_relative).write_bytes(stdout)
+            (root / stderr_relative).write_bytes(b"")
+            stdout_sha = hashlib.sha256(stdout).hexdigest()
+            stderr_sha = hashlib.sha256(b"").hexdigest()
+            pair_manifest[stdout_relative] = stdout_sha
+            pair_manifest[stderr_relative] = stderr_sha
+            bag_path = "/tmp/cp2-pair-self-test-{}.bag".format(sequence_index)
+            pair_inputs.append({"bag_path": bag_path, "bag_size": 1})
+            helper = str(
+                pair_workspace / "src/scripts/cp2/cp2_pair_index_extract.py"
+            )
+            pair_commands.append({
+                "command_id": 3 * sequence_index,
+                "phase": "pair_index", "sequence_index": sequence_index,
+                "pair_index": None, "run_index": None,
+                "exit_code": 0, "timed_out": False,
+                "environment_sha256": pair_environment_sha,
+                "argv": [
+                    "/usr/bin/python3", "-I", "-B", helper,
+                    "--sequence-index", str(sequence_index),
+                    "--sequence-id", sequence_id,
+                    "--bag-path", bag_path,
+                    "--parent-bag-fd", "7",
+                    "--bag-identity", "0:1:{}:1:0:0:1:0:0".format(
+                        stat.S_IFREG | 0o400
+                    ),
+                ],
+                "stdout": stdout_relative, "stdout_sha256": stdout_sha,
+                "stderr": stderr_relative, "stderr_sha256": stderr_sha,
+            })
+            runtime_commands.extend((
+                {
+                    "command_id": 3 * sequence_index + 1,
+                    "phase": "runtime_preflight",
+                    "sequence_index": sequence_index,
+                    "pair_index": None,
+                    "run_index": sequence_index,
+                },
+                {
+                    "command_id": 3 * sequence_index + 2,
+                    "phase": "ros_run",
+                    "sequence_index": sequence_index,
+                    "pair_index": None,
+                    "run_index": sequence_index,
+                },
+            ))
+        pair_environment_record = {
+            "environment_id": "pair_index_v1",
+            "canonical_sha256": pair_environment_sha,
+            "variables": [],
+        }
+        pair_common = {
+            "commands": sorted(
+                pair_commands + runtime_commands,
+                key=lambda item: item["command_id"],
+            ),
+            "environment_classes": {
+                pair_environment_sha: dict(ACTUAL_PAIR_INDEX_ENVIRONMENT)
+            },
+            "provenance": {
+                "build": {"workspace": str(pair_workspace)},
+                "environment": {"classes": [pair_environment_record]},
+                "inputs": pair_inputs,
+            },
+        }
+        _actual_validate_recorded_pair_index_commands(
+            root, pair_common, pair_manifest, serial_rows
+        )
+
+        def require_pair_index_rejection(label):
+            try:
+                _actual_validate_recorded_pair_index_commands(
+                    root, pair_common, pair_manifest, serial_rows
+                )
+            except ActualVerificationError:
+                return
+            raise RuntimeError("actual pair-index corruption was accepted: " + label)
+
+        pair_environment_record["environment_id"] = "not_pair_index_v1"
+        require_pair_index_rejection("environment-id")
+        pair_environment_record["environment_id"] = "pair_index_v1"
+
+        first_stderr = root / pair_commands[0]["stderr"]
+        first_stderr.write_bytes(b"unexpected diagnostic\n")
+        bad_stderr_sha = sha256_file(first_stderr)
+        pair_commands[0]["stderr_sha256"] = bad_stderr_sha
+        pair_manifest[pair_commands[0]["stderr"]] = bad_stderr_sha
+        require_pair_index_rejection("nonempty-stderr")
+        first_stderr.write_bytes(b"")
+        empty_sha = hashlib.sha256(b"").hexdigest()
+        pair_commands[0]["stderr_sha256"] = empty_sha
+        pair_manifest[pair_commands[0]["stderr"]] = empty_sha
+
+        first_stdout = root / pair_commands[0]["stdout"]
+        valid_stdout = first_stdout.read_bytes()
+        noncanonical_stdout = valid_stdout.replace(b"\n", b" \n", 1)
+        first_stdout.write_bytes(noncanonical_stdout)
+        noncanonical_sha = sha256_file(first_stdout)
+        pair_commands[0]["stdout_sha256"] = noncanonical_sha
+        pair_manifest[pair_commands[0]["stdout"]] = noncanonical_sha
+        require_pair_index_rejection("noncanonical-stdout")
+        first_stdout.write_bytes(valid_stdout)
+        valid_stdout_sha = hashlib.sha256(valid_stdout).hexdigest()
+        pair_commands[0]["stdout_sha256"] = valid_stdout_sha
+        pair_manifest[pair_commands[0]["stdout"]] = valid_stdout_sha
+
+        serial_rows[0]["cam0_header_time_ns"] += 1
+        require_pair_index_rejection("serial-source-projection")
+        serial_rows[0]["cam0_header_time_ns"] -= 1
+
+        pair_commands[0]["sequence_index"] = 1
+        require_pair_index_rejection("command-order")
+        pair_commands[0]["sequence_index"] = 0
+
+        runtime_commands[0]["command_id"] = pair_commands[0]["command_id"]
+        require_pair_index_rejection("command-after-runtime")
+        runtime_commands[0]["command_id"] = pair_commands[0]["command_id"] + 1
+
+        compile_workspace = root / "actual-compile-workspace"
+        compile_source = compile_workspace / "src"
+        compile_build = compile_workspace / "build"
+        compile_directory = compile_build / "ov_msckf"
+        compile_source.mkdir(parents=True)
+        compile_directory.mkdir(parents=True)
+        compile_entries = []
+        for source, target in ACTUAL_STRICT_FP_SOURCE_TARGETS.items():
+            source_path = compile_source / source
+            source_path.parent.mkdir(parents=True, exist_ok=True)
+            source_path.write_bytes(b"// self-test\n")
+            output = (
+                compile_directory / "CMakeFiles" / (target + ".dir")
+                / (source[len("ov_msckf/"):] + ".o")
+            )
+            tokens = [
+                "/usr/bin/c++", "-O3", "-fno-signed-zeros",
+                "-fno-fast-math", "-ffp-contract=off", "-fsigned-zeros",
+                "-DEIGEN_DONT_VECTORIZE=1",
+                "-DEIGEN_MAX_ALIGN_BYTES=16",
+                "-DEIGEN_MAX_STATIC_ALIGN_BYTES=16",
+                "-ffile-prefix-map={}=/cp2/reproducible-root".format(
+                    compile_workspace
+                ),
+                "-fdebug-prefix-map={}=/cp2/reproducible-root".format(
+                    compile_workspace
+                ),
+                "-fmacro-prefix-map={}=/cp2/reproducible-root".format(
+                    compile_workspace
+                ),
+                "-o", str(output), "-c", str(source_path),
+            ]
+            compile_entries.append({
+                "arguments": tokens,
+                "directory": str(compile_directory),
+                "file": str(source_path),
+                "output": str(output),
+            })
+
+        def write_compile_fixture(name, entries):
+            path = root / name
+            path.write_text(
+                json.dumps(
+                    entries, allow_nan=False, ensure_ascii=False,
+                    separators=(",", ":"), sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            return {
+                "compile_commands": name,
+                "workspace": str(compile_workspace),
+            }
+
+        _actual_validate_compile_commands(
+            root,
+            write_compile_fixture("compile-commands-valid.json", compile_entries),
+        )
+
+        def require_compile_rejection(name, mutate):
+            entries = json.loads(json.dumps(compile_entries))
+            mutate(entries)
+            try:
+                _actual_validate_compile_commands(
+                    root, write_compile_fixture(name, entries)
+                )
+            except ActualVerificationError:
+                return
+            raise RuntimeError("actual strict-FP corruption was accepted: " + name)
+
+        require_compile_rejection(
+            "compile-commands-dual.json",
+            lambda entries: entries[0].update({"command": "/usr/bin/c++"}),
+        )
+        require_compile_rejection(
+            "compile-commands-nul.json",
+            lambda entries: entries[0]["arguments"].insert(1, "-DOPAQUE=\0"),
+        )
+        require_compile_rejection(
+            "compile-commands-quoted-map.json",
+            lambda entries: entries[0]["arguments"].__setitem__(
+                next(
+                    index for index, token in enumerate(entries[0]["arguments"])
+                    if token.startswith("-ffile-prefix-map=")
+                ),
+                next(
+                    token for token in entries[0]["arguments"]
+                    if token.startswith("-ffile-prefix-map=")
+                ) + '"',
+            ),
+        )
+        try:
+            verify_timing_preprofile_blocked(root / "must-not-be-read", "0" * 64)
+        except ActualVerificationError:
+            pass
+        else:
+            raise RuntimeError("preprofile timing verifier did not fail closed")
+        try:
+            verify_sequence_artifact(
+                root / "must-not-be-read-sequence", "0" * 64, quiet=True
+            )
+        except ActualVerificationError as exc:
+            if "blocked before artifact access" not in str(exc):
+                raise RuntimeError(
+                    "pending-contract sequence verifier failed for the wrong reason"
+                ) from exc
+        else:
+            raise RuntimeError("pending-contract sequence verifier did not fail closed")
+
+    os.umask(0o077)
+    temporary_root = Path(tempfile.mkdtemp(prefix="schurvio-lite-cp2-verifier-self-test-", dir="/tmp"))
+    cases = []
+    try:
+        (temporary_root / "file-a").write_bytes(b"a")
+        os.link(str(temporary_root / "file-a"), str(temporary_root / "file-b"))
+        (temporary_root / "link").symlink_to("file-a")
+        (temporary_root / "root-link").symlink_to(".")
+        for index, name in enumerate(READINESS_VERIFIER_CASES):
+            expected_rejection = name != "valid_minimal_fixture"
+            observed_rejection = False
+            unexpected = False
+            try:
+                if name == "valid_minimal_fixture":
+                    safe_relpath("logs/self-test.log")
+                    strict_json_bytes(b'{"x":1}', "self-test JSON")
+                    check_recorded(valid_recorded())
+                    check_sequence(valid_sequence())
+                    check_timing(valid_timing())
+                    validate_actual_mode_primitives(temporary_root)
+                elif name in READINESS_COMMON_CASES:
+                    validate_common(name, temporary_root)
+                elif name in recorded_mutations:
+                    value = valid_recorded(); key, mutation = recorded_mutations[name]; value[key] = mutation; check_recorded(value)
+                elif name in sequence_mutations:
+                    value = valid_sequence(); key, mutation = sequence_mutations[name]; value[key] = mutation; check_sequence(value)
+                elif name in timing_mutations:
+                    value = valid_timing(); key, mutation = timing_mutations[name]; value[key] = mutation; check_timing(value)
+                else:
+                    raise RuntimeError("unimplemented verifier self-test case: " + name)
+            except _ReadinessSelfTestRejection:
+                observed_rejection = True
+            except Exception:
+                unexpected = True
+            cases.append({"index": index, "name": name, "expected_rejection": expected_rejection,
+                          "observed_rejection": observed_rejection,
+                          "passed": not unexpected and observed_rejection == expected_rejection})
+    finally:
+        shutil.rmtree(str(temporary_root))
+    passed = (not os.path.lexists(str(temporary_root)) and len(cases) == len(READINESS_VERIFIER_CASES)
+              and all(case["passed"] for case in cases))
+    result = {"schema_version": 1, "record_type": "self_test_result",
+              "entrypoint": "scripts/cp2/verify_report.py", "temporary_root": str(temporary_root),
+              "bag_provider_calls": 0, "cases": cases, "case_count": len(cases), "passed": passed}
+    print(json.dumps(result, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+    return 0 if passed else 1
+
+
+READINESS_ENGINE_PROTECTING_TESTS = (
+    ("test_cp2_readiness.py", 27),
+    ("test_cp2_actual_readiness_binding.py", 12),
+)
+READINESS_ENGINE_PROTECTING_TEST_COUNT = sum(
+    count for _, count in READINESS_ENGINE_PROTECTING_TESTS
+)
+
+
+def run_readiness_engine_protecting_tests():
+    """Run the readiness-engine attack suite inside the evidenced unit self-test."""
+
+    environment = {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PYTHONHASHSEED": "0",
+        "TZ": "UTC",
+    }
+    module_digest = hashlib.sha256(
+        b"SchurVIO-CP2-readiness-protecting-modules-v1\0"
+    )
+    output_digest = hashlib.sha256(
+        b"SchurVIO-CP2-readiness-protecting-outputs-v1\0"
+    )
+    tests_directory = Path(__file__).resolve().parent / "tests"
+    for filename, expected_count in READINESS_ENGINE_PROTECTING_TESTS:
+        test_path = (tests_directory / filename).resolve()
+        if (
+            test_path.parent != tests_directory.resolve()
+            or not test_path.is_file()
+            or test_path.is_symlink()
+        ):
+            raise RuntimeError(
+                "CP2 readiness protecting-test module is unavailable: " + filename
+            )
+        module_bytes = test_path.read_bytes()
+        encoded_name = filename.encode("utf-8")
+        module_digest.update(len(encoded_name).to_bytes(8, "big"))
+        module_digest.update(encoded_name)
+        module_digest.update(len(module_bytes).to_bytes(8, "big"))
+        module_digest.update(module_bytes)
+        command = ["/usr/bin/python3", "-I", "-B", str(test_path), "-v"]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd="/tmp",
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+                timeout=180,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                "CP2 readiness protecting tests timed out: " + filename
+            ) from exc
+        output = completed.stdout
+        sys.stdout.buffer.write(output)
+        sys.stdout.buffer.flush()
+        output_digest.update(len(encoded_name).to_bytes(8, "big"))
+        output_digest.update(encoded_name)
+        output_digest.update(len(output).to_bytes(8, "big"))
+        output_digest.update(output)
+        match = re.search(rb"Ran ([0-9]+) tests in [^\n]+\n\nOK\n", output)
+        if (
+            completed.returncode != 0
+            or match is None
+            or int(match.group(1)) != expected_count
+        ):
+            raise RuntimeError(
+                "CP2 readiness protecting-test inventory/outcome is not exact: "
+                + filename
+            )
+    print(
+        "CP2_READINESS_ENGINE_PROTECTING_TESTS count={} passed=true "
+        "module_sha256={} output_sha256={}".format(
+            READINESS_ENGINE_PROTECTING_TEST_COUNT,
+            module_digest.hexdigest(),
+            output_digest.hexdigest(),
+        )
+    )
+
+
+def run_unit_self_test():
     required_cp2_c2_counts = {
-        "test_cp2_updater_msckf_end_to_end": 14,
-        "test_cp2_updater_msckf_fault_injection": 28,
+        "test_cp2_updater_msckf_end_to_end": 16,
+        "test_cp2_updater_msckf_fault_injection": 31,
         "test_cp2_commit_oracle": 10,
         "test_cp2_commit_boundary": 4,
     }
     if any(CP2_TESTS.get(name) != count for name, count in required_cp2_c2_counts.items()):
         raise RuntimeError("CP2-C2 executable test-count contract is inconsistent")
-    if len(CP2_TESTS) != 14 or sum(ALL_TESTS.values()) != 139:
-        raise RuntimeError("CP2-C2 exact executable/total testcase inventory is inconsistent")
-    if len(RUNTIME_LIBRARY_SOURCES) != 23:
-        raise RuntimeError("CP2-C2 exact production/fault runtime source inventory is not 23")
+    if len(CP2_TESTS) != 21 or sum(ALL_TESTS.values()) != 203:
+        raise RuntimeError("CP2 exact executable/total testcase inventory is inconsistent")
+    if len(RUNTIME_LIBRARY_SOURCES) != 29:
+        raise RuntimeError("CP2-C3 exact production/fault runtime source inventory is not 29")
     if any(
         len(TEST_CASES_BY_BINARY.get(name, ())) != count
         for name, count in required_cp2_c2_counts.items()
@@ -5326,16 +12313,18 @@ def run_self_test():
         for case in cases
     }
     if (
-        sum(len(cases) for cases in TEST_CASES_BY_BINARY.values()) != 139
+        sum(len(cases) for cases in TEST_CASES_BY_BINARY.values()) != 203
         or mapped_testcase_names != EXPECTED_TEST_CASES
     ):
-        raise RuntimeError("CP1 plus CP2 exact testcase execution inventory is not 139")
+        raise RuntimeError("CP1 plus CP2 exact testcase execution inventory is not 203")
     if set(TEST_CASES_BY_BINARY) != set(ALL_TESTS):
         raise RuntimeError("testcase ownership does not cover the exact executable inventory")
     if set(SUMMARIES_BY_BINARY) != set(ALL_TESTS):
         raise RuntimeError("summary ownership does not cover the exact executable inventory")
     if set(TEST_SOURCE_BY_BINARY) != set(ALL_TESTS):
         raise RuntimeError("test source mapping does not cover the exact executable inventory")
+
+    run_readiness_engine_protecting_tests()
 
     frozen_sha256 = {
         relative: expected["sha256"]
@@ -6737,21 +13726,87 @@ def parse_args():
         help="require SHA256SUMS to match this externally retained SHA-256 digest",
     )
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--unit-self-test", action="store_true", help=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        "--verify-unit-anchor-prevalidated", metavar="ARTIFACT_DIR", type=Path,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--verify-recorded", metavar="ABS_PATH", type=Path,
+        help="independently verify one externally anchored CP2-C recorded artifact",
+    )
+    parser.add_argument(
+        "--verify-sequence", metavar="ABS_PATH", type=Path,
+        help="independently verify one externally anchored CP2-D sequence artifact",
+    )
+    parser.add_argument(
+        "--verify-timing", metavar="ABS_PATH", type=Path,
+        help="fail closed while CP2-E remains preprofile and non-authorizing",
+    )
+    parser.add_argument(
+        "--verify-sequence-set", nargs=3, metavar=("ABS0", "ABS1", "ABS2"), type=Path,
+        help="independently verify the exact ordered CP2-D sequence set",
+    )
+    parser.add_argument(
+        "--manifest-sha256", nargs="+", metavar="SHA256",
+        help="external SHA256SUMS anchor(s) for an actual CP2-C/D/E verifier mode",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    actual_modes = (
+        int(args.verify_recorded is not None)
+        + int(args.verify_sequence is not None)
+        + int(args.verify_timing is not None)
+        + int(args.verify_sequence_set is not None)
+    )
     selected_modes = (
-        int(args.self_test) + int(args.assemble_unit is not None)
+        int(args.self_test) + int(args.unit_self_test)
+        + int(args.assemble_unit is not None)
         + int(args.finalize_staging_noreplace is not None)
+        + int(args.verify_unit_anchor_prevalidated is not None)
+        + actual_modes
     )
     if selected_modes > 1 or (selected_modes and args.paths):
         raise ValueError("select exactly one verifier mode")
+    if actual_modes:
+        if args.expected_manifest_sha256 is not None:
+            raise ValueError("actual verifier modes require --manifest-sha256, not the unit anchor option")
+        expected_anchor_count = 3 if args.verify_sequence_set is not None else 1
+        if args.manifest_sha256 is None or len(args.manifest_sha256) != expected_anchor_count:
+            raise ValueError(
+                "actual verifier mode requires exactly {} --manifest-sha256 value(s)".format(
+                    expected_anchor_count
+                )
+            )
+        for digest in args.manifest_sha256:
+            if HEX64_PATTERN.fullmatch(digest) is None:
+                raise ValueError("--manifest-sha256 values must be lowercase SHA-256")
+        if args.verify_recorded is not None:
+            verify_recorded_artifact(args.verify_recorded, args.manifest_sha256[0])
+            return 0
+        if args.verify_sequence is not None:
+            verify_sequence_artifact(args.verify_sequence, args.manifest_sha256[0])
+            return 0
+        if args.verify_sequence_set is not None:
+            verify_sequence_set(args.verify_sequence_set, args.manifest_sha256)
+            return 0
+        verify_timing_preprofile_blocked(args.verify_timing, args.manifest_sha256[0])
+        raise AssertionError("unreachable timing verifier return")
+    if args.manifest_sha256 is not None:
+        raise ValueError("--manifest-sha256 is exclusive to actual CP2 verifier modes")
     if args.self_test:
         if args.expected_manifest_sha256 is not None:
             raise ValueError("--expected-manifest-sha256 is verification-only")
-        return run_self_test()
+        return run_readiness_self_test()
+    if args.unit_self_test:
+        if args.expected_manifest_sha256 is not None:
+            raise ValueError("--expected-manifest-sha256 is verification-only")
+        return run_unit_self_test()
     if args.assemble_unit is not None:
         if args.expected_manifest_sha256 is not None:
             raise ValueError("--expected-manifest-sha256 is verification-only")
@@ -6768,6 +13823,19 @@ def main():
             + str(args.finalize_staging_noreplace[1])
         )
         return 0
+    if args.verify_unit_anchor_prevalidated is not None:
+        if args.expected_manifest_sha256 is None:
+            raise ValueError("prevalidated verification requires the external manifest anchor")
+        content = sys.stdin.buffer.read(64 * 1024 * 1024 + 1)
+        if len(content) > 64 * 1024 * 1024:
+            raise ValueError("prevalidated source context exceeds 64 MiB")
+        context = strict_json_bytes(content, "prevalidated source context")
+        status, _ = verify_unit_anchor_prevalidated(
+            args.verify_unit_anchor_prevalidated,
+            args.expected_manifest_sha256,
+            context,
+        )
+        return status
     if len(args.paths) != 2:
         raise ValueError("verification requires ARTIFACT_DIR REPO_ROOT")
     status, _ = verify_unit_report(

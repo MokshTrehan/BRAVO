@@ -14,12 +14,29 @@
 
 #include <algorithm>
 #include <array>
+#include <cfenv>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <limits>
 
 namespace {
+
+class ScopedRoundingMode {
+public:
+  explicit ScopedRoundingMode(int mode) noexcept
+      : original_(std::fegetround()), changed_(std::fesetround(mode) == 0) {}
+  ~ScopedRoundingMode() {
+    if (original_ != -1) {
+      (void)std::fesetround(original_);
+    }
+  }
+  bool changed() const noexcept { return changed_; }
+
+private:
+  int original_ = -1;
+  bool changed_ = false;
+};
 
 constexpr std::uint64_t kMasterSeed = 20260801ULL;
 constexpr int kAcceptedFixtureCount = 1024;
@@ -538,6 +555,34 @@ TEST(CP2ProductionSchurReducer, OrderedValidityAndRankBoundariesAreExact) {
   EXPECT_EQ(result.H_reduced.rows(), 1);
   EXPECT_EQ(result.residual_reduced.rows(), 1);
   EXPECT_DOUBLE_EQ(result.noise_variance, 4.0);
+
+  ASSERT_EQ(std::fegetround(), FE_TONEAREST);
+  for (const int mode : {FE_UPWARD, FE_DOWNWARD, FE_TOWARDZERO}) {
+    ScopedRoundingMode rounding(mode);
+    ASSERT_TRUE(rounding.changed());
+    ASSERT_EQ(std::fegetround(), mode);
+
+    result = ov_msckf::SchurUpdate::Reduce(
+        Eigen::MatrixXd::Identity(4, 4),
+        diagonal_landmark_system(4, 1.0, 0.5, 0.25),
+        Eigen::Vector4d::Ones(), 2.0);
+    EXPECT_EQ(result.status, ov_msckf::SchurReductionStatus::kNonfinite);
+    EXPECT_EQ(result.stage, ov_msckf::SchurReductionStage::kConditioning);
+    EXPECT_TRUE(result.singular_values_available);
+    EXPECT_FALSE(result.singular_ratio_available);
+    EXPECT_TRUE(std::isnan(result.singular_ratio));
+
+    result = ov_msckf::SchurUpdate::Reduce(
+        Eigen::MatrixXd::Identity(rows, rows),
+        diagonal_landmark_system(rows, 1.0, 0.5, numerical_floor),
+        Eigen::VectorXd::Ones(rows), 1.0);
+    EXPECT_EQ(result.status, ov_msckf::SchurReductionStatus::kRankDeficient);
+    EXPECT_EQ(result.stage, ov_msckf::SchurReductionStage::kNumericalRank);
+    EXPECT_TRUE(result.singular_values_available);
+    EXPECT_FALSE(result.singular_ratio_available);
+    EXPECT_TRUE(std::isnan(result.singular_ratio));
+  }
+  EXPECT_EQ(std::fegetround(), FE_TONEAREST);
 }
 
 TEST(CP2ProductionSchurReducer, ReducedOutputAndStatisticsOverflowRejectAtomically) {

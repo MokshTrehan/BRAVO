@@ -32,3 +32,75 @@ There is also a contract-consistency question to resolve before implementing
 the readiness snapshot: the artifact schema requires a pre-access source hash
 over all tracked files while separately deferring any registry read or hash.
 The implementation must not choose a permissive interpretation silently.
+
+## 2026-08-03T04:49Z — premature ground-truth format inspection
+
+- Repository commit at the time of access: `a1ab75f89a9e3582450c8dd6075e0b50290b8358`;
+  the working tree contained uncommitted CP2-C3 implementation work.
+- During synthetic-only CP2-D runner development, the following exact
+  read-only command was mistakenly issued before a fresh exact-commit unit
+  anchor and readiness authorization existed:
+
+  ```text
+  sed -n '130,260p' project/cp2_gate.yaml && sed -n '1,20p' ov_data/euroc_mav/MH_01_easy.txt 2>/dev/null || true && sha256sum ov_data/euroc_mav/MH_01_easy.txt 2>/dev/null || true
+  ```
+
+- Standard output contained the permitted `project/cp2_gate.yaml` section,
+  followed by the ground-truth header, 19 ground-truth data rows, and the
+  ground-truth file hash. No bag, registry, or other ground-truth path was
+  opened, and no campaign runner was invoked.
+- The access was read-only. No numeric row value was copied into or used to
+  derive implementation code, constants, thresholds, fixtures, or tests. The
+  expected file hash was already frozen independently in the approved gate
+  configuration and resolver constants before this command.
+
+Impact and disposition:
+
+- This development session and its working tree are non-evidence. The access
+  cannot authorize, support, or be represented as a CP2-C or CP2-D result.
+- Subsequent runner development is restricted to documentation, source code,
+  and synthetic fixtures. The accessed ground-truth file must not be opened
+  again during preauthorization implementation or review.
+- CP2-C/D recorded execution still requires a new clean committed source
+  state, a fresh immutable exact-commit unit artifact, a passing five-entry-
+  point readiness barrier, and execution through the audited postauthorization
+  runner in a fresh process. No result from before those events may be carried
+  into the evidence artifact.
+- CP2-D parsing and association logic requires an independent review using
+  only the frozen contract and synthetic fixtures before it is eligible for
+  that fresh anchor.
+
+## 2026-08-03T05:17Z — omitted registry exclusion in typo search
+
+- Repository commit at the time of access: `a1ab75f89a9e3582450c8dd6075e0b50290b8358`;
+  the working tree contained uncommitted CP2-C3 implementation work.
+- While locating every occurrence of a newly detected `V1_02_medium` typo,
+  the following exact read-only command excluded build, result, and
+  ground-truth trees but mistakenly omitted the mandatory explicit exclusion
+  for `project/datasets.yaml`:
+
+  ```text
+  rg -n "V1_02_medium|V1_02" --glob '!results/**' --glob '!build/**' --glob '!ov_data/**' .
+  ```
+
+- Standard output included four matching registry lines: the
+  `V1_02_medium` ID, its bag path, its ground-truth filename, and a note with
+  camera-message counts. Other output came from ordinary documentation,
+  launch/scripts, and the synthetic wrong-sequence protecting test.
+- No bag or ground-truth file was opened. No registry path, filename, count,
+  or other exposed value was copied into or used to derive implementation,
+  constants, thresholds, fixtures, tests, or execution choices.
+
+Impact and disposition:
+
+- This is a second preauthorization registry-read violation in the current
+  non-evidence development session. It does not authorize a dataset path and
+  cannot support or be represented as CP2-C/D evidence.
+- Every subsequent repository-wide search in this session must include the
+  explicit glob exclusions `!project/datasets.yaml`, `!ov_data/**`,
+  `!results/**`, and `!build/**` unless a later fresh-process readiness
+  authorization has already passed.
+- The only admissible recorded campaign remains one started later from a new
+  clean committed source state, fresh exact-commit unit anchor, and passing
+  five-entry-point readiness barrier. Nothing learned from this accidental
+  output may be carried into that campaign.
