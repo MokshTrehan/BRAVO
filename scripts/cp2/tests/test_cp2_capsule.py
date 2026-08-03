@@ -684,6 +684,7 @@ class StagingTests(unittest.TestCase):
             capsule.stage_capsule(str(self.archive), self.profile, str(self.root / "bad name"))
 
         unsafe_parent = self.root / "unsafe"; unsafe_parent.mkdir(mode=0o755)
+        os.chmod(str(unsafe_parent), 0o755)
         with self.assertRaises(capsule.CapsuleError):
             capsule.stage_capsule(str(self.archive), self.profile, str(unsafe_parent / "destination"))
         real_parent = self.root / "real-parent"; real_parent.mkdir(mode=0o700)

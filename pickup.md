@@ -151,6 +151,16 @@ The next mechanical action after this pickup is committed is a complete unit
 gate at that exact clean `HEAD`. That unit anchor is necessary provenance but
 cannot substitute for any missing human approval above.
 
+The first such attempt at commit `e808c10070b380565ac6598fe59e7edd362fc803`
+failed closed during the pre-artifact verifier self-test, before any evidence
+directory, build, registry, bag, or clock access. Under the gate's required
+`umask 077`, a test fixture's `mkdir(mode=0755)` became mode `0700`, so the
+fixture no longer represented the unsafe parent it was meant to reject. The
+production stager did not fail; the protecting test setup was environment-
+dependent. The replacement explicitly `chmod`s that synthetic directory to
+`0755`; rerun the complete gate at the resulting clean commit and do not treat
+the failed attempt as evidence.
+
 ## 2026-08-03 overnight outcome
 
 The authorized result is a clean, exact-commit CP2-C3 review candidate plus a
