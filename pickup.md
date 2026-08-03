@@ -1,22 +1,37 @@
 # SchurVIO-Lite pickup and next-step plan
 
-Last updated: 2026-08-02 (America/Toronto)
+Last updated: 2026-08-03 (America/Toronto)
 
 ## Resume point
 
 - Repository: `/home/moksh/newSlam variant`
 - Branch: `schurvio-lite/cp2-one-pass`
-- Last completed runtime implementation checkpoint: `162ed140cb3fee301cf3f2e212c9afa28829798a` (`fix: bind CP2 commit boundary to production library`).
-- Tested source tree: `46935c58e7a7184f659a6f67fcd33896ebe02d46`.
-- CP2-C2 evidence-record commit: `2af6150c1f96378580d9a8b7406922f93b86821d` (`docs: record CP2-C2 unit evidence`).
-- Fresh unit artifact: `results/staging/cp2/unit/cp2_unit_20260802T185623152114466Z-g162ed140cb3f-WtrFa1xv`.
-- Artifact `SHA256SUMS` external anchor: `58bc351d513bb093a6e355a808fcf62a7d952e01dee5902594ed74946d76f579`.
-- The checkpoint-documentation commit containing this file is necessarily post-run metadata and was not runtime-tested by that artifact.
+- Approval-gated CP2-C3 review-candidate base commit: `71e2c56f1b63a391f417b0243edd5b1355c74012` (tree `0c2e4953f5f0288ab4e8da27e6512ef852503f90`).
+- Exact runtime/provenance replacement commit: `0d71fee98499a10df4e92176709c1afe14077f90` (`fix: bind CP2 unit evidence provenance`; tree `9e3dd0c72134b319f17c002c41aa63337de26414`).
+- Expanded preauthorization incident-log commit:
+  `c2f3ad9c54ed126cc69526c76adb3134c3bf9545` (tree
+  `193734a27077ba297747ade987b5c458934b8256`).
+- Fresh exact-commit unit artifact: `results/staging/cp2/unit/cp2_unit_20260803T090606610655669Z-g0d71fee98499-pry4lam2`.
+- Artifact `SHA256SUMS` external anchor: `b2cd771dc014da423a0fb57d2e9bc44a1da65b4bccd40b2fa9a7a01fe585bdd1`.
+- The unit artifact binds runtime commit `0d71fee...`. Incident-log commit
+  `c2f3ad9...`, the later pickup commit, and every approval/binding commit are
+  post-run tracked changes and are untested by that artifact.
 - Approved CP2-C clarification: `b37eff6e5baa035175e1dde3cae52ee496ca9e2d`
 - Approved CP1 mathematical contract: `952771e955fe3459f2fd43122a9c6f8ce57d1799`
+- Proposed replacement `docs/cp2_c_detached_readiness_binding_clarification_proposed.md` is still pending explicit approval and non-authorizing.
+- Proposed `docs/cp2_d_evaluator_precision_clarification_proposed.md` is
+  non-authorizing; its required evaluator/direct-math capsule identities and
+  known answers must first be frozen in a reviewed implementation commit, then
+  explicitly approved.
 - Pinned OpenVINS upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 - Target architecture: NVIDIA Jetson Nano family, CPU-only for the claimed path.
-- Current gate state: CP2-A and CP2-B passed; CP2-C1 and CP2-C2 passed unit-only; CP2-C3, CP2-C, and CP2-D remain pending/unexecuted; CP2-E is unexecuted and blocked pending a fixed-clock profile.
+- Current gate state: CP2-A and CP2-B passed; CP2-C1 and CP2-C2 passed unit-only. CP2-C3 implementation and protecting tests are present and audited, but formal CP2-C3 readiness is still `not_run` because its replacement contract is unapproved. CP2-C and CP2-D are unexecuted; CP2-E is unexecuted and blocked pending a fixed-clock profile/schema.
+- Formal-gate/campaign access: the exact unit artifact reports
+  `dataset_or_bag_accessed=false`. No bag or recorded-result artifact was
+  opened; no provider, readiness campaign, or CP2-C/D/E actual-mode runner was
+  invoked. This narrow formal claim does not erase the separately disclosed
+  preauthorization development incidents in
+  `docs/cp2_predata_incident_log.md`.
 - The CP2 deadline has been missed without a waiver. Requirements remain unchanged and the CP3 schedule is compressed.
 
 Before resuming, require no unexplained worktree changes and verify ancestry
@@ -27,9 +42,168 @@ from the tested implementation checkpoint above. Read, in order:
 3. `docs/cp2_recorded_evidence_contract.md`
 4. `docs/cp2_artifact_schema.md`
 5. `docs/cp2_c_composite_and_readiness_clarification.md`
-6. `project/cp2_gate.yaml`
+6. `project/cp2_c_clarification_approval.json`
+7. `docs/cp2_c_detached_readiness_binding_clarification_proposed.md`
+8. `docs/cp2_d_evaluator_precision_clarification_proposed.md`
+9. `project/cp2_gate.yaml`
 
 Do not inspect dataset registry contents, bags, ground truth, or payload data until the frozen CP2 readiness barrier permits it. Mathematical correctness remains the first priority; a build or run is not evidence of correctness by itself.
+
+## 2026-08-03 overnight outcome
+
+The authorized result is a clean, exact-commit CP2-C3 review candidate plus a
+fresh passing unit anchor. It is the maximum valid progress before Moksh's next
+approval; it is **not** a CP2-C3 readiness pass and is **not** completion of
+CP2-C/D/E.
+
+### Implementation and review result
+
+- `71e2c56...` added the three recorded/sequence/timing entry points, recorded
+  verifier modes, state/artifact assembly, detached replay, exact joins,
+  checked counters, readiness plumbing, and fail-closed actual-mode blocks.
+- `0d71fee...` is the replacement review commit. It fixes canonical unit-test
+  order, binds the standalone recorded assembler's real translation unit and
+  `CP2_RECORDED_ASSEMBLE_NO_MAIN=1` macro exactly, forbids path injection, and
+  hardens the assembler harness's status/diagnostic, rounding-mode, PID,
+  descriptor, watchdog, and cleanup proofs.
+- Independent final math and security reviews returned green. The exact
+  lambda/eta/gamma, gate, state, covariance, finite-state, counter,
+  failure-atomicity, and no-repair/no-fallback semantics remain unchanged.
+- In separate precommit, artifact-free, unretained development runs, all five
+  public entry-point self-tests passed with `CP2_FORBID_BAG_ACCESS=1` and zero
+  bag-provider calls. These are non-formal and must be rerun after approval
+  binding. The retained unit verifier independently reports 39/39 readiness
+  and binding protecting tests passed.
+
+The standalone assembler unit test directly embeds and calls the retained
+assembler entry/core translation unit; it does not independently attest an ELF
+loader or production `main`. The later authorized campaign must bind and invoke
+a freshly built standalone assembler ELF, so that loader/entry-point boundary
+remains a recorded-campaign proof rather than a unit-gate claim.
+
+### Preauthorization incident disclosure
+
+The complete disclosure is `docs/cp2_predata_incident_log.md`; do not summarize
+the overnight as “no recorded-input access.” In the non-evidence development
+session before the clean anchor, one command opened `MH_01_easy` ground truth
+and printed its header, 19 rows, and hash, and a later typo search printed four
+`project/datasets.yaml` lines. An earlier 2026-08-02 broad search could open the
+registry without printing a registry value. During this handoff, a broad
+sanitizer-reference search also omitted the registry/ground-truth exclusions;
+because both files were eligible for search, that invocation is conservatively
+recorded as opening both even though neither path appeared in retained stdout.
+
+These accesses were read-only, were not made by a campaign, and supplied no
+value to implementation, constants, thresholds, fixtures, tests, or execution
+choices. No bag or recorded-result artifact was opened; no provider, readiness
+campaign, or CP2-C/D/E actual-mode runner was invoked. The formal
+`0d71fee...` unit gate used an exact clean source/workspace and reports only
+its own zero-access scope; the last broad-search incident occurred after it
+finalized. Future recorded evidence must start from a new exact clean commit/
+unit anchor and a fresh-process, approval-bound readiness barrier, with nothing
+learned from these incidents carried forward.
+
+### Formal exact-commit unit evidence
+
+- Source before and after: commit `0d71fee...`, tree `9e3dd0c...`, branch
+  `schurvio-lite/cp2-one-pass`, clean in both snapshots.
+- Original execution: 203/203 GoogleTest cases passed across 25/25 binaries;
+  failures, errors, and disabled cases were all zero.
+- Independent retained-binary re-execution: the same 25/25 exit statuses were
+  zero and the same 203/203 cases passed.
+- Strict floating-point inventory passed for all 25 targets with
+  `-fno-fast-math`, `-ffp-contract=off`, `-fsigned-zeros`, and the frozen Eigen
+  ABI macros. Dependency Eigen ABI verification passed. Validation errors were
+  empty.
+- CP2-A accepted corpus: 1,024 fixtures. Maximum tolerance ratios were
+  lambda `0.0186021`, eta `0.0222892`, retained gamma `0.00458785`, covariance
+  `0.0000632893`, state increment `0.000227707`, and NIS `0.0000751222`.
+  CP2-A rejected corpus: 128/128 classified fixtures.
+- CP2-B state-update corpus: 128 fixtures, 256 accepted previews, 256 clone
+  calls, and 256 live commits. The five rejection cases made zero state
+  mutations; every reported jitter, repair, alternate-solve, clamp,
+  regularization, and fallback count was zero.
+- Artifact status is exactly `passed_cp2_a_b_cp2_c2_unit_only`; it deliberately
+  reports CP2-C3/C/D as `not_run` and CP2-E as
+  `not_run_blocked_pending_fixed_clock_profile`. It is trusted-runner,
+  internal, non-conveyable staging evidence, not an independent
+  source-to-binary attestation and not eligible for a CP2 seal.
+
+The formal artifact contains no sanitizer build or sanitizer execution, so no
+sanitizer pass is claimed from it. Separately, the dirty-tree development
+diagnostics recorded in `docs/cp2_math_implementation_audit.md` passed 203/203
+under UBSan, 189/189 under ASan+LSan, and a 14/14 composite-state supplemental
+UBSan run; those diagnostics are useful corroboration but are not the clean
+commit unit anchor.
+
+### Retained failed-closed precursor
+
+The first clean candidate run at `71e2c56...` retained
+`results/staging/cp2/unit/.cp2_unit_20260803T074825444378033Z-g71e2c56f1b63-gHHhbG9T.partial.Uzr5oXCz`
+and its workspace
+`build/cp2-unit-workspaces/.cp2-unit-20260803T074825444378033Z-g71e2c56f1b63.workspace.gHHhbG9T`.
+It exited 2. All 203 tests passed; the failure was evidence validation, not
+estimator math. The two root causes were a runner/verifier ordering mismatch
+for the offline/recorded/feature tests and the verifier expecting two instead
+of the deliberately compiled three assembler test translation units. The
+ordering root cause generated five validation messages; the source-inventory
+root cause generated one.
+Nothing was overwritten or relabelled.
+
+### Exact evidence limitation after cleanup
+
+The gate's own final independent verification ran after atomic finalization and
+before its trap removed the temporary build workspace; it passed and the runner
+exited zero. A later default live-verifier invocation correctly fails closed
+because the retained dependency compile/output records name that now-removed
+temporary workspace. This does not overturn the completed formal gate, and the
+external `SHA256SUMS` hash still matches exactly. Later readiness must use the
+approved held-source-context/prevalidated-anchor path; do not invoke that path
+until the pending replacement is approved and bound.
+
+### Approval-locked resume point
+
+Before binding the CP2-C replacement, Moksh must review the expanded incident
+log at exact commit `c2f3ad9c54ed126cc69526c76adb3134c3bf9545`
+and decide whether fresh-process CP2-C/D work may continue under the frozen
+protocols or whether a separately reviewed mitigation/holdout is required. A
+sufficient continue statement is:
+
+> I, Moksh Trehan, acknowledge the CP2 preauthorization incidents recorded in
+> docs/cp2_predata_incident_log.md at commit
+> c2f3ad9c54ed126cc69526c76adb3134c3bf9545, including the premature
+> MH_01_easy ground-truth access and registry disclosures. I authorize
+> fresh-process CP2-C/D work to continue under the frozen protocols, subject to
+> separate approval of every still-pending replacement; no exposed value may
+> be used to change source, configuration, thresholds, fixtures, tests,
+> sequence selection, or evaluation protocol; no exceptions.
+
+This acknowledgment is a user evidence-admissibility decision; a new unit
+anchor cannot substitute for it. If Moksh does not authorize that disposition,
+stop before approval binding and record the selected mitigation in a separately
+reviewed contract.
+
+For the CP2-C replacement itself, Moksh must also review exact commit
+`0d71fee98499a10df4e92176709c1afe14077f90` and, if accepted, provide a
+statement with the exact commit, document, complete replacement, and no
+exceptions. A sufficient statement is:
+
+> I, Moksh Trehan, approve the complete CP2-C detached-readiness and
+> evidence-binding replacement in
+> docs/cp2_c_detached_readiness_binding_clarification_proposed.md as reviewed
+> at commit 0d71fee98499a10df4e92176709c1afe14077f90; no exceptions.
+
+Only after both statements, create a **separate** approval-binding commit that
+records and source-binds the incident disposition, contains
+`project/cp2_c_detached_readiness_binding_approval.json`, and adds the exact
+contract/gate bindings. Every tracked-tree change after `0d71fee...`, including
+`c2f3ad9...`, the pickup commit, and the binding commit, invalidates the old
+anchor for readiness; rerun the complete unit gate at the new exact clean
+commit. Only if the nine-step readiness barrier then passes may the registry be
+opened once and CP2-C run. CP2-D additionally waits for a reviewed
+implementation that freezes the numerical/evaluator capsules and known
+answers, followed by explicit approval of that exact implementation/proposal;
+CP2-E waits for a separately frozen fixed-clock profile and artifact schema.
 
 ## Overnight CP2-C/D/E pickup contract
 
@@ -63,37 +237,56 @@ after each such commit.
 
 - Require branch `schurvio-lite/cp2-one-pass`, a clean worktree including
   untracked files, and ancestry from runtime-tested commit
-  `162ed140cb3fee301cf3f2e212c9afa28829798a`.
-- Re-read the six contract/source-of-truth files listed above. Treat their
-  exact counter units, operation order, CLI, artifact schema, and failure
-  taxonomy as locked.
-- Confirm the retained CP2-C2 unit artifact exists and its `SHA256SUMS` hashes
-  to `58bc351d513bb093a6e355a808fcf62a7d952e01dee5902594ed74946d76f579`.
+  `0d71fee98499a10df4e92176709c1afe14077f90`.
+- Re-read the nine contract/source-of-truth files listed above. At the current
+  HEAD both proposed clarifications are non-authorizing; treat each as such
+  unless and until its exact approval and separate binding commit are verified.
+  Treat frozen counter units, operation order, CLI, artifact schema, and
+  failure taxonomy as locked.
+- Confirm the retained unit artifact exists and its `SHA256SUMS` hashes to
+  `b2cd771dc014da423a0fb57d2e9bc44a1da65b4bccd40b2fa9a7a01fe585bdd1`.
+- Confirm that the CP2-C detached-readiness approval names exact reviewed
+  commit `0d71fee...`, the exact proposal path, the complete replacement, and
+  no exceptions; then require the separate approval-binding commit before any
+  readiness or actual-mode invocation.
+- Confirm Moksh has explicitly acknowledged incident-log commit `c2f3ad9...`
+  and authorized the chosen evidence disposition. A clean unit anchor does not
+  replace that human decision.
+- Do not treat the post-anchor pickup commit or later approval-binding commit
+  as tested by the `0d71fee...` artifact. Every later tracked-tree change
+  requires a new complete exact-commit unit gate.
 - Do not semantically parse `project/datasets.yaml`, resolve a bag, import
   `rosbag`, inspect ground truth, or open payload bytes during preflight.
-- If the tree is dirty, ancestry is wrong, an anchor mismatches, or a contract
-  is internally inconsistent, stop before implementation or data access.
+- If the tree is dirty, ancestry is wrong, an anchor mismatches, an approval is
+  incomplete, or a contract is internally inconsistent, stop before
+  implementation or data access.
 
-### Stage 1 — finish CP2-C3 before recorded data
+### Stage 1 — activate and prove CP2-C3 after approval
 
-- Implement the three missing runners, the recorded verifier modes, exact
-  artifact joins, state payload assembly, detached-replay plumbing, and the
-  approved nine-step opaque source-provenance/readiness barrier.
-- Each of the five preregistered entry points must have an exclusive,
-  artifact-free `--self-test` mode with its exact nonempty case inventory and
-  every mandatory negative/corruption case. Missing, extra, reordered,
-  duplicate, skipped, or no-op cases fail readiness.
-- Commit the completed runtime source at one clean commit. At that exact
-  commit/tree, run all final entry-point self-tests with
-  `CP2_FORBID_BAG_ACCESS=1`, zero bag-provider calls, fresh `/tmp` roots,
-  process-group timeouts, and byte-identical before/after
-  source/build/results/Testing snapshots.
-- Run a fresh complete unit gate at that same commit/tree, retain the new
-  external manifest anchor, and independently verify the finalized artifact
-  from a checkout of the exact tested source.
-- Only a completely passing readiness barrier at that same commit/tree and
+The implementation work formerly listed here is present at `0d71fee...` and
+has passed its artifact-free self-tests, protecting tests, math review, and
+fresh unit gate. It remains deliberately blocked in actual mode.
+
+- In one post-approval binding commit, record and source-bind Moksh's incident
+  disposition and exact replacement approval, add every frozen approval/source
+  identity to the source context, permitted archives, provenance, manifest,
+  and detached verifier, and remove only the two deliberate actual-mode blocks.
+  Do not edit the reviewed proposal.
+- Run all five exclusive artifact-free `--self-test` modes again under
+  `CP2_FORBID_BAG_ACCESS=1`, fresh private roots, process-group timeouts, exact
+  case inventories, zero provider calls, and byte-identical protected trees.
+- Run a fresh complete unit gate at the exact new clean commit and retain its
+  external manifest anchor.
+- Execute the full nine-step readiness barrier. It must bind the fresh unit
+  artifact, held source context, approval records, lock identity, Git children,
+  and command zero before returning a registry capability.
+- Only a completely passing readiness barrier at that exact commit/tree and
   unit-artifact identity may authorize semantic registry access. CP2-C3 itself
   produces no dataset-derived artifact and does not pass CP2-C.
+
+The prior version of this section described implementation tasks. Those tasks
+are now review-complete; approval binding and formal readiness are the remaining
+hard gate.
 
 ### Stage 2 — CP2-C recorded updater parity
 
@@ -128,6 +321,12 @@ after each such commit.
 
 ### Stage 3 — CP2-D sequence and trajectory parity
 
+- Before any actual-mode execution, complete a data-free implementation that
+  freezes the private evo 1.31.1 evaluator capsule, direct-math Python/NumPy/
+  BLAS/LAPACK closure, exact inventories, environments, and binary64 known
+  answers required by the pending precision clarification. Commit and review
+  those exact bytes, then obtain Moksh's explicit exact-commit approval. Do not
+  derive capsule identities from mutable host state during a recorded run.
 - Start only after CP2-C passes. Run independent `nullspace` and `schur` modes
   on all three frozen sequences with shadow disabled and identical inputs,
   calibration, initialization, offsets, and frontend configuration.
@@ -222,11 +421,11 @@ The branch already contains a real estimator modification and an unusually stric
 - A shared feature-gate implementation driven from one immutable prior.
 - A read-only full-update preflight that computes the proposed state increment and posterior covariance before any live EKF write and suppresses invalid commits.
 - A shadow path that runs the baseline and candidate from the same raw feature systems without candidate writes.
-- Canonical binary64/SHA-256 encoding for raw systems and proposals, plus a value-only trace codec and replay kernel; artifact-bound offline replay plumbing remains CP2-C3 work.
+- Canonical binary64/SHA-256 encoding for raw systems and proposals, plus a value-only trace codec, replay kernel, artifact-bound detached replay, and exact recorded-artifact joins.
 - An owning four-phase composite-state snapshot, exact pointer-graph token, canonical state-file codec, detached production-type commit oracle, and prepared nonthrowing/allocation-free phase-3 fill/handoff.
 - A production updater transaction that promotes one phase-0 prior before raw assembly, derives all gates and proposals from that prior, prepares detached phase 2 before the final phase-1 proof, performs exactly one baseline EKF commit, then captures the clock endpoint and allocation-free phase 3 in the approved order.
 - An authoritative status-returning evidence sink with a sticky fatal latch, exact checked counters, retained gamma provenance, postcommit oracle comparison, and a separately linked full fault-injection runtime.
-- One hundred thirty-nine CP1/CP2 unit executions across 18 binaries at the latest recorded checkpoint (125 unique test names; 14 updater cases intentionally run against both production and fault runtimes), including Schur equivalence, projection Jacobians, FEJ behavior, clone semantics, rank boundaries, transaction ordering, failure atomicity, production-library/source-inventory provenance, exact counters, trace corruption/replay, exhaustive composite mutation, detached update, and allocation-failure coverage.
+- Two hundred three CP1/CP2 unit executions across 25 binaries at the current exact-commit anchor, independently re-executed with the same 203/203 result. Coverage includes Schur equivalence, projection Jacobians, FEJ behavior, clone semantics, rank boundaries, transaction ordering, failure atomicity, production-library/source-inventory provenance, exact counters, trace corruption/replay, exhaustive composite mutation, detached update, recorded assembly, runtime context, serial pairing/trace, and allocation-failure behavior.
 
 The default live mode remains `nullspace`. The current `schur` mode is intentionally required to reproduce the same one-pass EKF information as the OpenVINS nullspace update. CP2 is therefore a correctness and parity foundation, not by itself the final research contribution.
 
@@ -287,7 +486,10 @@ Completed at source commit `162ed140cb3fee301cf3f2e212c9afa28829798a`
 passed all 139 executions across 18/18 executables (132 CP2 and 7 CP1),
 independently re-executed all 139, verified the exact 23-source production and
 23-source fault runtime inventories, and rejected all 85 synthetic verifier
-corruptions. The external manifest anchor is the one recorded above.
+corruptions. Its artifact is
+`results/staging/cp2/unit/cp2_unit_20260802T185623152114466Z-g162ed140cb3f-WtrFa1xv`;
+its external `SHA256SUMS` anchor is
+`58bc351d513bb093a6e355a808fcf62a7d952e01dee5902594ed74946d76f579`.
 
 The completed layer and protecting matrix cover tentative phase-0 promotion
 before raw counting, sole-prior projection, complete dual-path traversal,
@@ -308,33 +510,20 @@ recorded-data access, or establish AArch64/Jetson behavior. The artifact is
 trusted-runner internal non-conveyable staging evidence, is not an independent
 source-to-binary attestation, and is ineligible for a CP2 seal.
 
-### CP2-C3 — recorded-evidence runner readiness — immediate next checkpoint
+### CP2-C3 — implementation complete; approval/readiness pending
 
-1. Add the three missing committed runners: `run_recorded_parity.py`,
-   `run_sequence_pair.py`, and `run_timing_pair.py`; add the recorded modes of
-   the existing `verify_report.py` and preserve `run_unit_gate.sh`, yielding the
-   exact five preregistered entry points.
-2. Integrate the completed state-trace codec and authoritative sink into the
-   artifact assembler without changing the approved runtime math or commit
-   boundary.
-3. Implement the opaque source-provenance/readiness barrier in the exact nine
-   frozen steps, including clean Git identity, immutable before/after snapshots,
-   process-group timeouts, the data lock, exact unit-artifact binding, and zero
-   provider calls before authorization.
-4. Give all five entry points exclusive, artifact-free `--self-test` modes and
-   run them under `CP2_FORBID_BAG_ACCESS=1` in fresh `/tmp` directories. Require
-   each exact nonempty case inventory and every mandatory negative/corruption
-   case; reject missing, extra, reordered, skipped, duplicate, or no-op cases.
-5. Enforce one-to-one joins for raw, proposal, state, feature, state-block,
-   covariance-block, update, configuration, source, command, and readiness
-   records, with checked counts; implement artifact-bound detached-replay
-   plumbing and its artifact-free synthetic tests without recorded input.
-6. Run a new full unit gate at the exact clean CP2-C3 runtime commit, retain its
-   external manifest anchor, independently verify it, and only then evaluate
-   whether the barrier authorizes semantic registry access in a later CP2-C
-   turn.
+The five entry points, state/artifact assembler, exact joins, detached replay,
+opaque readiness engine, and protecting tests are implemented at
+`0d71fee...`. Its retained exact-commit unit gate passes 203/203. Separately,
+all five entry-point self-tests passed only as unretained development
+diagnostics and must be rerun after approval binding. Actual CP2-C entry remains
+hard blocked because
+`docs/cp2_c_detached_readiness_binding_clarification_proposed.md` is pending.
 
-Hard gate: readiness passes at one clean commit and produces no final CP2-C claim or dataset-derived artifact during self-test.
+Immediate hard gate: exact user approval, a separate approval/source-binding
+commit, a new complete unit anchor for that changed tree, and one passing
+nine-step readiness execution. Readiness must finish without a CP2-C claim or
+dataset-derived artifact; only then may CP2-C recorded execution begin.
 
 ### CP2-C — recorded updater parity
 
@@ -344,8 +533,14 @@ Any unexplained mismatch, nonfinite value, incomplete trace, silent repair, or e
 
 ### CP2-D and CP2-E — trajectory parity and desktop timing
 
-- CP2-D: independent nullspace and Schur sequence runs, common population/alignment checks, trajectory p95 bounds, and ATE-difference bound.
-- CP2-E: paired desktop timing under the frozen affinity/clock profile; median overhead at most 10% and p95 overhead at most 15%.
+- CP2-D: blocked before access pending a reviewed implementation that freezes
+  the evaluator/direct-math capsules, followed by exact approval and binding of
+  the evaluator-precision replacement. Once bound, run independent nullspace
+  and Schur sequences, common population/alignment checks, trajectory p95
+  bounds, and the ATE-difference bound.
+- CP2-E: blocked pending a fixed-clock profile and exact artifact schema. Once
+  frozen and established, run paired desktop timing; median overhead must be at
+  most 10% and p95 overhead at most 15%.
 
 Only after CP2-C/D/E pass is one-pass parity established.
 
@@ -372,13 +567,24 @@ Use read-only checks first:
 
 ```bash
 git status --short --branch
+git status --porcelain=v1 --untracked-files=all
 git rev-parse HEAD
 git log -5 --oneline --decorate
+git merge-base --is-ancestor 0d71fee98499a10df4e92176709c1afe14077f90 HEAD
+sha256sum results/staging/cp2/unit/cp2_unit_20260803T090606610655669Z-g0d71fee98499-pry4lam2/SHA256SUMS
 ```
 
-Require a clean HEAD that descends from the tested CP2-C2 implementation commit
-`162ed140cb3fee301cf3f2e212c9afa28829798a`. A later checkpoint-metadata commit
-is expected; do not confuse it with the runtime-tested source commit. If the
-ancestry check fails or the worktree has unexplained changes, inspect and
-reconcile them before starting CP2-C3. Do not reset or overwrite unexplained
-work.
+Require a clean HEAD that descends from the tested CP2-C3 review-candidate
+runtime commit
+`0d71fee98499a10df4e92176709c1afe14077f90`. A later pickup-metadata commit is
+expected; do not confuse it with the runtime-tested source commit. Verify the
+retained artifact path and external anchor above, then verify Moksh's exact
+incident-log acknowledgment/evidence disposition and exact replacement
+approval. Make the source-bound incident disposition, approval record, all
+required source/contract identities, and removal of the two deliberate
+actual-mode blocks one separately reviewed binding commit; do not invoke
+readiness or actual mode until that commit is clean and its fresh unit gate
+passes. If ancestry fails or the worktree has
+unexplained changes, inspect and reconcile them before continuing. Do not
+reset or overwrite unexplained work, and do not inspect recorded inputs during
+diagnosis.
