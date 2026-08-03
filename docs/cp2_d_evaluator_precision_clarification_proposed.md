@@ -237,7 +237,7 @@ deriving those values from the mutable host during a recorded run.
 
 ## Data-free implementation candidate
 
-The source tree now contains three non-authorizing, data-free candidate
+The source tree now contains four non-authorizing, data-free candidate
 primitives. They are not imported by either public actual-mode path and do not
 remove either pre-access block:
 
@@ -258,13 +258,24 @@ remove either pre-access block:
   fields/comments/preamble/gaps/overlap/trailing bytes/ZIP64/encryption/data
   descriptors, and decompresses only root `stats.json` under fixed bounds.
   The exact seven finite nonnegative, non-negative-zero statistics and basic
-  min/mean/median/RMSE/max ordering are checked. Console RMSE is diagnostic
-  six-decimal formatting; the archive RMSE is the full-precision value.
+  min/mean/median/RMSE/max ordering are checked, including the mathematically
+  necessary exact `RMSE >= mean` relation for nonnegative errors. Console RMSE
+  is diagnostic six-decimal formatting; the archive RMSE is the full-precision
+  value.
 - `scripts/cp2/cp2_f64_codec.py` defines canonical finite-binary64 array IPC.
   Values are lower-case 16-hex-digit big-endian IEEE-754 bit strings; shape is
   checked u64 arithmetic; JSON has exact keys/order/spacing and one LF; signed
   zero is preserved; nonfinite values, alternate JSON spellings, duplicate
   keys, excess rank/elements/document bytes, and overflow fail closed.
+- `scripts/cp2/cp2_direct_kat.py` defines the exact five-case direct-math
+  expectation/response bundle. It freezes every proposal input row and every
+  case/input/output name, shape and order as binary64 bits; requires exactly
+  two complete repeats carrying the same input projection; compares every
+  retained finite-binary64 bit string to the reviewed expectation; requires
+  the common alignment bytes to equal case 1 byte-for-byte; and directly
+  freezes the already specified ordered-RMSE and two p95 answer bits. It
+  deliberately does not derive the stack-specific SVD/Kabsch/matrix-product
+  bits.
 
 The candidate capsule profile has exact, nonnull fields for the clarification
 commit; target Linux ABI and CPU-dispatch policy; archive and complete file
@@ -291,8 +302,8 @@ evo, CPython, NumPy, BLAS, LAPACK, libc, libm, or CPU identity. â€œRelocatableâ€
 at this stage means transport bytes and canonical inventory are root-neutral.
 Executable relocation and identical numerical answers at two roots remain an
 approved-capsule preflight requirement. The evidenced data-free inventory is
-66 tests: 26 capsule/profile/stager cases, 28 ZIP/statistics cases, and 12
-binary64-codec cases.
+78 tests: 26 capsule/profile/stager cases, 29 ZIP/statistics cases, 12
+binary64-codec cases, and 11 direct-KAT bundle cases.
 
 ## Direct-math known-answer plan
 

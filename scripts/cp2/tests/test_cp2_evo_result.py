@@ -23,8 +23,8 @@ import cp2_evo_result as evo_result  # noqa: E402
 def stats_document(**changes):
     values = {
         "max": 0.5,
-        "mean": 0.25,
-        "median": 0.2,
+        "mean": 0.1,
+        "median": 0.1,
         "min": 0.0,
         "rmse": 0.12345678901234567,
         "sse": 1.25,
@@ -398,12 +398,35 @@ class StatsPayloadTests(unittest.TestCase):
             stats_document(min=0.4, median=0.2),
             stats_document(mean=0.75),
             stats_document(rmse=0.75),
+            stats_document(mean=0.25, rmse=next_up(0.0)),
             stats_document(max=0.0, mean=0.0, median=0.0, min=0.0, rmse=0.0, sse=1.0, std=0.0),
         )
         for payload in impossible:
             archive, _ = build_zip([("stats.json", payload)])
-            with self.assertRaises(evo_result.EvoResultError):
-                evo_result.parse_evo_result_zip(archive)
+            with self.subTest(payload=payload):
+                with self.assertRaises(evo_result.EvoResultError):
+                    evo_result.parse_evo_result_zip(archive)
+
+    def test_rmse_mean_exact_boundary_and_one_ulp_inversion(self):
+        mean = 0.25
+        equal, _ = build_zip(
+            [("stats.json", stats_document(mean=mean, median=mean, rmse=mean))]
+        )
+        above, _ = build_zip(
+            [("stats.json", stats_document(mean=mean, median=mean, rmse=next_up(mean)))]
+        )
+        self.assertEqual(evo_result.parse_evo_result_zip(equal).rmse, mean)
+        self.assertEqual(evo_result.parse_evo_result_zip(above).rmse, next_up(mean))
+
+        mean_bits = struct.unpack(">Q", struct.pack(">d", mean))[0]
+        one_ulp_below = struct.unpack(">d", struct.pack(">Q", mean_bits - 1))[0]
+        inverted, _ = build_zip(
+            [("stats.json", stats_document(mean=mean, median=mean, rmse=one_ulp_below))]
+        )
+        with self.assertRaisesRegex(
+            evo_result.EvoResultError, "RMSE is below the arithmetic mean"
+        ):
+            evo_result.parse_evo_result_zip(inverted)
 
 
 class NumericJoinTests(unittest.TestCase):

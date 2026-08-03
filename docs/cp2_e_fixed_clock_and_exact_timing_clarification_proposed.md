@@ -89,13 +89,25 @@ quantiles cannot be combined as though they came from one population. Nested
 dataclass evidence is reconstructed and revalidated rather than trusted by
 type alone.
 
-The candidate creates no artifact codec or profile and performs no file,
+The candidate creates no complete artifact codec or profile and performs no file,
 clock, host-control, registry, bag, build, or result access. Its 37-case
 isolated synthetic suite passed, and a separate audit compared 49,600 cases
 against Python's independent exact `Fraction` oracle with no disagreement.
 The module and test SHA-256 values before integration were respectively
 `4f9a394f808d69a5846b6b9d070fe98ed113f329306c681f7207c2a1d6a6ee34` and
 `e321a68dcd5ba495923975b02a92024c2801e941b8b31d5e2fff967f0f1dc960`.
+
+A later data-free audit found that the original candidate's generic
+`ExactRatio` domain admitted components wider than the proposed retained u128
+encoding even though all quantile-derived decisions remained exact. The
+candidate now bounds every retained rational component to u128, rejects a
+ratio-gate cross product wider than u128, and explicitly bounds exact ratio
+ordering to u256. It also provides the unique 32-lowercase-hex-digit scalar
+encoding and strict round-trip decoder required above. The same 37 protecting
+tests pass, including valid u64-wide products, u128 rejection boundaries, and
+u256 median ordering. The independent 49,600-case `Fraction` oracle was rerun
+after this correction with no disagreement. This scalar codec is not the
+still-missing complete timing artifact/profile codec and authorizes no access.
 
 The still-blocked public timing runner and independent verifier now use
 separate stdlib-only exact rational corruption oracles: their linear

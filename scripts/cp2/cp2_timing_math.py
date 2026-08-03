@@ -14,8 +14,10 @@ For a sorted population ``x`` of size ``n``, the retained quantile follows
 ``h = (n - 1) * q`` with zero-based ``lo = floor(h)`` and ``hi = ceil(h)``.
 Interpolation is evaluated as an exact rational; no binary floating-point value
 is created.  Ratio gates are evaluated by mathematically exact Python-integer
-cross products whose factors are bounded by validated u64/rational inputs.
-Rank arithmetic that is contractually u64 uses explicit checked operations.
+cross products whose retained values are bounded to u128; exact ratio ordering
+uses the full u256 product domain.  Exact rational scalars have one canonical
+32-lowercase-hex-digit-per-component record encoding.  Rank arithmetic that is
+contractually u64 uses explicit checked operations.
 Each quantile retains the exact canonical sorted u64 population plus its
 domain-separated SHA-256 as a big-endian unsigned-256-bit integer, preventing
 two independently computed populations from being combined as ordinary
@@ -28,12 +30,18 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 import hashlib
 import math
-from typing import Any, Tuple
+import re
+from typing import Any, Dict, Mapping, Tuple
 
 
 U64_MAX = (1 << 64) - 1
+U128_MAX = (1 << 128) - 1
+U256_MAX = (1 << 256) - 1
 MAX_TIMING_SAMPLE_COUNT = 1_000_000
-MAX_EXACT_RATIO_COMPONENT = U64_MAX * U64_MAX * U64_MAX
+# Every retained exact rational component is serialized as one fixed-width
+# unsigned-128 value by the proposed CP2-E contract.  Keep the historical
+# public constant name as the single component bound used by callers/tests.
+MAX_EXACT_RATIO_COMPONENT = U128_MAX
 
 P50_QUANTILE = (1, 2)
 P95_QUANTILE = (19, 20)
@@ -42,6 +50,7 @@ P95_RATIO_LIMIT = (23, 20)
 
 _ALLOWED_QUANTILES = (P50_QUANTILE, P95_QUANTILE)
 _ALLOWED_RATIO_LIMITS = (MEDIAN_RATIO_LIMIT, P95_RATIO_LIMIT)
+_U128_HEX = re.compile(r"^[0-9a-f]{32}$")
 
 
 class TimingMathError(ValueError):
@@ -66,6 +75,29 @@ def _positive_u64(value: Any, label: str) -> int:
     if converted == 0:
         raise TimingMathError(label + " must be positive")
     return converted
+
+
+def u128_to_hex(value: Any, label: str = "u128 value") -> str:
+    """Encode one retained unsigned-128 value in its only canonical spelling."""
+
+    converted = _plain_integer(value, label)
+    if converted < 0 or converted > U128_MAX:
+        raise TimingMathError(label + " is outside u128")
+    return format(converted, "032x")
+
+
+def u128_from_hex(value: Any, label: str = "u128 value") -> int:
+    """Decode exactly 32 lowercase hexadecimal digits; reject alternate forms."""
+
+    if type(value) is not str or _U128_HEX.fullmatch(value) is None:
+        raise TimingMathError(label + " must be exactly 32 lowercase hexadecimal digits")
+    return int(value, 16)
+
+
+def _exact_rational_record(value: Any, label: str) -> Mapping[str, Any]:
+    if type(value) is not dict or set(value) != {"numerator_hex", "denominator_hex"}:
+        raise TimingMathError(label + " record keys differ from the canonical schema")
+    return value
 
 
 def _checked_u64_add(left: int, right: int, label: str) -> int:
@@ -112,6 +144,8 @@ class RationalNanoseconds:
         denominator = _positive_u64(self.denominator, "rational denominator")
         if numerator < 0:
             raise TimingMathError("rational numerator must be nonnegative")
+        if numerator > U128_MAX:
+            raise TimingMathError("rational numerator exceeds the retained u128 domain")
         # The numerator may be wider than u64 because an interpolated u64
         # value is retained over a u64 denominator.  This inequality bounds
         # the represented value itself to u64 without using a float.
@@ -123,6 +157,26 @@ class RationalNanoseconds:
     @classmethod
     def from_u64(cls, value: Any) -> "RationalNanoseconds":
         return cls(_u64(value, "nanoseconds"), 1)
+
+
+def rational_nanoseconds_to_record(value: Any) -> Dict[str, str]:
+    """Return the canonical fixed-width JSON scalar record for exact ns."""
+
+    rational = _validated_rational_nanoseconds(value, "rational record input")
+    return {
+        "numerator_hex": u128_to_hex(rational.numerator, "rational numerator"),
+        "denominator_hex": u128_to_hex(rational.denominator, "rational denominator"),
+    }
+
+
+def rational_nanoseconds_from_record(value: Any) -> RationalNanoseconds:
+    """Parse and revalidate one canonical fixed-width exact-ns record."""
+
+    record = _exact_rational_record(value, "rational nanoseconds")
+    return RationalNanoseconds(
+        u128_from_hex(record["numerator_hex"], "rational numerator"),
+        u128_from_hex(record["denominator_hex"], "rational denominator"),
+    )
 
 
 def _validated_rational_nanoseconds(value: Any, label: str) -> RationalNanoseconds:
@@ -150,6 +204,26 @@ class ExactRatio:
             raise TimingMathError("exact-ratio denominator is outside its bounded domain")
         if math.gcd(numerator, denominator) != 1:
             raise TimingMathError("exact ratio must be reduced")
+
+
+def exact_ratio_to_record(value: Any) -> Dict[str, str]:
+    """Return the canonical fixed-width JSON scalar record for an exact ratio."""
+
+    ratio = _validated_exact_ratio(value, "exact-ratio record input")
+    return {
+        "numerator_hex": u128_to_hex(ratio.numerator, "exact-ratio numerator"),
+        "denominator_hex": u128_to_hex(ratio.denominator, "exact-ratio denominator"),
+    }
+
+
+def exact_ratio_from_record(value: Any) -> ExactRatio:
+    """Parse and revalidate one canonical fixed-width exact-ratio record."""
+
+    record = _exact_rational_record(value, "exact ratio")
+    return ExactRatio(
+        u128_from_hex(record["numerator_hex"], "exact-ratio numerator"),
+        u128_from_hex(record["denominator_hex"], "exact-ratio denominator"),
+    )
 
 
 def _validated_exact_ratio(value: Any, label: str) -> ExactRatio:
@@ -369,6 +443,10 @@ class RatioGate:
             raise TimingMathError("ratio cross products must be nonnegative")
         expected_left = candidate.numerator * baseline.denominator * limit_den
         expected_right = baseline.numerator * candidate.denominator * limit_num
+        if expected_left > U128_MAX or expected_right > U128_MAX:
+            raise TimingMathError(
+                "ratio-gate cross product exceeds the retained u128 domain"
+            )
         if left != expected_left or right != expected_right:
             raise TimingMathError("ratio-gate cross product differs from exact recomputation")
         if type(self.passed) is not bool or self.passed is not (left <= right):
@@ -542,6 +620,11 @@ def exact_candidate_baseline_ratio(candidate_ns: Any, baseline_ns: Any) -> Exact
 def _compare_exact_ratios(left: ExactRatio, right: ExactRatio) -> int:
     left_cross = left.numerator * right.denominator
     right_cross = right.numerator * left.denominator
+    # Each operand component is retained u128.  Ordering is intentionally a
+    # u256 operation rather than imposing the gate's narrower u128-product
+    # rule; this is the exact domain promised for median-of-three ordering.
+    if left_cross > U256_MAX or right_cross > U256_MAX:
+        raise TimingMathError("ratio-ordering cross product exceeds u256")
     return -1 if left_cross < right_cross else (1 if left_cross > right_cross else 0)
 
 
@@ -597,6 +680,8 @@ def ratio_gate(
     # all factors are bounded by RationalNanoseconds plus a frozen u64 limit.
     left = candidate.numerator * baseline.denominator * limit_den
     right = baseline.numerator * candidate.denominator * limit_num
+    if left > U128_MAX or right > U128_MAX:
+        raise TimingMathError("ratio-gate cross product exceeds the retained u128 domain")
     return RatioGate(
         baseline_ns=baseline,
         candidate_ns=candidate,

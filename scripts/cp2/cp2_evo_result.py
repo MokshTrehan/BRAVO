@@ -92,6 +92,13 @@ class EvoStatistics:
             _reject("stats mean is outside min/max")
         if not (self.min <= self.rmse <= self.max):
             _reject("stats RMSE is outside min/max")
+        # For a finite population of nonnegative translation errors,
+        # sqrt(E[x^2]) >= E[x].  The retained values are already binary64, so
+        # this is an exact ordered comparison: allowing even a one-ULP
+        # inversion would admit a statistic tuple that no such population can
+        # produce.  Equality is valid for a constant-error population.
+        if self.rmse < self.mean:
+            _reject("stats RMSE is below the arithmetic mean")
         if self.max == 0.0 and any(
             getattr(self, key) != 0.0 for key in ("mean", "median", "min", "rmse", "sse", "std")
         ):

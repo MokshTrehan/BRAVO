@@ -27,7 +27,6 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import resource
-import shutil
 import signal
 import stat
 import struct
@@ -913,6 +912,287 @@ def _file_flags() -> int:
     if hasattr(os, "O_NOFOLLOW"):
         value |= os.O_NOFOLLOW
     return value
+
+
+@dataclass(frozen=True)
+class _PrivateTreeEntry:
+    """One exact, private-readiness-tree identity retained after step 8."""
+
+    relative: str
+    entry_type: str
+    signature: Tuple[int, ...]
+    sha256: Optional[str]
+
+
+class _PrivateTreeSeal:
+    """Descriptor-held identity/inventory seal for readiness-owned state.
+
+    The readiness authorization remains live after the barrier returns.  This
+    seal makes that lifetime explicit: the private root stays descriptor-bound,
+    and every frozen-unit or readiness-attachment leaf is re-opened without
+    following links, re-fstat'ed, and re-hashed before recorded access.
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        root_fd: int,
+        root_signature: Tuple[int, ...],
+        entries: Tuple[_PrivateTreeEntry, ...],
+        attachment_paths: Tuple[str, ...],
+    ) -> None:
+        self.root = Path(root).absolute()
+        self.root_fd = root_fd
+        self.root_signature = root_signature
+        self.entries = entries
+        self.attachment_paths = attachment_paths
+        self._closed = False
+
+    @staticmethod
+    def _expected_mode(relative: str, entry_type: str) -> int:
+        frozen = (
+            relative == "unit-artifact-frozen"
+            or relative.startswith("unit-artifact-frozen/")
+        )
+        if entry_type == "d":
+            return 0o555 if frozen else 0o700
+        if frozen:
+            return (
+                0o555
+                if relative.startswith("unit-artifact-frozen/binaries/")
+                else 0o444
+            )
+        return 0o600
+
+    @classmethod
+    def _scan(cls, root_fd: int) -> Tuple[_PrivateTreeEntry, ...]:
+        records: List[_PrivateTreeEntry] = []
+        owner = os.geteuid()
+
+        def walk(directory_fd: int, prefix: str) -> None:
+            directory_before = os.fstat(directory_fd)
+            names = sorted(
+                os.listdir(directory_fd),
+                key=lambda name: _utf8(name, "private readiness path component"),
+            )
+            for name in names:
+                if not name or name in (".", "..") or "/" in name or "\0" in name:
+                    _fail("private readiness tree contains an unsafe path component")
+                relative = name if not prefix else prefix + "/" + name
+                _relpath(relative, "private readiness path")
+                before = os.stat(
+                    name, dir_fd=directory_fd, follow_symlinks=False
+                )
+                if before.st_uid != owner:
+                    _fail("private readiness entry has the wrong owner: " + relative)
+                if stat.S_ISDIR(before.st_mode):
+                    if stat.S_IMODE(before.st_mode) != cls._expected_mode(relative, "d"):
+                        _fail("private readiness directory mode differs: " + relative)
+                    child_fd = os.open(name, _directory_flags(), dir_fd=directory_fd)
+                    try:
+                        if not _same_binding(before, os.fstat(child_fd)):
+                            _fail(
+                                "private readiness directory changed while opening: "
+                                + relative
+                            )
+                        records.append(
+                            _PrivateTreeEntry(
+                                relative, "d", _stat_signature(before), None
+                            )
+                        )
+                        walk(child_fd, relative)
+                        if not _same_binding(before, os.fstat(child_fd)):
+                            _fail(
+                                "private readiness directory changed while scanning: "
+                                + relative
+                            )
+                    finally:
+                        os.close(child_fd)
+                elif stat.S_ISREG(before.st_mode):
+                    if before.st_nlink != 1:
+                        _fail(
+                            "private readiness file is hardlinked: " + relative
+                        )
+                    if stat.S_IMODE(before.st_mode) != cls._expected_mode(relative, "f"):
+                        _fail("private readiness file mode differs: " + relative)
+                    descriptor = os.open(name, _file_flags(), dir_fd=directory_fd)
+                    try:
+                        if not _same_binding(before, os.fstat(descriptor)):
+                            _fail(
+                                "private readiness file changed while opening: "
+                                + relative
+                            )
+                        size, digest = _hash_fd(descriptor)
+                        if (
+                            size != before.st_size
+                            or not _same_binding(before, os.fstat(descriptor))
+                        ):
+                            _fail(
+                                "private readiness file changed while hashing: "
+                                + relative
+                            )
+                    finally:
+                        os.close(descriptor)
+                    records.append(
+                        _PrivateTreeEntry(
+                            relative, "f", _stat_signature(before), digest
+                        )
+                    )
+                else:
+                    _fail(
+                        "private readiness tree contains a link or special entry: "
+                        + relative
+                    )
+                if len(records) > MAX_SNAPSHOT_ENTRIES:
+                    _fail("private readiness entry count exceeds bound")
+            if not _same_binding(directory_before, os.fstat(directory_fd)):
+                _fail("private readiness directory changed during traversal")
+
+        walk(root_fd, "")
+        return tuple(records)
+
+    @staticmethod
+    def _validate_paths(
+        root: Path,
+        entries: Sequence[_PrivateTreeEntry],
+        attachments: Mapping[str, Path],
+        frozen_unit_artifact: Path,
+    ) -> Tuple[str, ...]:
+        if not isinstance(attachments, Mapping):
+            _fail("readiness attachment inventory is not a mapping")
+        attachment_paths = tuple(
+            sorted(attachments, key=lambda value: _utf8(value, "attachment path"))
+        )
+        if not attachment_paths:
+            _fail("readiness attachment inventory is empty")
+        for relative in attachment_paths:
+            _relpath(relative, "readiness attachment path")
+            if not relative.startswith("readiness/"):
+                _fail("readiness attachment leaves its namespace")
+            expected = root.joinpath(*PurePosixPath(relative).parts)
+            supplied = Path(attachments[relative])
+            if (
+                not supplied.is_absolute()
+                or os.path.normpath(str(supplied)) != str(supplied)
+                or supplied != expected
+            ):
+                _fail("readiness attachment path binding differs: " + relative)
+
+        frozen = Path(frozen_unit_artifact)
+        expected_frozen = root / "unit-artifact-frozen"
+        if (
+            not frozen.is_absolute()
+            or os.path.normpath(str(frozen)) != str(frozen)
+            or frozen != expected_frozen
+        ):
+            _fail("frozen unit artifact leaves the held readiness root")
+
+        by_path = {record.relative: record for record in entries}
+        if len(by_path) != len(entries):
+            _fail("private readiness inventory contains duplicate paths")
+        if set(path.split("/", 1)[0] for path in by_path) != {
+            "git-home", "git-tmp", "readiness", "unit-artifact-frozen"
+        }:
+            _fail("private readiness top-level namespace differs")
+        for private_git_directory in ("git-home", "git-tmp"):
+            record = by_path.get(private_git_directory)
+            if record is None or record.entry_type != "d" or any(
+                path.startswith(private_git_directory + "/") for path in by_path
+            ):
+                _fail("private Git directory is missing, nonempty, or invalid")
+        if (
+            by_path.get("readiness") is None
+            or by_path["readiness"].entry_type != "d"
+            or by_path.get("unit-artifact-frozen") is None
+            or by_path["unit-artifact-frozen"].entry_type != "d"
+        ):
+            _fail("private readiness/frozen-unit directory inventory differs")
+        readiness_files = {
+            path
+            for path, record in by_path.items()
+            if path.startswith("readiness/") and record.entry_type == "f"
+        }
+        if readiness_files != set(attachment_paths):
+            _fail("private readiness attachment file population differs")
+        if not any(
+            path.startswith("unit-artifact-frozen/") and record.entry_type == "f"
+            for path, record in by_path.items()
+        ):
+            _fail("frozen unit artifact contains no regular files")
+        return attachment_paths
+
+    @classmethod
+    def capture(
+        cls,
+        root: Path,
+        attachments: Mapping[str, Path],
+        frozen_unit_artifact: Path,
+    ) -> "_PrivateTreeSeal":
+        root = Path(root).absolute()
+        before = os.lstat(str(root))
+        if (
+            not stat.S_ISDIR(before.st_mode)
+            or stat.S_ISLNK(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or stat.S_IMODE(before.st_mode) != 0o700
+        ):
+            _fail("private readiness root identity/mode differs")
+        descriptor = os.open(str(root), _directory_flags())
+        try:
+            if not _same_binding(before, os.fstat(descriptor)):
+                _fail("private readiness root changed while sealing")
+            entries = cls._scan(descriptor)
+            attachment_paths = cls._validate_paths(
+                root, entries, attachments, frozen_unit_artifact
+            )
+            if not _same_binding(before, os.fstat(descriptor)):
+                _fail("private readiness root changed while sealing")
+            return cls(
+                root,
+                descriptor,
+                _stat_signature(before),
+                entries,
+                attachment_paths,
+            )
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def revalidate(
+        self,
+        attachments: Mapping[str, Path],
+        frozen_unit_artifact: Path,
+    ) -> None:
+        if self._closed:
+            _fail("private readiness tree seal is closed")
+        held = os.fstat(self.root_fd)
+        current = os.lstat(str(self.root))
+        if (
+            _stat_signature(held) != self.root_signature
+            or _stat_signature(current) != self.root_signature
+            or not stat.S_ISDIR(held.st_mode)
+            or stat.S_ISLNK(current.st_mode)
+        ):
+            _fail("held private readiness root identity changed")
+        observed = self._scan(self.root_fd)
+        if observed != self.entries:
+            _fail("private readiness tree identity/inventory changed")
+        attachment_paths = self._validate_paths(
+            self.root, observed, attachments, frozen_unit_artifact
+        )
+        if attachment_paths != self.attachment_paths:
+            _fail("readiness attachment mapping changed")
+        if (
+            _stat_signature(os.fstat(self.root_fd)) != self.root_signature
+            or _stat_signature(os.lstat(str(self.root))) != self.root_signature
+        ):
+            _fail("held private readiness root changed during revalidation")
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        os.close(self.root_fd)
 
 
 class OpaqueGitRepository:
@@ -2039,8 +2319,20 @@ def _write_attachment(root: Path, relative: str, content: bytes) -> Path:
     return destination
 
 
-def _remove_private_tree(path: Path) -> None:
-    """Remove only a readiness-owned /tmp tree, including finalized 0555 nodes."""
+def _remove_private_tree(
+    path: Path, expected_seal: Optional[_PrivateTreeSeal] = None
+) -> None:
+    """Descriptor-relatively remove only verified readiness-owned entries.
+
+    A finalized authorization supplies ``expected_seal``.  Cleanup then requires
+    the pathname to remain bound to the descriptor-held root, but deliberately
+    does not require the descendants to equal the authorization-time inventory:
+    a failed revalidation must still clean readiness-owned temporary state.
+    Every current descendant is preflighted descriptor-relatively before the
+    first mutation; links are unlinked without being followed, and hardlinked or
+    special entries are refused.  A substituted root is never traversed or
+    removed.
+    """
 
     path = Path(path).absolute()
     allowed = (
@@ -2056,25 +2348,185 @@ def _remove_private_tree(path: Path) -> None:
     try:
         root_status = os.lstat(str(path))
     except FileNotFoundError:
+        if expected_seal is not None:
+            _fail("sealed readiness private tree disappeared before cleanup")
         return
-    if not stat.S_ISDIR(root_status.st_mode) or stat.S_ISLNK(root_status.st_mode):
-        _fail("readiness private tree root is not a real directory")
+    if (
+        not stat.S_ISDIR(root_status.st_mode)
+        or stat.S_ISLNK(root_status.st_mode)
+        or root_status.st_uid != os.geteuid()
+    ):
+        _fail("readiness private tree root is not an owned real directory")
+
+    if expected_seal is not None:
+        if path != expected_seal.root:
+            _fail("cleanup path differs from the sealed readiness root")
+        if expected_seal._closed:
+            _fail("sealed readiness root descriptor is closed before cleanup")
+        held_status = os.fstat(expected_seal.root_fd)
+        if (
+            held_status.st_dev != expected_seal.root_signature[0]
+            or held_status.st_ino != expected_seal.root_signature[1]
+            or not stat.S_ISDIR(held_status.st_mode)
+            or held_status.st_uid != expected_seal.root_signature[4]
+        ):
+            _fail("held readiness root identity changed before cleanup")
+        root_fd = os.dup(expected_seal.root_fd)
+    else:
+        root_fd = os.open(str(path), _directory_flags())
+
+    parent_fd = -1
     try:
-        for current, directories, _ in os.walk(str(path), topdown=True, followlinks=False):
-            current_status = os.lstat(current)
-            if not stat.S_ISDIR(current_status.st_mode) or stat.S_ISLNK(current_status.st_mode):
-                _fail("readiness private tree contains a replaced directory")
-            os.chmod(current, 0o700)
-            for name in directories:
-                child = Path(current) / name
-                child_status = os.lstat(str(child))
-                if stat.S_ISDIR(child_status.st_mode) and not stat.S_ISLNK(child_status.st_mode):
-                    os.chmod(str(child), 0o700)
-        shutil.rmtree(str(path))
+        opened_root = os.fstat(root_fd)
+        same_root_identity = (
+            root_status.st_dev == opened_root.st_dev
+            and root_status.st_ino == opened_root.st_ino
+            and root_status.st_uid == opened_root.st_uid
+            and stat.S_ISDIR(opened_root.st_mode)
+        )
+        if (
+            (expected_seal is not None and not same_root_identity)
+            or (expected_seal is None and not _same_binding(root_status, opened_root))
+        ):
+            _fail("readiness private tree root changed while opening for cleanup")
+        parent_before = os.lstat(str(path.parent))
+        if not stat.S_ISDIR(parent_before.st_mode) or stat.S_ISLNK(parent_before.st_mode):
+            _fail("readiness private tree parent is not a real directory")
+        parent_fd = os.open(str(path.parent), _directory_flags())
+        if not _same_binding(parent_before, os.fstat(parent_fd)):
+            _fail("readiness private tree parent changed while opening")
+        root_from_parent = os.stat(
+            path.name, dir_fd=parent_fd, follow_symlinks=False
+        )
+        if not _same_binding(root_status, root_from_parent):
+            _fail("readiness private tree path binding changed before cleanup")
+
+        preflight: Dict[str, Tuple[str, Tuple[int, ...]]] = {}
+
+        def inspect(directory_fd: int, prefix: str) -> None:
+            names = sorted(
+                os.listdir(directory_fd),
+                key=lambda name: _utf8(name, "cleanup path component"),
+            )
+            for name in names:
+                if not name or name in (".", "..") or "/" in name or "\0" in name:
+                    _fail("readiness cleanup found an unsafe path component")
+                relative = name if not prefix else prefix + "/" + name
+                _relpath(relative, "readiness cleanup path")
+                current = os.stat(
+                    name, dir_fd=directory_fd, follow_symlinks=False
+                )
+                if current.st_uid != os.geteuid():
+                    _fail("readiness cleanup found a foreign-owned entry")
+                signature = _stat_signature(current)
+                if stat.S_ISDIR(current.st_mode):
+                    kind = "d"
+                    child_fd = os.open(name, _directory_flags(), dir_fd=directory_fd)
+                    try:
+                        if not _same_binding(current, os.fstat(child_fd)):
+                            _fail("readiness cleanup directory changed during preflight")
+                        preflight[relative] = (kind, signature)
+                        inspect(child_fd, relative)
+                    finally:
+                        os.close(child_fd)
+                elif stat.S_ISREG(current.st_mode):
+                    if current.st_nlink != 1:
+                        _fail("readiness cleanup refuses a hardlinked file")
+                    descriptor = os.open(name, _file_flags(), dir_fd=directory_fd)
+                    try:
+                        if not _same_binding(current, os.fstat(descriptor)):
+                            _fail("readiness cleanup file changed during preflight")
+                    finally:
+                        os.close(descriptor)
+                    preflight[relative] = ("f", signature)
+                elif stat.S_ISLNK(current.st_mode):
+                    # The link itself may be safely unlinked; its target is never
+                    # opened, statted, chmodded, or traversed.
+                    preflight[relative] = ("l", signature)
+                else:
+                    _fail("readiness cleanup refuses a special entry")
+                if len(preflight) > MAX_SNAPSHOT_ENTRIES:
+                    _fail("readiness cleanup entry count exceeds bound")
+
+        inspect(root_fd, "")
+
+        def same_path_identity(current: os.stat_result, signature: Tuple[int, ...]) -> bool:
+            return (
+                current.st_dev == signature[0]
+                and current.st_ino == signature[1]
+                and current.st_uid == signature[4]
+            )
+
+        def remove(directory_fd: int, prefix: str) -> None:
+            os.fchmod(directory_fd, 0o700)
+            names = sorted(
+                os.listdir(directory_fd),
+                key=lambda name: _utf8(name, "cleanup path component"),
+            )
+            for name in names:
+                relative = name if not prefix else prefix + "/" + name
+                expected_kind, expected_signature = preflight[relative]
+                current = os.stat(
+                    name, dir_fd=directory_fd, follow_symlinks=False
+                )
+                if (
+                    not same_path_identity(current, expected_signature)
+                    or (
+                        expected_kind == "d" and not stat.S_ISDIR(current.st_mode)
+                    )
+                    or (
+                        expected_kind == "f" and not stat.S_ISREG(current.st_mode)
+                    )
+                    or (
+                        expected_kind == "l" and not stat.S_ISLNK(current.st_mode)
+                    )
+                ):
+                    _fail("readiness cleanup entry binding changed")
+                if expected_kind == "d":
+                    child_fd = os.open(name, _directory_flags(), dir_fd=directory_fd)
+                    try:
+                        if not same_path_identity(
+                            os.fstat(child_fd), expected_signature
+                        ):
+                            _fail("readiness cleanup directory binding changed")
+                        remove(child_fd, relative)
+                    finally:
+                        os.close(child_fd)
+                    current = os.stat(
+                        name, dir_fd=directory_fd, follow_symlinks=False
+                    )
+                    if not same_path_identity(current, expected_signature):
+                        _fail("readiness cleanup directory path was substituted")
+                    os.rmdir(name, dir_fd=directory_fd)
+                else:
+                    current = os.stat(
+                        name, dir_fd=directory_fd, follow_symlinks=False
+                    )
+                    if not same_path_identity(current, expected_signature):
+                        _fail("readiness cleanup leaf path was substituted")
+                    if expected_kind == "f" and current.st_nlink != 1:
+                        _fail("readiness cleanup leaf became hardlinked")
+                    os.unlink(name, dir_fd=directory_fd)
+
+        remove(root_fd, "")
+        current_root = os.stat(
+            path.name, dir_fd=parent_fd, follow_symlinks=False
+        )
+        if (
+            current_root.st_dev != root_status.st_dev
+            or current_root.st_ino != root_status.st_ino
+            or not stat.S_ISDIR(current_root.st_mode)
+        ):
+            _fail("readiness private root path was substituted during cleanup")
+        os.rmdir(path.name, dir_fd=parent_fd)
     except ReadinessError:
         raise
     except OSError as exc:
         raise ReadinessError("cannot remove readiness private tree") from exc
+    finally:
+        if parent_fd >= 0:
+            os.close(parent_fd)
+        os.close(root_fd)
     if os.path.lexists(str(path)):
         _fail("readiness private tree survived cleanup")
 
@@ -2641,6 +3093,7 @@ class ReadinessAuthorization:
     lock_fd: int
     lock_path: Path
     repository: OpaqueGitRepository
+    private_tree_seal: Optional[_PrivateTreeSeal]
     prebag_authorized: bool = True
     _closed: bool = False
 
@@ -2662,6 +3115,13 @@ class ReadinessAuthorization:
             _fail("held data lock identity changed")
         fcntl.flock(self.lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         self.repository.revalidate()
+        if self.private_tree_seal is None:
+            _fail("readiness authorization lacks its private-tree seal")
+        if Path(self.temporary_root).absolute() != self.private_tree_seal.root:
+            _fail("readiness authorization private-root path changed")
+        self.private_tree_seal.revalidate(
+            self.attachments, self.frozen_unit_artifact
+        )
 
     def read_registry_once(self, relative_path: str = "project/datasets.yaml") -> bytes:
         """Return the one verified postauthorization registry byte buffer."""
@@ -2692,10 +3152,17 @@ class ReadinessAuthorization:
             if first_error is None:
                 first_error = exc
         try:
-            _remove_private_tree(self.temporary_root)
+            _remove_private_tree(self.temporary_root, self.private_tree_seal)
         except BaseException as exc:
             if first_error is None:
                 first_error = exc
+        finally:
+            if self.private_tree_seal is not None:
+                try:
+                    self.private_tree_seal.close()
+                except BaseException as exc:
+                    if first_error is None:
+                        first_error = exc
         if first_error is not None:
             raise first_error
 
@@ -2735,6 +3202,7 @@ def run_readiness_barrier(
     temporary_root = Path(tempfile.mkdtemp(prefix="schurvio-cp2-readiness-", dir="/tmp"))
     os.chmod(str(temporary_root), 0o700)
     repository: Optional[OpaqueGitRepository] = None
+    private_tree_seal: Optional[_PrivateTreeSeal] = None
     lock_fd = -1
     attachments: Dict[str, Path] = {}
     try:
@@ -2899,6 +3367,11 @@ def run_readiness_barrier(
             "bag_provider_calls": 0,
             "passed": True,
         }
+        repository.revalidate()
+        private_tree_seal = _PrivateTreeSeal.capture(
+            temporary_root, attachments, frozen_unit_artifact
+        )
+        repository.revalidate()
         authorization = ReadinessAuthorization(
             record=record,
             attachments=attachments,
@@ -2908,9 +3381,11 @@ def run_readiness_barrier(
             lock_fd=lock_fd,
             lock_path=Path(lock_path).absolute(),
             repository=repository,
+            private_tree_seal=private_tree_seal,
         )
         lock_fd = -1
         repository = None
+        private_tree_seal = None
         return authorization
     except BaseException as original_error:
         cleanup_error: Optional[BaseException] = None
@@ -2931,10 +3406,17 @@ def run_readiness_barrier(
                 if cleanup_error is None:
                     cleanup_error = exc
         try:
-            _remove_private_tree(temporary_root)
+            _remove_private_tree(temporary_root, private_tree_seal)
         except BaseException as exc:
             if cleanup_error is None:
                 cleanup_error = exc
+        finally:
+            if private_tree_seal is not None:
+                try:
+                    private_tree_seal.close()
+                except BaseException as exc:
+                    if cleanup_error is None:
+                        cleanup_error = exc
         if cleanup_error is not None:
             raise cleanup_error from original_error
         raise

@@ -33,7 +33,7 @@ READINESS_RELATIVE_PATH = "scripts/cp2/cp2_readiness.py"
 # This is intentionally an embedded byte anchor, not a value imported from the
 # module being trusted.  The three actual-mode runners must be synchronized to
 # the final committed readiness bytes before an evidence run is attempted.
-READINESS_SHA256 = "18120bd0667ed3f320680bd08181f1b215fb0f82fff1cc2710e179c7d63b5ada"
+READINESS_SHA256 = "15fe6a2b2785ee7c021acddba67647564dfdeeaee3216db3345ba87be47ce3f7"
 READINESS_MAX_BYTES = 4 * 1024 * 1024
 CP2_D_ACTUAL_AUTHORIZED = False
 CP2_D_BLOCK_REASON = (

@@ -524,6 +524,7 @@ SOURCE_INPUTS = {
     "scripts/cp2/cp2_readiness.py",
     "scripts/cp2/cp2_recorded_campaign.py",
     "scripts/cp2/cp2_capsule.py",
+    "scripts/cp2/cp2_direct_kat.py",
     "scripts/cp2/cp2_evo_result.py",
     "scripts/cp2/cp2_f64_codec.py",
     "scripts/cp2/cp2_schema.py",
@@ -539,6 +540,7 @@ SOURCE_INPUTS = {
     "scripts/cp2/tests/test_cp2_readiness.py",
     "scripts/cp2/tests/test_cp2_recorded_campaign.py",
     "scripts/cp2/tests/test_cp2_capsule.py",
+    "scripts/cp2/tests/test_cp2_direct_kat.py",
     "scripts/cp2/tests/test_cp2_evo_result.py",
     "scripts/cp2/tests/test_cp2_f64_codec.py",
     "scripts/cp2/tests/test_cp2_schema.py",
@@ -4514,7 +4516,7 @@ def collect_verifier_self_test(artifact_dir, repo_root, errors, verifier_path=No
             "verifier self-test log lacks the exact readiness protecting-test result"
         )
     if re.search(
-        r"^CP2_D_DATA_FREE_PROTECTING_TESTS count=66 passed=true "
+        r"^CP2_D_DATA_FREE_PROTECTING_TESTS count=78 passed=true "
         r"module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$",
         log_text,
         flags=re.MULTILINE,
@@ -6022,7 +6024,7 @@ def create_synthetic_artifact(artifact_dir, repo_root):
         "Synthetic corruptions rejected: synthetic-bootstrap\n"
         "CP2_READINESS_ENGINE_PROTECTING_TESTS count=39 passed=true "
         "module_sha256={} output_sha256={}\n"
-        "CP2_D_DATA_FREE_PROTECTING_TESTS count=66 passed=true "
+        "CP2_D_DATA_FREE_PROTECTING_TESTS count=78 passed=true "
         "module_sha256={} output_sha256={}\n"
         "CP2_E_DATA_FREE_PROTECTING_TESTS count=37 passed=true "
         "module_sha256={} output_sha256={}\n".format(
@@ -12504,15 +12506,18 @@ def run_readiness_engine_protecting_tests():
 
 CP2_D_DATA_FREE_PROTECTING_MODULES = (
     "cp2_capsule.py",
+    "cp2_direct_kat.py",
     "cp2_evo_result.py",
     "cp2_f64_codec.py",
     "tests/test_cp2_capsule.py",
+    "tests/test_cp2_direct_kat.py",
     "tests/test_cp2_evo_result.py",
     "tests/test_cp2_f64_codec.py",
 )
 CP2_D_DATA_FREE_PROTECTING_TESTS = (
     ("test_cp2_capsule.py", 26),
-    ("test_cp2_evo_result.py", 28),
+    ("test_cp2_direct_kat.py", 11),
+    ("test_cp2_evo_result.py", 29),
     ("test_cp2_f64_codec.py", 12),
 )
 CP2_D_DATA_FREE_PROTECTING_TEST_COUNT = sum(

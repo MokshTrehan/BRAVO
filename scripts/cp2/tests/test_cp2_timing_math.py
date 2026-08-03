@@ -204,6 +204,28 @@ class ExactRatioGateTests(unittest.TestCase):
         )
         self.assertEqual(integer_ratio, timing_math.ExactRatio(11, 10))
         self.assertEqual(fractional_ratio, timing_math.ExactRatio(11, 10))
+        ratio_record = timing_math.exact_ratio_to_record(fractional_ratio)
+        self.assertEqual(
+            ratio_record,
+            {
+                "numerator_hex": "0000000000000000000000000000000b",
+                "denominator_hex": "0000000000000000000000000000000a",
+            },
+        )
+        self.assertEqual(timing_math.exact_ratio_from_record(ratio_record), fractional_ratio)
+
+        rational = timing_math.RationalNanoseconds(11, 20)
+        rational_record = timing_math.rational_nanoseconds_to_record(rational)
+        self.assertEqual(
+            rational_record,
+            {
+                "numerator_hex": "0000000000000000000000000000000b",
+                "denominator_hex": "00000000000000000000000000000014",
+            },
+        )
+        self.assertEqual(
+            timing_math.rational_nanoseconds_from_record(rational_record), rational
+        )
 
     def test_candidate_baseline_ratio_preserves_above_binary64_one_nanosecond(self):
         baseline_value = (1 << 53) + 1
@@ -258,6 +280,16 @@ class ExactRatioGateTests(unittest.TestCase):
         )
         result = timing_math.median_of_three_ratios(ratios)
         self.assertEqual(result.median_ratio, timing_math.ExactRatio(base + 2, base))
+
+        # The evidence components themselves are u128, but their exact order
+        # is a u256 comparison.  This boundary would be unsound under a u128
+        # intermediate-product restriction.
+        low = timing_math.ExactRatio(timing_math.U128_MAX - 1, timing_math.U128_MAX)
+        high = timing_math.ExactRatio(timing_math.U128_MAX, timing_math.U128_MAX - 1)
+        boundary = timing_math.median_of_three_ratios(
+            (high, timing_math.ExactRatio(1, 1), low)
+        )
+        self.assertEqual(boundary.ordered_ratios, (low, timing_math.ExactRatio(1, 1), high))
 
     def test_median_and_exact_ratio_reject_forged_or_zero_baseline_inputs(self):
         zero = timing_math.RationalNanoseconds.from_u64(0)
@@ -336,6 +368,15 @@ class ExactRatioGateTests(unittest.TestCase):
         self.assertTrue(result.passed)
         assert_integer_tree(self, result)
 
+        # Exact Python arithmetic alone is not sufficient evidence: the
+        # proposed retained fields are fixed-width u128.  Canonical operands
+        # whose gate product cannot be encoded must fail instead of silently
+        # widening the artifact representation.
+        tiny = timing_math.RationalNanoseconds(1, timing_math.U64_MAX)
+        huge = timing_math.RationalNanoseconds.from_u64(timing_math.U64_MAX)
+        with self.assertRaisesRegex(timing_math.TimingMathError, "u128"):
+            timing_math.ratio_gate(tiny, huge, 11, 10)
+
     def test_zero_candidate_passes_but_zero_baseline_is_rejected(self):
         zero = timing_math.RationalNanoseconds.from_u64(0)
         one = timing_math.RationalNanoseconds.from_u64(1)
@@ -375,7 +416,27 @@ class ExactRatioGateTests(unittest.TestCase):
                 with self.assertRaises(timing_math.TimingMathError):
                     timing_math.RationalNanoseconds(numerator, denominator)
 
+        valid = {
+            "numerator_hex": "00000000000000000000000000000001",
+            "denominator_hex": "00000000000000000000000000000001",
+        }
+        malformed_records = (
+            {**valid, "extra": "x"},
+            {"numerator_hex": valid["numerator_hex"]},
+            {**valid, "numerator_hex": "1"},
+            {**valid, "numerator_hex": "0000000000000000000000000000000A"},
+            {**valid, "numerator_hex": True},
+            {**valid, "denominator_hex": "00000000000000000000000000000000"},
+        )
+        for record in malformed_records:
+            with self.subTest(record=record):
+                with self.assertRaises(timing_math.TimingMathError):
+                    timing_math.rational_nanoseconds_from_record(record)
+        with self.assertRaises(timing_math.TimingMathError):
+            timing_math.u128_to_hex(timing_math.U128_MAX + 1)
+
     def test_invalid_exact_ratio_evidence_is_rejected(self):
+        self.assertEqual(timing_math.MAX_EXACT_RATIO_COMPONENT, timing_math.U128_MAX)
         invalid = (
             (2, 2),
             (0, 2),
@@ -390,6 +451,15 @@ class ExactRatioGateTests(unittest.TestCase):
             with self.subTest(value=(numerator, denominator)):
                 with self.assertRaises(timing_math.TimingMathError):
                     timing_math.ExactRatio(numerator, denominator)
+
+        # Both inputs are valid rational nanoseconds, but their reduced ratio
+        # needs roughly 192 bits.  It is therefore ineligible for the retained
+        # fixed-width u128 ratio schema.
+        u64 = timing_math.U64_MAX
+        candidate = timing_math.RationalNanoseconds(u64 * u64 - 1, u64)
+        baseline = timing_math.RationalNanoseconds(1, u64 - 1)
+        with self.assertRaisesRegex(timing_math.TimingMathError, "bounded domain"):
+            timing_math.exact_candidate_baseline_ratio(candidate, baseline)
 
     def test_forged_ratio_evidence_is_rejected(self):
         baseline = timing_math.RationalNanoseconds.from_u64(10)

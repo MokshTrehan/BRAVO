@@ -549,6 +549,7 @@ class LockTests(unittest.TestCase):
                 lock_fd=descriptor,
                 lock_path=lock,
                 repository=repository,
+                private_tree_seal=None,
             )
             lock.unlink()
             lock.write_bytes(b"")
@@ -560,6 +561,120 @@ class LockTests(unittest.TestCase):
                 authorization.close()
                 lock.unlink()
             repository.close.assert_called_once_with()
+
+        # A successful barrier retains a descriptor-held exact inventory of its
+        # private root, frozen unit copy, and readiness attachments.  Mutating
+        # any one of those after the barrier must fail before the sole registry
+        # read is reached.  Cleanup must still remove the descriptor-held private
+        # tree after descendant mutation; a substituted symlink's victim must be
+        # preserved rather than followed.
+        mutations = (
+            "private_root_mode",
+            "private_root_substitution",
+            "frozen_unit_bytes",
+            "attachment_bytes",
+            "attachment_inventory",
+            "attachment_mapping",
+            "attachment_symlink_victim",
+        )
+        with tempfile.TemporaryDirectory(
+            prefix="cp2-readiness-private-seal-test-", dir="/tmp"
+        ) as outer_temporary:
+            outer = Path(outer_temporary)
+            victim = outer / "cleanup-victim"
+            victim.write_bytes(b"victim-must-survive")
+            for mutation in mutations:
+                with self.subTest(post_barrier_mutation=mutation):
+                    displaced_private = None
+                    replacement_marker = None
+                    private = Path(tempfile.mkdtemp(
+                        prefix="schurvio-cp2-readiness-", dir="/tmp"
+                    ))
+                    private.chmod(0o700)
+                    for name in ("git-home", "git-tmp", "readiness"):
+                        (private / name).mkdir(mode=0o700)
+                    attachment = private / "readiness/synthetic.bin"
+                    attachment.write_bytes(b"readiness")
+                    attachment.chmod(0o600)
+                    frozen = private / "unit-artifact-frozen"
+                    frozen.mkdir(mode=0o700)
+                    frozen_report = frozen / "cp2_report.json"
+                    frozen_report.write_bytes(b"frozen-unit")
+                    frozen_report.chmod(0o444)
+                    frozen.chmod(0o555)
+                    attachments = {"readiness/synthetic.bin": attachment}
+                    seal = readiness._PrivateTreeSeal.capture(
+                        private, attachments, frozen
+                    )
+                    test_lock = Path("/tmp") / (
+                        "cp2-private-seal-lock-" + private.name
+                    )
+                    lock_descriptor = readiness.acquire_data_lock(test_lock)
+                    guarded_repository = mock.Mock()
+                    guarded_repository.read_preauthorized_registry_once.side_effect = (
+                        AssertionError("registry read was reached after private-state mutation")
+                    )
+                    authorization = readiness.ReadinessAuthorization(
+                        record={},
+                        attachments=attachments,
+                        unit_verification_command={},
+                        frozen_unit_artifact=frozen,
+                        temporary_root=private,
+                        lock_fd=lock_descriptor,
+                        lock_path=test_lock,
+                        repository=guarded_repository,
+                        private_tree_seal=seal,
+                    )
+                    if mutation == "private_root_mode":
+                        private.chmod(0o755)
+                    elif mutation == "private_root_substitution":
+                        displaced_private = private.with_name(private.name + "-held")
+                        private.rename(displaced_private)
+                        private.mkdir(mode=0o700)
+                        replacement_marker = private / "replacement-must-survive"
+                        replacement_marker.write_bytes(b"replacement-must-survive")
+                        replacement_marker.chmod(0o600)
+                    elif mutation == "frozen_unit_bytes":
+                        frozen_report.chmod(0o600)
+                        frozen_report.write_bytes(b"changed-unit")
+                        frozen_report.chmod(0o444)
+                    elif mutation == "attachment_bytes":
+                        attachment.write_bytes(b"changed-readiness")
+                    elif mutation == "attachment_inventory":
+                        extra = private / "readiness/extra.bin"
+                        extra.write_bytes(b"extra")
+                        extra.chmod(0o600)
+                    elif mutation == "attachment_mapping":
+                        authorization.attachments["readiness/synthetic.bin"] = victim
+                    elif mutation == "attachment_symlink_victim":
+                        attachment.unlink()
+                        attachment.symlink_to(victim)
+                    else:  # pragma: no cover - the tuple above is closed.
+                        self.fail("unknown private-state mutation")
+
+                    try:
+                        with self.assertRaises(readiness.ReadinessError):
+                            authorization.read_registry_once()
+                        guarded_repository.read_preauthorized_registry_once.assert_not_called()
+                        if mutation == "private_root_substitution":
+                            with self.assertRaises(readiness.ReadinessError):
+                                authorization.close()
+                            self.assertEqual(
+                                replacement_marker.read_bytes(),
+                                b"replacement-must-survive",
+                            )
+                            self.assertTrue(displaced_private.exists())
+                        else:
+                            authorization.close()
+                            self.assertFalse(private.exists())
+                        self.assertEqual(victim.read_bytes(), b"victim-must-survive")
+                    finally:
+                        if private.exists():
+                            readiness._remove_private_tree(private)
+                        if displaced_private is not None and displaced_private.exists():
+                            readiness._remove_private_tree(displaced_private)
+                        if test_lock.exists():
+                            test_lock.unlink()
 
 
 class OpaqueRepositoryTests(unittest.TestCase):
