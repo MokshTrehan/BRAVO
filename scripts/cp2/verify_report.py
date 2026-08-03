@@ -523,6 +523,9 @@ SOURCE_INPUTS = {
     "scripts/cp2/cp2_postauth_registry.py",
     "scripts/cp2/cp2_readiness.py",
     "scripts/cp2/cp2_recorded_campaign.py",
+    "scripts/cp2/cp2_capsule.py",
+    "scripts/cp2/cp2_evo_result.py",
+    "scripts/cp2/cp2_f64_codec.py",
     "scripts/cp2/cp2_schema.py",
     "scripts/cp2/cp2_sequence_actual.py",
     "scripts/cp2/cp2_sequence_math.py",
@@ -534,6 +537,9 @@ SOURCE_INPUTS = {
     "scripts/cp2/tests/test_cp2_actual_readiness_binding.py",
     "scripts/cp2/tests/test_cp2_readiness.py",
     "scripts/cp2/tests/test_cp2_recorded_campaign.py",
+    "scripts/cp2/tests/test_cp2_capsule.py",
+    "scripts/cp2/tests/test_cp2_evo_result.py",
+    "scripts/cp2/tests/test_cp2_f64_codec.py",
     "scripts/cp2/tests/test_cp2_schema.py",
     "scripts/cp2/tests/test_cp2_sequence_actual.py",
     "scripts/cp2/tests/test_cp2_sequence_math.py",
@@ -4505,6 +4511,15 @@ def collect_verifier_self_test(artifact_dir, repo_root, errors, verifier_path=No
         errors.append(
             "verifier self-test log lacks the exact readiness protecting-test result"
         )
+    if re.search(
+        r"^CP2_D_DATA_FREE_PROTECTING_TESTS count=66 passed=true "
+        r"module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$",
+        log_text,
+        flags=re.MULTILINE,
+    ) is None:
+        errors.append(
+            "verifier self-test log lacks the exact CP2-D data-free protecting-test result"
+        )
     enriched = dict(record)
     enriched.update({
         "log": "verifier_self_test.log",
@@ -5995,7 +6010,11 @@ def create_synthetic_artifact(artifact_dir, repo_root):
         "CP2 verifier self-test passed using only: /tmp/synthetic\n"
         "Synthetic corruptions rejected: synthetic-bootstrap\n"
         "CP2_READINESS_ENGINE_PROTECTING_TESTS count=39 passed=true "
-        "module_sha256={} output_sha256={}\n".format("0" * 64, "1" * 64),
+        "module_sha256={} output_sha256={}\n"
+        "CP2_D_DATA_FREE_PROTECTING_TESTS count=66 passed=true "
+        "module_sha256={} output_sha256={}\n".format(
+            "0" * 64, "1" * 64, "2" * 64, "3" * 64
+        ),
         encoding="utf-8",
     )
 
@@ -12362,6 +12381,113 @@ def run_readiness_engine_protecting_tests():
     )
 
 
+CP2_D_DATA_FREE_PROTECTING_MODULES = (
+    "cp2_capsule.py",
+    "cp2_evo_result.py",
+    "cp2_f64_codec.py",
+    "tests/test_cp2_capsule.py",
+    "tests/test_cp2_evo_result.py",
+    "tests/test_cp2_f64_codec.py",
+)
+CP2_D_DATA_FREE_PROTECTING_TESTS = (
+    ("test_cp2_capsule.py", 26),
+    ("test_cp2_evo_result.py", 28),
+    ("test_cp2_f64_codec.py", 12),
+)
+CP2_D_DATA_FREE_PROTECTING_TEST_COUNT = sum(
+    count for _, count in CP2_D_DATA_FREE_PROTECTING_TESTS
+)
+
+
+def run_cp2_d_data_free_protecting_tests():
+    """Run the synthetic CP2-D transport/math suite with an isolated environment."""
+
+    environment = {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PYTHONHASHSEED": "0",
+        "TZ": "UTC",
+    }
+    cp2_directory = Path(__file__).resolve().parent
+    tests_directory = cp2_directory / "tests"
+    module_digest = hashlib.sha256(
+        b"SchurVIO-CP2-D-data-free-protecting-modules-v1\0"
+    )
+    output_digest = hashlib.sha256(
+        b"SchurVIO-CP2-D-data-free-protecting-outputs-v1\0"
+    )
+    for relative in CP2_D_DATA_FREE_PROTECTING_MODULES:
+        module_path = (cp2_directory / relative).resolve()
+        if (
+            cp2_directory.resolve() not in module_path.parents
+            or not module_path.is_file()
+            or module_path.is_symlink()
+        ):
+            raise RuntimeError(
+                "CP2-D data-free protecting module is unavailable: " + relative
+            )
+        module_bytes = module_path.read_bytes()
+        encoded_name = relative.encode("utf-8")
+        module_digest.update(len(encoded_name).to_bytes(8, "big"))
+        module_digest.update(encoded_name)
+        module_digest.update(len(module_bytes).to_bytes(8, "big"))
+        module_digest.update(module_bytes)
+
+    for filename, expected_count in CP2_D_DATA_FREE_PROTECTING_TESTS:
+        test_path = (tests_directory / filename).resolve()
+        if (
+            test_path.parent != tests_directory.resolve()
+            or not test_path.is_file()
+            or test_path.is_symlink()
+        ):
+            raise RuntimeError(
+                "CP2-D data-free protecting test is unavailable: " + filename
+            )
+        command = ["/usr/bin/python3", "-I", "-B", str(test_path), "-v"]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd="/tmp",
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+                timeout=180,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                "CP2-D data-free protecting tests timed out: " + filename
+            ) from exc
+        output = completed.stdout
+        sys.stdout.buffer.write(output)
+        sys.stdout.buffer.flush()
+        encoded_name = filename.encode("utf-8")
+        output_digest.update(len(encoded_name).to_bytes(8, "big"))
+        output_digest.update(encoded_name)
+        output_digest.update(len(output).to_bytes(8, "big"))
+        output_digest.update(output)
+        match = re.search(rb"Ran ([0-9]+) tests in [^\n]+\n\nOK\n", output)
+        if (
+            completed.returncode != 0
+            or match is None
+            or int(match.group(1)) != expected_count
+        ):
+            raise RuntimeError(
+                "CP2-D data-free protecting-test inventory/outcome is not exact: "
+                + filename
+            )
+    print(
+        "CP2_D_DATA_FREE_PROTECTING_TESTS count={} passed=true "
+        "module_sha256={} output_sha256={}".format(
+            CP2_D_DATA_FREE_PROTECTING_TEST_COUNT,
+            module_digest.hexdigest(),
+            output_digest.hexdigest(),
+        )
+    )
+
+
 def run_unit_self_test():
     required_cp2_c2_counts = {
         "test_cp2_updater_msckf_end_to_end": 16,
@@ -12405,6 +12531,7 @@ def run_unit_self_test():
         raise RuntimeError("extra test translation-unit inventory is not exact")
 
     run_readiness_engine_protecting_tests()
+    run_cp2_d_data_free_protecting_tests()
 
     frozen_sha256 = {
         relative: expected["sha256"]

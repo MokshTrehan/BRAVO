@@ -96,11 +96,14 @@ the evaluator execution surface as follows. All associations, common
 alignment bytes, direct-RMSE arithmetic, limits, mode order, and other CP2-D
 requirements remain unchanged.
 
-1. Each mode's exact evaluator argv appends
-   `--save_results ABS_MODE_RESULTS.zip --no_warnings`, where the result path
-   is a distinct normalized nonsymlink path inside the hidden sequence
-   partial. `-a`, `--align`, scale correction, and any second association
-   remain forbidden.
+1. Each mode's exact evaluator argv has exactly eleven elements:
+   `${CAPSULE_ROOT}/APPROVED_LAUNCHER tum GT_SHARED.tum
+   MODE_SHARED_ALIGNED.tum -r trans_part --t_max_diff 0.01 --save_results
+   ABS_MODE_RESULTS.zip --no_warnings`. The result path is a distinct
+   normalized nonsymlink path inside the hidden sequence partial. The first
+   element is the absolute path inside the privately staged capsule; literal
+   or PATH-resolved `evo_ape` is forbidden. `-a`, `--align`, scale correction,
+   and any second association remain forbidden.
 2. Retain the two result ZIP files as role `evaluator` artifact members and
    bind their size and SHA-256 in the command record, provenance inventory,
    manifest, and detached verifier.
@@ -114,7 +117,8 @@ requirements remain unchanged.
    value.
 5. The full-precision archive RMSE must agree with the independently computed
    direct shared-population RMSE within the existing
-   `1e-12 + 1e-10*abs(reference)` tolerance.
+   `1e-12 + 1e-10*abs(direct_shared_population_RMSE)` tolerance. The direct
+   value, not the archive value, is the reference in the relative term.
 6. The six-decimal console row remains retained as diagnostic evidence. It
    must equal the result of formatting the archive RMSE with evo 1.31.1's
    exact `{:.6f}` rule; it is no longer compared directly to the unrounded
@@ -230,6 +234,133 @@ version, dependency list, file hashes, numerical/native-library closure,
 thread environment, and known-answer payloads must be recorded in the reviewed
 implementation commit before approval. This proposal does not authorize
 deriving those values from the mutable host during a recorded run.
+
+## Data-free implementation candidate
+
+The source tree now contains three non-authorizing, data-free candidate
+primitives. They are not imported by either public actual-mode path and do not
+remove either pre-access block:
+
+- `scripts/cp2/cp2_capsule.py` defines an uncompressed, length-prefixed
+  `.cp2cap` regular-file-only stream, a canonical relocation-independent
+  inventory, a strict profile schema, and a Linux-only private stager. The
+  stager pins directories and the input archive through descriptors, streams
+  the already hash-bound bytes through `O_NOFOLLOW|O_EXCL` members, validates
+  the complete tree, stages under an unpredictable hidden name, and publishes
+  with `renameat2(RENAME_NOREPLACE)`. Failure cleanup also pins and revalidates
+  every descendant before removal, refuses links, multiple links, ownership or
+  mode drift and device crossings, and rejects directory/file substitution
+  without deleting the substituted bytes. Unsupported descriptor capabilities
+  fail closed. Separate evaluator and direct-math profiles are mandatory.
+- `scripts/cp2/cp2_evo_result.py` manually accounts for every classic-ZIP
+  local, central-directory, and EOCD byte. It accepts only an exact Unix ZIP
+  2.0 regular-file surface, STORE or version-consistent raw DEFLATE, no extra
+  fields/comments/preamble/gaps/overlap/trailing bytes/ZIP64/encryption/data
+  descriptors, and decompresses only root `stats.json` under fixed bounds.
+  The exact seven finite nonnegative, non-negative-zero statistics and basic
+  min/mean/median/RMSE/max ordering are checked. Console RMSE is diagnostic
+  six-decimal formatting; the archive RMSE is the full-precision value.
+- `scripts/cp2/cp2_f64_codec.py` defines canonical finite-binary64 array IPC.
+  Values are lower-case 16-hex-digit big-endian IEEE-754 bit strings; shape is
+  checked u64 arithmetic; JSON has exact keys/order/spacing and one LF; signed
+  zero is preserved; nonfinite values, alternate JSON spellings, duplicate
+  keys, excess rank/elements/document bytes, and overflow fail closed.
+
+The candidate capsule profile has exact, nonnull fields for the clarification
+commit; target Linux ABI and CPU-dispatch policy; archive and complete file
+inventory; one launcher/interpreter and a source-linked entry module;
+kind-specific evaluator or direct-math roles; distribution member subsets
+whose inventory hashes are recomputed; every native consumer's ELF type,
+linkage kind, interpreter, ordered RPATH/RUNPATH, SONAME and ordered
+`DT_NEEDED` names; a complete loader/library provider graph with search-path
+reachability; every license/notice; an exact private single-thread
+environment; exact execution, version, and preflight commands; injection
+denylist; floating-point rounding/subnormal/control-state identity; retained
+preflight fixtures and known-answer bytes; and a canonical full-profile
+SHA-256. The x86 candidate requires MXCSR `0x1f80` and x87 control word
+`0x027f` (round-to-nearest, 53-bit significand, no FTZ/DAZ); the AArch64
+candidate requires zero FPCR/FPSR under the stated mask. The evaluator command
+template is the eleven-element command above. The direct-math command template
+is a five-element absolute launcher request/response command. A retained
+known-answer digest must equal the selected capsule member's actual SHA-256;
+an unrelated opaque digest is rejected.
+
+No real capsule archive or `project` profile has been created. The synthetic
+tests use invented bytes only; passing them proves parser/stager logic, not an
+evo, CPython, NumPy, BLAS, LAPACK, libc, libm, or CPU identity. “Relocatable”
+at this stage means transport bytes and canonical inventory are root-neutral.
+Executable relocation and identical numerical answers at two roots remain an
+approved-capsule preflight requirement. The evidenced data-free inventory is
+66 tests: 26 capsule/profile/stager cases, 28 ZIP/statistics cases, and 12
+binary64-codec cases.
+
+## Direct-math known-answer plan
+
+The selected numerical capsule must run the following ordered five cases
+twice in one process and reproduce the retained bit records exactly; detached
+verification repeats them with the same retained capsule. Expected SVD/Kabsch
+bits are deliberately not populated from the ambient host.
+
+1. `kabsch_proper_full_rank` uses source rows
+   `(3,0,0),(-3,0,0),(0,2,0),(0,-2,0),(0,0,1),(0,0,-1)` and target rows
+   `(1,1,.5),(1,-5,.5),(-1,-2,.5),(3,-2,.5),(1,-2,1.5),(1,-2,-.5)`.
+   The mathematical transform is `Rz(+90 degrees)`, translation `(1,-2,.5)`.
+   Retain rotation, translation, singular values, rank threshold, determinant,
+   and orthogonality-error bits from the selected approved stack.
+2. `kabsch_reflection_correction` uses the same source and target rows
+   `(-4,2,-.5),(2,2,-.5),(-1,4,-.5),(-1,0,-.5),(-1,2,.5),(-1,2,-1.5)`.
+   The unconstrained reflection is `diag(-1,1,1)`; the production correction
+   must return a proper rotation (mathematically `diag(-1,1,-1)`).
+3. `common_alignment_matrix_products` reuses case 1's alignment byte-for-byte
+   for both modes. The Schur source adds dyadic delta `(.125,-.25,.5)` and uses
+   stored quaternion `(0,0,.6,.8)`. Retain both aligned position/rotation
+   populations and one explicit 3x3 matmul rounding discriminator. A one-ULP
+   candidate-alignment change must reject.
+4. `ordered_translation_rmse` uses aligned rows
+   `(2^27,1,1),(1,1,1),(1,1,1)` against zero ground truth. The frozen ordered
+   result bits are `419279a74590331c`; forbidden small-first accumulation gives
+   `419279a74590331d`.
+5. `linear_p95_boundary` uses input bits
+   `bff539d94973bf31,3ff1c926addad2ec` and q bits `3fee666666666666`.
+   Frozen-order output is `3fefab9a2960fd9e`; the forbidden rearrangement is
+   `3fefab9a2960fda1`. The unsorted `[9,1,7,3,5]` companion result is
+   `4021333333333333`.
+
+Every binary64 is encoded as exactly 16 lower-case hexadecimal digits in the
+canonical codec; JSON floats are forbidden. The native closure must include
+the dynamic loader, CPython/NumPy extensions, BLAS, LAPACK, Fortran runtime,
+libc, **libm** (production uses `sqrt`, `acos`, and `pi`), and every other
+mapped dependency. Environment strings alone are not proof of one-thread or
+floating-point state: preflight must report and verify actual backend thread
+count, CPU dispatch/core policy, FE_TONEAREST, and x86 MXCSR or AArch64 FPCR
+state with subnormal preservation.
+
+## Decisions still required before a profile can exist
+
+Moksh Trehan must explicitly select and approve all of the following before
+real capsule bytes may be inspected, built, or bound:
+
+1. the CP2-D execution target: desktop `x86_64` or Jetson `aarch64`. The
+   current CP2 proposal is desktop evidence and Jetson remains CP6 unless that
+   checkpoint architecture is explicitly changed. One capsule cannot span
+   the two ABIs;
+2. the exact locally retained evaluator and direct-math artifact sets, or
+   explicit authority to build them from named audited sources;
+3. exact CPython, NumPy, evo 1.31.1, numerical backend, libc/loader, complete
+   native closure, CPU-feature/dispatch and fixed-core policy, and all
+   corresponding-source/license/notice bytes;
+4. the single-thread policy and an observed backend-thread-count verifier;
+5. the exact version/preflight outputs, evo ZIP profile, and stack-specific
+   Kabsch/SVD/matmul expected bits; and
+6. the hash-seed disposition. `/usr/bin/python3 -I` implies `-E`, so recording
+   `PYTHONHASHSEED=0` while using `-I` would be false: the interpreter ignores
+   that environment setting. The recommended options are a tiny bound launcher
+   using `PyConfig` isolated mode with a fixed hash seed, or explicit approval
+   and proof that the capsule protocol is hash-order-independent.
+
+After those choices, the exact profile/capsule implementation must be
+committed for review and approved. A separate source-binding commit, fresh
+exact-HEAD unit anchor, and readiness pass then precede any CP2-D data access.
 
 ## Approval boundary
 

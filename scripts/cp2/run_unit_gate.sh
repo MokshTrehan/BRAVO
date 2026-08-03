@@ -676,6 +676,12 @@ if ! grep -Eq -- '^CP2_READINESS_ENGINE_PROTECTING_TESTS count=39 passed=true mo
     rm -f -- "${verifier_self_test_log}"
     die "readiness-engine protecting tests are absent from the evidenced verifier gate"
 fi
+if ! grep -Eq -- '^CP2_D_DATA_FREE_PROTECTING_TESTS count=66 passed=true module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$' \
+    "${verifier_self_test_log}"; then
+    sed -n '1,320p' "${verifier_self_test_log}" >&2
+    rm -f -- "${verifier_self_test_log}"
+    die "CP2-D data-free protecting tests are absent from the evidenced verifier gate"
+fi
 readonly verifier_self_test_started verifier_self_test_finished verifier_self_test_status
 
 mkdir -p -- "${workspace_parent}"
