@@ -15,10 +15,16 @@ Last updated: 2026-08-03 (America/Toronto)
   `results/staging/cp2/unit/cp2_unit_20260803T090606610655669Z-g0d71fee98499-pry4lam2`.
 - Previous artifact `SHA256SUMS` external anchor:
   `b2cd771dc014da423a0fb57d2e9bc44a1da65b4bccd40b2fa9a7a01fe585bdd1`.
-- That artifact binds only runtime commit `0d71fee...`; it does **not** test the
-  later incident log, D/E candidates, or this pickup. Generate a new complete
-  unit artifact only after this pickup commit so the final clean `HEAD` is the
-  tested identity.
+- Later pre-hardening exact-commit unit artifact:
+  `results/staging/cp2/unit/cp2_unit_20260803T114617220547095Z-ga4697813c200-NjBpTlRQ`.
+  It binds commit `a4697813c200d1716aa8622f05873fa69af05be6`, tree
+  `58531da7102a4cd22dbd49972d4989e045279029`, and external
+  `SHA256SUMS` anchor
+  `02631c7dc83aafa278830224cb547c589d4a226394ab0a67745a083804c11f90`.
+- Focused C3/D/E mathematical and lifetime hardening commit:
+  `a3b27a18f865dcfd5e3933ba9efecd302bff2d38` (tree
+  `2104f7ab127d4d561e6b8bc2314ff635c0da7805`). This pickup commit follows
+  it, so one new exact-HEAD unit artifact is still required before stopping.
 - Data-free CP2-D candidate commit:
   `d53139a4bc799e1625a290fec146eef15cfbe1f5` (tree
   `75740cec9261d6fa86e5c8dd29125e62dac85dd0`).
@@ -69,6 +75,36 @@ from the tested implementation checkpoint above. Read, in order:
 
 Do not inspect dataset registry contents, bags, ground truth, or payload data until the frozen CP2 readiness barrier permits it. Mathematical correctness remains the first priority; a build or run is not evidence of correctness by itself.
 
+## 2026-08-03 satisfactory hardening follow-up
+
+Commit `a3b27a18f865dcfd5e3933ba9efecd302bff2d38` closes three issues found by
+fresh contract-to-source audits while keeping every public actual path blocked:
+
+- CP2-C3 authorization now descriptor-binds the private readiness root,
+  rehashes and revalidates its exact frozen-unit and attachment inventory
+  immediately before the sole registry read, and rejects every tested
+  post-barrier root/file/inventory/mapping mutation before that read. Cleanup
+  removes descendant-mutated owned trees without following links, preserves a
+  symlink victim, and refuses a substituted root without deleting replacement
+  or displaced bytes.
+- CP2-D rejects the mathematically impossible `RMSE < mean` relation for a
+  nonnegative error population at an exact one-binary64-ULP boundary. Its new
+  direct-math KAT transport binds all five proposal input arrays, output
+  surfaces, exact order, two complete repeats, shared-alignment bytes, and the
+  frozen ordered-RMSE and p95 results. Stack-specific SVD/Kabsch answer bits
+  remain deliberately unset until a real approved capsule exists.
+- CP2-E now enforces the proposed u128 retained-rational and gate-product
+  domains, uses the full u256 comparison domain for ratio ordering, and has a
+  strict 32-lowercase-hex-digit scalar codec. The exact `Fraction` oracle was
+  rerun on 49,600 decisions after the correction with no disagreement.
+
+The combined data-free Python inventory is now 243/243 across 13 files.
+Formal inventories remain 39/39 for readiness and 37/37 for E; D is now 78/78
+(26 capsule, 11 direct-KAT, 29 evo ZIP/statistics, 12 binary64 codec). The
+recorded, sequence, timing, and union-verifier public self-tests also pass at
+48/48, 36/36, 43/43, and 83/83. These are protecting results, not CP2-C/D/E
+evidence.
+
 ## 2026-08-03 CP2-D/E data-free overnight outcome
 
 This section supersedes the older D/E planning language below. The completed
@@ -87,16 +123,19 @@ Commit `d53139a4bc799e1625a290fec146eef15cfbe1f5` adds:
   native-consumer/loader/RPATH/RUNPATH/SONAME/`DT_NEEDED`, provider-search,
   license, version, and known-answer bindings;
 - a byte-accounting classic-ZIP/evo `stats.json` parser that retains the
-  full-precision RMSE and treats six-decimal console output as diagnostic;
-  and
+  full-precision RMSE, rejects `RMSE < mean`, and treats six-decimal console
+  output as diagnostic;
 - a canonical finite-binary64 array codec with checked shape/resource
-  arithmetic and no JSON floats.
+  arithmetic and no JSON floats; and
+- a canonical five-case, twice-run direct-KAT request/response boundary that
+  binds exact proposal inputs and reviewed output bits.
 
-The isolated protecting inventory is exactly 66/66: 26 capsule/profile/stager,
-28 ZIP/statistics, and 12 binary64-codec tests. The final cleanup regressions
-cover both descendant-directory and regular-file substitution. The D proposal
-still does not contain real evo/CPython/NumPy/native capsule bytes, and both
-public D paths remain blocked before artifact or recorded-input access.
+The isolated protecting inventory is exactly 78/78: 26 capsule/profile/stager,
+11 direct-KAT, 29 ZIP/statistics, and 12 binary64-codec tests. The final cleanup
+regressions cover both descendant-directory and regular-file substitution. The
+D proposal still does not contain real evo/CPython/NumPy/native capsule bytes,
+and both public D paths remain blocked before artifact or recorded-input
+access.
 
 ### Hard checkpoint E — committed, tested, still non-authorizing
 
@@ -108,7 +147,8 @@ timing-math layer and proposed replacement document:
 - quantiles retain reduced rational nanoseconds plus the complete sorted u64
   population and its rederived domain-separated SHA-256;
 - candidate/baseline ratios, all `11/10` and `23/20` gates, and the
-  median-of-three ordering use exact integer cross products;
+  median-of-three ordering use exact integer cross products with u128 retained
+  values/gate products and u256 ordering products;
 - Boolean, negative, overflow, unstable-sequence, resource, forged nested
   evidence, mixed-population, and zero-baseline inputs fail closed; and
 - the still-blocked public timing runner and detached verifier now require the
@@ -118,9 +158,9 @@ timing-math layer and proposed replacement document:
 The isolated E math suite is 37/37. An independent exact `Fraction` oracle
 agreed on 49,600/49,600 cases. The public timing self-test is 43/43 and the
 union verifier self-test is 83/83; they add omitted-bilateral, u64-overflow,
-above-`2^53`, and exact ratio-boundary mutations. Across the 12 CP2 Python test
-files, the current protecting inventory is 231/231. The formal verifier gate
-also requires exact 39-test readiness, 66-test D, and 37-test E result lines.
+above-`2^53`, and exact ratio-boundary mutations. Across the 13 CP2 Python test
+files, the current protecting inventory is 243/243. The formal verifier gate
+also requires exact 39-test readiness, 78-test D, and 37-test E result lines.
 
 No `project/cp2_timing_profile.yaml` was guessed or created. No host clock,
 governor, frequency, boost/turbo, affinity, thermal, registry, bag, ground
