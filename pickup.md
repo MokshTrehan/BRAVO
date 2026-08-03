@@ -11,11 +11,20 @@ Last updated: 2026-08-03 (America/Toronto)
 - Expanded preauthorization incident-log commit:
   `c2f3ad9c54ed126cc69526c76adb3134c3bf9545` (tree
   `193734a27077ba297747ade987b5c458934b8256`).
-- Fresh exact-commit unit artifact: `results/staging/cp2/unit/cp2_unit_20260803T090606610655669Z-g0d71fee98499-pry4lam2`.
-- Artifact `SHA256SUMS` external anchor: `b2cd771dc014da423a0fb57d2e9bc44a1da65b4bccd40b2fa9a7a01fe585bdd1`.
-- The unit artifact binds runtime commit `0d71fee...`. Incident-log commit
-  `c2f3ad9...`, the later pickup commit, and every approval/binding commit are
-  post-run tracked changes and are untested by that artifact.
+- Previous exact-commit unit artifact:
+  `results/staging/cp2/unit/cp2_unit_20260803T090606610655669Z-g0d71fee98499-pry4lam2`.
+- Previous artifact `SHA256SUMS` external anchor:
+  `b2cd771dc014da423a0fb57d2e9bc44a1da65b4bccd40b2fa9a7a01fe585bdd1`.
+- That artifact binds only runtime commit `0d71fee...`; it does **not** test the
+  later incident log, D/E candidates, or this pickup. Generate a new complete
+  unit artifact only after this pickup commit so the final clean `HEAD` is the
+  tested identity.
+- Data-free CP2-D candidate commit:
+  `d53139a4bc799e1625a290fec146eef15cfbe1f5` (tree
+  `75740cec9261d6fa86e5c8dd29125e62dac85dd0`).
+- Data-free CP2-E exact-math candidate commit:
+  `66f4eaf56bb42258214c25fe078e78b3cc0eeb15` (tree
+  `ccdb530e9f4c4f7da0a484ae3b6c8b4e5acf1998`).
 - Approved CP2-C clarification: `b37eff6e5baa035175e1dde3cae52ee496ca9e2d`
 - Approved CP1 mathematical contract: `952771e955fe3459f2fd43122a9c6f8ce57d1799`
 - Proposed replacement `docs/cp2_c_detached_readiness_binding_clarification_proposed.md` is still pending explicit approval and non-authorizing.
@@ -23,9 +32,19 @@ Last updated: 2026-08-03 (America/Toronto)
   non-authorizing; its required evaluator/direct-math capsule identities and
   known answers must first be frozen in a reviewed implementation commit, then
   explicitly approved.
+- Proposed `docs/cp2_e_fixed_clock_and_exact_timing_clarification_proposed.md`
+  is non-authorizing. It freezes a review candidate for exact timing math and
+  the future profile/artifact boundary, but no real profile has been created.
 - Pinned OpenVINS upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
-- Target architecture: NVIDIA Jetson Nano family, CPU-only for the claimed path.
-- Current gate state: CP2-A and CP2-B passed; CP2-C1 and CP2-C2 passed unit-only. CP2-C3 implementation and protecting tests are present and audited, but formal CP2-C3 readiness is still `not_run` because its replacement contract is unapproved. CP2-C and CP2-D are unexecuted; CP2-E is unexecuted and blocked pending a fixed-clock profile/schema.
+- Final target architecture: NVIDIA Jetson Nano family, CPU-only for the
+  claimed path. The currently frozen CP2-E contract still says fixed-clock
+  **desktop**; Jetson evidence remains CP6 unless Moksh explicitly approves an
+  architecture replacement.
+- Current gate state: CP2-A and CP2-B passed; CP2-C1 and CP2-C2 passed
+  unit-only. CP2-C3 implementation exists, but formal readiness is `not_run`
+  because its replacement and the incident disposition are unapproved. CP2-C
+  is unexecuted. CP2-D and CP2-E now have data-free review candidates but are
+  still unexecuted and approval/profile blocked.
 - Formal-gate/campaign access: the exact unit artifact reports
   `dataset_or_bag_accessed=false`. No bag or recorded-result artifact was
   opened; no provider, readiness campaign, or CP2-C/D/E actual-mode runner was
@@ -45,9 +64,92 @@ from the tested implementation checkpoint above. Read, in order:
 6. `project/cp2_c_clarification_approval.json`
 7. `docs/cp2_c_detached_readiness_binding_clarification_proposed.md`
 8. `docs/cp2_d_evaluator_precision_clarification_proposed.md`
-9. `project/cp2_gate.yaml`
+9. `docs/cp2_e_fixed_clock_and_exact_timing_clarification_proposed.md`
+10. `project/cp2_gate.yaml`
 
 Do not inspect dataset registry contents, bags, ground truth, or payload data until the frozen CP2 readiness barrier permits it. Mathematical correctness remains the first priority; a build or run is not evidence of correctness by itself.
+
+## 2026-08-03 CP2-D/E data-free overnight outcome
+
+This section supersedes the older D/E planning language below. The completed
+work is a pair of review candidates, not an actual CP2-C, D, or E run.
+
+### Hard checkpoint D — committed, tested, still non-authorizing
+
+Commit `d53139a4bc799e1625a290fec146eef15cfbe1f5` adds:
+
+- a regular-file-only, relocation-neutral `.cp2cap` transport and strict
+  evaluator/direct-math profile grammar;
+- descriptor-pinned Linux staging, complete rehashing, no-replace publication,
+  and failure cleanup that rejects directory/file substitution without
+  deleting substituted victim bytes;
+- exact distribution, interpreter, launcher, environment, floating-point,
+  native-consumer/loader/RPATH/RUNPATH/SONAME/`DT_NEEDED`, provider-search,
+  license, version, and known-answer bindings;
+- a byte-accounting classic-ZIP/evo `stats.json` parser that retains the
+  full-precision RMSE and treats six-decimal console output as diagnostic;
+  and
+- a canonical finite-binary64 array codec with checked shape/resource
+  arithmetic and no JSON floats.
+
+The isolated protecting inventory is exactly 66/66: 26 capsule/profile/stager,
+28 ZIP/statistics, and 12 binary64-codec tests. The final cleanup regressions
+cover both descendant-directory and regular-file substitution. The D proposal
+still does not contain real evo/CPython/NumPy/native capsule bytes, and both
+public D paths remain blocked before artifact or recorded-input access.
+
+### Hard checkpoint E — committed, tested, still non-authorizing
+
+Commit `66f4eaf56bb42258214c25fe078e78b3cc0eeb15` adds an exact, clock-free
+timing-math layer and proposed replacement document:
+
+- p50 and p95 use exact NumPy-linear interpolation with `q=1/2` and `19/20`,
+  never nearest rank or binary64 conversion;
+- quantiles retain reduced rational nanoseconds plus the complete sorted u64
+  population and its rederived domain-separated SHA-256;
+- candidate/baseline ratios, all `11/10` and `23/20` gates, and the
+  median-of-three ordering use exact integer cross products;
+- Boolean, negative, overflow, unstable-sequence, resource, forged nested
+  evidence, mixed-population, and zero-baseline inputs fail closed; and
+- the still-blocked public timing runner and detached verifier now require the
+  complete exact timestamp intersection and use independent stdlib-only exact
+  rational corruption oracles.
+
+The isolated E math suite is 37/37. An independent exact `Fraction` oracle
+agreed on 49,600/49,600 cases. The public timing self-test is 43/43 and the
+union verifier self-test is 83/83; they add omitted-bilateral, u64-overflow,
+above-`2^53`, and exact ratio-boundary mutations. Across the 12 CP2 Python test
+files, the current protecting inventory is 231/231. The formal verifier gate
+also requires exact 39-test readiness, 66-test D, and 37-test E result lines.
+
+No `project/cp2_timing_profile.yaml` was guessed or created. No host clock,
+governor, frequency, boost/turbo, affinity, thermal, registry, bag, ground
+truth, recorded artifact, or user-local evaluator bytes were read or changed
+in this D/E work. This claim is limited to this data-free work and does not
+erase the earlier incidents in `docs/cp2_predata_incident_log.md`.
+
+### Exact blockers and next authorized actions
+
+1. CP2-C3 still requires Moksh's incident-log disposition and approval of the
+   complete detached-readiness replacement, followed by one separate
+   source/approval-binding commit and a fresh exact-HEAD unit gate.
+2. CP2-D additionally requires Moksh to choose desktop `x86_64` versus Jetson
+   `aarch64` for this checkpoint and authorize a named local evaluator/direct-
+   math source set or audited build. Only then may real capsules, complete
+   native/license inventories, version/preflight bytes, and stack-specific
+   known-answer bits be frozen for another exact review and approval.
+3. CP2-E requires an explicit decision to retain the frozen desktop checkpoint
+   or replace it with Jetson, plus the exact machine/CPU IDs, fixed clocks,
+   governor/driver, affinity, boost/turbo, thermal policy, read-only sampling
+   commands, sequence/input identity, and resource bounds. The runner validates
+   but never changes those controls.
+4. Actual execution remains strictly serialized C readiness -> C -> D -> E.
+   A failure stops later stages; no data-driven tuning, threshold changes,
+   alternate profile, or silent retry is permitted.
+
+The next mechanical action after this pickup is committed is a complete unit
+gate at that exact clean `HEAD`. That unit anchor is necessary provenance but
+cannot substitute for any missing human approval above.
 
 ## 2026-08-03 overnight outcome
 
@@ -533,14 +635,15 @@ Any unexplained mismatch, nonfinite value, incomplete trace, silent repair, or e
 
 ### CP2-D and CP2-E — trajectory parity and desktop timing
 
-- CP2-D: blocked before access pending a reviewed implementation that freezes
-  the evaluator/direct-math capsules, followed by exact approval and binding of
-  the evaluator-precision replacement. Once bound, run independent nullspace
-  and Schur sequences, common population/alignment checks, trajectory p95
-  bounds, and the ATE-difference bound.
-- CP2-E: blocked pending a fixed-clock profile and exact artifact schema. Once
-  frozen and established, run paired desktop timing; median overhead must be at
-  most 10% and p95 overhead at most 15%.
+- CP2-D: the data-free transport/parser/codec review candidate is committed at
+  `d53139a...`, but actual mode remains blocked. A target and named real
+  evaluator/direct-math inputs must be approved, frozen, reviewed, and bound
+  before independent nullspace/Schur sequence execution.
+- CP2-E: the exact rational timing-math review candidate is committed at
+  `66f4eaf...`, but no real fixed-clock profile or authorizing artifact schema
+  exists. The desktop-versus-Jetson disposition and exact host controls remain
+  user decisions. If eventually authorized, every paired p50 ratio must pass
+  exact `11/10` and every p95 ratio exact `23/20`.
 
 Only after CP2-C/D/E pass is one-pass parity established.
 
@@ -571,6 +674,7 @@ git status --porcelain=v1 --untracked-files=all
 git rev-parse HEAD
 git log -5 --oneline --decorate
 git merge-base --is-ancestor 0d71fee98499a10df4e92176709c1afe14077f90 HEAD
+git merge-base --is-ancestor 66f4eaf56bb42258214c25fe078e78b3cc0eeb15 HEAD
 sha256sum results/staging/cp2/unit/cp2_unit_20260803T090606610655669Z-g0d71fee98499-pry4lam2/SHA256SUMS
 ```
 
@@ -578,9 +682,10 @@ Require a clean HEAD that descends from the tested CP2-C3 review-candidate
 runtime commit
 `0d71fee98499a10df4e92176709c1afe14077f90`. A later pickup-metadata commit is
 expected; do not confuse it with the runtime-tested source commit. Verify the
-retained artifact path and external anchor above, then verify Moksh's exact
-incident-log acknowledgment/evidence disposition and exact replacement
-approval. Make the source-bound incident disposition, approval record, all
+previous retained artifact path and external anchor above, then locate and
+verify the newer exact-HEAD unit artifact reported by the final handoff. Verify
+Moksh's exact incident-log acknowledgment/evidence disposition and exact
+replacement approval. Make the source-bound incident disposition, approval record, all
 required source/contract identities, and removal of the two deliberate
 actual-mode blocks one separately reviewed binding commit; do not invoke
 readiness or actual mode until that commit is clean and its fresh unit gate
