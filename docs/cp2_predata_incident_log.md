@@ -143,3 +143,46 @@ Impact and disposition:
   `!build/**`. Resume actual work only through a fresh clean commit/unit anchor
   and a fresh-process, approval-bound readiness barrier; nothing from the
   accidental search may enter recorded evidence.
+
+## 2026-08-04 (exact time not retained) — math-audit search crossed the registry boundary
+
+- Repository `HEAD` from the inherited session context was
+  `f98eb347552ddab8965d899516143344dcb8a0b4`; the worktree contained
+  uncommitted CP2-C implementation and protecting-test changes. The audit
+  agent did not independently resolve a commit or tree.
+- A read-only audit agent issued the following exact command from the
+  repository root:
+
+  ```text
+  git status --short && git diff --stat && rg -n "20|pair|candidate|timestamp|chronolog|selector|Schur|gamma|canonical" scripts/cp2 project docs -g '!project/data/**' -g '!project/results/**' -g '!build/**'
+  ```
+
+- The allowlist was too broad and omitted the exact exclusion for
+  `project/datasets.yaml`. The search opened that registry and printed matches
+  containing categories of project/as-of metadata, dataset sizes and hashes,
+  canonical dataset paths, and sequence/readability observations. It also
+  searched `project/cp0_baseline.json` and printed categories of baseline
+  timestamp/tolerance and evaluator-setting metadata. This log deliberately
+  does not repeat any exposed value.
+- No bag byte, ground-truth file, result artifact, or build content was opened.
+  No network access or recorded execution occurred. The agent made no edit or
+  commit and communicated no mathematical or implementation finding before
+  immediately reporting the incident.
+
+Impact and disposition:
+
+- The entire audit is quarantined and supplies no review credit. No exposed
+  registry or baseline value may influence CP2 implementation, thresholds,
+  profiles, tests, execution choices, or evidence.
+- A replacement math audit must start without that agent's retained context,
+  use an exact source-file allowlist, and explicitly forbid the registry,
+  recorded inputs, results, and build tree. Only the replacement audit may
+  supply review credit.
+- This uncommitted development state remains non-evidence. A new clean
+  approval-bound source commit, exactly one fresh exact-HEAD unit gate, and a
+  fresh readiness barrier remain mandatory before recorded-input access.
+- Moksh Trehan's acknowledgment at
+  `c2f3ad9c54ed126cc69526c76adb3134c3bf9545` predates this incident and does
+  not acknowledge it. Recorded-input access is therefore paused pending an
+  explicit acknowledgment and acceptance of this disposition; data-free
+  implementation, synthetic tests, and source review may continue.
