@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import contextlib
+import errno
 import fcntl
 import hashlib
 import importlib.util
@@ -988,6 +989,16 @@ os._exit(0)
                         entries[0].sha256,
                         hashlib.sha256(os.fsencode(link_target)).hexdigest(),
                     )
+                    staging = repository._create_postauthorization_output_staging(
+                        "synthetic_output"
+                    )
+                    marker = staging.partial / "authorized-marker"
+                    marker.write_bytes(b"authorized output\n")
+                    repository.revalidate()
+                    sibling = staging.parent / "unauthorized-sibling"
+                    sibling.write_bytes(b"must be rejected\n")
+                    with self.assertRaises(readiness.ReadinessError):
+                        repository.revalidate()
             finally:
                 outside.chmod(0o600)
 
@@ -1084,6 +1095,367 @@ os._exit(0)
             guard_temp.mkdir(mode=0o700)
             with self.assertRaises(readiness.ReadinessError):
                 readiness.OpaqueGitRepository(fixture.root, guard_temp)
+
+    def test_repository_close_attempts_every_fd_after_baseexception(self):
+        with tempfile.TemporaryDirectory(
+            prefix="cp2-readiness-close-", dir="/tmp"
+        ) as temporary:
+            fixture = SyntheticRepository(temporary)
+            guard_temp = Path(temporary) / "guard-close"
+            guard_temp.mkdir(mode=0o700)
+            repository = readiness.OpaqueGitRepository(
+                fixture.root, guard_temp
+            )
+            inventory = repository.descriptor_inventory()
+            descriptors = [record["fd"] for record in inventory.values()]
+            self.assertGreater(len(descriptors), 3)
+            interrupted_descriptor = descriptors[len(descriptors) // 2]
+            attempted = []
+            real_close = os.close
+
+            def close_then_interrupt(descriptor):
+                attempted.append(descriptor)
+                real_close(descriptor)
+                if descriptor == interrupted_descriptor:
+                    raise KeyboardInterrupt("injected close interruption")
+
+            with mock.patch.object(
+                readiness.os, "close", side_effect=close_then_interrupt
+            ), self.assertRaisesRegex(
+                KeyboardInterrupt, "injected close interruption"
+            ):
+                repository.close()
+            self.assertEqual(set(attempted), set(descriptors))
+            for descriptor in descriptors:
+                with self.assertRaises(OSError) as closed:
+                    os.fstat(descriptor)
+                self.assertEqual(closed.exception.errno, errno.EBADF)
+            # Ownership slots were cleared before close, so idempotent close
+            # cannot target a later unrelated reuse of the same fd number.
+            repository.close()
+
+    def test_publication_failed_rollback_reconciles_exact_final_inode(self):
+        with tempfile.TemporaryDirectory(
+            prefix="cp2-readiness-publish-reconcile-", dir="/tmp"
+        ) as temporary:
+            fixture = SyntheticRepository(temporary)
+            guard_temp = Path(temporary) / "guard-publish"
+            guard_temp.mkdir(mode=0o700)
+            with readiness.OpaqueGitRepository(
+                fixture.root, guard_temp
+            ) as repository:
+                staging = repository._create_postauthorization_output_staging(
+                    "cp2_reconcile"
+                )
+                held_inode = staging.partial.stat().st_ino
+                (staging.partial / "payload").write_bytes(b"sealed\n")
+                (staging.partial / "payload").chmod(0o444)
+                staging.partial.chmod(0o555)
+                real_rename = repository._renameat2_noreplace
+                rename_calls = 0
+
+                def fail_rollback(parent_fd, source_name, destination_name):
+                    nonlocal rename_calls
+                    rename_calls += 1
+                    if rename_calls == 2:
+                        raise OSError(errno.EIO, "synthetic rollback failure")
+                    return real_rename(
+                        parent_fd, source_name, destination_name
+                    )
+
+                with mock.patch.object(
+                    repository,
+                    "_renameat2_noreplace",
+                    side_effect=fail_rollback,
+                ), mock.patch.object(
+                    repository,
+                    "_rebaseline_postauthorization_output_parent",
+                    side_effect=readiness.ReadinessError(
+                        "synthetic forward rebaseline failure"
+                    ),
+                ), self.assertRaisesRegex(
+                    readiness.ReadinessError, "exact rollback failed"
+                ):
+                    repository._publish_postauthorization_output(staging)
+                self.assertEqual(rename_calls, 2)
+                self.assertFalse(staging.partial.exists())
+                self.assertEqual(staging.final.stat().st_ino, held_inode)
+                self.assertEqual(
+                    repository._output_publication_location(staging),
+                    ("published", 0o555),
+                )
+                descriptor = repository._duplicate_output_root_fd(staging)
+                try:
+                    self.assertEqual(os.fstat(descriptor).st_ino, held_inode)
+                finally:
+                    os.close(descriptor)
+                def rollback_then_interrupt(
+                    parent_fd, source_name, destination_name
+                ):
+                    real_rename(parent_fd, source_name, destination_name)
+                    raise KeyboardInterrupt(
+                        "synthetic rollback/latch interruption"
+                    )
+
+                with mock.patch.object(
+                    repository,
+                    "_renameat2_noreplace",
+                    side_effect=rollback_then_interrupt,
+                ), self.assertRaisesRegex(
+                    KeyboardInterrupt, "rollback/latch interruption"
+                ):
+                    repository._rollback_published_postauthorization_output(
+                        staging
+                    )
+                self.assertEqual(
+                    repository._output_publication_location(staging),
+                    ("hidden", 0o555),
+                )
+                self.assertFalse(staging.final.exists())
+                self.assertEqual(staging.partial.stat().st_ino, held_inode)
+
+
+class WorkerMountNamespaceRebindingTests(unittest.TestCase):
+    @staticmethod
+    def _worker_identity(origin):
+        return (origin[0] + 1000000, origin[1] + 1, origin[2] + 1)
+
+    @staticmethod
+    def _complete_private_tree(root):
+        readiness_dir = root / "readiness"
+        readiness_dir.mkdir(mode=0o700)
+        attachment = readiness_dir / "synthetic.bin"
+        attachment.write_bytes(b"synthetic readiness attachment\n")
+        attachment.chmod(0o600)
+        frozen = root / "unit-artifact-frozen"
+        frozen.mkdir(mode=0o700)
+        report = frozen / "cp2_report.json"
+        report.write_bytes(b"synthetic frozen unit report\n")
+        report.chmod(0o444)
+        frozen.chmod(0o555)
+        attachments = {"readiness/synthetic.bin": attachment}
+        return attachments, frozen
+
+    def test_repository_rebind_is_exact_one_shot_and_failure_atomic(self):
+        with tempfile.TemporaryDirectory(
+            prefix="cp2-readiness-rebind-repository-", dir="/tmp"
+        ) as temporary:
+            root = Path(temporary)
+            fixture = SyntheticRepository(root)
+            for case in ("injected_failure", "success"):
+                with self.subTest(case=case):
+                    guard = root / ("guard-" + case)
+                    guard.mkdir(mode=0o700)
+                    with readiness.OpaqueGitRepository(
+                        fixture.root, guard
+                    ) as repository:
+                        repository._create_postauthorization_output_staging(
+                            "cp2_" + case
+                        )
+                        before = repository.descriptor_inventory()
+                        before_process_fds = set(os.listdir("/proc/self/fd"))
+                        with self.assertRaisesRegex(
+                            readiness.ReadinessError, "child mount namespace"
+                        ):
+                            repository.rebind_worker_mount_namespace()
+                        self.assertEqual(repository.descriptor_inventory(), before)
+
+                        worker_identity = self._worker_identity(
+                            repository._descriptor_origin
+                        )
+                        if case == "injected_failure":
+                            real_reopen = (
+                                readiness._reopen_descriptor_on_current_mount
+                            )
+                            calls = 0
+
+                            def fail_second_reopen(*args, **kwargs):
+                                nonlocal calls
+                                calls += 1
+                                if calls == 2:
+                                    raise readiness.ReadinessError(
+                                        "injected atomic rebind failure"
+                                    )
+                                return real_reopen(*args, **kwargs)
+
+                            with mock.patch.object(
+                                readiness,
+                                "_process_mount_namespace_identity",
+                                return_value=worker_identity,
+                            ), mock.patch.object(
+                                readiness,
+                                "_reopen_descriptor_on_current_mount",
+                                side_effect=fail_second_reopen,
+                            ):
+                                with self.assertRaisesRegex(
+                                    readiness.ReadinessError,
+                                    "injected atomic rebind failure",
+                                ):
+                                    repository.rebind_worker_mount_namespace()
+                            self.assertEqual(calls, 2)
+                            self.assertEqual(repository.descriptor_inventory(), before)
+                            self.assertEqual(
+                                set(os.listdir("/proc/self/fd")), before_process_fds
+                            )
+                            self.assertFalse(
+                                repository._worker_mount_namespace_rebound
+                            )
+                            repository.revalidate()
+                            continue
+
+                        with mock.patch.object(
+                            readiness,
+                            "_process_mount_namespace_identity",
+                            return_value=worker_identity,
+                        ):
+                            repository.rebind_worker_mount_namespace()
+                            with self.assertRaisesRegex(
+                                readiness.ReadinessError, "already rebound"
+                            ):
+                                repository.rebind_worker_mount_namespace()
+                        after = repository.descriptor_inventory()
+                        self.assertEqual(set(after), set(before))
+                        for label in before:
+                            self.assertNotEqual(
+                                after[label]["fd"], before[label]["fd"]
+                            )
+                            self.assertEqual(
+                                after[label]["target"], before[label]["target"]
+                            )
+                            self.assertEqual(
+                                after[label]["stat_signature"],
+                                before[label]["stat_signature"],
+                            )
+                            self.assertEqual(
+                                after[label]["access_mode"], os.O_RDONLY
+                            )
+                            self.assertTrue(after[label]["close_on_exec"])
+                            with self.assertRaises(OSError) as closed:
+                                os.fstat(before[label]["fd"])
+                            self.assertEqual(closed.exception.errno, errno.EBADF)
+
+    def test_authorization_worker_mode_removes_lock_and_publication(self):
+        with tempfile.TemporaryDirectory(
+            prefix="cp2-readiness-rebind-authorization-", dir="/tmp"
+        ) as temporary:
+            outer = Path(temporary)
+            fixture = SyntheticRepository(outer)
+            private = Path(tempfile.mkdtemp(
+                prefix="schurvio-cp2-readiness-worker-", dir="/tmp"
+            ))
+            repository = readiness.OpaqueGitRepository(fixture.root, private)
+            attachments, frozen = self._complete_private_tree(private)
+            seal = readiness._PrivateTreeSeal.capture(private, attachments, frozen)
+            lock = Path("/tmp") / (
+                "cp2-worker-rebind-lock-" + outer.name
+            )
+            lock_fd = readiness.acquire_data_lock(lock)
+            authorization = readiness.ReadinessAuthorization(
+                record={},
+                attachments=attachments,
+                unit_verification_command={},
+                frozen_unit_artifact=frozen,
+                temporary_root=private,
+                lock_fd=lock_fd,
+                lock_path=lock,
+                repository=repository,
+                private_tree_seal=seal,
+            )
+            try:
+                staging = authorization.create_output_staging(
+                    "cp2_worker_rebind"
+                )
+                expected_identity = authorization.output_staging_identity(staging)
+                parent_duplicate = authorization.duplicate_output_partial_fd(
+                    staging
+                )
+                try:
+                    held = authorization.repository.descriptor_inventory()[
+                        "repository.output_partial"
+                    ]
+                    self.assertEqual(
+                        readiness._stat_signature(os.fstat(parent_duplicate)),
+                        held["stat_signature"],
+                    )
+                    self.assertEqual(
+                        os.readlink("/proc/self/fd/{}".format(parent_duplicate)),
+                        held["target"],
+                    )
+                    self.assertEqual(
+                        fcntl.fcntl(parent_duplicate, fcntl.F_GETFL)
+                        & os.O_ACCMODE,
+                        os.O_RDONLY,
+                    )
+                    self.assertTrue(
+                        fcntl.fcntl(parent_duplicate, fcntl.F_GETFD)
+                        & fcntl.FD_CLOEXEC
+                    )
+                finally:
+                    os.close(parent_duplicate)
+
+                parent_inventory = authorization.descriptor_inventory()
+                self.assertEqual(
+                    parent_inventory["authorization.data_lock"]["access_mode"],
+                    os.O_RDWR,
+                )
+                worker_identity = self._worker_identity(
+                    repository._descriptor_origin
+                )
+                with mock.patch.object(
+                    readiness,
+                    "_process_mount_namespace_identity",
+                    return_value=worker_identity,
+                ):
+                    authorization.rebind_worker_mount_namespace(staging)
+                self.assertTrue(authorization._worker_mode)
+                self.assertEqual(authorization.lock_fd, -1)
+                with self.assertRaises(OSError) as closed_lock:
+                    os.fstat(lock_fd)
+                self.assertEqual(closed_lock.exception.errno, errno.EBADF)
+                self.assertEqual(
+                    authorization.output_staging_identity(staging),
+                    expected_identity,
+                )
+                worker_inventory = authorization.descriptor_inventory()
+                self.assertNotIn("authorization.data_lock", worker_inventory)
+                self.assertEqual(
+                    set(worker_inventory),
+                    set(parent_inventory) - {"authorization.data_lock"},
+                )
+                self.assertTrue(all(
+                    record["access_mode"] == os.O_RDONLY
+                    and record["close_on_exec"] is True
+                    for record in worker_inventory.values()
+                ))
+                with mock.patch.object(
+                    readiness.fcntl,
+                    "flock",
+                    side_effect=AssertionError(
+                        "worker revalidation reached flock"
+                    ),
+                ):
+                    authorization.revalidate()
+                for operation in (
+                    lambda: authorization.create_output_staging("second"),
+                    lambda: authorization.publish_output(staging),
+                    lambda: authorization.duplicate_output_partial_fd(staging),
+                    lambda: authorization.output_publication_state(staging),
+                    lambda: authorization.current_output_publication_state(),
+                    lambda: authorization.duplicate_output_root_fd(staging),
+                    lambda: authorization.rebind_worker_mount_namespace(staging),
+                ):
+                    with self.assertRaises(readiness.ReadinessError):
+                        operation()
+
+                authorization.close()
+                self.assertTrue(private.is_dir())
+            finally:
+                if not authorization._closed:
+                    authorization.close()
+                if private.exists():
+                    readiness._remove_private_tree(private)
+                if lock.exists():
+                    lock.unlink()
 
 
 class PrevalidatedSourceTests(unittest.TestCase):
@@ -1263,6 +1635,7 @@ class FullBarrierTests(unittest.TestCase):
                     self_test_timeout_seconds=30,
                 )
             scratch = authorization.temporary_root
+            published_final = None
             try:
                 self.assertTrue(authorization.prebag_authorized)
                 self.assertTrue(authorization.record["passed"])
@@ -1301,6 +1674,24 @@ class FullBarrierTests(unittest.TestCase):
                 )
                 self.assertTrue(authorization.frozen_unit_artifact.is_dir())
                 authorization.revalidate()
+                held_contract = "docs/cp2_one_pass_contract.md"
+                with self.assertRaises(readiness.ReadinessError):
+                    authorization.repository.duplicate_tracked_fd(held_contract)
+                contract_fd = authorization.duplicate_source_fd(held_contract)
+                try:
+                    contract_bytes = os.read(contract_fd, 64 * 1024 * 1024)
+                finally:
+                    os.close(contract_fd)
+                self.assertEqual(
+                    contract_bytes,
+                    (fixture.root / held_contract).read_bytes(),
+                )
+                with self.assertRaises(readiness.ReadinessError):
+                    authorization.duplicate_source_fd(
+                        readiness.PREAUTHORIZATION_REGISTRY_PATH
+                    )
+                with self.assertRaises(readiness.ReadinessError):
+                    authorization.duplicate_source_fd("LICENSE")
                 with self.assertRaises(readiness.ReadinessError):
                     authorization.read_registry_once("project/not-the-registry.yaml")
                 registry_buffer = authorization.read_registry_once()
@@ -1315,10 +1706,285 @@ class FullBarrierTests(unittest.TestCase):
                         fcntl.flock(competitor, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 finally:
                     os.close(competitor)
+                with self.assertRaises(readiness.ReadinessError):
+                    authorization.create_output_staging("../unsafe")
+
+                # A failure in the authorization-level transition check must
+                # leave neither a consumed capability nor any output path.
+                output_parent = (
+                    fixture.root / "results/staging/cp2/recorded"
+                )
+                real_revalidate = authorization.revalidate
+                revalidate_calls = 0
+
+                def fail_second_revalidation():
+                    nonlocal revalidate_calls
+                    revalidate_calls += 1
+                    if revalidate_calls == 2:
+                        raise readiness.ReadinessError(
+                            "injected post-registration rejection"
+                        )
+                    return real_revalidate()
+
+                with mock.patch.object(
+                    authorization,
+                    "revalidate",
+                    side_effect=fail_second_revalidation,
+                ):
+                    with self.assertRaisesRegex(
+                        readiness.ReadinessError,
+                        "injected post-registration rejection",
+                    ):
+                        authorization.create_output_staging(
+                            "cp2_rollback_probe"
+                        )
+                self.assertEqual(revalidate_calls, 2)
+                self.assertIsNone(authorization._output_staging)
+                self.assertIsNone(
+                    authorization.repository._postauthorization_output_relative
+                )
+                if output_parent.exists():
+                    self.assertEqual(list(output_parent.iterdir()), [])
+                authorization.revalidate()
+
+                staging = authorization.create_output_staging(
+                    "cp2_synthetic_recorded"
+                )
+                self.assertEqual(
+                    authorization.output_publication_state(staging), "hidden"
+                )
+                self.assertEqual(
+                    staging.parent,
+                    fixture.root / "results/staging/cp2/recorded",
+                )
+                output_marker = staging.partial / "authorized-marker"
+                output_marker.write_bytes(b"authorized output\n")
+                authorization.revalidate()
+                with self.assertRaises(readiness.ReadinessError):
+                    authorization.create_output_staging("second_output")
+                wrong_token = readiness.AuthorizedOutputStaging(
+                    run_id=staging.run_id,
+                    parent=staging.parent,
+                    partial=staging.partial,
+                    final=staging.parent / "wrong-final",
+                )
+                with self.assertRaises(readiness.ReadinessError):
+                    authorization.publish_output(wrong_token)
+                partial_inode = staging.partial.stat().st_ino
+                staging.partial.chmod(0o555)
+
+                # Inject a post-rename transition failure.  Publication must
+                # restore the exact hidden name/inode and a usable binding;
+                # no final name may survive the failed attempt.
+                real_rebaseline = (
+                    authorization.repository.
+                    _rebaseline_postauthorization_output_parent
+                )
+                publication_rebaseline_calls = 0
+
+                def fail_first_publication_rebaseline(before_namespace):
+                    nonlocal publication_rebaseline_calls
+                    publication_rebaseline_calls += 1
+                    if publication_rebaseline_calls == 1:
+                        raise readiness.ReadinessError(
+                            "injected post-rename rejection"
+                        )
+                    return real_rebaseline(before_namespace)
+
+                with mock.patch.object(
+                    authorization.repository,
+                    "_rebaseline_postauthorization_output_parent",
+                    side_effect=fail_first_publication_rebaseline,
+                ):
+                    with self.assertRaisesRegex(
+                        readiness.ReadinessError,
+                        "injected post-rename rejection",
+                    ):
+                        authorization.publish_output(staging)
+                self.assertEqual(publication_rebaseline_calls, 2)
+                self.assertFalse(staging.final.exists())
+                self.assertEqual(staging.partial.stat().st_ino, partial_inode)
+                authorization.revalidate()
+
+                # If the forward rename completes but the exact rollback
+                # syscall fails, the held inode must remain queryable under
+                # its real final name as an uncommitted failure root.
+                rename_calls = 0
+                real_rename = (
+                    authorization.repository._renameat2_noreplace
+                )
+
+                def forward_then_reject_rollback(
+                    parent_fd, source_name, destination_name
+                ):
+                    nonlocal rename_calls
+                    rename_calls += 1
+                    if rename_calls == 2:
+                        raise OSError(
+                            errno.EIO, "injected rollback rename failure"
+                        )
+                    return real_rename(
+                        parent_fd, source_name, destination_name
+                    )
+
+                with mock.patch.object(
+                    authorization.repository,
+                    "_renameat2_noreplace",
+                    side_effect=forward_then_reject_rollback,
+                ), mock.patch.object(
+                    authorization.repository,
+                    "_rebaseline_postauthorization_output_parent",
+                    side_effect=readiness.ReadinessError(
+                        "injected forward post-rename failure"
+                    ),
+                ):
+                    with self.assertRaisesRegex(
+                        readiness.ReadinessError,
+                        "exact rollback failed",
+                    ):
+                        authorization.publish_output(staging)
+                self.assertEqual(rename_calls, 2)
+                self.assertEqual(
+                    authorization.output_publication_state(staging),
+                    "published_uncommitted",
+                )
+                self.assertFalse(staging.partial.exists())
+                self.assertEqual(staging.final.stat().st_ino, partial_inode)
+                interrupted_root_fd = authorization.duplicate_output_root_fd(
+                    staging
+                )
+                try:
+                    self.assertEqual(
+                        os.fstat(interrupted_root_fd).st_ino, partial_inode
+                    )
+                finally:
+                    os.close(interrupted_root_fd)
+                authorization.repository._rollback_published_postauthorization_output(
+                    staging
+                )
+                self.assertEqual(
+                    authorization.output_publication_state(staging), "hidden"
+                )
+                self.assertFalse(staging.final.exists())
+                self.assertEqual(staging.partial.stat().st_ino, partial_inode)
+
+                real_postpublish_revalidate = authorization.revalidate
+                postpublish_revalidate_calls = 0
+
+                def fail_postpublication_revalidation():
+                    nonlocal postpublish_revalidate_calls
+                    postpublish_revalidate_calls += 1
+                    if postpublish_revalidate_calls == 2:
+                        raise readiness.ReadinessError(
+                            "injected post-publication authorization rejection"
+                        )
+                    return real_postpublish_revalidate()
+
+                with mock.patch.object(
+                    authorization,
+                    "revalidate",
+                    side_effect=fail_postpublication_revalidation,
+                ):
+                    with self.assertRaisesRegex(
+                        readiness.ReadinessError,
+                        "post-publication authorization rejection",
+                    ):
+                        authorization.publish_output(staging)
+                self.assertEqual(postpublish_revalidate_calls, 2)
+                self.assertFalse(authorization._output_published)
+                self.assertFalse(staging.final.exists())
+                self.assertEqual(staging.partial.stat().st_ino, partial_inode)
+                self.assertEqual(
+                    authorization.output_publication_state(staging), "hidden"
+                )
+                authorization.revalidate()
+
+                # Interrupt exactly after the repository has durably renamed
+                # and rebound the held inode, but before the authorization can
+                # commit its success bit.  The authoritative query must expose
+                # the final-name root as an uncommitted failure target.
+                real_repository_publish = (
+                    authorization.repository._publish_postauthorization_output
+                )
+
+                def publish_then_interrupt(token):
+                    real_repository_publish(token)
+                    raise KeyboardInterrupt("injected publish/return gap")
+
+                with mock.patch.object(
+                    authorization.repository,
+                    "_publish_postauthorization_output",
+                    side_effect=publish_then_interrupt,
+                ):
+                    with self.assertRaisesRegex(
+                        KeyboardInterrupt, "injected publish/return gap"
+                    ):
+                        authorization.publish_output(staging)
+                self.assertEqual(
+                    authorization.output_publication_state(staging),
+                    "published_uncommitted",
+                )
+                self.assertFalse(staging.partial.exists())
+                self.assertEqual(staging.final.stat().st_ino, partial_inode)
+                interrupted_root_fd = authorization.duplicate_output_root_fd(
+                    staging
+                )
+                try:
+                    self.assertEqual(os.fstat(interrupted_root_fd).st_ino, partial_inode)
+                finally:
+                    os.close(interrupted_root_fd)
+                authorization.repository._rollback_published_postauthorization_output(
+                    staging
+                )
+                self.assertEqual(
+                    authorization.output_publication_state(staging), "hidden"
+                )
+                self.assertFalse(staging.final.exists())
+                self.assertEqual(staging.partial.stat().st_ino, partial_inode)
+
+                authorization.publish_output(staging)
+                published_final = staging.final
+                self.assertFalse(staging.partial.exists())
+                self.assertEqual(staging.final.stat().st_ino, partial_inode)
+                self.assertEqual(
+                    authorization.output_publication_state(staging), "published"
+                )
+                published_root_fd = authorization.duplicate_output_root_fd(
+                    staging
+                )
+                try:
+                    os.fchmod(published_root_fd, 0o700)
+                    with self.assertRaisesRegex(
+                        readiness.ReadinessError,
+                        "sealed final binding",
+                    ):
+                        authorization.output_publication_state(staging)
+                    os.fchmod(published_root_fd, 0o555)
+                finally:
+                    os.close(published_root_fd)
+                self.assertEqual(
+                    authorization.output_publication_state(staging), "published"
+                )
+                authorization.revalidate()
+                with self.assertRaises(readiness.ReadinessError):
+                    authorization.publish_output(staging)
+                (fixture.root / held_contract).write_bytes(b"postauthorization mutation\n")
+                # Publication is the commit point: later workspace drift is a
+                # diagnostic source failure but cannot retroactively make the
+                # already sealed, exact-source artifact unpublished.
+                self.assertEqual(
+                    authorization.output_publication_state(staging), "published"
+                )
+                with self.assertRaises(readiness.ReadinessError):
+                    authorization.duplicate_source_fd(held_contract)
             finally:
                 authorization.close()
+            with self.assertRaises(readiness.ReadinessError):
+                authorization.duplicate_source_fd("docs/cp2_one_pass_contract.md")
             self.assertFalse(scratch.exists())
             lock.unlink()
+            if published_final is not None:
+                published_final.chmod(0o700)
 
     def test_self_test_mutation_prevents_authorization_and_cleans_temporary_state(self):
         with tempfile.TemporaryDirectory(prefix="cp2-readiness-mutation-", dir="/tmp") as temporary:

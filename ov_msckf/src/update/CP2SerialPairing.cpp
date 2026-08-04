@@ -53,6 +53,8 @@ const char *ov_msckf::cp2_serial_pairing_status_name(
     return "accepted";
   case CP2SerialPairingStatus::kInvalidMessageKind:
     return "invalid_message_kind";
+  case CP2SerialPairingStatus::kRecordTimeReversed:
+    return "record_time_reversed";
   case CP2SerialPairingStatus::kPairCountOverflow:
     return "pair_count_overflow";
   case CP2SerialPairingStatus::kAllocationFailure:
@@ -89,11 +91,20 @@ ov_msckf::CP2SerialPairingResult ov_msckf::CP2SerialPairSelector::Select(
   CP2SerialPairingResult result;
   result.status = CP2SerialPairingStatus::kAccepted;
 
+  bool have_previous_record_time = false;
+  std::uint64_t previous_record_time_ns = 0U;
   for (const CP2SerialFilteredMessage &message : messages) {
     if (!cp2_serial_message_kind_valid(message.kind)) {
       result.status = CP2SerialPairingStatus::kInvalidMessageKind;
       return result;
     }
+    if (have_previous_record_time &&
+        message.record_time_ns < previous_record_time_ns) {
+      result.status = CP2SerialPairingStatus::kRecordTimeReversed;
+      return result;
+    }
+    previous_record_time_ns = message.record_time_ns;
+    have_previous_record_time = true;
   }
 
   try {

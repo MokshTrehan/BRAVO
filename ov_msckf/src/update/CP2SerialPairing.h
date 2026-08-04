@@ -23,7 +23,8 @@ enum class CP2SerialMessageKind : std::uint8_t {
  *
  * The vector position is its filtered-message ordinal. Camera record and
  * header times are already exact nonnegative integer nanoseconds; no binary64
- * timestamp participates in pairing.
+ * timestamp participates in pairing. Record times in the complete filtered
+ * view must be nondecreasing, matching chronological rosbag iteration.
  */
 struct CP2SerialFilteredMessage {
   CP2SerialMessageKind kind = CP2SerialMessageKind::kImu;
@@ -50,6 +51,7 @@ struct CP2SerialPair {
 enum class CP2SerialPairingStatus : std::uint8_t {
   kAccepted,
   kInvalidMessageKind,
+  kRecordTimeReversed,
   kPairCountOverflow,
   kAllocationFailure,
 };
@@ -93,10 +95,11 @@ public:
   /**
    * Select stereo pairs from the complete topic-filtered view.
    *
-   * Scan anchors in vector order. For an unused camera anchor, inspect only
-   * the first later message from the other camera. Accept it iff it is unused
-   * and its exact record-time difference is strictly below 20,000,000 ns.
-   * Accepted camera messages are never reused. Output is failure-atomic.
+   * First require nondecreasing record times. Then scan anchors in vector
+   * order. For an unused camera anchor, inspect only the first later message
+   * from the other camera. Accept it iff it is unused and its exact record-time
+   * difference is strictly below 20,000,000 ns. Accepted camera messages are
+   * never reused. Output is failure-atomic.
    */
   static CP2SerialPairingResult
   Select(std::uint64_t sequence_index,

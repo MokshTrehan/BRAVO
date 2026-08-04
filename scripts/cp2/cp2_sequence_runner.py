@@ -434,7 +434,8 @@ def _exact(value: Any, keys: Iterable[str], label: str) -> Mapping[str, Any]:
 
 def _identity(row: Mapping[str, Any], record_type: str, sequence_index: int, sequence_id: str) -> None:
     if (
-        row.get("schema_version") != 1
+        type(row.get("schema_version")) is not int
+        or row.get("schema_version") != 1
         or row.get("record_type") != record_type
         or _u64(row.get("sequence_index"), record_type + " sequence index") != sequence_index
         or row.get("sequence_id") != sequence_id
@@ -459,6 +460,9 @@ def _validate_sequence_identity(value: SequenceAssemblyInput) -> None:
 
 
 def _validate_pairs(payload: bytes, sequence_index: int, sequence_id: str) -> Tuple[Mapping[str, Any], ...]:
+    index = _u64(sequence_index, "requested pair-index sequence")
+    if index >= len(SEQUENCES) or SEQUENCES[index] != sequence_id:
+        _fail("pair-index requested sequence identity differs from the frozen inventory")
     rows = _parse_jsonl(payload, "pair index")
     if len(rows) < 2:
         _fail("pair index must contain at least two selected rows")
@@ -466,7 +470,7 @@ def _validate_pairs(payload: bytes, sequence_index: int, sequence_id: str) -> Tu
     previous_anchor = -1
     for expected_index, row in enumerate(rows):
         _exact(row, PAIR_KEYS, "pair-index row")
-        _identity(row, "pair_index", sequence_index, sequence_id)
+        _identity(row, "pair_index", index, sequence_id)
         if _u64(row["pair_index"], "pair index") != expected_index:
             _fail("pair indices are not contiguous from zero")
         anchor = _u64(row["anchor_filtered_index"], "anchor filtered index")
@@ -547,6 +551,8 @@ def _validate_callbacks(
         if row["mode"] != mode or _u64(row["callback_index"], "callback index") != expected_index:
             _fail(mode + " callback identity/order differs")
         pair_index = _u64(row["pair_index"], "callback pair index")
+        if pair_index != expected_index:
+            _fail(mode + " callback/pair order differs")
         if pair_index not in pair_by_index or pair_index in referenced:
             _fail(mode + " callback references a missing or duplicate pair")
         referenced.add(pair_index)
@@ -577,6 +583,8 @@ def _validate_callbacks(
     processed_count = len(processed)
     if processed_count <= 0 or processed_count > pair_count:
         _fail(mode + " processed pair population is empty or impossible")
+    # The frozen CP2-D coverage contract deliberately uses rosbag record time,
+    # while estimator/trajectory joins deliberately use cam0 header time.
     selected_first = _u64(pairs[0]["cam0_record_time_ns"], "first selected timestamp")
     selected_last = _u64(pairs[-1]["cam0_record_time_ns"], "last selected timestamp")
     processed_first = _u64(processed[0]["cam0_record_time_ns"], "first processed timestamp")
@@ -2040,12 +2048,15 @@ def make_tree_read_only(root: Path) -> None:
 
 
 def _rename_noreplace(source: Path, destination: Path) -> None:
+    if source.parent != destination.parent:
+        _fail("final rename is not same-directory/same-filesystem")
     libc = ctypes.CDLL(None, use_errno=True)
     renameat2 = getattr(libc, "renameat2", None)
     if renameat2 is None:
         _fail("renameat2(RENAME_NOREPLACE) is unavailable")
     renameat2.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
     renameat2.restype = ctypes.c_int
+    _fsync_directory(source.parent)
     result = renameat2(
         -100,
         os.fsencode(str(source)),
@@ -2058,6 +2069,39 @@ def _rename_noreplace(source: Path, destination: Path) -> None:
         if error == errno.EEXIST:
             _fail("final artifact already exists; overwrite is forbidden")
         raise OSError(error, os.strerror(error), str(destination))
+    try:
+        _fsync_directory(destination.parent)
+    except BaseException as durability_error:
+        rollback = renameat2(
+            -100,
+            os.fsencode(str(destination)),
+            -100,
+            os.fsencode(str(source)),
+            1,
+        )
+        if rollback == 0:
+            try:
+                _fsync_directory(source.parent)
+            except BaseException:
+                pass
+            raise durability_error
+        rollback_error = ctypes.get_errno()
+        raise SequenceRunnerError(
+            "final rename durability failed and rollback failed with errno {}"
+            .format(rollback_error)
+        ) from durability_error
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(
+        str(path),
+        os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _cleanup_partial(path: Path) -> None:
@@ -2107,11 +2151,6 @@ def build_verify_seal(
         if after != before:
             _fail("artifact bytes or modes changed during detached verification")
         _rename_noreplace(partial, final)
-        parent_fd = os.open(str(parent), os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
-        try:
-            os.fsync(parent_fd)
-        finally:
-            os.close(parent_fd)
         return final, result
     except BaseException:
         _cleanup_partial(partial)

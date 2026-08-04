@@ -51,29 +51,122 @@ class SequenceActualPureTests(unittest.TestCase):
             (rows[0]["anchor_filtered_index"], rows[0]["cam0_filtered_index"], rows[0]["cam1_filtered_index"]),
             (1, 1, 3),
         )
-        # The used cam1 at ordinal 3 is not reconsidered, and ordinal 4 uses
-        # the first later cam0 at 5; no nearest-message search occurs.
+        # The used cam1 at ordinal 3 is not reconsidered as an anchor, and
+        # ordinal 4 uses the first later cam0 at ordinal 5.
         self.assertEqual(
             (rows[1]["anchor_filtered_index"], rows[1]["cam0_filtered_index"], rows[1]["cam1_filtered_index"]),
             (4, 5, 4),
         )
 
-    def test_pair_boundary_reverse_time_and_bad_kind_are_rejected(self):
-        cases = (
-            (
-                actual.FilteredMessage("cam0", 0, 1),
-                actual.FilteredMessage("cam1", 20_000_000, 2),
-            ),
-            (
-                actual.FilteredMessage("imu", 2, 0),
-                actual.FilteredMessage("imu", 1, 0),
-            ),
-            (actual.FilteredMessage("other", 1, 0),),
+    def test_strict_record_boundary_and_record_not_header_selection_are_exact(self):
+        self.assertEqual(actual.runner.STRICT_PAIR_DELTA_NS, 20_000_000)
+        messages = (
+            # The record delta is one nanosecond inside the strict boundary,
+            # while the header delta is outside it. This pair must be retained.
+            actual.FilteredMessage("cam0", 0, 0),
+            actual.FilteredMessage("cam1", 19_999_999, 50_000_000),
+            # The record delta is exactly the excluded boundary, while the
+            # header delta is only one nanosecond. This pair must be omitted.
+            actual.FilteredMessage("cam0", 100_000_000, 1_000),
+            actual.FilteredMessage("cam1", 120_000_000, 1_001),
+            # Keep a second accepted pair so neither result can be masked by
+            # the selector's independent minimum-population requirement.
+            actual.FilteredMessage("cam0", 200_000_000, 2_000),
+            actual.FilteredMessage("cam1", 200_000_001, 2_001),
         )
-        for rows in cases:
-            with self.subTest(rows=rows):
+        payload = actual.select_pair_index_bytes(0, "MH_01_easy", messages)
+        rows = list(schema.strict_jsonl_loads(payload))
+        self.assertEqual(payload, schema.jsonl_bytes(rows))
+        self.assertEqual([row["pair_index"] for row in rows], [0, 1])
+        self.assertEqual(
+            [row["anchor_filtered_index"] for row in rows], [0, 4]
+        )
+        self.assertEqual(
+            [row["absolute_record_delta_ns"] for row in rows],
+            [19_999_999, 1],
+        )
+
+    def test_invalid_metadata_rejection_is_not_masked_by_minimum_population(self):
+        cases = {
+            "reverse-record-time": (
+                actual.FilteredMessage("cam0", 100, 1_000),
+                actual.FilteredMessage("cam1", 110, 1_001),
+                actual.FilteredMessage("imu", 50, 0),
+                actual.FilteredMessage("cam0", 200, 2_000),
+                actual.FilteredMessage("cam1", 210, 2_001),
+            ),
+            "invalid-kind": (
+                actual.FilteredMessage("cam0", 100, 1_000),
+                actual.FilteredMessage("cam1", 110, 1_001),
+                actual.FilteredMessage("other", 150, 0),
+                actual.FilteredMessage("cam0", 200, 2_000),
+                actual.FilteredMessage("cam1", 210, 2_001),
+            ),
+            "imu-header": (
+                actual.FilteredMessage("cam0", 100, 1_000),
+                actual.FilteredMessage("cam1", 110, 1_001),
+                actual.FilteredMessage("imu", 150, 1),
+                actual.FilteredMessage("cam0", 200, 2_000),
+                actual.FilteredMessage("cam1", 210, 2_001),
+            ),
+            "boolean-record-time": (
+                actual.FilteredMessage("cam0", True, 1_000),
+                actual.FilteredMessage("cam1", 2, 1_001),
+                actual.FilteredMessage("cam0", 3, 2_000),
+                actual.FilteredMessage("cam1", 4, 2_001),
+            ),
+            "boolean-header-time": (
+                actual.FilteredMessage("cam0", 1, False),
+                actual.FilteredMessage("cam1", 2, 1_001),
+                actual.FilteredMessage("cam0", 3, 2_000),
+                actual.FilteredMessage("cam1", 4, 2_001),
+            ),
+        }
+        for label, messages in cases.items():
+            with self.subTest(label=label):
                 with self.assertRaises(actual.SequenceActualError):
-                    actual.select_pair_index_bytes(0, "MH_01_easy", rows)
+                    actual.select_pair_index_bytes(
+                        0, "MH_01_easy", messages
+                    )
+
+        with self.assertRaises(actual.SequenceActualError):
+            actual.select_pair_index_bytes(False, "MH_01_easy", self._messages())
+
+    def test_used_first_forward_candidate_is_not_searched_past(self):
+        messages = (
+            actual.FilteredMessage("cam0", 100, 1_000),
+            actual.FilteredMessage("cam0", 101, 1_001),
+            actual.FilteredMessage("cam1", 102, 1_002),
+            actual.FilteredMessage("cam1", 103, 1_003),
+            actual.FilteredMessage("cam0", 104, 1_004),
+        )
+        rows = list(
+            schema.strict_jsonl_loads(
+                actual.select_pair_index_bytes(0, "MH_01_easy", messages)
+            )
+        )
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            [
+                (
+                    row["anchor_filtered_index"],
+                    row["cam0_filtered_index"],
+                    row["cam1_filtered_index"],
+                )
+                for row in rows
+            ],
+            [(0, 0, 2), (3, 4, 3)],
+        )
+
+    def test_selected_pair_population_requires_positive_cam0_duration(self):
+        messages = (
+            actual.FilteredMessage("cam0", 100, 1_000),
+            actual.FilteredMessage("cam1", 100, 1_001),
+            actual.FilteredMessage("cam0", 100, 2_000),
+            actual.FilteredMessage("cam1", 100, 2_001),
+        )
+        with self.assertRaises(actual.SequenceActualError):
+            actual.select_pair_index_bytes(0, "MH_01_easy", messages)
 
     def test_exact_ground_truth_decimal_parser(self):
         payload = (
@@ -165,11 +258,56 @@ class SequenceActualPureTests(unittest.TestCase):
         self.assertEqual(authorization.calls, 2)
 
     def test_recorded_serial_projection_is_exact_source_key_jsonl(self):
+        expected_sequences = (
+            "MH_01_easy",
+            "MH_03_medium",
+            "V1_01_easy",
+        )
+        self.assertEqual(campaign.SEQUENCES, expected_sequences)
+        self.assertEqual(actual.runner.SEQUENCES, expected_sequences)
+        self.assertEqual(extractor.SEQUENCES, expected_sequences)
+        self.assertEqual(
+            campaign.STRICT_PAIR_DELTA_NS,
+            actual.runner.STRICT_PAIR_DELTA_NS,
+        )
+        self.assertEqual(actual.runner.STRICT_PAIR_DELTA_NS, 20_000_000)
+        self.assertEqual(campaign.PAIR_INDEX_KEYS, actual.runner.PAIR_KEYS)
+        self.assertEqual(
+            campaign.PAIR_INDEX_POSTAUTH_ENV,
+            actual.PAIR_INDEX_POSTAUTH_ENV,
+        )
+        self.assertEqual(
+            campaign.PAIR_INDEX_POSTAUTH_VALUE,
+            actual.PAIR_INDEX_POSTAUTH_VALUE,
+        )
+        self.assertEqual(campaign.BAG_IDENTITY_FIELDS, actual.BAG_IDENTITY_FIELDS)
         pair_payload = actual.select_pair_index_bytes(
             0, "MH_01_easy", self._messages()
         )
+        pair_rows = list(schema.strict_jsonl_loads(pair_payload))
+        self.assertEqual(
+            actual.runner._validate_pairs(pair_payload, 0, "MH_01_easy"),
+            tuple(pair_rows),
+        )
+        for invalid_schema in (True, 1.0):
+            corrupted_pairs = [dict(row) for row in pair_rows]
+            corrupted_pairs[0]["schema_version"] = invalid_schema
+            with self.subTest(runner_schema=invalid_schema):
+                with self.assertRaises(actual.runner.SequenceRunnerError):
+                    actual.runner._validate_pairs(
+                        schema.jsonl_bytes(corrupted_pairs),
+                        0,
+                        "MH_01_easy",
+                    )
+        for invalid_request in (False, 0.0):
+            with self.subTest(runner_request=invalid_request):
+                with self.assertRaises(actual.runner.SequenceRunnerError):
+                    actual.runner._validate_pairs(
+                        pair_payload, invalid_request, "MH_01_easy"
+                    )
+
         serial_rows = []
-        for pair in schema.strict_jsonl_loads(pair_payload):
+        for pair in pair_rows:
             serial_rows.append(
                 {
                     **pair,
@@ -192,10 +330,36 @@ class SequenceActualPureTests(unittest.TestCase):
             ),
             pair_payload,
         )
-        serial_rows[0]["selected"] = False
+
+        corruptions = (
+            ("selected-false", "selected", False),
+            ("selected-integer", "selected", 1),
+            ("event-integer", "enqueue_entered", 1),
+            ("schema-boolean", "schema_version", True),
+            ("schema-float", "schema_version", 1.0),
+            ("sequence-boolean", "sequence_index", False),
+            (
+                "duplicate-invocation",
+                "updater_invocation_ids",
+                [0, 0],
+            ),
+        )
+        for label, field, value in corruptions:
+            corrupted_serial = [dict(row) for row in serial_rows]
+            corrupted_serial[0][field] = value
+            with self.subTest(serial_corruption=label):
+                with self.assertRaises(actual.SequenceActualError):
+                    actual.project_serial_pairs_to_pair_index_bytes(
+                        schema.jsonl_bytes(corrupted_serial),
+                        0,
+                        "MH_01_easy",
+                    )
+
         with self.assertRaises(actual.SequenceActualError):
             actual.project_serial_pairs_to_pair_index_bytes(
-                schema.jsonl_bytes(serial_rows), 0, "MH_01_easy"
+                schema.jsonl_bytes(list(reversed(serial_rows))),
+                0,
+                "MH_01_easy",
             )
 
     def test_pair_index_cli_binds_parent_fd_and_writes_only_canonical_jsonl(self):

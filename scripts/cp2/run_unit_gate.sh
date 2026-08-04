@@ -478,7 +478,11 @@ PY
         self_status=1
     fi
     if ! grep -Eq -- '^[[:space:]]+/usr/bin/python3 .* --finalize-staging-noreplace' \
-        "${BASH_SOURCE[0]}"; then
+        "${BASH_SOURCE[0]}" ||
+       ! grep -Eq -- '^[[:space:]]+/usr/bin/python3 .* --reconcile-staging-publication \\$' \
+            "${BASH_SOURCE[0]}" ||
+       [[ "$(grep -Ec -- '^[[:space:]]+--expected-manifest-sha256 "\$\{manifest_sha256\}"(; then)?$' \
+            "${BASH_SOURCE[0]}")" != "2" ]]; then
         echo "runner static invariant is missing: staging-only no-overwrite finalization" >&2
         self_status=1
     fi
@@ -670,7 +674,7 @@ if [[ "${verifier_self_test_status}" -ne 0 ]]; then
     rm -f -- "${verifier_self_test_log}"
     die "independent verifier self-test failed; no evidence directory was created"
 fi
-if ! grep -Eq -- '^CP2_READINESS_ENGINE_PROTECTING_TESTS count=39 passed=true module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$' \
+if ! grep -Eq -- '^CP2_READINESS_ENGINE_PROTECTING_TESTS count=43 passed=true module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$' \
     "${verifier_self_test_log}"; then
     sed -n '1,240p' "${verifier_self_test_log}" >&2
     rm -f -- "${verifier_self_test_log}"
@@ -717,10 +721,25 @@ validate_canonical_nonsymlink_path "${workspace}"
 run_id="cp2_unit_${run_stamp}-g${source_commit:0:12}-${workspace##*.workspace.}"
 run_dir=""
 final_dir=""
+manifest_sha256=""
+finalization_started=0
 run_succeeded=0
 cleanup() {
     rm -f -- "${verifier_self_test_log}"
-    if [[ "${run_succeeded}" -eq 0 && -n "${run_dir}" && -d "${run_dir}" ]]; then
+    if [[ "${run_succeeded}" -eq 0 && "${finalization_started}" -eq 1 &&
+          -n "${run_dir}" && -n "${final_dir}" && -n "${manifest_sha256}" ]]; then
+        if /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 \
+            /usr/bin/python3 -I -B "${verifier}" --reconcile-staging-publication \
+            "${run_dir}" "${final_dir}" \
+            --expected-manifest-sha256 "${manifest_sha256}"; then
+            echo "CP2 diagnostic artifacts remain in the reconciled source-only staging directory:" >&2
+            echo "  ${run_dir}" >&2
+        else
+            echo "CP2 staging publication_indeterminate; inspect both no-overwrite paths:" >&2
+            echo "  source: ${run_dir}" >&2
+            echo "  destination: ${final_dir}" >&2
+        fi
+    elif [[ "${run_succeeded}" -eq 0 && -n "${run_dir}" && -d "${run_dir}" ]]; then
         echo "CP2 diagnostic artifacts remain in the incomplete staging directory:" >&2
         echo "  ${run_dir}" >&2
     fi
@@ -1727,21 +1746,16 @@ if ! /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 
 fi
 manifest_sha256="$(sha256_path "${run_dir}/SHA256SUMS")"
 
+finalization_started=1
 if ! /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 \
     /usr/bin/python3 -I -B "${verifier}" --finalize-staging-noreplace \
-    "${run_dir}" "${final_dir}"; then
-    die "atomic no-overwrite staging finalization failed; partial artifacts were retained"
+    "${run_dir}" "${final_dir}" \
+    --expected-manifest-sha256 "${manifest_sha256}"; then
+    die "atomic no-overwrite staging finalization failed; publication state will be reconciled"
 fi
-run_dir=""
+finalization_started=0 run_dir=""
 
-if /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 \
-    /usr/bin/python3 -I -B "${verifier}" --expected-manifest-sha256 "${manifest_sha256}" \
-    "${final_dir}" "${repo_root}"; then
-    verify_status=0
-else
-    verify_status=$?
-fi
-if [[ "${verify_status}" -ne 0 || "${build_failures}" -ne 0 || "${test_failures}" -ne 0 ]]; then
+if [[ "${build_failures}" -ne 0 || "${test_failures}" -ne 0 ]]; then
     echo "CP2-A/B plus CP2-C2 FAILED; diagnostic staging evidence is retained without overwrite:" >&2
     echo "  ${final_dir}" >&2
     exit 1

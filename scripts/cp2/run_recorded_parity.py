@@ -3,12 +3,11 @@
 """CP2-C recorded-parity runner and artifact-free corruption oracle.
 
 The exclusive ``--self-test`` path is deliberately standard-library-only and
-cannot resolve the dataset registry or import a bag provider.  While the
-detached-readiness replacement is pending approval, actual mode exits before
-loading that readiness machinery.  The retained barrier-connected path below
-becomes reachable only through the later approval-binding change; recorded
-input then remains inaccessible unless all five committed entry points and the
-exact unit anchor pass the barrier at the current clean commit.
+cannot resolve the dataset registry or import a bag provider.  The approved
+detached-readiness replacement is source-bound by the unit/readiness verifier.
+Actual mode may load only that audited readiness machinery; recorded input
+remains inaccessible unless all five committed entry points and the exact unit
+anchor pass the barrier at the current clean commit.
 """
 
 from __future__ import annotations
@@ -36,13 +35,12 @@ ENTRYPOINT = "scripts/cp2/run_recorded_parity.py"
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 U64_MAX = (1 << 64) - 1
-READINESS_SHA256 = "15fe6a2b2785ee7c021acddba67647564dfdeeaee3216db3345ba87be47ce3f7"
+READINESS_SHA256 = "c0c09525dab693fd984430bc23b5dfe5888a701236ee8f676d348570612adeab"
 READINESS_MAX_BYTES = 4 * 1024 * 1024
-CP2_C_ACTUAL_AUTHORIZED = False
-CP2_C_BLOCK_REASON = (
-    "CP2-C actual execution is blocked before readiness/data access: the "
-    "detached-readiness replacement contract is pending exact-commit approval "
-    "and a separate approval-binding commit"
+POSTAUTHORIZATION_MODULE_MAX_BYTES = 4 * 1024 * 1024
+POSTAUTHORIZATION_MODULE_SOURCES = (
+    ("cp2_schema", "scripts/cp2/cp2_schema.py"),
+    ("cp2_recorded_campaign", "scripts/cp2/cp2_recorded_campaign.py"),
 )
 
 EXPECTED_CASE_NAMES = (
@@ -140,8 +138,152 @@ class _ReadinessBinding:
 
     def close(self) -> None:
         if self.descriptor >= 0:
-            os.close(self.descriptor)
+            descriptor = self.descriptor
             self.descriptor = -1
+            os.close(descriptor)
+
+
+def _read_held_module(descriptor: int, identity: os.stat_result,
+                      label: str) -> bytes:
+    if (
+        not stat.S_ISREG(identity.st_mode)
+        or identity.st_nlink != 1
+        or identity.st_size <= 0
+        or identity.st_size > POSTAUTHORIZATION_MODULE_MAX_BYTES
+    ):
+        _reject(label + " source identity is invalid")
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    content = bytearray()
+    while len(content) <= POSTAUTHORIZATION_MODULE_MAX_BYTES:
+        block = os.read(
+            descriptor,
+            min(
+                1024 * 1024,
+                POSTAUTHORIZATION_MODULE_MAX_BYTES + 1 - len(content),
+            ),
+        )
+        if not block:
+            break
+        content.extend(block)
+    payload = bytes(content)
+    if len(payload) != identity.st_size:
+        _reject(label + " source size changed")
+    return payload
+
+
+class _HeldPostauthorizationModules:
+    """Descriptor-load the two local campaign modules after authorization."""
+
+    def __init__(self, repo_root: Path, authorization: Any) -> None:
+        self.authorization = authorization
+        self.repo_root = Path(repo_root).absolute()
+        self.records: List[Dict[str, Any]] = []
+        self.modules: Dict[str, Any] = {}
+        local_names = tuple(name for name, _ in POSTAUTHORIZATION_MODULE_SOURCES)
+        if any(name in sys.modules for name in local_names):
+            _reject("a postauthorization CP2-C local module was preloaded")
+        try:
+            for name, relative in POSTAUTHORIZATION_MODULE_SOURCES:
+                authorization.revalidate()
+                descriptor = -1
+                try:
+                    descriptor = authorization.duplicate_source_fd(relative)
+                    identity = os.fstat(descriptor)
+                    payload = _read_held_module(descriptor, identity, name)
+                    expected_path = str(self.repo_root / relative)
+                    module = types.ModuleType(name)
+                    module.__file__ = expected_path
+                    module.__package__ = ""
+                    self.records.append({
+                        "name": name,
+                        "relative": relative,
+                        "descriptor": descriptor,
+                        "identity": identity,
+                        "payload": payload,
+                        "expected_path": expected_path,
+                        "module": module,
+                    })
+                    descriptor = -1
+                finally:
+                    if descriptor >= 0:
+                        os.close(descriptor)
+                self.modules[name] = module
+                sys.modules[name] = module
+                exec(
+                    compile(
+                        payload,
+                        expected_path,
+                        "exec",
+                        dont_inherit=True,
+                    ),
+                    module.__dict__,
+                )
+                authorization.revalidate()
+            self.revalidate()
+        except BaseException:
+            self.close()
+            raise
+
+    @property
+    def campaign(self) -> Any:
+        module = self.modules.get("cp2_recorded_campaign")
+        if module is None:
+            _reject("postauthorization CP2-C campaign module is unavailable")
+        return module
+
+    def revalidate(self) -> None:
+        self.authorization.revalidate()
+        if len(self.records) != len(POSTAUTHORIZATION_MODULE_SOURCES):
+            _reject("postauthorization CP2-C module population changed")
+        for record, expected in zip(self.records, POSTAUTHORIZATION_MODULE_SOURCES):
+            if (record["name"], record["relative"]) != expected:
+                _reject("postauthorization CP2-C module order changed")
+            module = record["module"]
+            if (
+                sys.modules.get(record["name"]) is not module
+                or getattr(module, "__file__", None) != record["expected_path"]
+            ):
+                _reject("postauthorization CP2-C module binding changed")
+            current = os.fstat(record["descriptor"])
+            identity = record["identity"]
+            if (
+                current.st_dev != identity.st_dev
+                or current.st_ino != identity.st_ino
+                or current.st_mode != identity.st_mode
+                or current.st_uid != identity.st_uid
+                or current.st_gid != identity.st_gid
+                or current.st_nlink != identity.st_nlink
+                or current.st_size != identity.st_size
+                or _read_held_module(
+                    record["descriptor"], current, record["name"]
+                )
+                != record["payload"]
+            ):
+                _reject("postauthorization CP2-C module source changed")
+        self.authorization.revalidate()
+
+    def close(self) -> None:
+        errors: List[BaseException] = []
+        for record in reversed(self.records):
+            if sys.modules.get(record["name"]) is record["module"]:
+                sys.modules.pop(record["name"], None)
+            descriptor = record["descriptor"]
+            if descriptor >= 0:
+                try:
+                    os.close(descriptor)
+                except BaseException as exc:
+                    errors.append(exc)
+                record["descriptor"] = -1
+        self.records.clear()
+        self.modules.clear()
+        if errors:
+            raise RuntimeError(
+                "postauthorization module cleanup failed: "
+                + "; ".join(
+                    type(error).__name__ + ": " + str(error)
+                    for error in errors
+                )
+            )
 
 
 def _load_readiness_by_descriptor() -> Tuple[Any, _ReadinessBinding]:
@@ -564,13 +706,9 @@ def _actual_mode(arguments: Sequence[str]) -> int:
         sys.stderr.write("CP2-C recorded runner CLI rejected: {}\n".format(exc))
         return 2
 
-    if CP2_C_ACTUAL_AUTHORIZED is not True:
-        sys.stderr.write(CP2_C_BLOCK_REASON + "\n")
-        return 1
-
-    # Descriptor-load only the audited standard-library bootstrap after
-    # exclusive CLI dispatch.  Normal workspace-local import machinery remains
-    # unused until readiness step 8 has passed.
+    # Descriptor-load only the approved, audited standard-library bootstrap
+    # after exclusive CLI dispatch. Normal workspace-local import machinery
+    # remains unused until readiness step 8 has passed.
     readiness_binding = None
     try:
         readiness, readiness_binding = _load_readiness_by_descriptor()
@@ -594,29 +732,121 @@ def _actual_mode(arguments: Sequence[str]) -> int:
         readiness_binding.close()
         return getattr(os, "EX_CONFIG", 78)
 
+    modules = None
+    campaign_result = 1
+    publication_complete = False
+    campaign_error = None
+    cleanup_errors: List[BaseException] = []
+    publication_state = None
     try:
-        with authorization:
-            readiness_binding.revalidate()
-            registry_bytes = authorization.read_registry_once()
-            # The campaign implementation is imported only after step 8 and
-            # consumes this one verified buffer; it is never allowed to reopen
-            # project/datasets.yaml.
-            import cp2_recorded_campaign
+        readiness_binding.revalidate()
+        registry_bytes = authorization.read_registry_once()
+        # Load the two workspace-local implementation modules from held,
+        # authorization-gated descriptors.  Normal pathname import machinery
+        # remains unavailable, and the campaign consumes the one verified
+        # registry buffer rather than reopening it.
+        modules = _HeldPostauthorizationModules(repo_root, authorization)
+        modules.revalidate()
 
-            result = cp2_recorded_campaign.execute_recorded_campaign(
-                repo_root=repo_root,
-                parsed_cli=parsed,
-                registry_bytes=registry_bytes,
-                authorization=authorization,
-            )
+        def prepublication_guard() -> None:
+            modules.revalidate()
             readiness_binding.revalidate()
-            return result
-    except Exception as exc:
-        sys.stderr.write("CP2-C authorized campaign failed closed: {}: {}\n".format(
-            type(exc).__name__, exc))
-        return 1
+
+        campaign_result = modules.campaign.execute_recorded_campaign(
+            repo_root=repo_root,
+            parsed_cli=parsed,
+            registry_bytes=registry_bytes,
+            authorization=authorization,
+            prepublication_guard=prepublication_guard,
+        )
+        if campaign_result != 0:
+            raise RuntimeError("campaign returned a nonzero success result")
+        # execute_recorded_campaign returns only after its no-replace rename
+        # and durability checks.  From here on, cleanup cannot revoke success.
+        publication_complete = True
+    except BaseException as exc:
+        campaign_error = exc
     finally:
-        readiness_binding.close()
+        publication_query_errors: List[BaseException] = []
+        for query_index in range(2):
+            try:
+                publication_state = (
+                    authorization.current_output_publication_state()
+                )
+                break
+            except BaseException as exc:
+                publication_query_errors.append(exc)
+                # A genuine validation Exception is stable and must fail
+                # closed.  One non-Exception BaseException may have landed
+                # after the read-only query returned but before Python stored
+                # its result, so perform one bounded reconciliation query.
+                # This never reruns readiness, a campaign, or recorded input.
+                if isinstance(exc, Exception) or query_index != 0:
+                    break
+        cleanup_errors.extend(publication_query_errors)
+        if publication_state == "published":
+            publication_complete = True
+            campaign_result = 0
+        elif publication_state is not None and publication_complete:
+            publication_complete = False
+            campaign_error = RuntimeError(
+                "campaign returned success without an authoritative "
+                "published output state: " + publication_state
+            )
+        elif publication_state is None:
+            publication_complete = False
+        if modules is not None:
+            try:
+                modules.close()
+            except BaseException as exc:
+                cleanup_errors.append(exc)
+        try:
+            authorization.close()
+        except BaseException as exc:
+            cleanup_errors.append(exc)
+        try:
+            readiness_binding.close()
+        except BaseException as exc:
+            cleanup_errors.append(exc)
+
+    if publication_complete:
+        diagnostics: List[BaseException] = []
+        if campaign_error is not None:
+            diagnostics.append(campaign_error)
+        diagnostics.extend(cleanup_errors)
+        if diagnostics:
+            try:
+                sys.stderr.write(
+                    "CP2-C publication succeeded; post-publication diagnostic "
+                    "reported: "
+                    + "; ".join(
+                        type(error).__name__ + ": " + str(error)
+                        for error in diagnostics
+                    )
+                    + "\n"
+                )
+            except BaseException:
+                pass
+        return campaign_result
+
+    summaries = []
+    if campaign_error is not None:
+        summaries.append(
+            type(campaign_error).__name__ + ": " + str(campaign_error)
+        )
+    summaries.extend(
+        "cleanup " + type(error).__name__ + ": " + str(error)
+        for error in cleanup_errors
+    )
+    try:
+        sys.stderr.write(
+            "CP2-C authorized campaign failed closed: "
+            + "; ".join(summaries)
+            + "\n"
+        )
+    except BaseException:
+        pass
+    return 1
 
 
 def main(arguments: Sequence[str]) -> int:

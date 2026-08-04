@@ -686,6 +686,11 @@ class ActualReadinessFixture:
              ), \
              mock.patch.object(
                  verify_report,
+                 "FROZEN_CP2_C_APPROVAL_RECORDS",
+                 {},
+             ), \
+             mock.patch.object(
+                 verify_report,
                  "verify_unit_anchor_prevalidated",
                  self._stub_unit_verifier,
              ):
@@ -1003,28 +1008,229 @@ class ActualReadinessBindingTests(unittest.TestCase):
                 schema = verify_report._actual_load_module("cp2_schema")
                 self.assertTrue(callable(schema.command_environment_sha256))
 
-    def test_pending_cp2_c_actual_paths_stop_before_any_access(self):
+    def test_approved_cp2_c_actual_paths_reach_only_the_bound_entry_boundaries(self):
         arguments = (
             "--unit-artifact", "/tmp/cp2-c-synthetic-unit",
             "--unit-manifest-sha256", "0" * 64,
         )
         stderr = io.StringIO()
+        readiness_loader = mock.Mock(
+            side_effect=RuntimeError("synthetic approved readiness boundary")
+        )
         with mock.patch.object(
                 run_recorded, "_load_readiness_by_descriptor",
-                side_effect=AssertionError("readiness loader was reached")), \
+                readiness_loader), \
                 contextlib.redirect_stderr(stderr):
             status = run_recorded._actual_mode(arguments)
-        self.assertEqual(status, 1)
-        self.assertIn("blocked before readiness/data access", stderr.getvalue())
+        self.assertEqual(status, getattr(os, "EX_CONFIG", 78))
+        readiness_loader.assert_called_once_with()
+        self.assertIn("synthetic approved readiness boundary", stderr.getvalue())
 
+        artifact_scanner = mock.Mock(
+            side_effect=AssertionError("synthetic approved artifact boundary")
+        )
         with mock.patch.object(
                 verify_report, "_actual_scan_and_verify_manifest",
-                side_effect=AssertionError("artifact scanner was reached")):
-            with self.assertRaisesRegex(
-                    verify_report.ActualVerificationError,
-                    "blocked before artifact access"):
+                artifact_scanner):
+            with self.assertRaisesRegex(AssertionError, "approved artifact boundary"):
                 verify_report.verify_recorded_artifact(
                     "/tmp/cp2-c-synthetic-artifact", "1" * 64)
+        artifact_scanner.assert_called_once()
+
+        class SyntheticAuthorization:
+            def __init__(self, root):
+                self.root = Path(root)
+                self.closed = False
+                self.descriptors = []
+
+            def revalidate(self):
+                if self.closed:
+                    raise RuntimeError("synthetic authorization is closed")
+
+            def duplicate_source_fd(self, relative):
+                self.revalidate()
+                if relative not in {
+                    path for _, path in run_recorded.POSTAUTHORIZATION_MODULE_SOURCES
+                }:
+                    raise RuntimeError("synthetic source is outside the allowlist")
+                descriptor = os.open(
+                    str(self.root.joinpath(*relative.split("/"))),
+                    os.O_RDONLY | os.O_CLOEXEC,
+                )
+                self.descriptors.append(descriptor)
+                return descriptor
+
+        with tempfile.TemporaryDirectory(
+            prefix="cp2-held-module-loader-", dir="/tmp"
+        ) as temporary:
+            root = Path(temporary)
+            source_directory = root / "scripts/cp2"
+            source_directory.mkdir(parents=True)
+            schema_path = source_directory / "cp2_schema.py"
+            campaign_path = source_directory / "cp2_recorded_campaign.py"
+            schema_path.write_bytes(b"TOKEN = 'held-schema'\n")
+            campaign_path.write_bytes(
+                b"import cp2_schema\nTOKEN = cp2_schema.TOKEN + '-campaign'\n"
+            )
+            authorization = SyntheticAuthorization(root)
+            modules = run_recorded._HeldPostauthorizationModules(
+                root, authorization
+            )
+            descriptors = tuple(authorization.descriptors)
+            try:
+                self.assertEqual(modules.campaign.TOKEN, "held-schema-campaign")
+                modules.revalidate()
+                with schema_path.open("ab") as stream:
+                    stream.write(b"MUTATION = True\n")
+                with self.assertRaises((run_recorded.Rejection, RuntimeError)):
+                    modules.revalidate()
+            finally:
+                modules.close()
+            self.assertNotIn("cp2_schema", sys.modules)
+            self.assertNotIn("cp2_recorded_campaign", sys.modules)
+            for descriptor in descriptors:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
+            schema_path.write_bytes(b"TOKEN = 'held-schema'\n")
+            campaign_path.write_bytes(b"")
+            failed_authorization = SyntheticAuthorization(root)
+            with self.assertRaisesRegex(
+                run_recorded.Rejection,
+                "cp2_recorded_campaign source identity is invalid",
+            ):
+                run_recorded._HeldPostauthorizationModules(
+                    root, failed_authorization
+                )
+            self.assertNotIn("cp2_schema", sys.modules)
+            self.assertNotIn("cp2_recorded_campaign", sys.modules)
+            for descriptor in failed_authorization.descriptors:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
+            sentinel = object()
+            with mock.patch.dict(sys.modules, {"cp2_schema": sentinel}):
+                with self.assertRaises(run_recorded.Rejection):
+                    run_recorded._HeldPostauthorizationModules(
+                        root, SyntheticAuthorization(root)
+                    )
+                self.assertIs(sys.modules["cp2_schema"], sentinel)
+                self.assertNotIn("cp2_recorded_campaign", sys.modules)
+
+        # Exercise the exact production module bytes as one dependency-closed
+        # descriptor load.  This catches an accidental workspace import or a
+        # local dependency that isolated Python cannot resolve before any
+        # recorded-input capability is involved.
+        repository_root = CP2_DIRECTORY.parents[1]
+        production_authorization = SyntheticAuthorization(repository_root)
+        production_modules = run_recorded._HeldPostauthorizationModules(
+            repository_root, production_authorization
+        )
+        try:
+            self.assertTrue(
+                callable(production_modules.campaign.execute_recorded_campaign)
+            )
+            production_modules.revalidate()
+        finally:
+            production_modules.close()
+        self.assertNotIn("cp2_schema", sys.modules)
+        self.assertNotIn("cp2_recorded_campaign", sys.modules)
+
+        # Once the authorization reports its exact held inode at the durable
+        # published boundary, even a campaign return-state gap and later
+        # cleanup errors are diagnostic only; they may not relabel the
+        # already-published artifact as a failed execution.
+        class PublishedBinding:
+            def __init__(self):
+                self.close_calls = 0
+
+            def revalidate(self):
+                return None
+
+            def close(self):
+                self.close_calls += 1
+                raise RuntimeError("synthetic binding cleanup")
+
+        class PublishedAuthorization:
+            def __init__(self):
+                self.close_calls = 0
+                self.publication_query_calls = 0
+
+            def read_registry_once(self):
+                return b"synthetic authorized registry buffer"
+
+            def current_output_publication_state(self):
+                self.publication_query_calls += 1
+                if self.publication_query_calls == 1:
+                    raise KeyboardInterrupt(
+                        "synthetic publication-query store gap"
+                    )
+                return "published"
+
+            def close(self):
+                self.close_calls += 1
+                raise RuntimeError("synthetic authorization cleanup")
+
+        class PublishedReadiness:
+            EXPECTED_CASE_NAMES_BY_ENTRYPOINT = {}
+            CP1_AUTHORIZATION_COMMIT = "0" * 40
+
+            def __init__(self, authorization):
+                self.authorization = authorization
+
+            def run_readiness_barrier(self, **kwargs):
+                del kwargs
+                return self.authorization
+
+        class PublishedCampaign:
+            @staticmethod
+            def execute_recorded_campaign(**kwargs):
+                kwargs["prepublication_guard"]()
+                # Model an asynchronous exception after the campaign's
+                # durable commit but before its return value reaches the
+                # caller's local variable.
+                raise KeyboardInterrupt("synthetic publish/return gap")
+
+        class PublishedModules:
+            def __init__(self):
+                self.campaign = PublishedCampaign()
+                self.close_calls = 0
+
+            def revalidate(self):
+                return None
+
+            def close(self):
+                self.close_calls += 1
+                raise RuntimeError("synthetic module cleanup")
+
+        published_binding = PublishedBinding()
+        published_authorization = PublishedAuthorization()
+        published_modules = PublishedModules()
+        published_stderr = io.StringIO()
+        with mock.patch.object(
+            run_recorded,
+            "_load_readiness_by_descriptor",
+            return_value=(
+                PublishedReadiness(published_authorization),
+                published_binding,
+            ),
+        ), mock.patch.object(
+            run_recorded,
+            "_HeldPostauthorizationModules",
+            return_value=published_modules,
+        ), contextlib.redirect_stderr(published_stderr):
+            published_status = run_recorded._actual_mode(arguments)
+        self.assertEqual(published_status, 0)
+        self.assertEqual(published_modules.close_calls, 1)
+        self.assertEqual(published_authorization.close_calls, 1)
+        self.assertEqual(published_authorization.publication_query_calls, 2)
+        self.assertEqual(published_binding.close_calls, 1)
+        self.assertIn("publication succeeded", published_stderr.getvalue())
+        self.assertIn("synthetic publish/return gap", published_stderr.getvalue())
+        self.assertIn(
+            "synthetic publication-query store gap",
+            published_stderr.getvalue(),
+        )
 
     def test_context_archive_and_approval_mutations_fail(self):
         self.assert_mutations_rejected((

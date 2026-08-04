@@ -218,6 +218,761 @@ class RecordedCampaignTests(unittest.TestCase):
                 campaign._rename_noreplace(second, destination)
             self.assertTrue(second.is_dir())
 
+            sealed_snapshot = campaign._sealed_artifact_snapshot(destination)
+            mutated_leaf = destination / "commands.jsonl"
+            os.chmod(str(mutated_leaf), 0o600)
+            mutated_leaf.write_bytes(b"[]\n")
+            os.chmod(str(mutated_leaf), 0o444)
+            self.assertNotEqual(
+                campaign._sealed_artifact_snapshot(destination),
+                sealed_snapshot,
+            )
+
+            failed_partial = parent / "failed-partial"
+            failed_partial.mkdir(mode=0o700)
+            failed_partial_fd = os.open(
+                str(failed_partial),
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+            )
+            try:
+                injected_failure = campaign.CampaignError(
+                    "synthetic campaign failure"
+                )
+                campaign._retain_campaign_failure(
+                    failed_partial,
+                    failed_partial_fd,
+                    "1" * 40,
+                    "2" * 40,
+                    injected_failure,
+                )
+                retained = json.loads(
+                    (failed_partial / "failure.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(retained["error"], str(injected_failure))
+                self.assertEqual(
+                    retained["primary_failure"]["type"], "CampaignError"
+                )
+                self.assertEqual(retained["cleanup_failures"], [])
+                self.assertIsNone(
+                    retained["quarantined_untrusted_failure_name"]
+                )
+                marker_before = (failed_partial / "failure.json").read_bytes()
+                with self.assertRaises(campaign.CampaignError):
+                    campaign._retain_campaign_failure(
+                        failed_partial,
+                        failed_partial_fd,
+                        "1" * 40,
+                        "2" * 40,
+                        campaign.CampaignError("must not replace"),
+                    )
+                self.assertEqual(
+                    (failed_partial / "failure.json").read_bytes(),
+                    marker_before,
+                )
+                self.assertFalse(any(
+                    path.name.startswith(".failure.json.partial.")
+                    for path in failed_partial.iterdir()
+                ))
+            finally:
+                os.close(failed_partial_fd)
+
+            outside_collision_victim = parent / "outside-collision-victim"
+            outside_collision_victim.write_bytes(b"preserve collision target\n")
+            for collision_kind in (
+                "regular", "symlink", "directory", "hardlink"
+            ):
+                with self.subTest(collision_kind=collision_kind):
+                    collision_root = parent / ("collision-" + collision_kind)
+                    collision_root.mkdir(mode=0o700)
+                    collision = collision_root / "failure.json"
+                    if collision_kind == "regular":
+                        collision.write_bytes(b"untrusted regular\n")
+                    elif collision_kind == "symlink":
+                        collision.symlink_to(outside_collision_victim)
+                    elif collision_kind == "directory":
+                        collision.mkdir()
+                        (collision / "nested").write_bytes(b"untrusted nested\n")
+                    else:
+                        os.link(outside_collision_victim, collision)
+                    collision_before = collision.lstat()
+                    descriptor = os.open(
+                        str(collision_root),
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+                    )
+                    try:
+                        campaign._retain_campaign_failure(
+                            collision_root,
+                            descriptor,
+                            "1" * 40,
+                            "2" * 40,
+                            campaign.CampaignError(
+                                "trusted collision disposition"
+                            ),
+                            quarantine_untrusted_collision=True,
+                        )
+                    finally:
+                        os.close(descriptor)
+                    trusted = json.loads(
+                        (collision_root / "failure.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    quarantine_name = trusted[
+                        "quarantined_untrusted_failure_name"
+                    ]
+                    self.assertRegex(
+                        quarantine_name,
+                        r"^\.untrusted-failure\.json\.[0-9a-f]{32}$",
+                    )
+                    quarantined = collision_root / quarantine_name
+                    self.assertEqual(
+                        (quarantined.lstat().st_dev, quarantined.lstat().st_ino),
+                        (collision_before.st_dev, collision_before.st_ino),
+                    )
+                    self.assertEqual(
+                        outside_collision_victim.read_bytes(),
+                        b"preserve collision target\n",
+                    )
+
+            outside = parent / "outside-victim"
+            outside.write_bytes(b"preserve\n")
+            workspace = campaign.OwnedTemporaryWorkspace.create()
+            workspace_descriptor = workspace.descriptor
+            nested = workspace.path / "nested"
+            nested.mkdir()
+            (nested / "payload").write_bytes(b"owned\n")
+            (workspace.path / "outside-link").symlink_to(outside)
+            workspace.revalidate()
+            workspace_path = workspace.path
+            workspace.remove()
+            self.assertFalse(workspace_path.exists())
+            self.assertEqual(outside.read_bytes(), b"preserve\n")
+            with self.assertRaises(OSError):
+                os.fstat(workspace_descriptor)
+
+            workspace_names_before = {
+                name
+                for name in os.listdir("/tmp")
+                if name.startswith("schurvio-cp2-recorded-build-")
+            }
+            descriptors_before = len(os.listdir("/proc/self/fd"))
+            with mock.patch.object(
+                campaign.OwnedTemporaryWorkspace,
+                "revalidate",
+                side_effect=campaign.CampaignError(
+                    "injected acquisition revalidation failure"
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    campaign.CampaignError,
+                    "injected acquisition revalidation failure",
+                ):
+                    campaign.OwnedTemporaryWorkspace.create()
+            self.assertEqual(
+                {
+                    name
+                    for name in os.listdir("/tmp")
+                    if name.startswith("schurvio-cp2-recorded-build-")
+                },
+                workspace_names_before,
+            )
+            self.assertEqual(
+                len(os.listdir("/proc/self/fd")), descriptors_before
+            )
+
+            copy_source = parent / "copy-source"
+            copy_destination = parent / "copy-destination"
+            copy_source.write_bytes(b"copy source\n")
+            real_open = os.open
+
+            def reject_copy_destination(path, *args, **kwargs):
+                if str(path) == str(copy_destination):
+                    raise OSError("injected destination acquisition failure")
+                return real_open(path, *args, **kwargs)
+
+            descriptors_before = len(os.listdir("/proc/self/fd"))
+            with mock.patch.object(
+                campaign.os,
+                "open",
+                side_effect=reject_copy_destination,
+            ):
+                with self.assertRaisesRegex(
+                    OSError, "injected destination acquisition failure"
+                ):
+                    campaign._copy_new(copy_source, copy_destination)
+            self.assertEqual(
+                len(os.listdir("/proc/self/fd")), descriptors_before
+            )
+            self.assertFalse(copy_destination.exists())
+
+            failed_build_owner = campaign.OwnedTemporaryWorkspace.create()
+            failed_build_path = failed_build_owner.path
+            failed_build_descriptor = failed_build_owner.descriptor
+
+            def fail_inside_workspace(*args):
+                build_workspace = Path(args[-1])
+                (build_workspace / "partial-build").mkdir()
+                (build_workspace / "partial-build/object").write_bytes(
+                    b"incomplete\n"
+                )
+                raise campaign.CampaignError("injected build failure")
+
+            with mock.patch.object(
+                campaign.OwnedTemporaryWorkspace,
+                "create",
+                return_value=failed_build_owner,
+            ), mock.patch.object(
+                campaign,
+                "_build_runtime_in_workspace",
+                side_effect=fail_inside_workspace,
+            ):
+                with self.assertRaisesRegex(
+                    campaign.CampaignError, "injected build failure"
+                ):
+                    campaign._build_runtime(
+                        parent,
+                        destination,
+                        parent,
+                        object(),
+                        mock.Mock(),
+                        "0" * 40,
+                    )
+            self.assertFalse(failed_build_path.exists())
+            with self.assertRaises(OSError):
+                os.fstat(failed_build_descriptor)
+
+            substituted = campaign.OwnedTemporaryWorkspace.create()
+            substituted_path = substituted.path
+            displaced = substituted_path.with_name(
+                substituted_path.name + "-displaced"
+            )
+            substituted_path.rename(displaced)
+            substituted_path.mkdir(mode=0o700)
+            with self.assertRaises(campaign.CampaignError):
+                substituted.remove()
+            self.assertTrue(substituted_path.is_dir())
+            self.assertTrue(displaced.is_dir())
+            substituted_path.rmdir()
+            displaced.rename(substituted_path)
+            substituted.remove()
+            self.assertFalse(substituted_path.exists())
+
+            # The actual CP2-C worker receives only the exact hidden partial
+            # and build workspace as writable mounts.  Every inherited host
+            # capability is either rebound through the new mount namespace or
+            # closed, bags are exact read-only inode binds, and even a setsid
+            # grandchild is killed when PID-namespace init exits.
+            sandbox_repo = parent / "sandbox-repo"
+            sandbox_parent = sandbox_repo / "results/staging/cp2/recorded"
+            sandbox_parent.mkdir(mode=0o700, parents=True)
+            sandbox_partial = sandbox_parent / (
+                ".synthetic.partial." + "a" * 32
+            )
+            sandbox_partial.mkdir(mode=0o700)
+            sandbox_final = sandbox_parent / "synthetic"
+            sandbox_staging = type("SyntheticStaging", (), {})()
+            sandbox_staging.run_id = "synthetic"
+            sandbox_staging.parent = sandbox_parent
+            sandbox_staging.partial = sandbox_partial
+            sandbox_staging.final = sandbox_final
+            sandbox_victim = parent / "sandbox-victim"
+            sandbox_victim.write_bytes(b"preserve exactly\n")
+            sandbox_victim_mode = stat.S_IMODE(sandbox_victim.stat().st_mode)
+            inherited_escape_fd = os.open(
+                str(sandbox_victim), os.O_RDWR | os.O_CLOEXEC
+            )
+            sandbox_build = campaign.OwnedTemporaryWorkspace.create()
+            sandbox_bag_owner = campaign.OwnedTemporaryWorkspace.create(
+                "schurvio-cp2-bag-bind-"
+            )
+
+            class SandboxRepository:
+                def __init__(self):
+                    self.root_fd = os.open(
+                        str(sandbox_repo),
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+                    )
+
+            class SandboxAuthorization:
+                def __init__(self):
+                    self.repository = SandboxRepository()
+                    self.partial_fd = os.open(
+                        str(sandbox_partial),
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+                    )
+                    self.escape_fd = inherited_escape_fd
+                    self.worker_mode = False
+
+                def output_staging_identity(self, staging):
+                    del staging
+                    held = os.fstat(self.partial_fd)
+                    by_path = os.lstat(str(sandbox_partial))
+                    self.assert_same(held, by_path)
+                    return campaign._directory_object_identity(held)
+
+                @staticmethod
+                def assert_same(left, right):
+                    if not campaign._same_stat(left, right):
+                        raise campaign.CampaignError(
+                            "synthetic authorization binding differs"
+                        )
+
+                def rebind_worker_mount_namespace(self, staging):
+                    del staging
+                    replacements = []
+                    for owner, attribute, path, directory in (
+                        (self.repository, "root_fd", sandbox_repo, True),
+                        (self, "partial_fd", sandbox_partial, True),
+                    ):
+                        old = getattr(owner, attribute)
+                        flags = os.O_RDONLY | os.O_CLOEXEC
+                        if directory:
+                            flags |= os.O_DIRECTORY
+                        replacement = os.open(str(path), flags)
+                        self.assert_same(os.fstat(old), os.fstat(replacement))
+                        replacements.append((owner, attribute, old, replacement))
+                    for owner, attribute, old, replacement in replacements:
+                        setattr(owner, attribute, replacement)
+                        os.close(old)
+                    # Deliberately retain this unrelated writable descriptor.
+                    # The campaign's generic worker-FD scrub, not this mock
+                    # authorization transition, must close it.
+                    self.worker_mode = True
+
+                def descriptor_inventory(self):
+                    if not self.worker_mode:
+                        raise campaign.CampaignError(
+                            "synthetic authorization was not rebound"
+                        )
+                    return {
+                        "repository": {"fd": self.repository.root_fd},
+                        "partial": {"fd": self.partial_fd},
+                    }
+
+                def publish_output(self, staging):
+                    os.rename(str(staging.partial), str(staging.final))
+
+            sandbox_authorization = SandboxAuthorization()
+            source_descriptors = []
+            bag_mounts = []
+            original_bag_paths = []
+            for index in range(3):
+                original = parent / "sandbox-bag-{}.bag".format(index)
+                original.write_bytes(
+                    "held-bag-{}\n".format(index).encode("ascii")
+                )
+                source_fd = os.open(str(original), os.O_RDONLY | os.O_CLOEXEC)
+                source_descriptors.append(source_fd)
+                target = sandbox_bag_owner.path / "{:02d}.bag".format(index)
+                target.write_bytes(b"")
+                os.chmod(str(target), 0o600)
+                bag_mounts.append(campaign._BagMountBinding(
+                    original_path=original,
+                    target_path=target,
+                    source_descriptor=source_fd,
+                    source_identity=os.fstat(source_fd),
+                    target_identity=target.lstat(),
+                ))
+                original_bag_paths.append(original)
+
+            attacker_pid = os.fork()
+            if attacker_pid == 0:
+                ready = sandbox_partial / "swap-ready"
+                done = sandbox_partial / "read-done"
+                deadline = time.monotonic() + 10.0
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(0.005)
+                original = original_bag_paths[0]
+                saved = original.with_name(original.name + ".held")
+                try:
+                    original.rename(saved)
+                    original.write_bytes(b"substitute-bag\n")
+                    (sandbox_partial / "swapped").write_bytes(b"ready\n")
+                    while not done.exists() and time.monotonic() < deadline:
+                        time.sleep(0.005)
+                    original.unlink()
+                    saved.rename(original)
+                    os._exit(0 if done.exists() else 2)
+                except BaseException:
+                    try:
+                        if original.exists():
+                            original.unlink()
+                        if saved.exists():
+                            saved.rename(original)
+                    finally:
+                        os._exit(3)
+
+            def synthetic_worker(*args):
+                worker_authorization = args[3]
+                worker_staging = args[4]
+                worker_partial = Path(worker_staging.partial)
+                worker_mounts = args[6]
+                for descriptor in os.listdir("/proc/1/fd"):
+                    try:
+                        target = os.readlink("/proc/1/fd/" + descriptor)
+                    except FileNotFoundError:
+                        continue
+                    if target == str(sandbox_victim):
+                        raise campaign.CampaignError(
+                            "worker retained the inherited writable victim fd"
+                        )
+                try:
+                    os.ftruncate(inherited_escape_fd, 0)
+                except OSError:
+                    pass
+                else:
+                    raise campaign.CampaignError(
+                        "worker retained a truncatable inherited host fd"
+                    )
+                for operation in (
+                    lambda: os.open(
+                        "forbidden", os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600, dir_fd=worker_authorization.repository.root_fd,
+                    ),
+                    lambda: os.fchmod(
+                        worker_authorization.repository.root_fd, 0o777
+                    ),
+                    lambda: worker_authorization.publish_output(worker_staging),
+                ):
+                    try:
+                        operation()
+                    except OSError:
+                        pass
+                    else:
+                        raise campaign.CampaignError(
+                            "worker retained a repository/publication capability"
+                        )
+                escape = worker_partial / "escape"
+                escape.symlink_to(sandbox_victim)
+                for operation in (
+                    lambda: os.truncate(str(escape), 0),
+                    lambda: os.chmod(str(escape), 0o777),
+                ):
+                    try:
+                        operation()
+                    except OSError as exc:
+                        if exc.errno != getattr(os, "EROFS", 30):
+                            raise
+                    else:
+                        raise campaign.CampaignError(
+                            "read-only namespace allowed a symlink escape"
+                        )
+                (worker_partial / "allowed").write_bytes(b"allowed\n")
+                (worker_partial / "swap-ready").write_bytes(b"ready\n")
+                deadline = time.monotonic() + 5.0
+                while not (worker_partial / "swapped").exists():
+                    if time.monotonic() >= deadline:
+                        raise campaign.CampaignError("bag substitution timed out")
+                    time.sleep(0.005)
+                if Path(worker_mounts[0].target_path).read_bytes() != b"held-bag-0\n":
+                    raise campaign.CampaignError(
+                        "read-only bag bind followed a pathname substitute"
+                    )
+                (worker_partial / "read-done").write_bytes(b"done\n")
+                ready_read, ready_write = os.pipe()
+                escaped_pid = os.fork()
+                if escaped_pid == 0:
+                    os.close(ready_read)
+                    os.setsid()
+                    os.write(ready_write, b"1")
+                    os.close(ready_write)
+                    time.sleep(0.25)
+                    (worker_partial / "late-write").write_bytes(b"escaped\n")
+                    os._exit(0)
+                os.close(ready_write)
+                if os.read(ready_read, 1) != b"1":
+                    raise campaign.CampaignError(
+                        "setsid descendant did not complete its handshake"
+                    )
+                os.close(ready_read)
+                return "b" * 64
+
+            try:
+                with mock.patch.object(
+                    campaign,
+                    "_execute_recorded_campaign_worker",
+                    side_effect=synthetic_worker,
+                ):
+                    isolated = campaign._run_campaign_in_namespaces(
+                        sandbox_repo,
+                        {},
+                        b"",
+                        sandbox_authorization,
+                        sandbox_staging,
+                        sandbox_build,
+                        tuple(bag_mounts),
+                    )
+                self.assertTrue(isolated["passed"])
+                self.assertTrue(isolated["descendants_absent"])
+                self.assertEqual(isolated["manifest_sha256"], "b" * 64)
+                time.sleep(0.35)
+                self.assertFalse((sandbox_partial / "late-write").exists())
+                self.assertEqual(
+                    sandbox_victim.read_bytes(), b"preserve exactly\n"
+                )
+                self.assertEqual(
+                    stat.S_IMODE(sandbox_victim.stat().st_mode),
+                    sandbox_victim_mode,
+                )
+                observed_attacker, attacker_status = os.waitpid(attacker_pid, 0)
+                self.assertEqual(observed_attacker, attacker_pid)
+                self.assertTrue(os.WIFEXITED(attacker_status))
+                self.assertEqual(os.WEXITSTATUS(attacker_status), 0)
+                self.assertEqual(original_bag_paths[0].read_bytes(), b"held-bag-0\n")
+                self.assertFalse(sandbox_final.exists())
+            finally:
+                try:
+                    os.kill(attacker_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    os.waitpid(attacker_pid, 0)
+                except ChildProcessError:
+                    pass
+                for descriptor in source_descriptors:
+                    os.close(descriptor)
+                os.close(inherited_escape_fd)
+                os.close(sandbox_authorization.partial_fd)
+                os.close(sandbox_authorization.repository.root_fd)
+                sandbox_bag_owner.remove()
+                sandbox_build.remove()
+
+    def test_failure_bundle_preserves_primary_and_ordered_cleanup_records(self):
+        primary_message = "p" * campaign.MAX_FAILURE_MESSAGE_BYTES
+        bundle = campaign._append_cleanup_failures(
+            RuntimeError(primary_message),
+            (
+                ValueError("first cleanup"),
+                KeyboardInterrupt("second cleanup"),
+            ),
+        )
+        self.assertEqual(bundle.primary_failure["type"], "RuntimeError")
+        self.assertEqual(bundle.primary_failure["message"], primary_message)
+        self.assertFalse(bundle.primary_failure["message_truncated"])
+        self.assertEqual(
+            [record["type"] for record in bundle.cleanup_failures],
+            ["ValueError", "KeyboardInterrupt"],
+        )
+        self.assertEqual(
+            [record["message"] for record in bundle.cleanup_failures],
+            ["first cleanup", "second cleanup"],
+        )
+
+    def test_owned_close_clears_slots_before_baseexception(self):
+        with tempfile.TemporaryDirectory(
+            prefix="cp2-campaign-close-slots-", dir="/tmp"
+        ) as raw:
+            root = Path(raw)
+            leaf = root / "bound"
+            leaf.write_bytes(b"bound\n")
+            bound = campaign._bind_regular_file(leaf)
+            bound_descriptor = bound.descriptor
+            real_close = os.close
+
+            def interrupt_bound_close(descriptor):
+                real_close(descriptor)
+                raise KeyboardInterrupt("synthetic bound close gap")
+
+            with mock.patch.object(
+                campaign.os,
+                "close",
+                side_effect=interrupt_bound_close,
+            ), self.assertRaisesRegex(
+                KeyboardInterrupt, "bound close gap"
+            ):
+                bound.close()
+            self.assertEqual(bound.descriptor, -1)
+            with self.assertRaises(OSError):
+                os.fstat(bound_descriptor)
+            bound.close()
+
+            workspace = campaign.OwnedTemporaryWorkspace.create()
+            workspace_descriptor = workspace.descriptor
+
+            def interrupt_workspace_close(descriptor):
+                real_close(descriptor)
+                if descriptor == workspace_descriptor:
+                    raise KeyboardInterrupt("synthetic workspace close gap")
+
+            with mock.patch.object(
+                campaign.os,
+                "close",
+                side_effect=interrupt_workspace_close,
+            ), self.assertRaisesRegex(
+                KeyboardInterrupt, "workspace close gap"
+            ):
+                workspace.remove()
+            self.assertEqual(workspace.descriptor, -1)
+            self.assertFalse(workspace.path.exists())
+            with self.assertRaises(OSError):
+                os.fstat(workspace_descriptor)
+            workspace.remove()
+
+    def test_publication_commit_gap_and_uncommitted_final_are_distinct(self):
+        class FakeOwner:
+            def remove(self):
+                return None
+
+        class Repository:
+            commit = "1" * 40
+            tree = "2" * 40
+
+        for committed in (True, False):
+            with self.subTest(committed=committed), tempfile.TemporaryDirectory(
+                prefix="cp2-campaign-publication-", dir="/tmp"
+            ) as raw:
+                repo_root = Path(raw)
+
+                class Authorization:
+                    def __init__(self):
+                        self.repository = Repository()
+                        self.state = "absent"
+                        self.staging = None
+
+                    def revalidate(self):
+                        return None
+
+                    def create_output_staging(self, run_id):
+                        parent = (
+                            repo_root / "results/staging/cp2/recorded"
+                        )
+                        parent.mkdir(parents=True)
+                        partial = parent / (
+                            "." + run_id + ".partial." + "a" * 32
+                        )
+                        partial.mkdir(mode=0o700)
+                        self.staging = type("Staging", (), {
+                            "run_id": run_id,
+                            "parent": parent,
+                            "partial": partial,
+                            "final": parent / run_id,
+                        })()
+                        self.state = "hidden"
+                        return self.staging
+
+                    def publish_output(self, staging):
+                        os.rename(staging.partial, staging.final)
+                        self.state = (
+                            "published" if committed
+                            else "published_uncommitted"
+                        )
+                        raise KeyboardInterrupt(
+                            "synthetic post-rename publication gap"
+                        )
+
+                    def output_publication_state(self, staging):
+                        self.assert_token(staging)
+                        return self.state
+
+                    def duplicate_output_root_fd(self, staging):
+                        self.assert_token(staging)
+                        root = (
+                            staging.partial
+                            if self.state == "hidden"
+                            else staging.final
+                        )
+                        return os.open(
+                            str(root),
+                            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+                        )
+
+                    def assert_token(self, staging):
+                        if staging is not self.staging:
+                            raise campaign.CampaignError(
+                                "synthetic staging token differs"
+                            )
+
+                authorization = Authorization()
+                manifest_bytes = b"synthetic manifest\n"
+                manifest_sha256 = hashlib.sha256(
+                    manifest_bytes
+                ).hexdigest()
+
+                def synthetic_worker(*args, **kwargs):
+                    del args, kwargs
+                    partial = authorization.staging.partial
+                    (partial / "payload").write_bytes(b"sealed payload\n")
+                    (partial / "SHA256SUMS").write_bytes(manifest_bytes)
+                    (partial / "payload").chmod(0o444)
+                    (partial / "SHA256SUMS").chmod(0o444)
+                    partial.chmod(0o555)
+                    return {
+                        "schema_version": 1,
+                        "record_type": "cp2_isolated_worker_result",
+                        "passed": True,
+                        "worker_started": True,
+                        "descendants_absent": True,
+                        "manifest_sha256": manifest_sha256,
+                        "error_type": None,
+                        "error": None,
+                        "primary_failure": None,
+                        "cleanup_failures": [],
+                        "failure_marker_retained": False,
+                    }
+
+                patches = (
+                    mock.patch.object(
+                        campaign.OwnedTemporaryWorkspace,
+                        "create",
+                        side_effect=(FakeOwner(), FakeOwner(), FakeOwner()),
+                    ),
+                    mock.patch.object(
+                        campaign,
+                        "_prepare_parent_bag_mounts",
+                        return_value=((), ()),
+                    ),
+                    mock.patch.object(
+                        campaign,
+                        "_run_campaign_in_namespaces",
+                        side_effect=synthetic_worker,
+                    ),
+                    mock.patch.object(
+                        campaign,
+                        "_trusted_parent_detached_verify_recorded",
+                        return_value=None,
+                    ),
+                )
+                with patches[0], patches[1], patches[2], patches[3]:
+                    if committed:
+                        self.assertEqual(
+                            campaign.execute_recorded_campaign(
+                                repo_root,
+                                {"--run-id": "synthetic_publication"},
+                                b"synthetic registry",
+                                authorization,
+                            ),
+                            0,
+                        )
+                    else:
+                        with self.assertRaisesRegex(
+                            KeyboardInterrupt,
+                            "post-rename publication gap",
+                        ):
+                            campaign.execute_recorded_campaign(
+                                repo_root,
+                                {"--run-id": "synthetic_publication"},
+                                b"synthetic registry",
+                                authorization,
+                            )
+                final = authorization.staging.final
+                self.assertTrue(final.is_dir())
+                self.assertEqual(
+                    (final / "payload").read_bytes(), b"sealed payload\n"
+                )
+                if committed:
+                    self.assertEqual(stat.S_IMODE(final.stat().st_mode), 0o555)
+                    self.assertFalse((final / "failure.json").exists())
+                else:
+                    self.assertEqual(stat.S_IMODE(final.stat().st_mode), 0o700)
+                    failure = json.loads(
+                        (final / "failure.json").read_text(encoding="utf-8")
+                    )
+                    self.assertEqual(
+                        failure["error_type"], "KeyboardInterrupt"
+                    )
+
     def test_closed_summary_rejects_nonpassing_math(self):
         summary = {name: 0 for name in campaign.ASSEMBLER_SUMMARY_KEYS}
         summary.update({
@@ -238,6 +993,188 @@ class RecordedCampaignTests(unittest.TestCase):
                 campaign._build_report(
                     root, summary, {"passed": True}, "2026-08-02T00:00:00.000000Z")
 
+        pair_rows = []
+        for pair_index, base in enumerate(
+            (100_000_000, 200_000_000, 300_000_000)
+        ):
+            pair_rows.append({
+                "schema_version": 1,
+                "record_type": "pair_index",
+                "sequence_index": 0,
+                "sequence_id": campaign.SEQUENCES[0],
+                "pair_index": pair_index,
+                "anchor_filtered_index": pair_index * 2,
+                "anchor_camera_id": 0,
+                "cam0_filtered_index": pair_index * 2,
+                "cam1_filtered_index": pair_index * 2 + 1,
+                "cam0_record_time_ns": base,
+                "cam1_record_time_ns": base + 1_000_000,
+                "cam0_header_time_ns": base,
+                "cam1_header_time_ns": base + 1_000_000,
+                "absolute_record_delta_ns": 1_000_000,
+            })
+        canonical_pairs = campaign.schema.jsonl_bytes(pair_rows)
+        self.assertEqual(
+            campaign._validate_pair_index_bytes(
+                canonical_pairs, 0, campaign.SEQUENCES[0]
+            ),
+            tuple(pair_rows),
+        )
+        noncanonical_pairs = b"".join(
+            (json.dumps(row, sort_keys=True) + "\n").encode("utf-8")
+            for row in pair_rows
+        )
+        self.assertNotEqual(noncanonical_pairs, canonical_pairs)
+        with self.assertRaises(campaign.CampaignError):
+            campaign._validate_pair_index_bytes(
+                noncanonical_pairs, 0, campaign.SEQUENCES[0]
+            )
+        compact_wrong_key_order = b"".join(
+            (
+                json.dumps(
+                    row,
+                    allow_nan=False,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=False,
+                )
+                + "\n"
+            ).encode("utf-8")
+            for row in pair_rows
+        )
+        self.assertNotEqual(compact_wrong_key_order, canonical_pairs)
+        with self.assertRaises(campaign.CampaignError):
+            campaign._validate_pair_index_bytes(
+                compact_wrong_key_order, 0, campaign.SEQUENCES[0]
+            )
+        for invalid_request in (False, 0.0):
+            with self.subTest(pair_request=invalid_request):
+                with self.assertRaises(campaign.CampaignError):
+                    campaign._validate_pair_index_bytes(
+                        canonical_pairs,
+                        invalid_request,
+                        campaign.SEQUENCES[0],
+                    )
+        for invalid_schema in (True, 1.0):
+            corrupted = [dict(row) for row in pair_rows]
+            corrupted[0]["schema_version"] = invalid_schema
+            with self.assertRaises(campaign.CampaignError):
+                campaign._validate_pair_index_bytes(
+                    campaign.schema.jsonl_bytes(corrupted),
+                    0,
+                    campaign.SEQUENCES[0],
+                )
+        threshold = [dict(row) for row in pair_rows]
+        threshold[0]["cam1_record_time_ns"] = (
+            threshold[0]["cam0_record_time_ns"]
+            + campaign.STRICT_PAIR_DELTA_NS
+        )
+        threshold[0]["absolute_record_delta_ns"] = (
+            campaign.STRICT_PAIR_DELTA_NS
+        )
+        with self.assertRaises(campaign.CampaignError):
+            campaign._validate_pair_index_bytes(
+                campaign.schema.jsonl_bytes(threshold),
+                0,
+                campaign.SEQUENCES[0],
+            )
+
+        population_mutations = {}
+
+        pair_index_boolean = [dict(row) for row in pair_rows]
+        pair_index_boolean[1]["pair_index"] = True
+        population_mutations["pair-index-boolean"] = pair_index_boolean
+
+        delta_mismatch = [dict(row) for row in pair_rows]
+        delta_mismatch[0]["absolute_record_delta_ns"] += 1
+        population_mutations["delta-mismatch"] = delta_mismatch
+
+        reused_camera = [dict(row) for row in pair_rows]
+        reused_camera[0]["cam1_filtered_index"] = 3
+        population_mutations["reused-camera"] = reused_camera
+
+        reversed_anchors = [dict(row) for row in pair_rows]
+        for row, anchor in zip(reversed_anchors, (4, 2, 6)):
+            row["anchor_filtered_index"] = anchor
+            row["cam0_filtered_index"] = anchor
+            row["cam1_filtered_index"] = anchor + 1
+        population_mutations["reversed-anchor-order"] = reversed_anchors
+
+        reversed_times = [dict(row) for row in pair_rows]
+        reversed_times[1]["cam0_record_time_ns"] = 90_000_000
+        reversed_times[1]["cam1_record_time_ns"] = 91_000_000
+        population_mutations["reversed-cam0-time"] = reversed_times
+
+        zero_duration = [dict(row) for row in pair_rows]
+        for row in zero_duration:
+            row["cam0_record_time_ns"] = 100_000_000
+            row["cam1_record_time_ns"] = 101_000_000
+        population_mutations["zero-duration"] = zero_duration
+
+        candidate_not_forward = [dict(row) for row in pair_rows]
+        candidate_not_forward[0]["anchor_camera_id"] = 1
+        candidate_not_forward[0]["anchor_filtered_index"] = 1
+        population_mutations["candidate-not-forward"] = candidate_not_forward
+
+        for label, corrupted in population_mutations.items():
+            with self.subTest(pair_population=label):
+                with self.assertRaises(campaign.CampaignError):
+                    campaign._validate_pair_index_bytes(
+                        campaign.schema.jsonl_bytes(corrupted),
+                        0,
+                        campaign.SEQUENCES[0],
+                    )
+
+        serial_rows = []
+        for row in pair_rows:
+            serial = dict(row)
+            serial.update({
+                "record_type": "serial_pair",
+                "camera_timestamp_ns": row["cam0_header_time_ns"],
+                "selected": True,
+                "enqueue_entered": True,
+                "enqueue_returned": True,
+                "enqueue_status": "returned",
+                "processing_entered": True,
+                "processing_returned": True,
+                "processing_status": "returned",
+                "updater_invocation_ids": [],
+            })
+            serial_rows.append(serial)
+        canonical_serial = campaign.schema.jsonl_bytes(serial_rows)
+        self.assertEqual(
+            campaign._project_serial_pairs_to_pair_index_bytes(
+                canonical_serial, 0, campaign.SEQUENCES[0]
+            ),
+            canonical_pairs,
+        )
+        noncanonical_serial = b"".join(
+            (json.dumps(row, sort_keys=True) + "\n").encode("utf-8")
+            for row in serial_rows
+        )
+        with self.assertRaises(campaign.CampaignError):
+            campaign._project_serial_pairs_to_pair_index_bytes(
+                noncanonical_serial, 0, campaign.SEQUENCES[0]
+            )
+        compact_serial_wrong_key_order = b"".join(
+            (
+                json.dumps(
+                    row,
+                    allow_nan=False,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=False,
+                )
+                + "\n"
+            ).encode("utf-8")
+            for row in serial_rows
+        )
+        self.assertNotEqual(compact_serial_wrong_key_order, canonical_serial)
+        with self.assertRaises(campaign.CampaignError):
+            campaign._project_serial_pairs_to_pair_index_bytes(
+                compact_serial_wrong_key_order, 0, campaign.SEQUENCES[0]
+            )
+
     def test_command_recorder_cleans_timeout_and_baseexception_paths(self):
         environment = {
             "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
@@ -256,6 +1193,36 @@ class RecordedCampaignTests(unittest.TestCase):
                              campaign.schema.sha256_file(root / record["stdout"]))
             self.assertEqual(record["stderr_sha256"],
                              campaign.schema.sha256_file(root / record["stderr"]))
+
+            fault_root = root / "stderr-open-fault"
+            fault_root.mkdir()
+            recorder = campaign.CommandRecorder(
+                fault_root, _SyntheticAuthorization())
+            real_open = os.open
+
+            def reject_stderr(path, *args, **kwargs):
+                if str(path).endswith("_verification.stderr"):
+                    raise OSError("injected stderr acquisition failure")
+                return real_open(path, *args, **kwargs)
+
+            descriptors_before = len(os.listdir("/proc/self/fd"))
+            with mock.patch.object(
+                campaign.os, "open", side_effect=reject_stderr
+            ):
+                with self.assertRaisesRegex(
+                    OSError, "injected stderr acquisition failure"
+                ):
+                    recorder.run(
+                        "verification",
+                        ["/usr/bin/true"],
+                        Path("/tmp"),
+                        "synthetic_stderr_failure",
+                        environment,
+                        timeout=5.0,
+                    )
+            self.assertEqual(
+                len(os.listdir("/proc/self/fd")), descriptors_before
+            )
 
         with tempfile.TemporaryDirectory(
                 prefix="cp2-campaign-process-timeout-", dir="/tmp") as raw:
@@ -346,6 +1313,107 @@ class RecordedCampaignTests(unittest.TestCase):
             self._assert_group_absent(parent_pid)
             self.assertFalse(Path("/proc/{}".format(parent_pid)).exists())
             self.assertFalse(Path("/proc/{}".format(child_pid)).exists())
+
+            trusted_partial = root / "trusted-partial"
+            trusted_partial.mkdir()
+            verifier_owner = campaign.OwnedTemporaryWorkspace.create(
+                "schurvio-cp2-final-verifier-"
+            )
+            delayed_path = verifier_owner.path / "delayed-mutation"
+            sentinel_path = root / "unrelated-inherited-fd"
+            sentinel_path.write_bytes(b"sentinel\n")
+            sentinel_fd = os.open(
+                str(sentinel_path), os.O_RDONLY | os.O_CLOEXEC
+            )
+            delayed_child = (
+                "import os,sys,time;"
+                "assert os.getsid(0)==os.getpid();"
+                "payload=(str(os.getpid())+' '+str(os.getsid(0))+' '+"
+                "os.readlink('/proc/self/ns/pid')+'\\n').encode('ascii');"
+                "os.write(int(sys.argv[1]),payload);"
+                "time.sleep(1.0);"
+                "open(sys.argv[2],'wb').write(b'delayed\\n');"
+                "os.write(1,b'DELAYED-STDOUT\\n')"
+            )
+            verifier.write_text(
+                "import os,subprocess,sys\n"
+                "status={}\n"
+                "for line in open('/proc/self/status',encoding='ascii'):\n"
+                "    if ':' in line:\n"
+                "        key,value=line.split(':',1);status[key]=value.strip()\n"
+                "assert os.getpid()==1\n"
+                "assert all(status.get(key)=='0000000000000000' for key in "
+                "('CapInh','CapPrm','CapEff','CapBnd','CapAmb'))\n"
+                "assert status.get('NoNewPrivs')=='1'\n"
+                "sentinel=" + repr(str(sentinel_path)) + "\n"
+                "for name in os.listdir('/proc/self/fd'):\n"
+                "    try: target=os.readlink('/proc/self/fd/'+name)\n"
+                "    except OSError: continue\n"
+                "    assert target!=sentinel\n"
+                "ready_read,ready_write=os.pipe()\n"
+                "child=subprocess.Popen([sys.executable,'-c'," +
+                repr(delayed_child) + ",str(ready_write)," +
+                repr(str(delayed_path)) + "],pass_fds=(ready_write,),"
+                "start_new_session=True)\n"
+                "os.close(ready_write)\n"
+                "with os.fdopen(ready_read,'rb') as stream:\n"
+                "    ready=stream.readline().decode('ascii').strip()\n"
+                "print('TRUSTED_DESCENDANT '+ready,flush=True)\n"
+                "partial=sys.argv[sys.argv.index('--verify-recorded')+1]\n"
+                "print('CP2-C recorded artifact independently verified: '+"
+                "partial,flush=True)\n",
+                encoding="utf-8",
+            )
+
+            class HeldVerifierAuthorization:
+                @staticmethod
+                def revalidate():
+                    return None
+
+                @staticmethod
+                def duplicate_source_fd(relative):
+                    if relative != "scripts/cp2/verify_report.py":
+                        raise campaign.CampaignError("unexpected held source")
+                    return os.open(
+                        str(verifier), os.O_RDONLY | os.O_CLOEXEC
+                    )
+
+            try:
+                campaign._trusted_parent_detached_verify_recorded(
+                    trusted_partial,
+                    "0" * 64,
+                    HeldVerifierAuthorization(),
+                    verifier_owner,
+                )
+                stdout_path = verifier_owner.path / "trusted-parent.stdout"
+                stdout_before_delay = stdout_path.read_bytes()
+                descendant_lines = [
+                    line for line in stdout_before_delay.decode("utf-8").splitlines()
+                    if line.startswith("TRUSTED_DESCENDANT ")
+                ]
+                self.assertEqual(len(descendant_lines), 1)
+                _, namespace_pid, session_id, namespace_identity = (
+                    descendant_lines[0].split()
+                )
+                self.assertEqual(namespace_pid, session_id)
+                self.assertEqual(namespace_pid, "2")
+                for namespace_path in Path("/proc").glob("[0-9]*/ns/pid"):
+                    try:
+                        observed_namespace = os.readlink(str(namespace_path))
+                    except OSError:
+                        continue
+                    self.assertNotEqual(
+                        observed_namespace, namespace_identity,
+                        "setsid verifier descendant survived namespace exit",
+                    )
+                self.assertFalse(delayed_path.exists())
+                time.sleep(1.25)
+                self.assertFalse(delayed_path.exists())
+                self.assertEqual(stdout_path.read_bytes(), stdout_before_delay)
+                self.assertNotIn(b"DELAYED-STDOUT", stdout_before_delay)
+            finally:
+                os.close(sentinel_fd)
+                verifier_owner.remove()
 
 
 if __name__ == "__main__":

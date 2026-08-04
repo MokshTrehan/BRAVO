@@ -16,6 +16,7 @@ finalization.
 
 from __future__ import annotations
 
+import ctypes
 from dataclasses import dataclass
 import datetime as _dt
 import errno
@@ -47,6 +48,28 @@ ENTRYPOINTS = (
 EXPECTED_BRANCH = "schurvio-lite/cp2-one-pass"
 CP1_AUTHORIZATION_COMMIT = "8d80f483752411d34a3bc4c1ff6330b3a5c0fef3"
 PREAUTHORIZATION_REGISTRY_PATH = "project/datasets.yaml"
+POSTAUTHORIZATION_OUTPUT_PARENT = "results/staging/cp2/recorded"
+POSTAUTHORIZATION_SOURCE_PATHS = (
+    "config/euroc_mav/estimator_config.yaml",
+    "config/euroc_mav/kalibr_imu_chain.yaml",
+    "config/euroc_mav/kalibr_imucam_chain.yaml",
+    "docs/cp2_artifact_schema.md",
+    "docs/cp2_c_composite_and_readiness_clarification.md",
+    "docs/cp2_c_detached_readiness_binding_clarification_proposed.md",
+    "docs/cp2_one_pass_contract.md",
+    "docs/cp2_predata_incident_log.md",
+    "docs/cp2_recorded_evidence_contract.md",
+    "docs/iterated_update_spec.md",
+    "project/cp1_gate.yaml",
+    "project/cp2_c_clarification_approval.json",
+    "project/cp2_c_detached_readiness_binding_approval.json",
+    "project/cp2_predata_incident_disposition_approval.json",
+    "project/cp2_gate.yaml",
+    "project/cp2_serial.launch",
+    "scripts/cp2/cp2_recorded_campaign.py",
+    "scripts/cp2/cp2_schema.py",
+    "scripts/cp2/verify_report.py",
+)
 PREVALIDATED_SOURCE_RECORD_TYPE = "cp2_prevalidated_unit_source_v1"
 DATA_LOCK_PATH = "/tmp/schurvio-lite-cp2-data.lock"
 SELF_TEST_TIMEOUT_SECONDS = 300.0
@@ -239,6 +262,86 @@ def _stat_signature(value: os.stat_result) -> Tuple[int, ...]:
 
 def _same_binding(before: os.stat_result, after: os.stat_result) -> bool:
     return _stat_signature(before) == _stat_signature(after)
+
+
+def _process_mount_namespace_identity() -> Tuple[int, int, int]:
+    """Bind a descriptor owner to one process and one mount namespace."""
+
+    namespace = os.stat("/proc/self/ns/mnt")
+    return (os.getpid(), namespace.st_dev, namespace.st_ino)
+
+
+def _descriptor_absolute_target(descriptor: int, label: str) -> str:
+    """Return the exact extant absolute pathname reported for one held fd."""
+
+    if isinstance(descriptor, bool) or not isinstance(descriptor, int) or descriptor < 0:
+        _fail(label + " descriptor is invalid")
+    target = os.readlink("/proc/self/fd/{}".format(descriptor))
+    if (
+        not target
+        or "\0" in target
+        or not os.path.isabs(target)
+        or os.path.normpath(target) != target
+    ):
+        _fail(label + " descriptor target is not normalized absolute")
+    return target
+
+
+def _descriptor_inventory_record(descriptor: int, label: str) -> Dict[str, Any]:
+    """Return an immutable-by-copy description of one owned capability fd."""
+
+    return {
+        "fd": descriptor,
+        "target": _descriptor_absolute_target(descriptor, label),
+        "stat_signature": _stat_signature(os.fstat(descriptor)),
+        "access_mode": fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE,
+        "close_on_exec": bool(
+            fcntl.fcntl(descriptor, fcntl.F_GETFD) & fcntl.FD_CLOEXEC
+        ),
+    }
+
+
+def _reopen_descriptor_on_current_mount(
+    descriptor: int, directory: bool, label: str
+) -> Tuple[int, str, Tuple[int, ...]]:
+    """Reopen a held object's exact pathname through the current mount tree."""
+
+    before = os.fstat(descriptor)
+    if stat.S_ISDIR(before.st_mode) != directory:
+        _fail(label + " descriptor type differs")
+    target = _descriptor_absolute_target(descriptor, label)
+    reopened = os.open(target, _directory_flags() if directory else _file_flags())
+    try:
+        after = os.fstat(reopened)
+        signature = _stat_signature(before)
+        if (
+            _stat_signature(after) != signature
+            or _stat_signature(os.fstat(descriptor)) != signature
+            or _descriptor_absolute_target(reopened, label + " rebound") != target
+        ):
+            _fail(label + " changed while rebinding its mount namespace")
+        return reopened, target, signature
+    except BaseException:
+        os.close(reopened)
+        raise
+
+
+def _directory_object_identity(value: os.stat_result) -> Tuple[int, ...]:
+    """Return directory fields that cannot legitimately change while populated."""
+
+    return (
+        value.st_dev,
+        value.st_ino,
+        stat.S_IFMT(value.st_mode),
+        value.st_uid,
+        value.st_gid,
+    )
+
+
+def _directory_signature_identity(value: Tuple[int, ...]) -> Tuple[int, ...]:
+    """Project a ``_stat_signature`` onto immutable directory identity fields."""
+
+    return (value[0], value[1], stat.S_IFMT(value[3]), value[4], value[5])
 
 
 def _read_fd(fd: int, maximum: Optional[int] = None) -> bytes:
@@ -889,6 +992,16 @@ class _BoundDirectory:
     signature: Tuple[int, ...]
 
 
+@dataclass(frozen=True)
+class AuthorizedOutputStaging:
+    """The one exact CP2-C output namespace opened after authorization."""
+
+    run_id: str
+    parent: Path
+    partial: Path
+    final: Path
+
+
 @dataclass
 class _OwnedRawProcess:
     """Mutable parent-side state for one raw-fork process-group lifecycle."""
@@ -946,6 +1059,8 @@ class _PrivateTreeSeal:
         self.root_signature = root_signature
         self.entries = entries
         self.attachment_paths = attachment_paths
+        self._descriptor_origin = _process_mount_namespace_identity()
+        self._worker_mount_namespace_rebound = False
         self._closed = False
 
     @staticmethod
@@ -1188,11 +1303,58 @@ class _PrivateTreeSeal:
         ):
             _fail("held private readiness root changed during revalidation")
 
+    def descriptor_inventory(self) -> Dict[str, Dict[str, Any]]:
+        """Expose the exact private-tree descriptors owned by this seal."""
+
+        if self._closed:
+            _fail("private readiness tree seal is closed")
+        return {
+            "private_tree.root": _descriptor_inventory_record(
+                self.root_fd, "private readiness root"
+            )
+        }
+
+    def rebind_worker_mount_namespace(
+        self,
+        attachments: Mapping[str, Path],
+        frozen_unit_artifact: Path,
+    ) -> None:
+        """Replace the inherited root fd with one opened on the worker mount."""
+
+        if self._closed:
+            _fail("private readiness tree seal is closed")
+        if self._worker_mount_namespace_rebound:
+            _fail("private readiness descriptors were already rebound")
+        current_origin = _process_mount_namespace_identity()
+        if (
+            current_origin[0] == self._descriptor_origin[0]
+            or current_origin[1:] == self._descriptor_origin[1:]
+        ):
+            _fail("private readiness rebinding requires a child mount namespace")
+        self.revalidate(attachments, frozen_unit_artifact)
+        original = self.root_fd
+        reopened, _, signature = _reopen_descriptor_on_current_mount(
+            original, True, "private readiness root"
+        )
+        try:
+            if signature != self.root_signature:
+                _fail("private readiness rebound identity differs from its seal")
+            self.root_fd = reopened
+            self._worker_mount_namespace_rebound = True
+            reopened = -1
+            os.close(original)
+            self.revalidate(attachments, frozen_unit_artifact)
+        finally:
+            if reopened >= 0:
+                os.close(reopened)
+
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        os.close(self.root_fd)
+        descriptor = self.root_fd
+        self.root_fd = -1
+        os.close(descriptor)
 
 
 class OpaqueGitRepository:
@@ -1223,6 +1385,15 @@ class OpaqueGitRepository:
         self._git_commands: List[Dict[str, Any]] = []
         self._git_outputs: Dict[str, bytes] = {}
         self._registry_read = False
+        self._postauthorization_output_relative: Optional[str] = None
+        self._postauthorization_output_fd = -1
+        self._postauthorization_output_identity: Optional[Tuple[int, ...]] = None
+        self._postauthorization_output_created_ancestors: Tuple[str, ...] = ()
+        self._postauthorization_output_pre_namespace: Optional[
+            Dict[str, Tuple[int, ...]]
+        ] = None
+        self._descriptor_origin = _process_mount_namespace_identity()
+        self._worker_mount_namespace_rebound = False
         self._closed = False
         try:
             self._open_and_validate()
@@ -1234,18 +1405,46 @@ class OpaqueGitRepository:
         if self._closed:
             return
         self._closed = True
-        descriptors = [item.fd for item in self._bound_files]
-        descriptors.extend(item.fd for item in self._bound_directories)
-        descriptors.extend(item.fd for item in self._tracked_fds.values())
-        descriptors.extend((self._child_root_fd, self._child_git_fd, self.git_fd, self.root_fd))
+        descriptors: List[int] = []
+        for item in self._bound_files:
+            descriptors.append(item.fd)
+            item.fd = -1
+        for item in self._bound_directories:
+            descriptors.append(item.fd)
+            item.fd = -1
+        for item in self._tracked_fds.values():
+            descriptors.append(item.fd)
+            item.fd = -1
+        for attribute in (
+            "_postauthorization_output_fd",
+            "_child_root_fd",
+            "_child_git_fd",
+            "git_fd",
+            "root_fd",
+        ):
+            descriptors.append(getattr(self, attribute))
+            setattr(self, attribute, -1)
+
+        # Clear every ownership slot before the first close syscall.  A close
+        # may have taken effect even when an asynchronous BaseException is
+        # delivered immediately afterwards, so retrying that numeric fd could
+        # close an unrelated descriptor.  Still attempt every other distinct
+        # descriptor and report the first non-OSError interruption afterwards.
+        first_error: Optional[BaseException] = None
         seen = set()
         for descriptor in descriptors:
-            if descriptor >= 0 and descriptor not in seen:
-                seen.add(descriptor)
-                try:
-                    os.close(descriptor)
-                except OSError:
-                    pass
+            if descriptor < 0 or descriptor in seen:
+                continue
+            seen.add(descriptor)
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
     def __enter__(self) -> "OpaqueGitRepository":
         return self
@@ -1253,6 +1452,317 @@ class OpaqueGitRepository:
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
         del exc_type, exc, traceback
         self.close()
+
+    def _owned_descriptor_slots(
+        self,
+    ) -> List[Tuple[str, int, bool, Any, str]]:
+        """Return every descriptor-owning slot in a deterministic inventory."""
+
+        slots: List[Tuple[str, int, bool, Any, str]] = [
+            ("repository.root", self.root_fd, True, self, "root_fd"),
+            ("repository.git", self.git_fd, True, self, "git_fd"),
+            (
+                "repository.child_root",
+                self._child_root_fd,
+                True,
+                self,
+                "_child_root_fd",
+            ),
+            (
+                "repository.child_git",
+                self._child_git_fd,
+                True,
+                self,
+                "_child_git_fd",
+            ),
+        ]
+        for item in self._bound_files:
+            slots.append((
+                "repository.bound_file/" + item.relative,
+                item.fd,
+                False,
+                item,
+                "fd",
+            ))
+        for item in self._bound_directories:
+            slots.append((
+                "repository.bound_directory/" + item.relative,
+                item.fd,
+                True,
+                item,
+                "fd",
+            ))
+        for relative in sorted(
+            self._tracked_fds, key=lambda value: _utf8(value, "tracked fd path")
+        ):
+            item = self._tracked_fds[relative]
+            slots.append((
+                "repository.tracked_file/" + relative,
+                item.fd,
+                False,
+                item,
+                "fd",
+            ))
+        if self._postauthorization_output_fd >= 0:
+            slots.append((
+                "repository.output_partial",
+                self._postauthorization_output_fd,
+                True,
+                self,
+                "_postauthorization_output_fd",
+            ))
+        labels = [item[0] for item in slots]
+        descriptors = [item[1] for item in slots]
+        if (
+            any(descriptor < 0 for descriptor in descriptors)
+            or len(set(labels)) != len(labels)
+            or len(set(descriptors)) != len(descriptors)
+        ):
+            _fail("repository descriptor inventory is invalid or aliased")
+        return slots
+
+    def descriptor_inventory(self) -> Dict[str, Dict[str, Any]]:
+        """Expose every descriptor capability owned by the repository guard."""
+
+        if self._closed:
+            _fail("repository guard is closed")
+        return {
+            label: _descriptor_inventory_record(descriptor, label)
+            for label, descriptor, _, _, _ in self._owned_descriptor_slots()
+        }
+
+    def rebind_worker_mount_namespace(self) -> None:
+        """Atomically replace inherited fds with current-mount read handles."""
+
+        if self._closed:
+            _fail("repository guard is closed")
+        if self._worker_mount_namespace_rebound:
+            _fail("repository descriptors were already rebound")
+        current_origin = _process_mount_namespace_identity()
+        if (
+            current_origin[0] == self._descriptor_origin[0]
+            or current_origin[1:] == self._descriptor_origin[1:]
+        ):
+            _fail("repository rebinding requires a child mount namespace")
+        self._validate_bindings()
+        slots = self._owned_descriptor_slots()
+        reopened: List[
+            Tuple[Tuple[str, int, bool, Any, str], int, str, Tuple[int, ...]]
+        ] = []
+        committed = False
+        try:
+            for slot in slots:
+                label, descriptor, directory, _, _ = slot
+                rebound_fd, target, signature = _reopen_descriptor_on_current_mount(
+                    descriptor, directory, label
+                )
+                reopened.append((slot, rebound_fd, target, signature))
+            self._validate_bindings()
+            for slot, rebound_fd, target, signature in reopened:
+                label, descriptor, _, _, _ = slot
+                if (
+                    _stat_signature(os.fstat(descriptor)) != signature
+                    or _stat_signature(os.fstat(rebound_fd)) != signature
+                    or _descriptor_absolute_target(descriptor, label) != target
+                    or _descriptor_absolute_target(rebound_fd, label + " rebound")
+                    != target
+                ):
+                    _fail("repository descriptor changed during atomic rebinding")
+
+            for slot, rebound_fd, _, _ in reopened:
+                _, _, _, owner, attribute = slot
+                setattr(owner, attribute, rebound_fd)
+            self._worker_mount_namespace_rebound = True
+            committed = True
+
+            close_errors: List[BaseException] = []
+            for slot, _, _, _ in reopened:
+                try:
+                    os.close(slot[1])
+                except BaseException as exc:
+                    close_errors.append(exc)
+            if close_errors:
+                _fail("an inherited repository descriptor could not be closed")
+            self._validate_bindings()
+        finally:
+            if not committed:
+                for _, descriptor, _, _ in reopened:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+
+    def _output_staging_identity(
+        self, staging: AuthorizedOutputStaging
+    ) -> Tuple[int, ...]:
+        """Return the exact immutable identity of the registered hidden root."""
+
+        expected_parent = self.repo_root.joinpath(
+            *PurePosixPath(POSTAUTHORIZATION_OUTPUT_PARENT).parts
+        )
+        expected_relative = (
+            POSTAUTHORIZATION_OUTPUT_PARENT + "/" + staging.partial.name
+            if isinstance(staging, AuthorizedOutputStaging)
+            else None
+        )
+        if (
+            not isinstance(staging, AuthorizedOutputStaging)
+            or self._postauthorization_output_fd < 0
+            or self._postauthorization_output_identity is None
+            or self._postauthorization_output_relative != expected_relative
+            or staging.parent != expected_parent
+            or staging.partial.parent != expected_parent
+            or staging.final.parent != expected_parent
+            or staging.final.name != staging.run_id
+        ):
+            _fail("postauthorization output staging token differs")
+        self._validate_bindings()
+        held = os.fstat(self._postauthorization_output_fd)
+        by_path = os.lstat(str(staging.partial))
+        expected = self._postauthorization_output_identity
+        if (
+            not stat.S_ISDIR(held.st_mode)
+            or stat.S_ISLNK(by_path.st_mode)
+            or _directory_object_identity(held) != expected
+            or _directory_object_identity(by_path) != expected
+        ):
+            _fail("postauthorization output staging identity changed")
+        return expected
+
+    def _duplicate_output_partial_fd(
+        self, staging: AuthorizedOutputStaging
+    ) -> int:
+        """Duplicate the exact held partial for trusted-parent failure sealing."""
+
+        self._output_staging_identity(staging)
+        held = self._postauthorization_output_fd
+        descriptor = fcntl.fcntl(held, fcntl.F_DUPFD_CLOEXEC, 0)
+        try:
+            if _stat_signature(os.fstat(descriptor)) != _stat_signature(os.fstat(held)):
+                _fail("duplicated output-partial identity differs")
+            self._output_staging_identity(staging)
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def _output_publication_location(
+        self, staging: AuthorizedOutputStaging
+    ) -> Tuple[str, int]:
+        """Return the exact held root name and permission mode."""
+
+        expected_parent = self.repo_root.joinpath(
+            *PurePosixPath(POSTAUTHORIZATION_OUTPUT_PARENT).parts
+        )
+        partial_relative = (
+            POSTAUTHORIZATION_OUTPUT_PARENT + "/" + staging.partial.name
+            if isinstance(staging, AuthorizedOutputStaging)
+            else None
+        )
+        final_relative = (
+            POSTAUTHORIZATION_OUTPUT_PARENT + "/" + staging.final.name
+            if isinstance(staging, AuthorizedOutputStaging)
+            else None
+        )
+        if (
+            not isinstance(staging, AuthorizedOutputStaging)
+            or self._postauthorization_output_fd < 0
+            or self._postauthorization_output_identity is None
+            or self._postauthorization_output_relative
+            not in (partial_relative, final_relative)
+            or staging.parent != expected_parent
+            or staging.partial.parent != expected_parent
+            or staging.final.parent != expected_parent
+            or staging.final.name != staging.run_id
+        ):
+            _fail("postauthorization output publication token differs")
+        held = os.fstat(self._postauthorization_output_fd)
+        expected_identity = self._postauthorization_output_identity
+        if (
+            not stat.S_ISDIR(held.st_mode)
+            or _directory_object_identity(held) != expected_identity
+        ):
+            _fail("postauthorization output held identity changed")
+        location = (
+            "hidden"
+            if self._postauthorization_output_relative == partial_relative
+            else "published"
+        )
+        parent_relative = "worktree/" + POSTAUTHORIZATION_OUTPUT_PARENT
+        parents = [
+            bound for bound in self._bound_directories
+            if bound.relative == parent_relative
+        ]
+        if len(parents) != 1:
+            _fail("postauthorization output parent descriptor population differs")
+        parent_fd = fcntl.fcntl(
+            parents[0].fd, fcntl.F_DUPFD_CLOEXEC, 0
+        )
+        try:
+            parent_status = os.fstat(parent_fd)
+            if (
+                not stat.S_ISDIR(parent_status.st_mode)
+                or _directory_signature_identity(
+                    _stat_signature(parent_status)
+                )
+                != _directory_signature_identity(parents[0].signature)
+            ):
+                _fail("postauthorization output parent identity changed")
+            current_name = (
+                staging.partial.name
+                if location == "hidden"
+                else staging.final.name
+            )
+            other_name = (
+                staging.final.name
+                if location == "hidden"
+                else staging.partial.name
+            )
+            by_name = os.stat(
+                current_name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if (
+                stat.S_ISLNK(by_name.st_mode)
+                or not stat.S_ISDIR(by_name.st_mode)
+                or _directory_object_identity(by_name) != expected_identity
+                or stat.S_IMODE(by_name.st_mode) not in (0o555, 0o700)
+            ):
+                _fail("postauthorization output current-name binding changed")
+            try:
+                other_status = os.stat(
+                    other_name, dir_fd=parent_fd, follow_symlinks=False
+                )
+            except FileNotFoundError:
+                other_status = None
+            if (
+                other_status is not None
+                and _directory_object_identity(other_status)
+                == expected_identity
+            ):
+                _fail("postauthorization output inode is bound at both names")
+            return location, stat.S_IMODE(by_name.st_mode)
+        finally:
+            os.close(parent_fd)
+
+    def _duplicate_output_root_fd(
+        self, staging: AuthorizedOutputStaging
+    ) -> int:
+        """Duplicate the held output root at either authoritative name."""
+
+        location = self._output_publication_location(staging)
+        held = self._postauthorization_output_fd
+        descriptor = fcntl.fcntl(held, fcntl.F_DUPFD_CLOEXEC, 0)
+        try:
+            if _stat_signature(os.fstat(descriptor)) != _stat_signature(
+                os.fstat(held)
+            ):
+                _fail("duplicated output-root identity differs")
+            if self._output_publication_location(staging) != location:
+                _fail("output-root location changed during duplication")
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
 
     def _open_regular_at(
         self, parent_fd: int, name: str, relative: str, owner: int,
@@ -1582,6 +2092,11 @@ class OpaqueGitRepository:
                 if not allowed and not tracked and not prefix_only:
                     _fail("worktree gained an untracked source entry: " + relative)
                 status_value = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                if relative == self._postauthorization_output_relative:
+                    self._validate_postauthorization_output_binding(
+                        directory_fd, name, status_value
+                    )
+                    continue
                 result[relative] = _stat_signature(status_value)
                 if name == ".git" or (allowed and name in (".gitignore", ".gitattributes")):
                     _fail("worktree gained a forbidden control path: " + relative)
@@ -1610,6 +2125,1029 @@ class OpaqueGitRepository:
 
         walk(self.root_fd, "", False)
         return result
+
+    def _validate_postauthorization_output_binding(
+        self,
+        parent_fd: int,
+        name: str,
+        by_path: os.stat_result,
+    ) -> None:
+        """Validate the held root of the sole mutable postauthorization tree."""
+
+        if (
+            self._postauthorization_output_fd < 0
+            or self._postauthorization_output_identity is None
+        ):
+            _fail("postauthorization output binding is incomplete")
+        held = os.fstat(self._postauthorization_output_fd)
+        reopened_fd = os.open(name, _directory_flags(), dir_fd=parent_fd)
+        try:
+            reopened = os.fstat(reopened_fd)
+        finally:
+            os.close(reopened_fd)
+        expected = self._postauthorization_output_identity
+        if (
+            not stat.S_ISDIR(by_path.st_mode)
+            or not stat.S_ISDIR(held.st_mode)
+            or not stat.S_ISDIR(reopened.st_mode)
+            or _directory_object_identity(by_path) != expected
+            or _directory_object_identity(held) != expected
+            or _directory_object_identity(reopened) != expected
+            or stat.S_IMODE(by_path.st_mode) not in (0o555, 0o700)
+            or stat.S_IMODE(held.st_mode) != stat.S_IMODE(by_path.st_mode)
+            or stat.S_IMODE(reopened.st_mode) != stat.S_IMODE(by_path.st_mode)
+            or by_path.st_uid != os.geteuid()
+        ):
+            _fail("postauthorization output root identity/mode changed")
+
+    @staticmethod
+    def _validate_output_parent_component(
+        relative: str, value: os.stat_result
+    ) -> None:
+        if (
+            not stat.S_ISDIR(value.st_mode)
+            or value.st_uid != os.geteuid()
+            or value.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        ):
+            _fail("postauthorization output parent is unsafe: " + relative)
+
+    def _create_postauthorization_output_staging(
+        self, run_id: str
+    ) -> AuthorizedOutputStaging:
+        """Create and register the one CP2-C partial after the strict barrier."""
+
+        if (
+            not isinstance(run_id, str)
+            or SAFE_ID.fullmatch(run_id) is None
+            or "\0" in run_id
+        ):
+            _fail("postauthorization output run ID is unsafe")
+        if self._postauthorization_output_relative is not None:
+            _fail("postauthorization output capability was already consumed")
+        self._validate_bindings()
+        if self._root_signature is None:
+            _fail("repository root binding is unavailable")
+        before_namespace = dict(self._worktree_namespace)
+        before_root = self._root_signature
+        components = tuple(PurePosixPath(POSTAUTHORIZATION_OUTPUT_PARENT).parts)
+        opened: List[Tuple[str, int, bool]] = []
+        transferred_descriptors = set()
+        initial_bound_directory_count = len(self._bound_directories)
+        output_fd = -1
+        output_relative: Optional[str] = None
+        partial_name = ""
+        staging: Optional[AuthorizedOutputStaging] = None
+
+        def remove_just_created_empty_directory(
+            parent_descriptor: int,
+            name: str,
+            relative: str,
+            expected: Optional[os.stat_result],
+        ) -> None:
+            """Bind, validate, and remove one mkdir result after acquisition fails."""
+
+            cleanup_fd = os.open(
+                name, _directory_flags(), dir_fd=parent_descriptor
+            )
+            try:
+                held = os.fstat(cleanup_fd)
+                by_path = os.stat(
+                    name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    not stat.S_ISDIR(held.st_mode)
+                    or held.st_uid != os.geteuid()
+                    or stat.S_IMODE(held.st_mode) != 0o700
+                    or _directory_object_identity(held)
+                    != _directory_object_identity(by_path)
+                    or (
+                        expected is not None
+                        and (
+                            not _same_binding(expected, held)
+                            or not _same_binding(expected, by_path)
+                        )
+                    )
+                    or os.listdir(cleanup_fd)
+                ):
+                    _fail(
+                        "new output directory changed before acquisition "
+                        "rollback: " + relative
+                    )
+                os.rmdir(name, dir_fd=parent_descriptor)
+                if os.fstat(cleanup_fd).st_nlink != 0:
+                    _fail(
+                        "held output directory survived acquisition rollback: "
+                        + relative
+                    )
+                os.fsync(parent_descriptor)
+            finally:
+                os.close(cleanup_fd)
+
+        def rebaseline_after_local_rollback() -> None:
+            after_namespace = self._scan_worktree_namespace()
+            if set(after_namespace) != set(before_namespace):
+                _fail("worktree population differs after output-creation rollback")
+            ancestor_set = {relative for relative, _, _ in opened}
+            for relative, prior in before_namespace.items():
+                current = after_namespace[relative]
+                if relative not in ancestor_set:
+                    if current != prior:
+                        _fail(
+                            "unrelated worktree metadata changed during output rollback: "
+                            + relative
+                        )
+                elif (
+                    _directory_signature_identity(current)
+                    != _directory_signature_identity(prior)
+                    or current[3] != prior[3]
+                ):
+                    _fail("output ancestor identity changed during rollback: " + relative)
+            current_root_status = os.fstat(self.root_fd)
+            current_root_path = os.lstat(str(self.repo_root))
+            if not _same_binding(current_root_status, current_root_path):
+                _fail("repository root path changed during output rollback")
+            current_root = _stat_signature(current_root_status)
+            if (
+                _directory_signature_identity(current_root)
+                != _directory_signature_identity(before_root)
+                or current_root[3] != before_root[3]
+            ):
+                _fail("repository root identity changed during output rollback")
+            rebound = set()
+            for bound in self._bound_directories:
+                if not bound.relative.startswith("worktree/"):
+                    continue
+                relative = bound.relative[len("worktree/"):]
+                if relative in after_namespace and relative in ancestor_set:
+                    bound.signature = after_namespace[relative]
+                    rebound.add(relative)
+            expected_rebound = {
+                relative for relative in ancestor_set if relative in before_namespace
+            }
+            if rebound != expected_rebound:
+                _fail("output rollback ancestor descriptors are incomplete")
+            self._root_signature = current_root
+            self._worktree_namespace = dict(after_namespace)
+
+        def rollback_local_creation() -> None:
+            if partial_name:
+                if output_fd < 0:
+                    _fail("output rollback lacks the held partial descriptor")
+                held_output = os.fstat(output_fd)
+                parent_descriptor = opened[-1][1]
+                by_path = os.stat(
+                    partial_name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    _directory_object_identity(held_output)
+                    != _directory_object_identity(by_path)
+                    or os.listdir(output_fd)
+                ):
+                    _fail("output partial is nonempty or substituted during rollback")
+                os.rmdir(partial_name, dir_fd=parent_descriptor)
+                if os.fstat(output_fd).st_nlink != 0:
+                    _fail("held output partial survived creation rollback")
+                os.fsync(parent_descriptor)
+            for index in range(len(opened) - 1, -1, -1):
+                relative, descriptor, created = opened[index]
+                if not created:
+                    continue
+                parent_descriptor = self.root_fd if index == 0 else opened[index - 1][1]
+                leaf = PurePosixPath(relative).parts[-1]
+                held = os.fstat(descriptor)
+                by_path = os.stat(
+                    leaf, dir_fd=parent_descriptor, follow_symlinks=False
+                )
+                if (
+                    _directory_object_identity(held)
+                    != _directory_object_identity(by_path)
+                    or os.listdir(descriptor)
+                ):
+                    _fail("created output ancestor is nonempty or substituted: " + relative)
+                os.rmdir(leaf, dir_fd=parent_descriptor)
+                if os.fstat(descriptor).st_nlink != 0:
+                    _fail("held output ancestor survived rollback: " + relative)
+                os.fsync(parent_descriptor)
+            rebaseline_after_local_rollback()
+
+        try:
+            parent_fd = self.root_fd
+            prefix_parts: List[str] = []
+            for component in components:
+                prefix_parts.append(component)
+                relative = "/".join(prefix_parts)
+                created = False
+                before: Optional[os.stat_result] = None
+                try:
+                    before = os.stat(
+                        component, dir_fd=parent_fd, follow_symlinks=False
+                    )
+                except FileNotFoundError:
+                    try:
+                        os.mkdir(component, 0o700, dir_fd=parent_fd)
+                    except FileExistsError as exc:
+                        raise ReadinessError(
+                            "postauthorization output parent raced into existence: "
+                            + relative
+                        ) from exc
+                    except BaseException as mkdir_error:
+                        try:
+                            os.stat(
+                                component,
+                                dir_fd=parent_fd,
+                                follow_symlinks=False,
+                            )
+                        except FileNotFoundError:
+                            raise mkdir_error
+                        try:
+                            remove_just_created_empty_directory(
+                                parent_fd,
+                                component,
+                                relative,
+                                None,
+                            )
+                        except BaseException as cleanup_error:
+                            raise ReadinessError(
+                                "output-parent mkdir failed and exact rollback "
+                                "failed: " + str(cleanup_error)
+                            ) from mkdir_error
+                        raise mkdir_error
+                    created = True
+                try:
+                    before = os.stat(
+                        component, dir_fd=parent_fd, follow_symlinks=False
+                    )
+                    self._validate_output_parent_component(relative, before)
+                    child_fd = os.open(
+                        component, _directory_flags(), dir_fd=parent_fd
+                    )
+                except BaseException as acquisition_error:
+                    if created:
+                        try:
+                            remove_just_created_empty_directory(
+                                parent_fd,
+                                component,
+                                relative,
+                                before,
+                            )
+                        except BaseException as cleanup_error:
+                            raise ReadinessError(
+                                "output-parent acquisition failed and exact "
+                                "rollback failed: " + str(cleanup_error)
+                            ) from acquisition_error
+                    raise
+                if before is None:
+                    _fail("postauthorization output parent status is unavailable")
+                opened.append((relative, child_fd, created))
+                after = os.fstat(child_fd)
+                if not _same_binding(before, after):
+                    _fail("postauthorization output parent changed: " + relative)
+                parent_fd = child_fd
+
+            try:
+                os.stat(run_id, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                _fail("recorded final destination already exists")
+
+            for _ in range(128):
+                candidate = ".{}.partial.{}".format(run_id, os.urandom(16).hex())
+                try:
+                    os.mkdir(candidate, 0o700, dir_fd=parent_fd)
+                except FileExistsError:
+                    continue
+                except BaseException as mkdir_error:
+                    try:
+                        os.stat(
+                            candidate,
+                            dir_fd=parent_fd,
+                            follow_symlinks=False,
+                        )
+                    except FileNotFoundError:
+                        raise mkdir_error
+                    candidate_relative = (
+                        POSTAUTHORIZATION_OUTPUT_PARENT + "/" + candidate
+                    )
+                    try:
+                        remove_just_created_empty_directory(
+                            parent_fd,
+                            candidate,
+                            candidate_relative,
+                            None,
+                        )
+                    except BaseException as cleanup_error:
+                        raise ReadinessError(
+                            "output-partial mkdir failed and exact rollback "
+                            "failed: " + str(cleanup_error)
+                        ) from mkdir_error
+                    raise mkdir_error
+                partial_name = candidate
+                break
+            if not partial_name:
+                _fail("could not allocate a unique recorded partial directory")
+            output_relative = POSTAUTHORIZATION_OUTPUT_PARENT + "/" + partial_name
+            output_before: Optional[os.stat_result] = None
+            try:
+                output_before = os.stat(
+                    partial_name, dir_fd=parent_fd, follow_symlinks=False
+                )
+                if (
+                    not stat.S_ISDIR(output_before.st_mode)
+                    or output_before.st_uid != os.geteuid()
+                    or stat.S_IMODE(output_before.st_mode) != 0o700
+                ):
+                    _fail("new postauthorization output partial is unsafe")
+                output_fd = os.open(
+                    partial_name, _directory_flags(), dir_fd=parent_fd
+                )
+            except BaseException as acquisition_error:
+                try:
+                    remove_just_created_empty_directory(
+                        parent_fd,
+                        partial_name,
+                        output_relative,
+                        output_before,
+                    )
+                    partial_name = ""
+                except BaseException as cleanup_error:
+                    raise ReadinessError(
+                        "output-partial acquisition failed and exact rollback "
+                        "failed: " + str(cleanup_error)
+                    ) from acquisition_error
+                raise
+            if output_before is None:
+                _fail("postauthorization output partial status is unavailable")
+            if not _same_binding(output_before, os.fstat(output_fd)):
+                _fail("new postauthorization output partial changed while opening")
+            after_namespace = self._scan_worktree_namespace()
+            after_root_status = os.fstat(self.root_fd)
+            after_root_path = os.lstat(str(self.repo_root))
+            if not _same_binding(after_root_status, after_root_path):
+                _fail("repository root path changed during output registration")
+            after_root = _stat_signature(after_root_status)
+            if "results" in before_namespace:
+                if after_root != before_root:
+                    _fail("repository root changed during nested output creation")
+            elif (
+                _directory_signature_identity(after_root)
+                != _directory_signature_identity(before_root)
+                or after_root[3] != before_root[3]
+            ):
+                _fail("repository root identity changed during output creation")
+
+            ancestor_set = {relative for relative, _, _ in opened}
+            allowed_changes = ancestor_set | {output_relative}
+            for relative in set(before_namespace) | set(after_namespace):
+                before_signature = before_namespace.get(relative)
+                after_signature = after_namespace.get(relative)
+                if relative not in allowed_changes:
+                    if before_signature != after_signature:
+                        _fail(
+                            "unrelated worktree namespace changed during output creation: "
+                            + relative
+                        )
+                    continue
+                if relative == output_relative:
+                    if (
+                        before_signature is not None
+                        or after_signature != _stat_signature(output_before)
+                    ):
+                        _fail("postauthorization output partial transition differs")
+                    continue
+                if after_signature is None:
+                    _fail("postauthorization output parent disappeared: " + relative)
+                if before_signature is not None:
+                    same_identity = (
+                        _directory_signature_identity(before_signature)
+                        == _directory_signature_identity(after_signature)
+                    )
+                    if (
+                        not same_identity
+                        or after_signature[3] != before_signature[3]
+                    ):
+                        _fail(
+                            "postauthorization output parent identity changed: "
+                            + relative
+                        )
+                elif stat.S_IMODE(after_signature[3]) != 0o700:
+                    _fail("new postauthorization output parent mode differs")
+
+            after_by_relative = {
+                relative: after_namespace[relative] for relative in ancestor_set
+            }
+            existing_ancestors = {
+                relative for relative in ancestor_set if relative in before_namespace
+            }
+            rebound_ancestors = set()
+            for bound in self._bound_directories:
+                if not bound.relative.startswith("worktree/"):
+                    continue
+                relative = bound.relative[len("worktree/"):]
+                if relative in existing_ancestors:
+                    bound.signature = after_by_relative[relative]
+                    rebound_ancestors.add(relative)
+            if rebound_ancestors != existing_ancestors:
+                _fail("existing output-parent descriptors are incomplete")
+
+            # Allocate every fallible transition object before repository
+            # capability state or descriptor ownership is committed.
+            new_bound_directories = tuple(
+                _BoundDirectory(
+                    "worktree/" + relative,
+                    descriptor,
+                    after_by_relative[relative],
+                )
+                for relative, descriptor, created in opened
+                if created
+            )
+            created_ancestors = tuple(
+                relative for relative, _, created in opened if created
+            )
+            output_identity = _directory_object_identity(output_before)
+            registered_namespace = {
+                relative: signature
+                for relative, signature in after_namespace.items()
+                if relative != output_relative
+            }
+            parent = self.repo_root.joinpath(*components)
+            staging = AuthorizedOutputStaging(
+                run_id=run_id,
+                parent=parent,
+                partial=parent / partial_name,
+                final=parent / run_id,
+            )
+
+            self._bound_directories.extend(new_bound_directories)
+            transferred_descriptors.update(
+                item.fd for item in new_bound_directories
+            )
+
+            self._root_signature = after_root
+            self._worktree_namespace = registered_namespace
+            self._postauthorization_output_fd = output_fd
+            self._postauthorization_output_identity = output_identity
+            self._postauthorization_output_created_ancestors = (
+                created_ancestors
+            )
+            self._postauthorization_output_pre_namespace = before_namespace
+            # This is the registration commit marker.  All fields it guards
+            # are populated before the mutable subtree becomes scan-exempt.
+            self._postauthorization_output_relative = output_relative
+            output_fd = -1
+            return staging
+        except BaseException as original_error:
+            try:
+                if self._postauthorization_output_relative is None:
+                    appended = self._bound_directories[
+                        initial_bound_directory_count:
+                    ]
+                    del self._bound_directories[
+                        initial_bound_directory_count:
+                    ]
+                    for item in appended:
+                        transferred_descriptors.discard(item.fd)
+                    self._postauthorization_output_fd = -1
+                    self._postauthorization_output_identity = None
+                    self._postauthorization_output_created_ancestors = ()
+                    self._postauthorization_output_pre_namespace = None
+                    rollback_local_creation()
+                else:
+                    if staging is None:
+                        _fail(
+                            "registered output creation lacks its rollback token"
+                        )
+                    if output_fd == self._postauthorization_output_fd:
+                        output_fd = -1
+                    self._rollback_empty_postauthorization_output(staging)
+            except BaseException as rollback_error:
+                raise ReadinessError(
+                    "output creation failed and exact rollback failed: "
+                    + str(rollback_error)
+                ) from original_error
+            raise
+        finally:
+            for _, descriptor, _ in opened:
+                if descriptor in transferred_descriptors:
+                    continue
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            if output_fd >= 0:
+                os.close(output_fd)
+
+    def _rollback_empty_postauthorization_output(
+        self, staging: AuthorizedOutputStaging
+    ) -> None:
+        """Remove a just-created, still-empty output registration exactly."""
+
+        expected_relative = self._postauthorization_output_relative
+        pre_namespace = self._postauthorization_output_pre_namespace
+        created_ancestors = self._postauthorization_output_created_ancestors
+        expected_parent = self.repo_root.joinpath(
+            *PurePosixPath(POSTAUTHORIZATION_OUTPUT_PARENT).parts
+        )
+        if (
+            not isinstance(staging, AuthorizedOutputStaging)
+            or expected_relative is None
+            or pre_namespace is None
+            or self._postauthorization_output_fd < 0
+            or staging.parent != expected_parent
+            or expected_relative
+            != POSTAUTHORIZATION_OUTPUT_PARENT + "/" + staging.partial.name
+        ):
+            _fail("empty output rollback token differs from the registration")
+        output_fd = self._postauthorization_output_fd
+        parent_fd = self._open_relative_directory(
+            self.root_fd, PurePosixPath(POSTAUTHORIZATION_OUTPUT_PARENT).parts
+        )
+        try:
+            held = os.fstat(output_fd)
+            by_path = os.stat(
+                staging.partial.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if (
+                _directory_object_identity(held)
+                != self._postauthorization_output_identity
+                or _directory_object_identity(by_path)
+                != self._postauthorization_output_identity
+                or stat.S_IMODE(held.st_mode) != 0o700
+                or stat.S_IMODE(by_path.st_mode) != 0o700
+                or os.listdir(output_fd)
+            ):
+                _fail("registered output is nonempty or substituted during rollback")
+            os.rmdir(staging.partial.name, dir_fd=parent_fd)
+            if os.fstat(output_fd).st_nlink != 0:
+                _fail("held registered output survived rollback")
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+
+        os.close(output_fd)
+        self._postauthorization_output_fd = -1
+        self._postauthorization_output_relative = None
+        self._postauthorization_output_identity = None
+
+        for relative in reversed(created_ancestors):
+            matches = [
+                item
+                for item in self._bound_directories
+                if item.relative == "worktree/" + relative
+            ]
+            if len(matches) != 1:
+                _fail("created output ancestor descriptor population differs")
+            bound = matches[0]
+            parts = PurePosixPath(relative).parts
+            ancestor_parent = (
+                os.dup(self.root_fd)
+                if len(parts) == 1
+                else self._open_relative_directory(self.root_fd, parts[:-1])
+            )
+            try:
+                held = os.fstat(bound.fd)
+                by_path = os.stat(
+                    parts[-1],
+                    dir_fd=ancestor_parent,
+                    follow_symlinks=False,
+                )
+                if (
+                    _directory_object_identity(held)
+                    != _directory_object_identity(by_path)
+                    or os.listdir(bound.fd)
+                ):
+                    _fail("created output ancestor is nonempty or substituted: " + relative)
+                os.rmdir(parts[-1], dir_fd=ancestor_parent)
+                if os.fstat(bound.fd).st_nlink != 0:
+                    _fail(
+                        "held created output ancestor survived rollback: "
+                        + relative
+                    )
+                os.fsync(ancestor_parent)
+            finally:
+                os.close(ancestor_parent)
+            os.close(bound.fd)
+            self._bound_directories.remove(bound)
+
+        after_namespace = self._scan_worktree_namespace()
+        if set(after_namespace) != set(pre_namespace):
+            _fail("worktree population differs after registered-output rollback")
+        ancestor_relatives = {
+            "/".join(PurePosixPath(POSTAUTHORIZATION_OUTPUT_PARENT).parts[:length])
+            for length in range(
+                1, len(PurePosixPath(POSTAUTHORIZATION_OUTPUT_PARENT).parts) + 1
+            )
+        }
+        for relative, prior in pre_namespace.items():
+            current = after_namespace[relative]
+            if relative not in ancestor_relatives:
+                if current != prior:
+                    _fail(
+                        "unrelated worktree metadata changed during registered rollback: "
+                        + relative
+                    )
+            elif (
+                _directory_signature_identity(current)
+                != _directory_signature_identity(prior)
+                or current[3] != prior[3]
+            ):
+                _fail("output ancestor identity changed during registered rollback")
+        root_status = os.fstat(self.root_fd)
+        root_path = os.lstat(str(self.repo_root))
+        if not _same_binding(root_status, root_path):
+            _fail("repository root path changed during registered rollback")
+        root_signature = _stat_signature(root_status)
+        if self._root_signature is None or (
+            _directory_signature_identity(root_signature)
+            != _directory_signature_identity(self._root_signature)
+            or root_signature[3] != self._root_signature[3]
+        ):
+            _fail("repository root identity changed during registered rollback")
+        expected_rebound = {
+            relative
+            for relative in ancestor_relatives
+            if relative in after_namespace
+        }
+        rebound = set()
+        for bound in self._bound_directories:
+            if not bound.relative.startswith("worktree/"):
+                continue
+            relative = bound.relative[len("worktree/"):]
+            if relative in expected_rebound:
+                bound.signature = after_namespace[relative]
+                rebound.add(relative)
+        if rebound != expected_rebound:
+            _fail("registered rollback ancestor descriptors are incomplete")
+        self._root_signature = root_signature
+        self._worktree_namespace = dict(after_namespace)
+        self._postauthorization_output_created_ancestors = ()
+        self._postauthorization_output_pre_namespace = None
+        self._validate_bindings()
+
+    @staticmethod
+    def _renameat2_noreplace(
+        parent_fd: int, source_name: str, destination_name: str
+    ) -> None:
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = getattr(libc, "renameat2", None)
+        if renameat2 is None:
+            _fail("renameat2 is unavailable; refusing an overwrite-racy fallback")
+        renameat2.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        renameat2.restype = ctypes.c_int
+        result = renameat2(
+            parent_fd,
+            os.fsencode(source_name),
+            parent_fd,
+            os.fsencode(destination_name),
+            1,
+        )
+        if result != 0:
+            value = ctypes.get_errno()
+            raise OSError(value, os.strerror(value), destination_name)
+
+    def _rebaseline_postauthorization_output_parent(
+        self, before_namespace: Mapping[str, Tuple[int, ...]]
+    ) -> None:
+        """Accept only the parent metadata delta caused by one exact rename."""
+
+        parent_relative = POSTAUTHORIZATION_OUTPUT_PARENT
+        after_namespace = self._scan_worktree_namespace()
+        for relative in set(before_namespace) | set(after_namespace):
+            before_signature = before_namespace.get(relative)
+            after_signature = after_namespace.get(relative)
+            if relative != parent_relative:
+                if before_signature != after_signature:
+                    _fail(
+                        "unrelated worktree namespace changed during output publication: "
+                        + relative
+                    )
+                continue
+            if (
+                before_signature is None
+                or after_signature is None
+                or _directory_signature_identity(before_signature)
+                != _directory_signature_identity(after_signature)
+                or before_signature[3] != after_signature[3]
+            ):
+                _fail("recorded output parent identity changed during publication")
+        rebound = 0
+        for bound in self._bound_directories:
+            if bound.relative == "worktree/" + parent_relative:
+                bound.signature = after_namespace[parent_relative]
+                rebound += 1
+        if rebound != 1:
+            _fail("recorded output parent descriptor population differs")
+        self._worktree_namespace = dict(after_namespace)
+
+    def _publish_postauthorization_output(
+        self, staging: AuthorizedOutputStaging
+    ) -> None:
+        """Atomically bind the held partial inode to its one final CP2-C name."""
+
+        if not isinstance(staging, AuthorizedOutputStaging):
+            _fail("postauthorization output publication token is invalid")
+        expected_partial_relative = self._postauthorization_output_relative
+        expected_parent = self.repo_root.joinpath(
+            *PurePosixPath(POSTAUTHORIZATION_OUTPUT_PARENT).parts
+        )
+        if (
+            expected_partial_relative is None
+            or self._postauthorization_output_fd < 0
+            or staging.parent != expected_parent
+            or staging.partial.parent != expected_parent
+            or staging.final.parent != expected_parent
+            or staging.final.name != staging.run_id
+            or expected_partial_relative
+            != POSTAUTHORIZATION_OUTPUT_PARENT + "/" + staging.partial.name
+        ):
+            _fail("postauthorization output publication token differs")
+        self._validate_bindings()
+        held = os.fstat(self._postauthorization_output_fd)
+        if (
+            not stat.S_ISDIR(held.st_mode)
+            or stat.S_IMODE(held.st_mode) != 0o555
+            or _directory_object_identity(held)
+            != self._postauthorization_output_identity
+        ):
+            _fail("only the sealed held output partial may be published")
+
+        parent_fd = self._open_relative_directory(
+            self.root_fd, PurePosixPath(POSTAUTHORIZATION_OUTPUT_PARENT).parts
+        )
+        renamed = False
+        before_namespace = dict(self._worktree_namespace)
+        final_relative = POSTAUTHORIZATION_OUTPUT_PARENT + "/" + staging.final.name
+        try:
+            partial_status = os.stat(
+                staging.partial.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if _directory_object_identity(partial_status) != (
+                self._postauthorization_output_identity
+            ):
+                _fail("held output partial path binding changed before publication")
+            try:
+                os.stat(staging.final.name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                _fail("recorded final destination already exists")
+            self._renameat2_noreplace(
+                parent_fd, staging.partial.name, staging.final.name
+            )
+            renamed = True
+            os.fsync(parent_fd)
+            try:
+                os.stat(staging.partial.name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                _fail("hidden output name remained after publication")
+            final_status = os.stat(
+                staging.final.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if (
+                _directory_object_identity(final_status)
+                != self._postauthorization_output_identity
+                or stat.S_IMODE(final_status.st_mode) != 0o555
+            ):
+                _fail("published output does not retain the held sealed inode")
+            self._postauthorization_output_relative = final_relative
+            self._rebaseline_postauthorization_output_parent(before_namespace)
+            self._validate_bindings()
+        except BaseException as original_error:
+            held_identity = self._postauthorization_output_identity
+            partial_is_held = False
+            final_is_held = False
+            try:
+                partial_after_error = os.stat(
+                    staging.partial.name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                partial_after_error = None
+            try:
+                final_after_error = os.stat(
+                    staging.final.name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                final_after_error = None
+            if partial_after_error is not None:
+                partial_is_held = (
+                    _directory_object_identity(partial_after_error)
+                    == held_identity
+                )
+            if final_after_error is not None:
+                final_is_held = (
+                    _directory_object_identity(final_after_error)
+                    == held_identity
+                )
+            if final_is_held and partial_after_error is None:
+                renamed = True
+                # Reconcile the authoritative name before attempting rollback.
+                # The forward rename may have completed immediately before an
+                # asynchronous exception, and later trusted-parent failure
+                # handling must still be able to bind the exact final inode.
+                self._postauthorization_output_relative = final_relative
+            elif partial_is_held and not final_is_held:
+                renamed = False
+                self._postauthorization_output_relative = (
+                    expected_partial_relative
+                )
+            else:
+                raise ReadinessError(
+                    "output publication failure left an irreconcilable held "
+                    "name binding"
+                ) from original_error
+            if renamed:
+                rollback_error: Optional[BaseException] = None
+                try:
+                    self._renameat2_noreplace(
+                        parent_fd, staging.final.name, staging.partial.name
+                    )
+                    os.fsync(parent_fd)
+                    self._postauthorization_output_relative = (
+                        expected_partial_relative
+                    )
+                    self._rebaseline_postauthorization_output_parent(
+                        before_namespace
+                    )
+                    self._validate_bindings()
+                except BaseException as exc:
+                    rollback_error = exc
+                if rollback_error is not None:
+                    # The rollback syscall itself may have completed before a
+                    # later fsync/rebaseline interruption.  Reconcile both
+                    # names again so publication-state and held-root queries
+                    # never depend on a stale Python-side location latch.
+                    try:
+                        partial_after_rollback = os.stat(
+                            staging.partial.name,
+                            dir_fd=parent_fd,
+                            follow_symlinks=False,
+                        )
+                    except FileNotFoundError:
+                        partial_after_rollback = None
+                    try:
+                        final_after_rollback = os.stat(
+                            staging.final.name,
+                            dir_fd=parent_fd,
+                            follow_symlinks=False,
+                        )
+                    except FileNotFoundError:
+                        final_after_rollback = None
+                    partial_is_held = (
+                        partial_after_rollback is not None
+                        and _directory_object_identity(partial_after_rollback)
+                        == held_identity
+                    )
+                    final_is_held = (
+                        final_after_rollback is not None
+                        and _directory_object_identity(final_after_rollback)
+                        == held_identity
+                    )
+                    if partial_is_held and not final_is_held:
+                        self._postauthorization_output_relative = (
+                            expected_partial_relative
+                        )
+                    elif final_is_held and not partial_is_held:
+                        self._postauthorization_output_relative = final_relative
+                    else:
+                        raise ReadinessError(
+                            "output publication rollback failure left an "
+                            "irreconcilable held name binding"
+                        ) from original_error
+                    raise ReadinessError(
+                        "output publication failed and exact rollback failed: "
+                        + type(rollback_error).__name__ + ": "
+                        + str(rollback_error)
+                    ) from original_error
+            raise
+        finally:
+            os.close(parent_fd)
+
+    def _rollback_published_postauthorization_output(
+        self, staging: AuthorizedOutputStaging
+    ) -> None:
+        """Restore the hidden name if authorization fails after publication."""
+
+        expected_parent = self.repo_root.joinpath(
+            *PurePosixPath(POSTAUTHORIZATION_OUTPUT_PARENT).parts
+        )
+        expected_final_relative = (
+            POSTAUTHORIZATION_OUTPUT_PARENT + "/" + staging.final.name
+        )
+        if (
+            not isinstance(staging, AuthorizedOutputStaging)
+            or self._postauthorization_output_fd < 0
+            or self._postauthorization_output_identity is None
+            or self._postauthorization_output_relative
+            != expected_final_relative
+            or staging.parent != expected_parent
+            or staging.partial.parent != expected_parent
+            or staging.final.parent != expected_parent
+            or staging.final.name != staging.run_id
+        ):
+            _fail("published-output rollback token differs")
+
+        parent_fd = self._open_relative_directory(
+            self.root_fd, PurePosixPath(POSTAUTHORIZATION_OUTPUT_PARENT).parts
+        )
+        before_namespace = dict(self._worktree_namespace)
+        partial_relative = (
+            POSTAUTHORIZATION_OUTPUT_PARENT + "/" + staging.partial.name
+        )
+        try:
+            held = os.fstat(self._postauthorization_output_fd)
+            final_status = os.stat(
+                staging.final.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(held.st_mode)
+                or stat.S_IMODE(held.st_mode) != 0o555
+                or _directory_object_identity(held)
+                != self._postauthorization_output_identity
+                or _directory_object_identity(final_status)
+                != self._postauthorization_output_identity
+            ):
+                _fail("published output changed before rollback")
+            try:
+                os.stat(
+                    staging.partial.name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                pass
+            else:
+                _fail("hidden output destination exists during rollback")
+            self._renameat2_noreplace(
+                parent_fd, staging.final.name, staging.partial.name
+            )
+            os.fsync(parent_fd)
+            self._postauthorization_output_relative = partial_relative
+            self._rebaseline_postauthorization_output_parent(before_namespace)
+            self._validate_bindings()
+        except BaseException as original_error:
+            # The rollback rename may have completed immediately before an
+            # fsync, latch-update, rebaseline, or validation interruption.
+            # Reconcile both names against the held inode before exposing the
+            # root to trusted-parent failure handling.
+            held_identity = self._postauthorization_output_identity
+            try:
+                partial_after_error = os.stat(
+                    staging.partial.name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                partial_after_error = None
+            try:
+                final_after_error = os.stat(
+                    staging.final.name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                final_after_error = None
+            partial_is_held = (
+                partial_after_error is not None
+                and _directory_object_identity(partial_after_error)
+                == held_identity
+            )
+            final_is_held = (
+                final_after_error is not None
+                and _directory_object_identity(final_after_error)
+                == held_identity
+            )
+            if partial_is_held and not final_is_held:
+                self._postauthorization_output_relative = partial_relative
+            elif final_is_held and not partial_is_held:
+                self._postauthorization_output_relative = (
+                    expected_final_relative
+                )
+            else:
+                raise ReadinessError(
+                    "published-output rollback failure left an irreconcilable "
+                    "held name binding"
+                ) from original_error
+            raise
+        finally:
+            os.close(parent_fd)
 
     def _git_environment(self) -> Dict[str, str]:
         home = self.temporary_root / "git-home"
@@ -1718,7 +3256,14 @@ class OpaqueGitRepository:
         return result
 
     def _validate_bindings(self) -> None:
-        if _stat_signature(os.fstat(self.root_fd)) != self._root_signature:
+        held_root = os.fstat(self.root_fd)
+        path_root = os.lstat(str(self.repo_root))
+        if (
+            _stat_signature(held_root) != self._root_signature
+            or _stat_signature(path_root) != self._root_signature
+            or not stat.S_ISDIR(held_root.st_mode)
+            or stat.S_ISLNK(path_root.st_mode)
+        ):
             _fail("repository root metadata changed")
         if _stat_signature(os.fstat(self.git_fd)) != self._git_signature:
             _fail("Git directory metadata changed")
@@ -2145,6 +3690,25 @@ class OpaqueGitRepository:
         descriptor = os.dup(held.fd)
         os.set_inheritable(descriptor, False)
         return descriptor
+
+    def _duplicate_postauthorization_source_fd(self, relative_path: str) -> int:
+        """Duplicate one held nonregistry leaf for an authorization capability."""
+
+        if relative_path == PREAUTHORIZATION_REGISTRY_PATH:
+            _fail("the registry is restricted to its single-read capability")
+        self._validate_bindings()
+        held = self._tracked_fds.get(relative_path)
+        if held is None or held.digest is None:
+            _fail("postauthorization source is not an exact held leaf: " + relative_path)
+        descriptor = os.dup(held.fd)
+        try:
+            os.set_inheritable(descriptor, False)
+            self._validate_bindings()
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
 
     def capture_source(self, root_tag: str = "source") -> bytes:
         self._validate_bindings()
@@ -3095,6 +4659,10 @@ class ReadinessAuthorization:
     repository: OpaqueGitRepository
     private_tree_seal: Optional[_PrivateTreeSeal]
     prebag_authorized: bool = True
+    _output_staging: Optional[AuthorizedOutputStaging] = None
+    _output_published: bool = False
+    _worker_transition_started: bool = False
+    _worker_mode: bool = False
     _closed: bool = False
 
     def revalidate(self) -> None:
@@ -3102,18 +4670,24 @@ class ReadinessAuthorization:
 
         if self._closed or not self.prebag_authorized:
             _fail("readiness authorization is closed")
-        lock_status = os.fstat(self.lock_fd)
-        path_status = os.lstat(str(self.lock_path))
-        if (
-            not stat.S_ISREG(lock_status.st_mode)
-            or stat.S_ISLNK(path_status.st_mode)
-            or not _same_binding(lock_status, path_status)
-            or lock_status.st_uid != os.geteuid()
-            or lock_status.st_nlink != 1
-            or stat.S_IMODE(lock_status.st_mode) != 0o600
-        ):
-            _fail("held data lock identity changed")
-        fcntl.flock(self.lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if self._worker_transition_started and not self._worker_mode:
+            _fail("readiness authorization worker transition is incomplete")
+        if self._worker_mode:
+            if self.lock_fd != -1:
+                _fail("worker authorization retained the data-lock capability")
+        else:
+            lock_status = os.fstat(self.lock_fd)
+            path_status = os.lstat(str(self.lock_path))
+            if (
+                not stat.S_ISREG(lock_status.st_mode)
+                or stat.S_ISLNK(path_status.st_mode)
+                or not _same_binding(lock_status, path_status)
+                or lock_status.st_uid != os.geteuid()
+                or lock_status.st_nlink != 1
+                or stat.S_IMODE(lock_status.st_mode) != 0o600
+            ):
+                _fail("held data lock identity changed")
+            fcntl.flock(self.lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         self.repository.revalidate()
         if self.private_tree_seal is None:
             _fail("readiness authorization lacks its private-tree seal")
@@ -3131,38 +4705,274 @@ class ReadinessAuthorization:
         self.revalidate()
         return content
 
+    def duplicate_source_fd(self, relative_path: str) -> int:
+        """Return one held approved nonregistry source leaf after step 8."""
+
+        if (
+            not isinstance(relative_path, str)
+            or relative_path not in POSTAUTHORIZATION_SOURCE_PATHS
+        ):
+            _fail("postauthorization source path is outside the exact allowlist")
+        self.revalidate()
+        descriptor = self.repository._duplicate_postauthorization_source_fd(
+            relative_path
+        )
+        try:
+            self.revalidate()
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def output_staging_identity(
+        self, staging: AuthorizedOutputStaging
+    ) -> Tuple[int, ...]:
+        """Return the immutable identity of the sole registered output root."""
+
+        if (
+            self._output_staging is None
+            or staging != self._output_staging
+            or self._output_published
+        ):
+            _fail("postauthorization output staging is not the live capability")
+        self.revalidate()
+        identity = self.repository._output_staging_identity(staging)
+        self.revalidate()
+        return identity
+
+    def duplicate_output_partial_fd(
+        self, staging: AuthorizedOutputStaging
+    ) -> int:
+        """Return a trusted-parent-owned duplicate of the exact output root."""
+
+        if self._worker_mode:
+            _fail("campaign worker may not duplicate the publication root")
+        self.output_staging_identity(staging)
+        descriptor = self.repository._duplicate_output_partial_fd(staging)
+        try:
+            self.revalidate()
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def output_publication_state(
+        self, staging: AuthorizedOutputStaging
+    ) -> str:
+        """Reconcile the held inode with the hidden/final commit state.
+
+        ``published`` is the sole durable success state.  A final-name inode
+        observed before this authorization completed its post-publication
+        checks is reported as ``published_uncommitted`` and remains a failure
+        root eligible for the trusted marker.
+        """
+
+        if self._closed or not self.prebag_authorized:
+            _fail("readiness authorization is closed")
+        if self._worker_mode:
+            _fail("campaign worker may not query publication state")
+        if self._output_staging is None or staging != self._output_staging:
+            _fail("postauthorization output publication token differs")
+        location, mode = self.repository._output_publication_location(staging)
+        if self._output_published and (
+            location != "published" or mode != 0o555
+        ):
+            _fail(
+                "committed output publication lost its sealed final binding"
+            )
+        state = (
+            "published"
+            if self._output_published
+            else (
+                "published_uncommitted"
+                if location == "published"
+                else "hidden"
+            )
+        )
+        return state
+
+    def duplicate_output_root_fd(
+        self, staging: AuthorizedOutputStaging
+    ) -> int:
+        """Duplicate the held root even after an interrupted final rename."""
+
+        if self._worker_mode:
+            _fail("campaign worker may not duplicate the publication root")
+        state = self.output_publication_state(staging)
+        descriptor = self.repository._duplicate_output_root_fd(staging)
+        try:
+            if self.output_publication_state(staging) != state:
+                _fail("output publication state changed during duplication")
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def current_output_publication_state(self) -> str:
+        """Return ``absent`` or the authoritative sole-output state."""
+
+        if self._closed or not self.prebag_authorized or self._worker_mode:
+            _fail("readiness authorization cannot report output state")
+        if self._output_staging is None:
+            return "absent"
+        return self.output_publication_state(self._output_staging)
+
+    def descriptor_inventory(self) -> Dict[str, Dict[str, Any]]:
+        """Expose every descriptor capability retained by this authorization."""
+
+        self.revalidate()
+        inventory = self.repository.descriptor_inventory()
+        if self.private_tree_seal is None:
+            _fail("readiness authorization lacks its private-tree seal")
+        for label, record in self.private_tree_seal.descriptor_inventory().items():
+            if label in inventory:
+                _fail("authorization descriptor labels are duplicated")
+            inventory[label] = record
+        if not self._worker_mode:
+            inventory["authorization.data_lock"] = _descriptor_inventory_record(
+                self.lock_fd, "readiness data lock"
+            )
+        descriptors = [record["fd"] for record in inventory.values()]
+        if len(set(descriptors)) != len(descriptors):
+            _fail("authorization descriptor inventory is aliased")
+        if self._worker_mode and any(
+            record["access_mode"] != os.O_RDONLY
+            or record["close_on_exec"] is not True
+            for record in inventory.values()
+        ):
+            _fail("worker authorization retained a writable or inheritable fd")
+        return inventory
+
+    def rebind_worker_mount_namespace(
+        self, staging: AuthorizedOutputStaging
+    ) -> None:
+        """Enter one-shot worker mode with only current-mount read handles."""
+
+        if self._worker_mode:
+            _fail("readiness authorization is already in worker mode")
+        expected_identity = self.output_staging_identity(staging)
+        if self.private_tree_seal is None:
+            _fail("readiness authorization lacks its private-tree seal")
+        current_origin = _process_mount_namespace_identity()
+        for label, origin in (
+            ("repository", self.repository._descriptor_origin),
+            ("private readiness", self.private_tree_seal._descriptor_origin),
+        ):
+            if current_origin[0] == origin[0] or current_origin[1:] == origin[1:]:
+                _fail(label + " worker transition requires a child mount namespace")
+        self._worker_transition_started = True
+        self.repository.rebind_worker_mount_namespace()
+        self.private_tree_seal.rebind_worker_mount_namespace(
+            self.attachments, self.frozen_unit_artifact
+        )
+        if self.repository._output_staging_identity(staging) != expected_identity:
+            _fail("output identity changed across worker descriptor rebinding")
+
+        inherited_lock = self.lock_fd
+        if inherited_lock < 0:
+            _fail("worker transition lacks its inherited data-lock descriptor")
+        os.close(inherited_lock)
+        try:
+            os.fstat(inherited_lock)
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise
+        else:
+            _fail("worker transition did not close its data-lock descriptor")
+        self.lock_fd = -1
+        self._worker_mode = True
+        self.descriptor_inventory()
+
+    def create_output_staging(self, run_id: str) -> AuthorizedOutputStaging:
+        """Consume the sole capability for an exact CP2-C output partial."""
+
+        if self._worker_mode:
+            _fail("campaign worker may not create an output staging root")
+        if self._output_staging is not None:
+            _fail("postauthorization output capability was already consumed")
+        self.revalidate()
+        staging = self.repository._create_postauthorization_output_staging(run_id)
+        self._output_staging = staging
+        try:
+            self.revalidate()
+        except BaseException as original_error:
+            try:
+                self.repository._rollback_empty_postauthorization_output(staging)
+                self._output_staging = None
+            except BaseException as rollback_error:
+                raise ReadinessError(
+                    "output authorization failed and exact rollback failed: "
+                    + str(rollback_error)
+                ) from original_error
+            raise
+        return staging
+
+    def publish_output(self, staging: AuthorizedOutputStaging) -> None:
+        """Publish the exact held partial once, without replacement."""
+
+        if self._worker_mode:
+            _fail("campaign worker may not publish an output staging root")
+        if (
+            self._output_staging is None
+            or staging != self._output_staging
+            or self._output_published
+        ):
+            _fail("postauthorization output publication is not authorized")
+        self.revalidate()
+        self.repository._publish_postauthorization_output(staging)
+        try:
+            self.revalidate()
+        except BaseException as original_error:
+            try:
+                self.repository._rollback_published_postauthorization_output(
+                    staging
+                )
+            except BaseException as rollback_error:
+                raise ReadinessError(
+                    "post-publication authorization failed and exact rollback "
+                    "failed: " + str(rollback_error)
+                ) from original_error
+            raise
+        self._output_published = True
+
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
         self.prebag_authorized = False
+        child_transition = self._worker_transition_started or self._worker_mode
         first_error: Optional[BaseException] = None
-        try:
-            fcntl.flock(self.lock_fd, fcntl.LOCK_UN)
-        except BaseException as exc:
-            first_error = exc
-        try:
-            os.close(self.lock_fd)
-        except BaseException as exc:
-            if first_error is None:
-                first_error = exc
+        if self.lock_fd >= 0:
+            lock_descriptor = self.lock_fd
+            self.lock_fd = -1
+            if not child_transition:
+                try:
+                    fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+                except BaseException as exc:
+                    first_error = exc
+            try:
+                os.close(lock_descriptor)
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
         try:
             self.repository.close()
         except BaseException as exc:
             if first_error is None:
                 first_error = exc
-        try:
-            _remove_private_tree(self.temporary_root, self.private_tree_seal)
-        except BaseException as exc:
-            if first_error is None:
-                first_error = exc
-        finally:
-            if self.private_tree_seal is not None:
-                try:
-                    self.private_tree_seal.close()
-                except BaseException as exc:
-                    if first_error is None:
-                        first_error = exc
+        if not child_transition:
+            try:
+                _remove_private_tree(self.temporary_root, self.private_tree_seal)
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if self.private_tree_seal is not None:
+            try:
+                self.private_tree_seal.close()
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
         if first_error is not None:
             raise first_error
 

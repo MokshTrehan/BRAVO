@@ -176,6 +176,8 @@ def select_pair_index_bytes(
         used.update((anchor_index, candidate_index))
     if len(rows) < 2:
         _fail("independent pair index has fewer than two selected rows")
+    if rows[-1]["cam0_record_time_ns"] <= rows[0]["cam0_record_time_ns"]:
+        _fail("independent pair index has no positive cam0 record duration")
     try:
         return schema.jsonl_bytes(rows)
     except schema.SchemaError as exc:
@@ -194,79 +196,12 @@ def project_serial_pairs_to_pair_index_bytes(
     independent extractor stdout for the same sequence.
     """
 
-    index = _u64(sequence_index, "serial projection sequence index")
-    if index >= len(runner.SEQUENCES) or runner.SEQUENCES[index] != sequence_id:
-        _fail("serial projection sequence identity differs from the frozen inventory")
-    if not isinstance(serial_pair_bytes, bytes):
-        _fail("serial projection input is not bytes")
     try:
-        decoded = schema.strict_jsonl_loads(serial_pair_bytes)
-    except schema.SchemaError as exc:
-        raise SequenceActualError("serial projection input is not strict JSONL") from exc
-    projected: List[Mapping[str, Any]] = []
-    previous: Optional[Tuple[int, int]] = None
-    for row in decoded:
-        if not isinstance(row, Mapping) or set(row) != set(SERIAL_PAIR_KEYS):
-            _fail("serial projection row has the wrong exact key set")
-        if row["schema_version"] != 1 or row["record_type"] != "serial_pair":
-            _fail("serial projection row has the wrong schema identity")
-        row_sequence = _u64(row["sequence_index"], "serial projection row sequence")
-        pair_index = _u64(row["pair_index"], "serial projection row pair")
-        if (
-            row_sequence >= len(runner.SEQUENCES)
-            or row["sequence_id"] != runner.SEQUENCES[row_sequence]
-        ):
-            _fail("serial projection row has an invalid frozen sequence identity")
-        order = (row_sequence, pair_index)
-        if previous is not None and order <= previous:
-            _fail("serial projection rows are duplicate or globally out of order")
-        previous = order
-        for field in (
-            "anchor_filtered_index",
-            "anchor_camera_id",
-            "cam0_filtered_index",
-            "cam1_filtered_index",
-            "cam0_record_time_ns",
-            "cam1_record_time_ns",
-            "cam0_header_time_ns",
-            "cam1_header_time_ns",
-            "camera_timestamp_ns",
-            "absolute_record_delta_ns",
-        ):
-            _u64(row[field], "serial projection " + field)
-        if row["selected"] is not True:
-            _fail("serial projection row is not selected")
-        for field in (
-            "enqueue_entered",
-            "enqueue_returned",
-            "processing_entered",
-            "processing_returned",
-        ):
-            if not isinstance(row[field], bool):
-                _fail("serial projection event flag is not Boolean")
-        if not isinstance(row["enqueue_status"], str) or not isinstance(
-            row["processing_status"], str
-        ):
-            _fail("serial projection status is not a string")
-        invocation_ids = row["updater_invocation_ids"]
-        if not isinstance(invocation_ids, list):
-            _fail("serial projection invocation IDs are invalid")
-        normalized_invocations = [
-            _u64(invocation_id, "serial projection invocation ID")
-            for invocation_id in invocation_ids
-        ]
-        if len(normalized_invocations) != len(set(normalized_invocations)):
-            _fail("serial projection invocation IDs are invalid")
-        if row_sequence == index:
-            source = {key: row[key] for key in runner.PAIR_KEYS}
-            source["record_type"] = "pair_index"
-            projected.append(source)
-    try:
-        payload = schema.jsonl_bytes(projected)
-        runner._validate_pairs(payload, index, sequence_id)
-    except (schema.SchemaError, runner.SequenceRunnerError) as exc:
-        raise SequenceActualError("projected serial-pair population is invalid") from exc
-    return payload
+        return campaign._project_serial_pairs_to_pair_index_bytes(
+            serial_pair_bytes, sequence_index, sequence_id
+        )
+    except campaign.CampaignError as exc:
+        raise SequenceActualError(str(exc)) from exc
 
 
 def parse_ground_truth_tum_bytes(payload: bytes) -> Tuple[runner.GroundTruthPose, ...]:
@@ -433,72 +368,18 @@ def _run_pair_index_command(
 ) -> bytes:
     """Retain the independent index as exact stdout from fresh source."""
 
-    authorization.revalidate()
-    bound_bag.revalidate()
-    helper = Path(build["source_space"]) / "scripts/cp2/cp2_pair_index_extract.py"
-    helper_status = helper.lstat()
-    if not stat.S_ISREG(helper_status.st_mode) or helper_status.st_nlink != 1:
-        _fail("fresh source lacks the pair-index subprocess helper")
-    environment = {
-        PAIR_INDEX_POSTAUTH_ENV: PAIR_INDEX_POSTAUTH_VALUE,
-        "LANG": "C.UTF-8",
-        "LC_ALL": "C.UTF-8",
-        "PATH": "/usr/bin:/bin",
-        "PYTHONDONTWRITEBYTECODE": "1",
-        "PYTHONNOUSERSITE": "1",
-        "PYTHONPATH": "/opt/ros/noetic/lib/python3/dist-packages",
-    }
-    argv = [
-        "/usr/bin/python3",
-        "-I",
-        "-B",
-        str(helper),
-        "--sequence-index",
-        str(sequence_index),
-        "--sequence-id",
-        runner.SEQUENCES[sequence_index],
-        "--bag-path",
-        str(bound_bag.path),
-        "--parent-bag-fd",
-        str(bound_bag.descriptor),
-        "--bag-identity",
-        _bag_identity_argument(bound_bag.identity),
-    ]
-    command = recorder.run(
-        "pair_index",
-        argv,
-        Path(repo_root),
-        "pair_index_v1",
-        environment,
-        sequence_index=sequence_index,
-    )
-    authorization.revalidate()
-    bound_bag.revalidate()
-    if command["exit_code"] != 0 or command["timed_out"]:
-        _fail("independent pair-index subprocess failed")
-    stdout_path = partial / command["stdout"]
-    stderr_path = partial / command["stderr"]
-    for label, path in (("stdout", stdout_path), ("stderr", stderr_path)):
-        status_value = path.lstat()
-        if not stat.S_ISREG(status_value.st_mode) or status_value.st_nlink != 1:
-            _fail("pair-index subprocess " + label + " is unsafe")
-        if schema.sha256_file(path) != command[label + "_sha256"]:
-            _fail("pair-index subprocess " + label + " digest differs")
-    stdout = stdout_path.read_bytes()
-    if stderr_path.read_bytes() != b"":
-        _fail("successful pair-index subprocess wrote diagnostics")
     try:
-        rows = schema.strict_jsonl_loads(stdout)
-        if schema.jsonl_bytes(rows) != stdout:
-            _fail("pair-index subprocess stdout is not canonical JSONL")
-        runner._validate_pairs(
-            stdout, sequence_index, runner.SEQUENCES[sequence_index]
+        return campaign._run_pair_index_command(
+            repo_root=repo_root,
+            partial=partial,
+            build=build,
+            recorder=recorder,
+            authorization=authorization,
+            bound_bag=bound_bag,
+            sequence_index=sequence_index,
         )
-    except (schema.SchemaError, runner.SequenceRunnerError) as exc:
-        raise SequenceActualError("pair-index subprocess stdout is invalid") from exc
-    authorization.revalidate()
-    bound_bag.revalidate()
-    return stdout
+    except campaign.CampaignError as exc:
+        raise SequenceActualError(str(exc)) from exc
 
 
 def _held_source_bytes(repository: Any, relative: str) -> bytes:
@@ -884,7 +765,7 @@ def _provenance_base(
     contracts = [
         {
             "path": relative,
-            "sha256": campaign._held_source_hash(authorization.repository, relative),
+            "sha256": campaign._held_source_hash(authorization, relative),
         }
         for relative in campaign.CONTRACT_INPUTS
     ]
@@ -1178,6 +1059,7 @@ def execute_authorized_sequence(
     os.chmod(str(partial), 0o700)
     bound_bag: Optional[campaign.BoundRegularFile] = None
     bound_ground_truth: Optional[campaign.BoundRegularFile] = None
+    workspace_owner: Optional[campaign.OwnedTemporaryWorkspace] = None
     try:
         authorization.revalidate()
         bound_bag = campaign._bind_regular_file(Path(resolved_input.bag_path))
@@ -1241,6 +1123,10 @@ def execute_authorized_sequence(
             recorder,
             source_commit,
         )
+        candidate_owner = build.get("workspace_owner")
+        if not isinstance(candidate_owner, campaign.OwnedTemporaryWorkspace):
+            _fail("runtime build did not return its private-workspace owner")
+        workspace_owner = candidate_owner
         executable_before = schema.sha256_file(build["executable"])
         executable_build_id, executable_soname = campaign._elf_identity(
             Path(build["executable"]).absolute(), require_soname=False
@@ -1339,6 +1225,9 @@ def execute_authorized_sequence(
             _fail("detached CP2-D verifier did not pass")
         if runner._snapshot_tree(partial) != before:
             _fail("artifact changed during detached verification")
+        workspace_owner.remove()
+        workspace_owner = None
+        authorization.revalidate()
         campaign._rename_noreplace(partial, final)
         return {"artifact": str(final), "manifest_sha256": result.manifest_sha256}
     except BaseException as exc:
@@ -1349,6 +1238,8 @@ def execute_authorized_sequence(
             bound_ground_truth.close()
         if bound_bag is not None:
             bound_bag.close()
+        if workspace_owner is not None:
+            workspace_owner.remove()
 
 
 __all__ = [

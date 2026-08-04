@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "record_type": "cp2_predata_incident_disposition_approval",
+  "reviewer": "Moksh Trehan",
+  "approved_utc": "2026-08-04T11:41:12Z",
+  "reviewed_commit": "46b3010ad5e77ea61f9a571ccb7842ea2e0f1979",
+  "document_path": "docs/cp2_predata_incident_log.md",
+  "document_git_blob": "644f35ba9e371ae27efc2827e146f8b69dab70fe",
+  "document_sha256": "5d1f8aa1728bedd6141a55c756ef9dc3bfd2d52e7480208c27a94324b321af56",
+  "approval_statement": "I, Moksh Trehan, acknowledge the 2026-08-04 math-audit registry/baseline-metadata incident and accept its disposition as recorded in docs/cp2_predata_incident_log.md at commit 46b3010ad5e77ea61f9a571ccb7842ea2e0f1979; no exposed or incident-derived value may influence CP2 implementation, thresholds, profiles, tests, execution choices, or evidence. My prior conditional CP2-C recorded-input authorization otherwise remains unchanged; no exceptions.",
+  "exceptions": []
+}

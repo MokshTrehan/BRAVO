@@ -13,6 +13,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -471,6 +472,15 @@ class SequenceAssemblyTests(unittest.TestCase):
             self.assertEqual(result.report["shared_timestamp_count"], 4)
             self.assertGreater(result.report["ate_nullspace_m"], 0.0)
             self.assertEqual(result.report["relative_ate_difference"], 0.0)
+            # Coverage is frozen in rosbag record time (1..4 seconds), while
+            # estimator/trajectory timestamps are cam0 headers (10..13).
+            for run in result.report["runs"]:
+                self.assertEqual(run["first_selected_timestamp_ns"], 1_000_000_000)
+                self.assertEqual(run["last_selected_timestamp_ns"], 4_000_000_000)
+                self.assertEqual(run["first_processed_timestamp_ns"], 1_000_000_000)
+                self.assertEqual(run["last_processed_timestamp_ns"], 4_000_000_000)
+                self.assertEqual(run["selected_duration_ns"], 3_000_000_000)
+                self.assertEqual(run["processed_duration_ns"], 3_000_000_000)
             manifest = (partial / "SHA256SUMS").read_bytes()
             self.assertEqual(digest(manifest), result.manifest_sha256)
             entries = schema.parse_manifest_bytes(manifest)
@@ -550,6 +560,29 @@ class SequenceAssemblyTests(unittest.TestCase):
                 runner.assemble_sequence_artifact(
                     partial,
                     replace(fixture.evidence(), modes=(incomplete, fixture.modes[1])),
+                )
+
+            callbacks = list(
+                schema.strict_jsonl_loads(fixture.modes[0].callback_bytes)
+            )
+            callbacks[0], callbacks[1] = callbacks[1], callbacks[0]
+            for callback_index, callback in enumerate(callbacks):
+                callback["callback_index"] = callback_index
+            permuted = replace(
+                fixture.modes[0],
+                callback_bytes=schema.jsonl_bytes(callbacks),
+            )
+            partial = Path(temporary) / "permuted-callbacks"
+            partial.mkdir()
+            with self.assertRaisesRegex(
+                runner.SequenceRunnerError, "callback/pair order differs"
+            ):
+                runner.assemble_sequence_artifact(
+                    partial,
+                    replace(
+                        fixture.evidence(),
+                        modes=(permuted, fixture.modes[1]),
+                    ),
                 )
 
     def test_nonallowlisted_parameter_drift_is_rejected(self):
@@ -643,6 +676,49 @@ class SequenceAssemblyTests(unittest.TestCase):
                 runner.build_verify_seal(staging, "synthetic-run", builder, mutating_verifier)
             self.assertFalse((staging / "synthetic-run").exists())
             self.assertEqual(list(staging.glob(".synthetic-run.partial.*")), [])
+
+    def test_postrename_directory_fsync_failure_rolls_back_publication(self):
+        with tempfile.TemporaryDirectory(
+            prefix="cp2-d-seal-fsync-", dir="/tmp"
+        ) as temporary:
+            fixture = SyntheticEvidence(temporary)
+            staging = Path(temporary) / "staging"
+
+            def builder(partial):
+                return runner.assemble_sequence_artifact(
+                    partial, fixture.evidence()
+                )
+
+            def verifier(partial, manifest_sha256):
+                del partial, manifest_sha256
+                return {"passed": True}
+
+            real_fsync_directory = runner._fsync_directory
+            call_count = 0
+
+            def fail_postrename(path):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 2:
+                    raise OSError("injected post-rename directory fsync failure")
+                return real_fsync_directory(path)
+
+            with mock.patch.object(
+                runner,
+                "_fsync_directory",
+                side_effect=fail_postrename,
+            ):
+                with self.assertRaisesRegex(
+                    OSError, "injected post-rename directory fsync failure"
+                ):
+                    runner.build_verify_seal(
+                        staging, "synthetic-run", builder, verifier
+                    )
+            self.assertGreaterEqual(call_count, 3)
+            self.assertFalse((staging / "synthetic-run").exists())
+            self.assertEqual(
+                list(staging.glob(".synthetic-run.partial.*")), []
+            )
 
 
 class BootstrapOrderingTests(unittest.TestCase):

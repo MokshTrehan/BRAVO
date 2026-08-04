@@ -417,6 +417,7 @@ SOURCE_INPUTS = {
     "docs/cp2_d_evaluator_precision_clarification_proposed.md",
     "docs/cp2_math_implementation_audit.md",
     "docs/cp2_one_pass_contract.md",
+    "docs/cp2_predata_incident_log.md",
     "docs/cp2_recorded_evidence_contract.md",
     "docs/iterated_update_spec.md",
     "docs/schurvio_lite_execution_plan.md",
@@ -512,6 +513,8 @@ SOURCE_INPUTS = {
     "project/cp0_baseline.json",
     "project/cp1_gate.yaml",
     "project/cp2_c_clarification_approval.json",
+    "project/cp2_c_detached_readiness_binding_approval.json",
+    "project/cp2_predata_incident_disposition_approval.json",
     "project/cp2_gate.yaml",
     "project/cp2_serial.launch",
     "scripts/cp0/bootstrap_ceres_1_14.sh",
@@ -554,11 +557,15 @@ SOURCE_INPUTS = {
 CONTRACT_INPUTS = {
     "docs/cp2_artifact_schema.md",
     "docs/cp2_c_composite_and_readiness_clarification.md",
+    "docs/cp2_c_detached_readiness_binding_clarification_proposed.md",
     "docs/cp2_one_pass_contract.md",
+    "docs/cp2_predata_incident_log.md",
     "docs/cp2_recorded_evidence_contract.md",
     "docs/iterated_update_spec.md",
     "project/cp1_gate.yaml",
     "project/cp2_c_clarification_approval.json",
+    "project/cp2_c_detached_readiness_binding_approval.json",
+    "project/cp2_predata_incident_disposition_approval.json",
     "project/cp2_gate.yaml",
 }
 CONFIG_INPUTS = {
@@ -579,9 +586,124 @@ FROZEN_CP2_C_APPROVAL_BINDING = {
         "git_blob": "90ac833f52ad8a8c6ea12ff86e3301a46b28d6e0",
         "sha256": "dd2232ec8ee6536c78b5971858efbb22d9965f121205f83a613c5b0ad0f69e66",
     },
+    "docs/cp2_c_detached_readiness_binding_clarification_proposed.md": {
+        "git_blob": "cd2ae23d9aef345457e86bb618f9611ace7b5e82",
+        "sha256": "d07edcfe2112d41e5328882708aaec6f57e3a80c9fb605e94c8094df080986b4",
+    },
+    "docs/cp2_predata_incident_log.md": {
+        "git_blob": "644f35ba9e371ae27efc2827e146f8b69dab70fe",
+        "sha256": "5d1f8aa1728bedd6141a55c756ef9dc3bfd2d52e7480208c27a94324b321af56",
+    },
     "project/cp2_c_clarification_approval.json": {
         "git_blob": "0307342411e06dff57d58d48bc4d829fca138686",
         "sha256": "e6a8a4e55f1e39fafd35e57114668c26f15690d3b20d8d99c34fee1285a9a3e7",
+    },
+    "project/cp2_c_detached_readiness_binding_approval.json": {
+        "git_blob": "dfc9e1ac59ab779451c48a5f9243fe43156cf492",
+        "sha256": "41dfe69b32f19a4be165aeb11292bd98822711ea10f9bb7de0c488b0ef22a768",
+    },
+    "project/cp2_predata_incident_disposition_approval.json": {
+        "git_blob": "c6c1a1b29324b31152cf038d6375fc216ca6f57c",
+        "sha256": "80d227032c77a060d4bae5b48c869cc207c999ab7e2f2259bc884767ca11412e",
+    },
+}
+FROZEN_CP2_C_APPROVAL_RECORDS = {
+    "project/cp2_c_clarification_approval.json": {
+        "schema_version": 1,
+        "record_type": "cp2_c_clarification_approval",
+        "reviewer": "Moksh Trehan",
+        "approved_utc": "2026-08-02T13:55:04Z",
+        "reviewed_commit": "b37eff6e5baa035175e1dde3cae52ee496ca9e2d",
+        "document_path": "docs/cp2_c_composite_and_readiness_clarification.md",
+        "document_git_blob": "90ac833f52ad8a8c6ea12ff86e3301a46b28d6e0",
+        "document_sha256": "dd2232ec8ee6536c78b5971858efbb22d9965f121205f83a613c5b0ad0f69e66",
+        "approval_statement": (
+            "jI, Moksh Trehan, approve the CP2-C composite, detached-commit, "
+            "failure-atomicity, exact-counter, finite-state, retained-gamma, "
+            "checked-arithmetic, opaque source-provenance, approval-binding, "
+            "and protecting-test clarification recorded at commit "
+            "b37eff6e5baa035175e1dde3cae52ee496ca9e2d in "
+            "docs/cp2_c_composite_and_readiness_clarification.md; no exceptions."
+        ),
+        "exceptions": [],
+    },
+    "project/cp2_c_detached_readiness_binding_approval.json": {
+        "schema_version": 1,
+        "record_type": "cp2_c_detached_readiness_binding_approval",
+        "reviewer": "Moksh Trehan",
+        "approved_utc": "2026-08-04T06:13:32Z",
+        "reviewed_commit": "0d71fee98499a10df4e92176709c1afe14077f90",
+        "document_path": (
+            "docs/cp2_c_detached_readiness_binding_clarification_proposed.md"
+        ),
+        "document_git_blob": "cd2ae23d9aef345457e86bb618f9611ace7b5e82",
+        "document_sha256": "d07edcfe2112d41e5328882708aaec6f57e3a80c9fb605e94c8094df080986b4",
+        "approval_statement": (
+            "I, Moksh Trehan, acknowledge every preauthorization incident and "
+            "accept the evidence dispositions recorded in "
+            "docs/cp2_predata_incident_log.md at commit "
+            "c2f3ad9c54ed126cc69526c76adb3134c3bf9545; no incident-derived value "
+            "may influence CP2 implementation, thresholds, profiles, or "
+            "execution choices.\n"
+            "I approve the complete CP2-C detached-readiness and "
+            "evidence-binding replacement in "
+            "docs/cp2_c_detached_readiness_binding_clarification_proposed.md "
+            "as reviewed at commit "
+            "0d71fee98499a10df4e92176709c1afe14077f90; no exceptions.\n"
+            "I select desktop x86_64 for CP2-D and retain the frozen "
+            "fixed-clock desktop checkpoint for CP2-E. Jetson work is "
+            "deferred beyond CP2.\n"
+            "I authorize a data-free, read-only inventory of this desktop’s "
+            "evaluator/direct-math candidates, CPU topology, affinity, "
+            "clock/governor/boost/thermal surfaces, and corresponding "
+            "license/source material solely to prepare exact CP2-D capsule "
+            "and CP2-E profile candidates. This does not authorize network "
+            "installation, recorded-input access, or changing any host control.\n"
+            "After the approval-bound unit gate and readiness barrier pass, I "
+            "authorize frozen recorded-input access for CP2-C. CP2-D/E "
+            "recorded execution remains unauthorized until I approve their "
+            "exact committed capsule/profile identities. No exceptions.\n\n"
+            "go ahead and execute your plan"
+        ),
+        "exceptions": [],
+    },
+    "project/cp2_predata_incident_disposition_approval.json": {
+        "schema_version": 1,
+        "record_type": "cp2_predata_incident_disposition_approval",
+        "reviewer": "Moksh Trehan",
+        "approved_utc": "2026-08-04T11:41:12Z",
+        "reviewed_commit": "46b3010ad5e77ea61f9a571ccb7842ea2e0f1979",
+        "document_path": "docs/cp2_predata_incident_log.md",
+        "document_git_blob": "644f35ba9e371ae27efc2827e146f8b69dab70fe",
+        "document_sha256": "5d1f8aa1728bedd6141a55c756ef9dc3bfd2d52e7480208c27a94324b321af56",
+        "approval_statement": (
+            "I, Moksh Trehan, acknowledge the 2026-08-04 math-audit "
+            "registry/baseline-metadata incident and accept its disposition "
+            "as recorded in docs/cp2_predata_incident_log.md at commit "
+            "46b3010ad5e77ea61f9a571ccb7842ea2e0f1979; no exposed or "
+            "incident-derived value may influence CP2 implementation, "
+            "thresholds, profiles, tests, execution choices, or evidence. My "
+            "prior conditional CP2-C recorded-input authorization otherwise "
+            "remains unchanged; no exceptions."
+        ),
+        "exceptions": [],
+    },
+}
+FROZEN_CP2_C_HISTORICAL_BINDING = {
+    "docs/cp2_c_composite_and_readiness_clarification.md": {
+        "commit": "b37eff6e5baa035175e1dde3cae52ee496ca9e2d",
+        "git_blob": "90ac833f52ad8a8c6ea12ff86e3301a46b28d6e0",
+        "sha256": "dd2232ec8ee6536c78b5971858efbb22d9965f121205f83a613c5b0ad0f69e66",
+    },
+    "docs/cp2_c_detached_readiness_binding_clarification_proposed.md": {
+        "commit": "0d71fee98499a10df4e92176709c1afe14077f90",
+        "git_blob": "cd2ae23d9aef345457e86bb618f9611ace7b5e82",
+        "sha256": "d07edcfe2112d41e5328882708aaec6f57e3a80c9fb605e94c8094df080986b4",
+    },
+    "docs/cp2_predata_incident_log.md": {
+        "commit": "46b3010ad5e77ea61f9a571ccb7842ea2e0f1979",
+        "git_blob": "644f35ba9e371ae27efc2827e146f8b69dab70fe",
+        "sha256": "5d1f8aa1728bedd6141a55c756ef9dc3bfd2d52e7480208c27a94324b321af56",
     },
 }
 
@@ -791,7 +913,87 @@ def validate_cp2_c_approval_binding(input_hashes, git_blobs, errors):
             errors.append("CP2-C approval-binding Git blob mismatch: " + relative)
 
 
-def rename_path_noreplace(source, destination):
+def validate_cp2_c_approval_records(contents, errors):
+    """Require every frozen approval JSON record to equal its exact reviewed meaning."""
+
+    for relative, expected in FROZEN_CP2_C_APPROVAL_RECORDS.items():
+        content = contents.get(relative) if isinstance(contents, dict) else None
+        if not isinstance(content, bytes):
+            errors.append("CP2-C semantic approval record is missing: " + relative)
+            continue
+        try:
+            parsed = strict_json_bytes(content, relative)
+        except ValueError as exc:
+            errors.append(
+                "CP2-C semantic approval record is invalid: {}: {}".format(
+                    relative, exc
+                )
+            )
+            continue
+        if parsed != expected:
+            errors.append("CP2-C semantic approval record differs: " + relative)
+
+
+def validate_cp2_c_historical_observations(observations, errors):
+    """Validate exact commit/path observations made by the unit-time Git join."""
+
+    for relative, expected in FROZEN_CP2_C_HISTORICAL_BINDING.items():
+        observed = observations.get(relative) if isinstance(observations, dict) else None
+        if not isinstance(observed, dict):
+            errors.append("CP2-C historical binding is missing: " + relative)
+            continue
+        if observed.get("commit") != expected["commit"]:
+            errors.append("CP2-C historical commit mismatch: " + relative)
+        if observed.get("git_blob") != expected["git_blob"]:
+            errors.append("CP2-C historical Git blob mismatch: " + relative)
+        if observed.get("sha256") != expected["sha256"]:
+            errors.append("CP2-C historical SHA-256 mismatch: " + relative)
+
+
+def validate_cp2_c_historical_binding(repo_root, errors):
+    """Join each reviewed historical commit to its exact path/blob/content."""
+
+    observations = {}
+    for relative, expected in FROZEN_CP2_C_HISTORICAL_BINDING.items():
+        commit = expected["commit"]
+        try:
+            content = committed_blob(repo_root, commit, relative)
+            observed_blob = git_text(
+                repo_root, "rev-parse", commit + ":" + relative
+            )
+        except subprocess.CalledProcessError as exc:
+            errors.append(
+                "cannot verify CP2-C historical binding {}:{}: {}".format(
+                    commit, relative, exc
+                )
+            )
+            continue
+        observations[relative] = {
+            "commit": commit,
+            "git_blob": observed_blob,
+            "sha256": sha256_bytes(content),
+        }
+    validate_cp2_c_historical_observations(observations, errors)
+
+
+class PublicationIndeterminateError(RuntimeError):
+    """The exact durable namespace state of a publication is not provable."""
+
+
+def rename_name_noreplace(parent_descriptor, source_name, destination_name):
+    if (
+        not isinstance(source_name, str)
+        or not isinstance(destination_name, str)
+        or not source_name
+        or not destination_name
+        or source_name in (".", "..")
+        or destination_name in (".", "..")
+        or "/" in source_name
+        or "/" in destination_name
+        or "\0" in source_name
+        or "\0" in destination_name
+    ):
+        raise ValueError("publication names must be nonempty path leaves")
     libc = ctypes.CDLL(None, use_errno=True)
     renameat2 = getattr(libc, "renameat2", None)
     if renameat2 is None:
@@ -802,54 +1004,237 @@ def rename_path_noreplace(source, destination):
     ]
     renameat2.restype = ctypes.c_int
     result = renameat2(
-        -100,
-        os.fsencode(str(source)),
-        -100,
-        os.fsencode(str(destination)),
+        parent_descriptor,
+        os.fsencode(source_name),
+        parent_descriptor,
+        os.fsencode(destination_name),
         1,
     )
     if result != 0:
         code = ctypes.get_errno()
-        raise OSError(code, os.strerror(code), str(destination))
+        raise OSError(code, os.strerror(code), destination_name)
+
+
+def rename_path_noreplace(source, destination):
+    source = Path(source).absolute()
+    destination = Path(destination).absolute()
+    source_parent = source.parent.resolve(strict=True)
+    destination_parent = destination.parent.resolve(strict=True)
+    if source_parent != destination_parent:
+        raise OSError(
+            errno.EXDEV,
+            "atomic no-replace publication requires one parent directory",
+            str(destination),
+        )
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    parent_descriptor = os.open(str(source_parent), flags)
+    renamed = False
+    try:
+        rename_name_noreplace(parent_descriptor, source.name, destination.name)
+        renamed = True
+    finally:
+        try:
+            os.close(parent_descriptor)
+        except BaseException:
+            if not renamed:
+                raise
+
+
+def _name_status(parent_descriptor, name):
+    try:
+        return os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def _same_inode(status_value, identity):
+    return (
+        status_value is not None
+        and (status_value.st_dev, status_value.st_ino) == identity
+    )
+
+
+def _publication_name_state(
+    parent_descriptor, source_name, destination_name, identity
+):
+    source_status = _name_status(parent_descriptor, source_name)
+    destination_status = _name_status(parent_descriptor, destination_name)
+    return (
+        source_status,
+        destination_status,
+        _same_inode(source_status, identity),
+        _same_inode(destination_status, identity),
+    )
+
+
+def _restore_exact_publication_name(
+    parent_descriptor, source_name, destination_name, identity
+):
+    """Restore the exact held inode to source_name after a failed publication."""
+
+    (
+        source_status,
+        destination_status,
+        source_is_exact,
+        destination_is_exact,
+    ) = _publication_name_state(
+        parent_descriptor, source_name, destination_name, identity
+    )
+    if source_is_exact and not destination_is_exact:
+        return
+    if destination_is_exact and source_status is None:
+        try:
+            rename_name_noreplace(
+                parent_descriptor, destination_name, source_name
+            )
+            os.fsync(parent_descriptor)
+        except BaseException as exc:
+            raise PublicationIndeterminateError(
+                "publication failed and exact rollback/durability failed: "
+                + type(exc).__name__ + ": " + str(exc)
+            ) from exc
+        (
+            source_status,
+            destination_status,
+            source_is_exact,
+            destination_is_exact,
+        ) = _publication_name_state(
+            parent_descriptor, source_name, destination_name, identity
+        )
+        if source_is_exact and destination_status is None:
+            return
+    raise PublicationIndeterminateError(
+        "publication failure left an irreconcilable namespace state for "
+        + source_name + " and " + destination_name
+    )
+
+
+def _unlink_exact_name(parent_descriptor, name, identity):
+    status_value = _name_status(parent_descriptor, name)
+    if not _same_inode(status_value, identity):
+        raise PublicationIndeterminateError(
+            "refusing to remove a temporary name whose inode identity changed: "
+            + name
+        )
+    os.unlink(name, dir_fd=parent_descriptor)
+    os.fsync(parent_descriptor)
 
 
 def atomic_write_bytes(path, content):
     path = path.absolute()
     parent = path.parent.resolve(strict=True)
     destination = parent / path.name
+    directory_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        directory_flags |= os.O_DIRECTORY
+    parent_descriptor = os.open(str(parent), directory_flags)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix="." + path.name + ".tmp.", dir=str(parent)
     )
     temporary = Path(temporary_name)
+    temporary_identity = None
+    completed = False
     try:
         os.fchmod(descriptor, 0o600)
-        stream = os.fdopen(descriptor, "wb")
-        descriptor = None
+        temporary_status = os.fstat(descriptor)
+        if not stat.S_ISREG(temporary_status.st_mode) or temporary_status.st_nlink != 1:
+            raise PublicationIndeterminateError(
+                "atomic write temporary is not a single-link regular file"
+            )
+        temporary_identity = (temporary_status.st_dev, temporary_status.st_ino)
+        # Write through a duplicate while retaining the original descriptor as
+        # an unforgeable inode capability across namespace publication.
+        stream = os.fdopen(os.dup(descriptor), "wb")
         with stream:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
+        held_after_write = os.fstat(descriptor)
+        if (
+            (held_after_write.st_dev, held_after_write.st_ino)
+            != temporary_identity
+            or held_after_write.st_nlink != 1
+        ):
+            raise PublicationIndeterminateError(
+                "atomic write temporary inode changed before publication"
+            )
+        temporary_after_write = _name_status(
+            parent_descriptor, temporary.name
+        )
+        if not _same_inode(temporary_after_write, temporary_identity):
+            raise PublicationIndeterminateError(
+                "atomic write temporary name changed before publication"
+            )
+        os.fsync(parent_descriptor)
         try:
-            rename_path_noreplace(temporary, destination)
+            rename_name_noreplace(
+                parent_descriptor, temporary.name, destination.name
+            )
         except OSError as exc:
             if exc.errno == errno.EEXIST:
                 raise ValueError("refusing to overwrite: " + str(destination)) from exc
             raise
-        directory_flags = os.O_RDONLY
-        if hasattr(os, "O_DIRECTORY"):
-            directory_flags |= os.O_DIRECTORY
-        directory_descriptor = os.open(str(parent), directory_flags)
-        try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
+        destination_after_rename = _name_status(
+            parent_descriptor, destination.name
+        )
+        if (
+            not _same_inode(destination_after_rename, temporary_identity)
+            or _name_status(parent_descriptor, temporary.name) is not None
+        ):
+            raise PublicationIndeterminateError(
+                "atomic write rename did not publish the held temporary inode"
+            )
+        os.fsync(parent_descriptor)
+        destination_after_fsync = _name_status(
+            parent_descriptor, destination.name
+        )
+        held_after_fsync = os.fstat(descriptor)
+        if (
+            not _same_inode(destination_after_fsync, temporary_identity)
+            or _name_status(parent_descriptor, temporary.name) is not None
+            or (held_after_fsync.st_dev, held_after_fsync.st_ino)
+            != temporary_identity
+        ):
+            raise PublicationIndeterminateError(
+                "durable atomic write destination differs from the held inode"
+            )
+        completed = True
+    except BaseException as original_error:
+        if temporary_identity is not None:
+            try:
+                _restore_exact_publication_name(
+                    parent_descriptor,
+                    temporary.name,
+                    destination.name,
+                    temporary_identity,
+                )
+                _unlink_exact_name(
+                    parent_descriptor, temporary.name, temporary_identity
+                )
+            except BaseException as cleanup_error:
+                if isinstance(cleanup_error, PublicationIndeterminateError):
+                    raise cleanup_error from original_error
+                raise PublicationIndeterminateError(
+                    "atomic write failure cleanup is indeterminate: "
+                    + type(cleanup_error).__name__ + ": " + str(cleanup_error)
+                ) from original_error
+        raise
     finally:
         if descriptor is not None:
-            os.close(descriptor)
+            try:
+                os.close(descriptor)
+            except BaseException:
+                if not completed:
+                    raise
         try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+            os.close(parent_descriptor)
+        except BaseException:
+            if not completed:
+                raise
+    if not completed:
+        raise AssertionError("atomic write returned without a durable publication")
 
 
 def atomic_write_json(path, value):
@@ -3616,6 +4001,42 @@ def strict_json_bytes(content, label="JSON"):
     return value
 
 
+def read_exact_source_archive_members(archive_path, relatives, errors):
+    """Read only a small exact allowlist after the archive has been validated."""
+
+    expected = set(relatives)
+    observed = {}
+    try:
+        with tarfile.open(str(archive_path), "r:") as stream:
+            for member in stream:
+                name = member.name[:-1] if member.name.endswith("/") else member.name
+                if name not in expected:
+                    continue
+                if name in observed:
+                    errors.append("source archive repeats semantic member: " + name)
+                    continue
+                if not member.isfile() or member.issym() or member.islnk():
+                    errors.append("source archive semantic member is not regular: " + name)
+                    continue
+                if member.size < 0 or member.size > 1024 * 1024:
+                    errors.append("source archive semantic member exceeds bound: " + name)
+                    continue
+                source = stream.extractfile(member)
+                if source is None:
+                    errors.append("source archive semantic member cannot be read: " + name)
+                    continue
+                content = source.read(1024 * 1024 + 1)
+                if len(content) != member.size:
+                    errors.append("source archive semantic member size differs: " + name)
+                    continue
+                observed[name] = content
+    except (OSError, tarfile.TarError) as exc:
+        errors.append("cannot read semantic source archive members: " + str(exc))
+    for relative in expected - set(observed):
+        errors.append("source archive omits semantic member: " + relative)
+    return observed
+
+
 def validate_prevalidated_source_context(value, errors):
     required = {
         "branch", "commit", "entries", "entrypoints", "index_tree",
@@ -3871,6 +4292,11 @@ def collect_prevalidated_source_metadata(
 
     archive_path = artifact_dir / SOURCE_ARCHIVE_NAME
     archived_hashes = validate_prevalidated_source_archive(archive_path, context, errors)
+    if not allow_synthetic:
+        approval_contents = read_exact_source_archive_members(
+            archive_path, FROZEN_CP2_C_APPROVAL_RECORDS, errors
+        )
+        validate_cp2_c_approval_records(approval_contents, errors)
     archived_inputs = {name: archived_hashes.get(name) for name in sorted(SOURCE_INPUTS)}
     archive_sha = sha256_file(archive_path) if archive_path.is_file() else None
     archive_size = archive_path.stat().st_size if archive_path.is_file() else None
@@ -4006,11 +4432,13 @@ def collect_source_metadata(artifact_dir, repo_root, errors, allow_synthetic=Fal
     except subprocess.CalledProcessError as exc:
         errors.append("recorded source commit is unavailable: " + str(exc))
     input_hashes = {}
+    input_bytes = {}
     approval_binding_git_blobs = {}
     if commit:
         for relative in sorted(SOURCE_INPUTS):
             try:
                 committed_bytes = committed_blob(repo_root, commit, relative)
+                input_bytes[relative] = committed_bytes
                 input_hashes[relative] = sha256_bytes(committed_bytes)
                 if relative in FROZEN_CP2_C_APPROVAL_BINDING:
                     git_header = b"blob " + str(len(committed_bytes)).encode("ascii") + b"\0"
@@ -4027,6 +4455,8 @@ def collect_source_metadata(artifact_dir, repo_root, errors, allow_synthetic=Fal
         validate_cp2_c_approval_binding(
             input_hashes, approval_binding_git_blobs, errors
         )
+        validate_cp2_c_approval_records(input_bytes, errors)
+        validate_cp2_c_historical_binding(repo_root, errors)
     contract_hashes = {name: input_hashes.get(name) for name in sorted(CONTRACT_INPUTS)}
     archive_path = artifact_dir / SOURCE_ARCHIVE_NAME
     archive_record = {
@@ -4507,7 +4937,7 @@ def collect_verifier_self_test(artifact_dir, repo_root, errors, verifier_path=No
     if "Synthetic corruptions rejected:" not in log_text:
         errors.append("verifier self-test log lacks negative-corruption results")
     if re.search(
-        r"^CP2_READINESS_ENGINE_PROTECTING_TESTS count=39 passed=true "
+        r"^CP2_READINESS_ENGINE_PROTECTING_TESTS count=43 passed=true "
         r"module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$",
         log_text,
         flags=re.MULTILINE,
@@ -5084,10 +5514,20 @@ def fsync_path(path, directory=False):
         os.close(descriptor)
 
 
-def finalize_staging_noreplace(source, destination, repo_root=None, allow_synthetic=False):
+def finalize_staging_noreplace(
+    source, destination, repo_root=None, allow_synthetic=False,
+    expected_manifest_sha256=None,
+):
     repo_root = (repo_root or Path(__file__).resolve().parents[2]).resolve()
     source = source.absolute()
     destination = destination.absolute()
+    if source.parent != destination.parent:
+        raise ValueError("unit staging publication must remain in one parent directory")
+    publication_parent = source.parent.resolve(strict=True)
+    if source.parent != publication_parent or publication_parent.is_symlink():
+        raise ValueError("unit staging publication parent is not canonical")
+    source = publication_parent / source.name
+    destination = publication_parent / destination.name
     expected_parent = (repo_root / "results/staging/cp2/unit").resolve()
     if not allow_synthetic:
         if source.parent.absolute() != expected_parent or not source.parent.is_dir():
@@ -5135,21 +5575,238 @@ def finalize_staging_noreplace(source, destination, repo_root=None, allow_synthe
     fsync_path(source, directory=True)
     fsync_path(source.parent, directory=True)
 
-    frozen_errors = []
-    if regular_artifact_files(source, frozen_errors, finalized=True) != expected_artifact_files():
-        frozen_errors.append("frozen staging inventory is not exact")
-    verify_manifest(source, frozen_errors)
-    if frozen_errors:
-        raise ValueError("read-only staging freeze failed: " + "; ".join(frozen_errors))
-    atomic_rename_noreplace(source, destination)
-    fsync_path(destination.parent, directory=True)
+    frozen_status, frozen_errors = verify_unit_report(
+        source,
+        repo_root,
+        quiet=True,
+        expected_manifest_sha256=expected_manifest_sha256,
+        require_finalized=True,
+        allow_synthetic=allow_synthetic,
+    )
+    if frozen_status != 0:
+        raise ValueError(
+            "read-only anchored staging verification failed before publication: "
+            + "; ".join(frozen_errors)
+        )
 
-    final_errors = []
-    if regular_artifact_files(destination, final_errors, finalized=True) != expected_artifact_files():
-        final_errors.append("finalized staging inventory is not exact")
-    verify_manifest(destination, final_errors)
-    if final_errors:
-        raise ValueError("post-rename staging verification failed: " + "; ".join(final_errors))
+    directory_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        directory_flags |= os.O_DIRECTORY
+    parent_descriptor = os.open(str(publication_parent), directory_flags)
+    source_descriptor = os.open(str(source), directory_flags)
+    committed = False
+    try:
+        held_status = os.fstat(source_descriptor)
+        if not stat.S_ISDIR(held_status.st_mode):
+            raise PublicationIndeterminateError(
+                "unit staging source stopped being a directory before publication"
+            )
+        held_identity = (held_status.st_dev, held_status.st_ino)
+        source_status = _name_status(parent_descriptor, source.name)
+        if not _same_inode(source_status, held_identity):
+            raise PublicationIndeterminateError(
+                "unit staging source name changed before publication"
+            )
+        if _name_status(parent_descriptor, destination.name) is not None:
+            raise OSError(
+                errno.EEXIST,
+                "unit staging destination already exists",
+                str(destination),
+            )
+        os.fsync(parent_descriptor)
+        try:
+            rename_name_noreplace(
+                parent_descriptor, source.name, destination.name
+            )
+            destination_after_rename = _name_status(
+                parent_descriptor, destination.name
+            )
+            held_after_rename = os.fstat(source_descriptor)
+            if (
+                not _same_inode(destination_after_rename, held_identity)
+                or _name_status(parent_descriptor, source.name) is not None
+                or (held_after_rename.st_dev, held_after_rename.st_ino)
+                != held_identity
+            ):
+                raise PublicationIndeterminateError(
+                    "unit staging rename did not publish the held frozen inode"
+                )
+            os.fsync(parent_descriptor)
+            destination_after_fsync = _name_status(
+                parent_descriptor, destination.name
+            )
+            held_after_fsync = os.fstat(source_descriptor)
+            if (
+                not _same_inode(destination_after_fsync, held_identity)
+                or _name_status(parent_descriptor, source.name) is not None
+                or (held_after_fsync.st_dev, held_after_fsync.st_ino)
+                != held_identity
+            ):
+                raise PublicationIndeterminateError(
+                    "durable unit staging destination differs from the held inode"
+                )
+            committed = True
+        except BaseException as original_error:
+            try:
+                _restore_exact_publication_name(
+                    parent_descriptor,
+                    source.name,
+                    destination.name,
+                    held_identity,
+                )
+            except BaseException as rollback_error:
+                if isinstance(rollback_error, PublicationIndeterminateError):
+                    raise rollback_error from original_error
+                raise PublicationIndeterminateError(
+                    "unit staging publication rollback is indeterminate: "
+                    + type(rollback_error).__name__ + ": "
+                    + str(rollback_error)
+                ) from original_error
+            raise
+    finally:
+        if source_descriptor is not None:
+            try:
+                os.close(source_descriptor)
+            except BaseException:
+                if not committed:
+                    raise
+        try:
+            os.close(parent_descriptor)
+        except BaseException:
+            if not committed:
+                raise
+
+
+def reconcile_staging_publication(
+    source, destination, expected_manifest_sha256, repo_root=None,
+    allow_synthetic=False,
+):
+    """Restore a destination-only interrupted unit publication to its source name."""
+
+    repo_root = (repo_root or Path(__file__).resolve().parents[2]).resolve()
+    source = source.absolute()
+    destination = destination.absolute()
+    if source.parent != destination.parent:
+        raise PublicationIndeterminateError(
+            "publication_indeterminate: source and destination parents differ"
+        )
+    publication_parent = source.parent.resolve(strict=True)
+    if source.parent != publication_parent or publication_parent.is_symlink():
+        raise PublicationIndeterminateError(
+            "publication_indeterminate: publication parent is not canonical"
+        )
+    source = publication_parent / source.name
+    destination = publication_parent / destination.name
+    if not allow_synthetic:
+        expected_parent = (repo_root / "results/staging/cp2/unit").resolve()
+        if publication_parent != expected_parent:
+            raise PublicationIndeterminateError(
+                "publication_indeterminate: publication parent differs"
+            )
+        if (
+            not source.name.startswith(".cp2_unit_")
+            or ".partial." not in source.name
+            or not destination.name.startswith("cp2_unit_")
+            or source.name[1:].split(".partial.", 1)[0] != destination.name
+        ):
+            raise PublicationIndeterminateError(
+                "publication_indeterminate: source/destination identity differs"
+            )
+    directory_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        directory_flags |= os.O_DIRECTORY
+    parent_descriptor = os.open(str(publication_parent), directory_flags)
+    reconciled_state = None
+    try:
+        source_status = _name_status(parent_descriptor, source.name)
+        destination_status = _name_status(parent_descriptor, destination.name)
+        if source_status is not None and destination_status is None:
+            held_identity = (source_status.st_dev, source_status.st_ino)
+            status_value, verification_errors = verify_unit_report(
+                source,
+                repo_root,
+                quiet=True,
+                expected_manifest_sha256=expected_manifest_sha256,
+                require_finalized=True,
+                allow_synthetic=allow_synthetic,
+            )
+            if status_value != 0:
+                raise PublicationIndeterminateError(
+                    "publication_indeterminate: source-only artifact does not "
+                    "match the exact frozen anchor: "
+                    + "; ".join(verification_errors)
+                )
+            source_after = _name_status(parent_descriptor, source.name)
+            destination_after = _name_status(parent_descriptor, destination.name)
+            if not _same_inode(source_after, held_identity) or destination_after is not None:
+                raise PublicationIndeterminateError(
+                    "publication_indeterminate: source inode changed during reconciliation"
+                )
+            os.fsync(parent_descriptor)
+            source_after = _name_status(parent_descriptor, source.name)
+            destination_after = _name_status(parent_descriptor, destination.name)
+            if not _same_inode(source_after, held_identity) or destination_after is not None:
+                raise PublicationIndeterminateError(
+                    "publication_indeterminate: source-only durable name state differs"
+                )
+            reconciled_state = "source_only_verified_durable"
+        elif source_status is not None or destination_status is None:
+            raise PublicationIndeterminateError(
+                "publication_indeterminate: expected exactly one staging name; "
+                "source={} destination={}".format(
+                    "present" if source_status is not None else "absent",
+                    "present" if destination_status is not None else "absent",
+                )
+            )
+        else:
+            held_identity = (destination_status.st_dev, destination_status.st_ino)
+            status_value, verification_errors = verify_unit_report(
+                destination,
+                repo_root,
+                quiet=True,
+                expected_manifest_sha256=expected_manifest_sha256,
+                require_finalized=True,
+                allow_synthetic=allow_synthetic,
+            )
+            if status_value != 0:
+                raise PublicationIndeterminateError(
+                    "publication_indeterminate: destination-only artifact does not "
+                    "match the exact frozen anchor: "
+                    + "; ".join(verification_errors)
+                )
+            destination_after = _name_status(parent_descriptor, destination.name)
+            if not _same_inode(destination_after, held_identity):
+                raise PublicationIndeterminateError(
+                    "publication_indeterminate: destination inode changed during reconciliation"
+                )
+            try:
+                rename_name_noreplace(
+                    parent_descriptor, destination.name, source.name
+                )
+                os.fsync(parent_descriptor)
+            except BaseException as exc:
+                raise PublicationIndeterminateError(
+                    "publication_indeterminate: rollback/durability failed: "
+                    + type(exc).__name__ + ": " + str(exc)
+                ) from exc
+            source_after = _name_status(parent_descriptor, source.name)
+            destination_after = _name_status(parent_descriptor, destination.name)
+            if not _same_inode(source_after, held_identity) or destination_after is not None:
+                raise PublicationIndeterminateError(
+                    "publication_indeterminate: rollback name state differs"
+                )
+            reconciled_state = "rolled_back_to_source_verified_durable"
+    finally:
+        try:
+            os.close(parent_descriptor)
+        except BaseException:
+            if reconciled_state is None:
+                raise
+    if reconciled_state is None:
+        raise PublicationIndeterminateError(
+            "publication_indeterminate: reconciliation returned no durable state"
+        )
+    return reconciled_state
 
 
 TEST_CASES_BY_BINARY = {
@@ -6022,7 +6679,7 @@ def create_synthetic_artifact(artifact_dir, repo_root):
     (artifact_dir / "verifier_self_test.log").write_text(
         "CP2 verifier self-test passed using only: /tmp/synthetic\n"
         "Synthetic corruptions rejected: synthetic-bootstrap\n"
-        "CP2_READINESS_ENGINE_PROTECTING_TESTS count=39 passed=true "
+        "CP2_READINESS_ENGINE_PROTECTING_TESTS count=43 passed=true "
         "module_sha256={} output_sha256={}\n"
         "CP2_D_DATA_FREE_PROTECTING_TESTS count=78 passed=true "
         "module_sha256={} output_sha256={}\n"
@@ -6287,12 +6944,6 @@ ACTUAL_OFFLINE_REPLAY_TIMEOUT_SECONDS = 300
 ACTUAL_PROCESS_GROUP_CLEANUP_SECONDS = 10.0
 ACTUAL_PROCESS_GROUP_POLL_SECONDS = 0.01
 ACTUAL_EXACT_BINARY64_INTEGER_MAX = (1 << 53) - 1
-ACTUAL_CP2_C_AUTHORIZED = False
-ACTUAL_CP2_C_BLOCK_REASON = (
-    "CP2-C actual verification is blocked before artifact access: the "
-    "detached-readiness replacement contract is pending exact-commit approval "
-    "and a separate approval-binding commit"
-)
 ACTUAL_SEQUENCE_IDS = ("MH_01_easy", "MH_03_medium", "V1_01_easy")
 ACTUAL_SEQUENCE_OFFSETS_SECONDS = (40.0, 5.0, 0.0)
 ACTUAL_PARAMETER_DIFF_KEYS = (
@@ -7792,6 +8443,12 @@ def _actual_validate_source_unit_approval_binding(
     }
     approval_errors = []
     validate_cp2_c_approval_binding(input_hashes, git_blobs, approval_errors)
+    approval_contents = read_exact_source_archive_members(
+        artifact / source_archive,
+        FROZEN_CP2_C_APPROVAL_RECORDS,
+        approval_errors,
+    )
+    validate_cp2_c_approval_records(approval_contents, approval_errors)
     if approval_errors:
         _actual_fail("actual CP2-C approval binding is invalid: " + "; ".join(approval_errors))
     expected_contracts = [
@@ -10290,11 +10947,9 @@ def verify_recorded_artifact(artifact, manifest_sha256, quiet=False, run_offline
     if not os.path.isabs(raw) or os.path.normpath(raw) != raw:
         _actual_fail("recorded artifact path must be normalized and absolute")
     _actual_sha256(manifest_sha256, "recorded manifest anchor")
-    if ACTUAL_CP2_C_AUTHORIZED is not True:
-        _actual_fail(ACTUAL_CP2_C_BLOCK_REASON)
-
-    # Unreachable until an approval-bound replacement deliberately removes the
-    # pre-access block above; retained implementation remains reviewable.
+    # This entry point becomes reachable only in the source-bound approval
+    # commit. The retained manifest/source/readiness/unit chain below is still
+    # mandatory before any result can be accepted.
     artifact = Path(artifact)
     manifest, observed, _ = _actual_scan_and_verify_manifest(artifact, manifest_sha256)
     required = {
@@ -10937,6 +11592,8 @@ def _actual_validate_sequence_traces(artifact, manifest, report, provenance_deta
             ):
                 _actual_fail("sequence callback identity/order differs")
             pair_index = _actual_u64(callback["pair_index"], "callback pair index")
+            if pair_index != callback_index:
+                _actual_fail("callback/pair order differs")
             pair = pair_by_index.get(pair_index)
             if pair is None or pair_index in seen_pairs:
                 _actual_fail("callback references an absent/duplicate pair")
@@ -11040,6 +11697,8 @@ def _actual_validate_sequence_traces(artifact, manifest, report, provenance_deta
         if raw_tum_bytes != _actual_estimator_tum_bytes(trajectories):
             _actual_fail("raw estimator TUM is not the exact trajectory projection")
 
+        # CP2-D coverage is frozen in rosbag record time.  Estimator and
+        # trajectory joins above are independently frozen in cam0 header time.
         selected_first = pair_rows[0]["cam0_record_time_ns"]
         selected_last = pair_rows[-1]["cam0_record_time_ns"]
         processed_first = processed[0]["cam0_record_time_ns"]
@@ -12420,7 +13079,7 @@ def run_readiness_self_test():
 
 
 READINESS_ENGINE_PROTECTING_TESTS = (
-    ("test_cp2_readiness.py", 27),
+    ("test_cp2_readiness.py", 31),
     ("test_cp2_actual_readiness_binding.py", 12),
 )
 READINESS_ENGINE_PROTECTING_TEST_COUNT = sum(
@@ -12714,6 +13373,8 @@ def run_cp2_e_data_free_protecting_tests():
 
 
 def run_unit_self_test():
+    global rename_name_noreplace
+
     required_cp2_c2_counts = {
         "test_cp2_updater_msckf_end_to_end": 16,
         "test_cp2_updater_msckf_fault_injection": 31,
@@ -12798,6 +13459,131 @@ def run_unit_self_test():
     ]:
         raise RuntimeError("wrong CP2-C approval Git blob was not rejected exactly")
 
+    detached_clarification_path = (
+        "docs/cp2_c_detached_readiness_binding_clarification_proposed.md"
+    )
+    wrong_sha256 = dict(frozen_sha256)
+    wrong_sha256[detached_clarification_path] = "0" * 64
+    binding_errors = []
+    validate_cp2_c_approval_binding(
+        wrong_sha256, frozen_git_blobs, binding_errors
+    )
+    if binding_errors != [
+        "CP2-C approval-binding SHA-256 mismatch: "
+        + detached_clarification_path
+    ]:
+        raise RuntimeError(
+            "wrong detached-readiness clarification SHA-256 was not rejected exactly"
+        )
+
+    detached_approval_path = (
+        "project/cp2_c_detached_readiness_binding_approval.json"
+    )
+    wrong_git_blobs = dict(frozen_git_blobs)
+    wrong_git_blobs[detached_approval_path] = "0" * 40
+    binding_errors = []
+    validate_cp2_c_approval_binding(
+        frozen_sha256, wrong_git_blobs, binding_errors
+    )
+    if binding_errors != [
+        "CP2-C approval-binding Git blob mismatch: " + detached_approval_path
+    ]:
+        raise RuntimeError(
+            "wrong detached-readiness approval Git blob was not rejected exactly"
+        )
+
+    incident_path = "docs/cp2_predata_incident_log.md"
+    wrong_sha256 = dict(frozen_sha256)
+    wrong_sha256[incident_path] = "0" * 64
+    binding_errors = []
+    validate_cp2_c_approval_binding(
+        wrong_sha256, frozen_git_blobs, binding_errors
+    )
+    if binding_errors != [
+        "CP2-C approval-binding SHA-256 mismatch: " + incident_path
+    ]:
+        raise RuntimeError("wrong incident disposition SHA-256 was not rejected exactly")
+
+    incident_approval_path = (
+        "project/cp2_predata_incident_disposition_approval.json"
+    )
+    wrong_git_blobs = dict(frozen_git_blobs)
+    wrong_git_blobs[incident_approval_path] = "0" * 40
+    binding_errors = []
+    validate_cp2_c_approval_binding(
+        frozen_sha256, wrong_git_blobs, binding_errors
+    )
+    if binding_errors != [
+        "CP2-C approval-binding Git blob mismatch: " + incident_approval_path
+    ]:
+        raise RuntimeError(
+            "wrong incident disposition approval Git blob was not rejected exactly"
+        )
+
+    semantic_contents = {
+        relative: json.dumps(expected, sort_keys=True).encode("utf-8")
+        for relative, expected in FROZEN_CP2_C_APPROVAL_RECORDS.items()
+    }
+    binding_errors = []
+    validate_cp2_c_approval_records(semantic_contents, binding_errors)
+    if binding_errors:
+        raise RuntimeError("valid semantic CP2-C approvals were rejected")
+    wrong_semantic = dict(semantic_contents)
+    changed_approval = dict(
+        FROZEN_CP2_C_APPROVAL_RECORDS[detached_approval_path]
+    )
+    changed_approval["exceptions"] = ["forbidden"]
+    wrong_semantic[detached_approval_path] = json.dumps(
+        changed_approval, sort_keys=True
+    ).encode("utf-8")
+    binding_errors = []
+    validate_cp2_c_approval_records(wrong_semantic, binding_errors)
+    if binding_errors != [
+        "CP2-C semantic approval record differs: " + detached_approval_path
+    ]:
+        raise RuntimeError("nonempty semantic approval exception was not rejected")
+
+    wrong_semantic = dict(semantic_contents)
+    changed_incident_approval = dict(
+        FROZEN_CP2_C_APPROVAL_RECORDS[incident_approval_path]
+    )
+    changed_incident_approval["approval_statement"] += " altered"
+    wrong_semantic[incident_approval_path] = json.dumps(
+        changed_incident_approval, sort_keys=True
+    ).encode("utf-8")
+    binding_errors = []
+    validate_cp2_c_approval_records(wrong_semantic, binding_errors)
+    if binding_errors != [
+        "CP2-C semantic approval record differs: " + incident_approval_path
+    ]:
+        raise RuntimeError(
+            "altered incident disposition approval was not rejected exactly"
+        )
+
+    historical_observations = {
+        relative: dict(expected)
+        for relative, expected in FROZEN_CP2_C_HISTORICAL_BINDING.items()
+    }
+    binding_errors = []
+    validate_cp2_c_historical_observations(
+        historical_observations, binding_errors
+    )
+    if binding_errors:
+        raise RuntimeError("valid CP2-C historical observations were rejected")
+    wrong_historical = {
+        relative: dict(observed)
+        for relative, observed in historical_observations.items()
+    }
+    wrong_historical[incident_path]["git_blob"] = "0" * 40
+    binding_errors = []
+    validate_cp2_c_historical_observations(
+        wrong_historical, binding_errors
+    )
+    if binding_errors != [
+        "CP2-C historical Git blob mismatch: " + incident_path
+    ]:
+        raise RuntimeError("wrong historical incident Git blob was not rejected")
+
     # Force all writes under /tmp. The self-test never creates, removes, or
     # changes anything under a repository results/ directory.
     with tempfile.TemporaryDirectory(prefix="cp2-verifier-self-test-", dir="/tmp") as temporary:
@@ -12861,6 +13647,429 @@ def run_unit_self_test():
             raise RuntimeError("failed manifest publication retained a temporary file")
         corruptions.append({
             "name": "publication-broken-manifest-symlink",
+            "detected_errors": 1,
+        })
+
+        postrename_file = publication_root / "postrename-fsync-failure.json"
+        real_fsync = os.fsync
+        directory_fsync_count = 0
+
+        def fail_second_directory_fsync(descriptor):
+            nonlocal directory_fsync_count
+            status_value = os.fstat(descriptor)
+            if stat.S_ISDIR(status_value.st_mode):
+                directory_fsync_count += 1
+                if directory_fsync_count == 2:
+                    raise OSError(errno.EIO, "synthetic post-rename directory fsync failure")
+            return real_fsync(descriptor)
+
+        os.fsync = fail_second_directory_fsync
+        try:
+            try:
+                atomic_write_bytes(postrename_file, b"never-published\n")
+            except OSError as exc:
+                if "synthetic post-rename" not in str(exc):
+                    raise
+            else:
+                raise RuntimeError("post-rename file fsync failure was accepted")
+        finally:
+            os.fsync = real_fsync
+        if os.path.lexists(str(postrename_file)):
+            raise RuntimeError("post-rename file fsync failure retained the destination")
+        if list(publication_root.glob("." + postrename_file.name + ".tmp.*")):
+            raise RuntimeError("post-rename file fsync rollback retained a temporary")
+        corruptions.append({
+            "name": "publication-file-postrename-fsync-rollback",
+            "detected_errors": 1,
+        })
+
+        close_interrupt_file = publication_root / "postcommit-close-interrupt.json"
+        real_close = os.close
+        parent_identity = (
+            publication_root.stat().st_dev,
+            publication_root.stat().st_ino,
+        )
+        close_interrupted = False
+
+        def interrupt_after_parent_close(descriptor):
+            nonlocal close_interrupted
+            status_value = os.fstat(descriptor)
+            real_close(descriptor)
+            if (
+                not close_interrupted
+                and (status_value.st_dev, status_value.st_ino) == parent_identity
+                and os.path.lexists(str(close_interrupt_file))
+            ):
+                close_interrupted = True
+                raise KeyboardInterrupt("synthetic postcommit parent-close interruption")
+
+        os.close = interrupt_after_parent_close
+        try:
+            atomic_write_bytes(close_interrupt_file, b"durable-commit\n")
+        finally:
+            os.close = real_close
+        if (
+            not close_interrupted
+            or close_interrupt_file.read_bytes() != b"durable-commit\n"
+        ):
+            raise RuntimeError("durable file commit was revoked by a close interruption")
+        close_interrupt_file.unlink()
+        corruptions.append({
+            "name": "publication-file-postcommit-close-interruption",
+            "detected_errors": 1,
+        })
+
+        substituted_file = publication_root / "substituted-temporary.json"
+        real_rename_name_noreplace = rename_name_noreplace
+        displaced_temporary_name = None
+
+        def substitute_temporary_before_publish(
+            parent_descriptor, source_name, destination_name
+        ):
+            nonlocal displaced_temporary_name
+            if destination_name == substituted_file.name:
+                displaced_temporary_name = source_name + ".held-substitution-probe"
+                real_rename_name_noreplace(
+                    parent_descriptor, source_name, displaced_temporary_name
+                )
+                foreign_descriptor = os.open(
+                    source_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=parent_descriptor,
+                )
+                try:
+                    os.write(foreign_descriptor, b"foreign-substitute\n")
+                    os.fsync(foreign_descriptor)
+                finally:
+                    os.close(foreign_descriptor)
+            real_rename_name_noreplace(
+                parent_descriptor, source_name, destination_name
+            )
+
+        rename_name_noreplace = substitute_temporary_before_publish
+        try:
+            try:
+                atomic_write_bytes(substituted_file, b"held-exact-inode\n")
+            except PublicationIndeterminateError:
+                pass
+            else:
+                raise RuntimeError("substituted temporary inode was accepted")
+        finally:
+            rename_name_noreplace = real_rename_name_noreplace
+        if substituted_file.read_bytes() != b"foreign-substitute\n":
+            raise RuntimeError("temporary substitution was overwritten or accepted")
+        if displaced_temporary_name is None:
+            raise RuntimeError("temporary substitution probe did not retain the held inode")
+        displaced_temporary = publication_root / displaced_temporary_name
+        if displaced_temporary.read_bytes() != b"held-exact-inode\n":
+            raise RuntimeError("held temporary inode changed during substitution rejection")
+        substituted_file.unlink()
+        displaced_temporary.unlink()
+        corruptions.append({
+            "name": "publication-file-held-inode-substitution-rejected",
+            "detected_errors": 1,
+        })
+
+        collision_file = publication_root / "rollback-collision.json"
+        real_rename_name_noreplace = rename_name_noreplace
+        publication_live = False
+        injected_fsync_failure = False
+        collision_temporary_name = None
+
+        def publish_then_create_rollback_collision(
+            parent_descriptor, source_name, destination_name
+        ):
+            nonlocal publication_live, collision_temporary_name
+            real_rename_name_noreplace(
+                parent_descriptor, source_name, destination_name
+            )
+            if destination_name == collision_file.name:
+                publication_live = True
+                collision_temporary_name = source_name
+                collision_descriptor = os.open(
+                    source_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=parent_descriptor,
+                )
+                try:
+                    os.write(collision_descriptor, b"foreign-collision\n")
+                    real_fsync(collision_descriptor)
+                finally:
+                    os.close(collision_descriptor)
+
+        def fail_live_publication_fsync(descriptor):
+            nonlocal injected_fsync_failure
+            if (
+                publication_live
+                and not injected_fsync_failure
+                and stat.S_ISDIR(os.fstat(descriptor).st_mode)
+            ):
+                injected_fsync_failure = True
+                raise OSError(errno.EIO, "synthetic live-publication fsync failure")
+            return real_fsync(descriptor)
+
+        rename_name_noreplace = publish_then_create_rollback_collision
+        os.fsync = fail_live_publication_fsync
+        try:
+            try:
+                atomic_write_bytes(collision_file, b"exact-published-inode\n")
+            except PublicationIndeterminateError:
+                pass
+            else:
+                raise RuntimeError("rollback-name collision was not indeterminate")
+        finally:
+            rename_name_noreplace = real_rename_name_noreplace
+            os.fsync = real_fsync
+        if collision_file.read_bytes() != b"exact-published-inode\n":
+            raise RuntimeError("rollback collision changed the exact published inode")
+        if collision_temporary_name is None:
+            raise RuntimeError("rollback collision did not retain its foreign source name")
+        collision_temporary = publication_root / collision_temporary_name
+        if collision_temporary.read_bytes() != b"foreign-collision\n":
+            raise RuntimeError("rollback collision overwrote the foreign source name")
+        collision_file.unlink()
+        collision_temporary.unlink()
+        corruptions.append({
+            "name": "publication-file-rollback-collision-indeterminate",
+            "detected_errors": 1,
+        })
+
+        rollback_repo = temporary_root / "rollback-repo"
+        rollback_repo.mkdir()
+        create_synthetic_repo(rollback_repo)
+        rollback_partial = temporary_root / "rollback-artifact-partial"
+        create_synthetic_artifact(rollback_partial, rollback_repo)
+        assemble_unit_report(rollback_partial, rollback_repo, allow_synthetic=True)
+        rollback_manifest_sha256 = sha256_file(rollback_partial / MANIFEST_NAME)
+        rollback_final = temporary_root / "rollback-artifact-final"
+        real_fsync = os.fsync
+        real_rename_name_noreplace = rename_name_noreplace
+        publication_live = False
+        injected_fsync_failure = False
+
+        def track_finalizer_publication(
+            parent_descriptor, source_name, destination_name
+        ):
+            nonlocal publication_live
+            real_rename_name_noreplace(
+                parent_descriptor, source_name, destination_name
+            )
+            if (
+                source_name == rollback_partial.name
+                and destination_name == rollback_final.name
+            ):
+                publication_live = True
+            elif (
+                source_name == rollback_final.name
+                and destination_name == rollback_partial.name
+            ):
+                publication_live = False
+
+        def fail_finalizer_postrename_fsync(descriptor):
+            nonlocal injected_fsync_failure
+            if (
+                publication_live
+                and not injected_fsync_failure
+                and stat.S_ISDIR(os.fstat(descriptor).st_mode)
+            ):
+                injected_fsync_failure = True
+                raise OSError(errno.EIO, "synthetic finalizer post-rename fsync failure")
+            return real_fsync(descriptor)
+
+        rename_name_noreplace = track_finalizer_publication
+        os.fsync = fail_finalizer_postrename_fsync
+        try:
+            try:
+                finalize_staging_noreplace(
+                    rollback_partial,
+                    rollback_final,
+                    repo_root=rollback_repo,
+                    allow_synthetic=True,
+                    expected_manifest_sha256=rollback_manifest_sha256,
+                )
+            except OSError as exc:
+                if "synthetic finalizer post-rename" not in str(exc):
+                    raise
+            else:
+                raise RuntimeError("post-rename finalizer fsync failure was accepted")
+        finally:
+            rename_name_noreplace = real_rename_name_noreplace
+            os.fsync = real_fsync
+        if not rollback_partial.is_dir() or os.path.lexists(str(rollback_final)):
+            raise RuntimeError("finalizer failure did not restore the hidden source name")
+        rollback_status, rollback_errors = verify_unit_report(
+            rollback_partial,
+            rollback_repo,
+            quiet=True,
+            expected_manifest_sha256=rollback_manifest_sha256,
+            require_finalized=True,
+            allow_synthetic=True,
+        )
+        if rollback_status != 0:
+            raise RuntimeError(
+                "rolled-back hidden unit artifact failed verification: "
+                + "; ".join(rollback_errors)
+            )
+        corruptions.append({
+            "name": "publication-directory-postrename-fsync-rollback",
+            "detected_errors": 1,
+        })
+
+        substitution_partial = temporary_root / "substitution-artifact-partial"
+        shutil.copytree(str(base), str(substitution_partial))
+        set_synthetic_tree_modes(substitution_partial, writable=True)
+        substitution_manifest_sha256 = sha256_file(
+            substitution_partial / MANIFEST_NAME
+        )
+        substitution_final = temporary_root / "substitution-artifact-final"
+        displaced_source_name = None
+        real_rename_name_noreplace = rename_name_noreplace
+
+        def substitute_finalizer_source(
+            parent_descriptor, source_name, destination_name
+        ):
+            nonlocal displaced_source_name
+            if (
+                source_name == substitution_partial.name
+                and destination_name == substitution_final.name
+            ):
+                displaced_source_name = (
+                    source_name + ".held-substitution-probe"
+                )
+                real_rename_name_noreplace(
+                    parent_descriptor, source_name, displaced_source_name
+                )
+                os.mkdir(source_name, mode=0o700, dir_fd=parent_descriptor)
+            real_rename_name_noreplace(
+                parent_descriptor, source_name, destination_name
+            )
+
+        rename_name_noreplace = substitute_finalizer_source
+        try:
+            try:
+                finalize_staging_noreplace(
+                    substitution_partial,
+                    substitution_final,
+                    repo_root=repo_root,
+                    allow_synthetic=True,
+                    expected_manifest_sha256=substitution_manifest_sha256,
+                )
+            except PublicationIndeterminateError:
+                pass
+            else:
+                raise RuntimeError("substituted finalizer source inode was accepted")
+        finally:
+            rename_name_noreplace = real_rename_name_noreplace
+        if not substitution_final.is_dir() or any(substitution_final.iterdir()):
+            raise RuntimeError("foreign finalizer source was overwritten or accepted")
+        if displaced_source_name is None:
+            raise RuntimeError("finalizer substitution did not retain the held inode")
+        displaced_source = temporary_root / displaced_source_name
+        displaced_status, displaced_errors = verify_unit_report(
+            displaced_source,
+            repo_root,
+            quiet=True,
+            expected_manifest_sha256=substitution_manifest_sha256,
+            require_finalized=True,
+            allow_synthetic=True,
+        )
+        if displaced_status != 0:
+            raise RuntimeError(
+                "held finalizer source changed during substitution rejection: "
+                + "; ".join(displaced_errors)
+            )
+        corruptions.append({
+            "name": "publication-directory-held-inode-substitution-rejected",
+            "detected_errors": 1,
+        })
+
+        interrupted_repo = temporary_root / "interrupted-repo"
+        interrupted_repo.mkdir()
+        create_synthetic_repo(interrupted_repo)
+        interrupted_partial = temporary_root / "interrupted-artifact-partial"
+        create_synthetic_artifact(interrupted_partial, interrupted_repo)
+        assemble_unit_report(
+            interrupted_partial, interrupted_repo, allow_synthetic=True
+        )
+        interrupted_manifest_sha256 = sha256_file(interrupted_partial / MANIFEST_NAME)
+        interrupted_final = temporary_root / "interrupted-artifact-final"
+        real_close = os.close
+        parent_status = temporary_root.stat()
+        parent_identity = (parent_status.st_dev, parent_status.st_ino)
+        close_interrupted = False
+
+        def interrupt_finalizer_parent_close(descriptor):
+            nonlocal close_interrupted
+            status_value = os.fstat(descriptor)
+            real_close(descriptor)
+            if (
+                not close_interrupted
+                and (status_value.st_dev, status_value.st_ino) == parent_identity
+                and os.path.lexists(str(interrupted_final))
+            ):
+                close_interrupted = True
+                raise KeyboardInterrupt("synthetic finalizer parent-close interruption")
+
+        os.close = interrupt_finalizer_parent_close
+        try:
+            finalize_staging_noreplace(
+                interrupted_partial,
+                interrupted_final,
+                repo_root=interrupted_repo,
+                allow_synthetic=True,
+                expected_manifest_sha256=interrupted_manifest_sha256,
+            )
+        finally:
+            os.close = real_close
+        if not close_interrupted:
+            raise RuntimeError("finalizer parent-close interruption was not injected")
+
+        reconciliation_close_interrupted = False
+
+        def interrupt_reconciliation_parent_close(descriptor):
+            nonlocal reconciliation_close_interrupted
+            status_value = os.fstat(descriptor)
+            real_close(descriptor)
+            if (
+                not reconciliation_close_interrupted
+                and (status_value.st_dev, status_value.st_ino) == parent_identity
+                and interrupted_partial.is_dir()
+                and not os.path.lexists(str(interrupted_final))
+            ):
+                reconciliation_close_interrupted = True
+                raise KeyboardInterrupt("synthetic reconciliation parent-close interruption")
+
+        os.close = interrupt_reconciliation_parent_close
+        try:
+            reconciliation_state = reconcile_staging_publication(
+                interrupted_partial,
+                interrupted_final,
+                interrupted_manifest_sha256,
+                repo_root=interrupted_repo,
+                allow_synthetic=True,
+            )
+        finally:
+            os.close = real_close
+        if (
+            reconciliation_state != "rolled_back_to_source_verified_durable"
+            or not reconciliation_close_interrupted
+            or not interrupted_partial.is_dir()
+            or os.path.lexists(str(interrupted_final))
+        ):
+            raise RuntimeError("destination-only publication was not reconciled exactly")
+        source_only_state = reconcile_staging_publication(
+            interrupted_partial,
+            interrupted_final,
+            interrupted_manifest_sha256,
+            repo_root=interrupted_repo,
+            allow_synthetic=True,
+        )
+        if source_only_state != "source_only_verified_durable":
+            raise RuntimeError("source-only publication was not reverified and fsynced")
+        corruptions.append({
+            "name": "publication-directory-interruption-close-reconciliation",
             "detected_errors": 1,
         })
 
@@ -12965,6 +14174,46 @@ def run_unit_self_test():
                 root,
                 "project/cp2_c_clarification_approval.json",
                 ".without-composite-approval",
+            ),
+            expected_error="source archive does not contain every curated SOURCE_INPUTS file",
+        )
+
+        corruption(
+            "missing-detached-readiness-clarification-archive-member",
+            lambda root: remove_archive_member(
+                root,
+                "docs/cp2_c_detached_readiness_binding_clarification_proposed.md",
+                ".without-detached-readiness-clarification",
+            ),
+            expected_error="source archive does not contain every curated SOURCE_INPUTS file",
+        )
+
+        corruption(
+            "missing-detached-readiness-approval-archive-member",
+            lambda root: remove_archive_member(
+                root,
+                "project/cp2_c_detached_readiness_binding_approval.json",
+                ".without-detached-readiness-approval",
+            ),
+            expected_error="source archive does not contain every curated SOURCE_INPUTS file",
+        )
+
+        corruption(
+            "missing-incident-disposition-archive-member",
+            lambda root: remove_archive_member(
+                root,
+                "docs/cp2_predata_incident_log.md",
+                ".without-incident-disposition",
+            ),
+            expected_error="source archive does not contain every curated SOURCE_INPUTS file",
+        )
+
+        corruption(
+            "missing-incident-disposition-approval-archive-member",
+            lambda root: remove_archive_member(
+                root,
+                "project/cp2_predata_incident_disposition_approval.json",
+                ".without-incident-disposition-approval",
             ),
             expected_error="source archive does not contain every curated SOURCE_INPUTS file",
         )
@@ -14241,6 +15490,11 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--reconcile-staging-publication", nargs=2,
+        metavar=("SOURCE_DIR", "DESTINATION_DIR"), type=Path,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--expected-manifest-sha256", metavar="HEX",
         help="require SHA256SUMS to match this externally retained SHA-256 digest",
     )
@@ -14287,6 +15541,7 @@ def main():
         int(args.self_test) + int(args.unit_self_test)
         + int(args.assemble_unit is not None)
         + int(args.finalize_staging_noreplace is not None)
+        + int(args.reconcile_staging_publication is not None)
         + int(args.verify_unit_anchor_prevalidated is not None)
         + actual_modes
     )
@@ -14331,15 +15586,34 @@ def main():
             raise ValueError("--expected-manifest-sha256 is verification-only")
         return assemble_unit_report(args.assemble_unit[0], args.assemble_unit[1])
     if args.finalize_staging_noreplace is not None:
-        if args.expected_manifest_sha256 is not None:
-            raise ValueError("--expected-manifest-sha256 is verification-only")
+        if (
+            args.expected_manifest_sha256 is None
+            or HEX64_PATTERN.fullmatch(args.expected_manifest_sha256) is None
+        ):
+            raise ValueError(
+                "staging finalization requires one lowercase external manifest SHA-256"
+            )
         finalize_staging_noreplace(
-            args.finalize_staging_noreplace[0], args.finalize_staging_noreplace[1]
+            args.finalize_staging_noreplace[0],
+            args.finalize_staging_noreplace[1],
+            expected_manifest_sha256=args.expected_manifest_sha256,
         )
-        print(
-            "Read-only CP2-A/B plus CP2-C2 staging finalized without overwrite "
-            "(not a CP2 seal): "
-            + str(args.finalize_staging_noreplace[1])
+        # Namespace commit is the final authoritative operation.  In
+        # particular, do not perform fallible output after publication.
+        return 0
+    if args.reconcile_staging_publication is not None:
+        if (
+            args.expected_manifest_sha256 is None
+            or HEX64_PATTERN.fullmatch(args.expected_manifest_sha256) is None
+        ):
+            raise ValueError(
+                "publication reconciliation requires one lowercase external "
+                "manifest SHA-256"
+            )
+        reconcile_staging_publication(
+            args.reconcile_staging_publication[0],
+            args.reconcile_staging_publication[1],
+            args.expected_manifest_sha256,
         )
         return 0
     if args.verify_unit_anchor_prevalidated is not None:

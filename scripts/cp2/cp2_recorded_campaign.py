@@ -22,6 +22,7 @@ import math
 import os
 from pathlib import Path, PurePosixPath
 import re
+import select
 import shlex
 import shutil
 import signal
@@ -29,10 +30,11 @@ import socket
 import stat
 import struct
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 import yaml
 
@@ -45,6 +47,47 @@ BAG_SHA256 = (
     "57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9",
     "c51b0064681dfb287b6653f5fd54e6c56af5d9151c866e17574fdbc527db2311",
     "6dc6192fac63dd0a05ba745548b41fe8cae14724168a98865a81d37e681bbc81",
+)
+STRICT_PAIR_DELTA_NS = 20_000_000
+PAIR_INDEX_POSTAUTH_ENV = "CP2_POSTAUTH_PAIR_INDEX"
+PAIR_INDEX_POSTAUTH_VALUE = "held-readiness-bound-fd-v1"
+BAG_IDENTITY_FIELDS = (
+    "st_dev",
+    "st_ino",
+    "st_mode",
+    "st_nlink",
+    "st_uid",
+    "st_gid",
+    "st_size",
+    "st_mtime_ns",
+    "st_ctime_ns",
+)
+PAIR_INDEX_KEYS = (
+    "schema_version",
+    "record_type",
+    "sequence_index",
+    "sequence_id",
+    "pair_index",
+    "anchor_filtered_index",
+    "anchor_camera_id",
+    "cam0_filtered_index",
+    "cam1_filtered_index",
+    "cam0_record_time_ns",
+    "cam1_record_time_ns",
+    "cam0_header_time_ns",
+    "cam1_header_time_ns",
+    "absolute_record_delta_ns",
+)
+SERIAL_PAIR_KEYS = PAIR_INDEX_KEYS + (
+    "camera_timestamp_ns",
+    "selected",
+    "enqueue_entered",
+    "enqueue_returned",
+    "enqueue_status",
+    "processing_entered",
+    "processing_returned",
+    "processing_status",
+    "updater_invocation_ids",
 )
 STATIC_PATHS = (
     "config/euroc_mav/estimator_config.yaml",
@@ -71,14 +114,53 @@ MAX_DEPENDENCY_MEMBER_BYTES = 256 * 1024 * 1024
 MAX_DEPENDENCY_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 MAX_DEPENDENCY_MEMBERS = 100000
 MAX_ELF_BYTES = 1024 * 1024 * 1024
+MAX_ISOLATED_WORKER_MESSAGE_BYTES = 256 * 1024
+MAX_FAILURE_MESSAGE_BYTES = 8192
+MAX_CLEANUP_FAILURES = 16
+
+# Linux x86_64 namespace/mount constants.  The recorded worker runs as PID 1
+# in a fresh PID namespace and sees the host tree recursively read-only except
+# for three precreated, descriptor-bound roots.  The trusted parent alone owns
+# cleanup and final no-replace publication.
+_CLONE_NEWNS = 0x00020000
+_CLONE_NEWPID = 0x20000000
+_CLONE_NEWUSER = 0x10000000
+_MS_NOSUID = 2
+_MS_NODEV = 4
+_MS_NOEXEC = 8
+_MS_BIND = 4096
+_MS_REC = 16384
+_MS_PRIVATE = 1 << 18
+_MNT_DETACH = 2
+_AT_FDCWD = -100
+_AT_RECURSIVE = 0x8000
+_OPEN_TREE_CLONE = 1
+_OPEN_TREE_CLOEXEC = 0o2000000
+_MOVE_MOUNT_F_EMPTY_PATH = 0x00000004
+_SYS_OPEN_TREE_X86_64 = 428
+_SYS_MOVE_MOUNT_X86_64 = 429
+_SYS_PIDFD_SEND_SIGNAL_X86_64 = 424
+_SYS_PIDFD_OPEN_X86_64 = 434
+_SYS_MOUNT_SETATTR_X86_64 = 442
+_MOUNT_ATTR_RDONLY = 0x00000001
+_PR_SET_PDEATHSIG = 1
+_PR_CAPBSET_DROP = 24
+_PR_SET_NO_NEW_PRIVS = 38
+_PR_CAP_AMBIENT = 47
+_PR_CAP_AMBIENT_CLEAR_ALL = 4
+_LINUX_CAPABILITY_VERSION_3 = 0x20080522
 CONTRACT_INPUTS = (
     "docs/cp2_artifact_schema.md",
     "docs/cp2_c_composite_and_readiness_clarification.md",
+    "docs/cp2_c_detached_readiness_binding_clarification_proposed.md",
     "docs/cp2_one_pass_contract.md",
+    "docs/cp2_predata_incident_log.md",
     "docs/cp2_recorded_evidence_contract.md",
     "docs/iterated_update_spec.md",
     "project/cp1_gate.yaml",
     "project/cp2_c_clarification_approval.json",
+    "project/cp2_c_detached_readiness_binding_approval.json",
+    "project/cp2_predata_incident_disposition_approval.json",
     "project/cp2_gate.yaml",
 )
 STRICT_FP_SOURCE_TARGETS = {
@@ -123,6 +205,125 @@ class CampaignError(RuntimeError):
     """A fail-closed campaign contract violation."""
 
 
+def _bounded_failure_record(failure: BaseException) -> Dict[str, Any]:
+    """Retain exact short diagnostics and a digest/size for every message."""
+
+    raw_message = str(failure).encode("utf-8", errors="replace")
+    retained = raw_message[:MAX_FAILURE_MESSAGE_BYTES]
+    while retained:
+        try:
+            decoded = retained.decode("utf-8", errors="strict")
+            break
+        except UnicodeDecodeError as exc:
+            if exc.end != len(retained):
+                raise
+            retained = retained[:-1]
+    else:
+        decoded = ""
+    return {
+        "type": type(failure).__name__,
+        "message": decoded,
+        "message_utf8_sha256": hashlib.sha256(raw_message).hexdigest(),
+        "message_utf8_size": len(raw_message),
+        "message_truncated": len(raw_message) > len(retained),
+    }
+
+
+def _validate_failure_record(record: Any, label: str) -> Dict[str, Any]:
+    required = {
+        "type", "message", "message_utf8_sha256", "message_utf8_size",
+        "message_truncated",
+    }
+    if (
+        not isinstance(record, Mapping)
+        or set(record) != required
+        or not isinstance(record.get("type"), str)
+        or not record.get("type")
+        or not isinstance(record.get("message"), str)
+        or not isinstance(record.get("message_utf8_sha256"), str)
+        or re.fullmatch(
+            r"[0-9a-f]{64}", record.get("message_utf8_sha256", "")
+        ) is None
+        or type(record.get("message_utf8_size")) is not int
+        or record.get("message_utf8_size") < 0
+        or not isinstance(record.get("message_truncated"), bool)
+    ):
+        _fail(label + " failure record shape differs")
+    retained = record["message"].encode("utf-8")
+    if (
+        len(retained) > MAX_FAILURE_MESSAGE_BYTES
+        or record["message_utf8_size"] < len(retained)
+        or record["message_truncated"]
+        != (record["message_utf8_size"] > len(retained))
+        or (
+            not record["message_truncated"]
+            and hashlib.sha256(retained).hexdigest()
+            != record["message_utf8_sha256"]
+        )
+    ):
+        _fail(label + " failure record content differs")
+    return dict(record)
+
+
+class _CampaignFailureBundle(CampaignError):
+    """One primary failure plus an ordered, independently retained cleanup set."""
+
+    def __init__(
+        self,
+        primary_failure: Mapping[str, Any],
+        cleanup_failures: Sequence[Mapping[str, Any]] = (),
+    ) -> None:
+        self.primary_failure = _validate_failure_record(
+            primary_failure, "primary"
+        )
+        if (
+            not isinstance(cleanup_failures, Sequence)
+            or isinstance(cleanup_failures, (str, bytes, bytearray))
+            or len(cleanup_failures) > MAX_CLEANUP_FAILURES
+        ):
+            _fail("cleanup failure population differs")
+        self.cleanup_failures = tuple(
+            _validate_failure_record(record, "cleanup")
+            for record in cleanup_failures
+        )
+        summary = (
+            self.primary_failure["type"] + ": "
+            + self.primary_failure["message"]
+        )
+        if self.cleanup_failures:
+            summary += "; cleanup: " + "; ".join(
+                record["type"] + ": " + record["message"]
+                for record in self.cleanup_failures
+            )
+        super().__init__(summary)
+
+
+def _failure_components(
+    failure: BaseException,
+) -> Tuple[Dict[str, Any], Tuple[Dict[str, Any], ...]]:
+    if isinstance(failure, _CampaignFailureBundle):
+        return (
+            dict(failure.primary_failure),
+            tuple(dict(record) for record in failure.cleanup_failures),
+        )
+    return _bounded_failure_record(failure), ()
+
+
+def _append_cleanup_failures(
+    failure: BaseException,
+    cleanup_failures: Sequence[BaseException],
+) -> _CampaignFailureBundle:
+    primary, retained_cleanup = _failure_components(failure)
+    additions = tuple(
+        _bounded_failure_record(item) for item in cleanup_failures
+    )
+    if len(retained_cleanup) + len(additions) > MAX_CLEANUP_FAILURES:
+        _fail("cleanup failure population exceeds its exact bound")
+    return _CampaignFailureBundle(
+        primary, retained_cleanup + additions
+    )
+
+
 def _fail(message: str) -> None:
     raise CampaignError(message)
 
@@ -162,12 +363,14 @@ def _write_new(path: Path, content: bytes, mode: int = 0o600) -> None:
 
 def _copy_new(source: Path, destination: Path, mode: int = 0o600) -> None:
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    source_fd = os.open(str(source), os.O_RDONLY | os.O_CLOEXEC |
-                        getattr(os, "O_NOFOLLOW", 0))
-    destination_fd = os.open(
-        str(destination), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC |
-        getattr(os, "O_NOFOLLOW", 0), mode)
+    source_fd = -1
+    destination_fd = -1
     try:
+        source_fd = os.open(str(source), os.O_RDONLY | os.O_CLOEXEC |
+                            getattr(os, "O_NOFOLLOW", 0))
+        destination_fd = os.open(
+            str(destination), os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+            os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0), mode)
         source_status = os.fstat(source_fd)
         destination_status = os.fstat(destination_fd)
         if (not stat.S_ISREG(source_status.st_mode) or source_status.st_nlink != 1 or
@@ -192,8 +395,12 @@ def _copy_new(source: Path, destination: Path, mode: int = 0o600) -> None:
                 offset += count
         os.fsync(destination_fd)
     finally:
-        os.close(source_fd)
-        os.close(destination_fd)
+        try:
+            if source_fd >= 0:
+                os.close(source_fd)
+        finally:
+            if destination_fd >= 0:
+                os.close(destination_fd)
 
 
 def _fsync_directory(path: Path) -> None:
@@ -236,11 +443,34 @@ def _same_stat(left: os.stat_result, right: os.stat_result) -> bool:
     return all(getattr(left, name) == getattr(right, name) for name in names)
 
 
+def _stat_tuple(value: os.stat_result) -> Tuple[int, ...]:
+    return tuple(
+        getattr(value, name)
+        for name in (
+            "st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid",
+            "st_size", "st_mtime_ns", "st_ctime_ns",
+        )
+    )
+
+
+def _same_stat_without_ctime(
+    left: os.stat_result, right: os.stat_result
+) -> bool:
+    return all(
+        getattr(left, name) == getattr(right, name)
+        for name in (
+            "st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid",
+            "st_size", "st_mtime_ns",
+        )
+    )
+
+
 @dataclass
 class BoundRegularFile:
     path: Path
     descriptor: int
     identity: os.stat_result
+    provenance_path: Optional[Path] = None
 
     def revalidate(self) -> None:
         current = os.fstat(self.descriptor)
@@ -267,8 +497,9 @@ class BoundRegularFile:
 
     def close(self) -> None:
         if self.descriptor >= 0:
-            os.close(self.descriptor)
+            descriptor = self.descriptor
             self.descriptor = -1
+            os.close(descriptor)
 
     def __enter__(self) -> "BoundRegularFile":
         return self
@@ -276,6 +507,889 @@ class BoundRegularFile:
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
         del exc_type, exc, traceback
         self.close()
+
+
+@dataclass(frozen=True)
+class _BagMountBinding:
+    """One parent-held bag inode and its private read-only mount target."""
+
+    original_path: Path
+    target_path: Path
+    source_descriptor: int
+    source_identity: os.stat_result
+    target_identity: os.stat_result
+
+
+def _directory_object_identity(value: os.stat_result) -> Tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        stat.S_IFMT(value.st_mode),
+        value.st_uid,
+        value.st_gid,
+    )
+
+
+@dataclass
+class OwnedTemporaryWorkspace:
+    """Descriptor-bind and safely remove one private dynamic build tree."""
+
+    path: Path
+    descriptor: int
+    identity: Tuple[int, ...]
+    owner_uid: int
+    device: int
+
+    @classmethod
+    def create(
+        cls,
+        prefix: str = "schurvio-cp2-recorded-build-",
+    ) -> "OwnedTemporaryWorkspace":
+        if prefix not in {
+            "schurvio-cp2-recorded-build-",
+            "schurvio-cp2-final-verifier-",
+            "schurvio-cp2-bag-bind-",
+        }:
+            _fail("private campaign workspace prefix is not approved")
+        parent_fd = os.open(
+            "/tmp",
+            os.O_RDONLY
+            | os.O_DIRECTORY
+            | os.O_CLOEXEC
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        name: Optional[str] = None
+        path: Optional[Path] = None
+        created = False
+        descriptor = -1
+        before: Optional[os.stat_result] = None
+        try:
+            for _ in range(128):
+                candidate = prefix + os.urandom(16).hex()
+                name = candidate
+                try:
+                    os.mkdir(candidate, 0o700, dir_fd=parent_fd)
+                except FileExistsError:
+                    name = None
+                    continue
+                except BaseException:
+                    # The syscall may have succeeded before an asynchronous
+                    # exception was delivered.  The preselected unique name
+                    # gives the cleanup path an exact candidate to reconcile.
+                    created = True
+                    raise
+                created = True
+                break
+            if not created or name is None:
+                _fail("could not allocate a private campaign workspace")
+            path = (Path("/tmp") / name).absolute()
+            before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(before.st_mode)
+                or stat.S_ISLNK(before.st_mode)
+                or before.st_uid != os.geteuid()
+            ):
+                _fail("private campaign workspace identity is invalid")
+            descriptor = os.open(
+                name,
+                os.O_RDONLY
+                | os.O_DIRECTORY
+                | os.O_CLOEXEC
+                | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=parent_fd,
+            )
+            opened = os.fstat(descriptor)
+            if not _same_stat(before, opened):
+                _fail("private campaign workspace changed while opening")
+            os.fchmod(descriptor, 0o700)
+            os.fsync(descriptor)
+            opened = os.fstat(descriptor)
+            by_path = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                _directory_object_identity(opened)
+                != _directory_object_identity(before)
+                or not _same_stat(opened, by_path)
+                or stat.S_IMODE(opened.st_mode) != 0o700
+            ):
+                _fail("private campaign workspace mode transition differs")
+            result = cls(
+                path=path,
+                descriptor=descriptor,
+                identity=_directory_object_identity(opened),
+                owner_uid=opened.st_uid,
+                device=opened.st_dev,
+            )
+            result.revalidate()
+            descriptor = -1
+            return result
+        except BaseException as original_error:
+            cleanup_error: Optional[BaseException] = None
+            try:
+                if created and name is not None:
+                    try:
+                        os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        if descriptor >= 0:
+                            held = os.fstat(descriptor)
+                            if held.st_nlink != 0:
+                                _fail(
+                                    "failed private campaign workspace escaped "
+                                    "its allocated name"
+                                )
+                        created = False
+                if created and name is not None and descriptor < 0:
+                    descriptor = os.open(
+                        name,
+                        os.O_RDONLY
+                        | os.O_DIRECTORY
+                        | os.O_CLOEXEC
+                        | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=parent_fd,
+                    )
+                if created and name is not None:
+                    held = os.fstat(descriptor)
+                    current = os.stat(
+                        name, dir_fd=parent_fd, follow_symlinks=False
+                    )
+                    if (
+                        not stat.S_ISDIR(held.st_mode)
+                        or held.st_uid != os.geteuid()
+                        or stat.S_IMODE(held.st_mode) != 0o700
+                        or _directory_object_identity(held)
+                        != _directory_object_identity(current)
+                        or (
+                            before is not None
+                            and (
+                                _directory_object_identity(held)
+                                != _directory_object_identity(before)
+                            )
+                        )
+                        or os.listdir(descriptor)
+                    ):
+                        _fail(
+                            "failed private campaign workspace changed before "
+                            "cleanup"
+                        )
+                    os.rmdir(name, dir_fd=parent_fd)
+                    if os.fstat(descriptor).st_nlink != 0:
+                        _fail(
+                            "failed private campaign workspace survived cleanup"
+                        )
+                    os.fsync(parent_fd)
+            except BaseException as exc:
+                cleanup_error = exc
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+                    descriptor = -1
+            if cleanup_error is not None:
+                raise CampaignError(
+                    "private campaign workspace creation failed and exact "
+                    "cleanup failed: " + str(cleanup_error)
+                ) from original_error
+            raise
+        finally:
+            os.close(parent_fd)
+
+    def revalidate(self) -> None:
+        if self.descriptor < 0:
+            _fail("private campaign workspace is closed")
+        held = os.fstat(self.descriptor)
+        by_path = os.lstat(str(self.path))
+        if (
+            not stat.S_ISDIR(held.st_mode)
+            or stat.S_ISLNK(by_path.st_mode)
+            or _directory_object_identity(held) != self.identity
+            or _directory_object_identity(by_path) != self.identity
+            or held.st_uid != self.owner_uid
+            or stat.S_IMODE(held.st_mode) != 0o700
+            or stat.S_IMODE(by_path.st_mode) != 0o700
+        ):
+            _fail("private campaign workspace root binding changed")
+
+    def rebind_current_mount_namespace(self) -> None:
+        """Replace the inherited directory FD with this namespace's mount."""
+
+        self.revalidate()
+        old_descriptor = self.descriptor
+        replacement = os.open(
+            str(self.path),
+            os.O_RDONLY
+            | os.O_DIRECTORY
+            | os.O_CLOEXEC
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            opened = os.fstat(replacement)
+            if (
+                _directory_object_identity(opened) != self.identity
+                or stat.S_IMODE(opened.st_mode) != 0o700
+            ):
+                _fail("private workspace namespace rebind changed identity")
+            self.descriptor = replacement
+            replacement = -1
+            os.close(old_descriptor)
+            self.revalidate()
+        finally:
+            if replacement >= 0:
+                os.close(replacement)
+
+    def _remove_children(self, directory_fd: int, label: str) -> None:
+        for name in sorted(os.listdir(directory_fd), key=lambda item: item.encode("utf-8")):
+            if not name or name in (".", "..") or "/" in name or "\0" in name:
+                _fail("private campaign workspace contains an unsafe name")
+            before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if before.st_uid != self.owner_uid:
+                _fail("private campaign workspace entry owner changed: " + label + name)
+            if stat.S_ISDIR(before.st_mode):
+                if before.st_dev != self.device:
+                    _fail("private campaign workspace crossed a device: " + label + name)
+                child_fd = os.open(
+                    name,
+                    os.O_RDONLY
+                    | os.O_DIRECTORY
+                    | os.O_CLOEXEC
+                    | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=directory_fd,
+                )
+                try:
+                    opened = os.fstat(child_fd)
+                    if _directory_object_identity(opened) != _directory_object_identity(before):
+                        _fail("private campaign directory changed while opening: " + label + name)
+                    self._remove_children(child_fd, label + name + "/")
+                    by_path = os.stat(
+                        name, dir_fd=directory_fd, follow_symlinks=False
+                    )
+                    if (
+                        _directory_object_identity(os.fstat(child_fd))
+                        != _directory_object_identity(opened)
+                        or _directory_object_identity(by_path)
+                        != _directory_object_identity(opened)
+                    ):
+                        _fail("private campaign directory was substituted: " + label + name)
+                    os.rmdir(name, dir_fd=directory_fd)
+                    if os.fstat(child_fd).st_nlink != 0:
+                        _fail(
+                            "held private campaign directory survived cleanup: "
+                            + label + name
+                        )
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(child_fd)
+            else:
+                if not hasattr(os, "O_PATH") or before.st_nlink != 1:
+                    _fail(
+                        "private campaign leaf is not single-link/O_PATH-bindable: "
+                        + label + name
+                    )
+                leaf_fd = os.open(
+                    name,
+                    os.O_PATH
+                    | os.O_CLOEXEC
+                    | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=directory_fd,
+                )
+                try:
+                    opened = os.fstat(leaf_fd)
+                    current = os.stat(
+                        name, dir_fd=directory_fd, follow_symlinks=False
+                    )
+                    if (
+                        not _same_stat(before, opened)
+                        or not _same_stat(before, current)
+                    ):
+                        _fail(
+                            "private campaign leaf was substituted: "
+                            + label + name
+                        )
+                    os.unlink(name, dir_fd=directory_fd)
+                    if os.fstat(leaf_fd).st_nlink != 0:
+                        _fail(
+                            "held private campaign leaf survived cleanup: "
+                            + label + name
+                        )
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(leaf_fd)
+
+    def remove(self) -> None:
+        """Remove only the still-bound owned tree; never follow a substitute."""
+
+        if self.descriptor < 0:
+            return
+        removed = False
+        try:
+            self.revalidate()
+            self._remove_children(self.descriptor, "")
+            self.revalidate()
+            if os.listdir(self.descriptor):
+                _fail("private campaign workspace was repopulated during cleanup")
+            os.fsync(self.descriptor)
+            self.revalidate()
+            if self.path.parent != Path("/tmp") or "/" in self.path.name:
+                _fail("private campaign workspace parent/name changed")
+            parent_fd = os.open(
+                "/tmp",
+                os.O_RDONLY
+                | os.O_DIRECTORY
+                | os.O_CLOEXEC
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            try:
+                by_parent = os.stat(
+                    self.path.name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+                if _directory_object_identity(by_parent) != self.identity:
+                    _fail("private campaign workspace changed before removal")
+                os.rmdir(self.path.name, dir_fd=parent_fd)
+                if os.fstat(self.descriptor).st_nlink != 0:
+                    _fail("held private campaign workspace survived removal")
+                removed = True
+                try:
+                    os.stat(
+                        self.path.name,
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                except FileNotFoundError:
+                    pass
+                else:
+                    _fail("private campaign workspace path survived cleanup")
+                os.fsync(parent_fd)
+            finally:
+                os.close(parent_fd)
+        except BaseException:
+            if removed or os.fstat(self.descriptor).st_nlink == 0:
+                descriptor = self.descriptor
+                self.descriptor = -1
+                os.close(descriptor)
+            raise
+        else:
+            descriptor = self.descriptor
+            self.descriptor = -1
+            os.close(descriptor)
+
+
+class _MountAttr(ctypes.Structure):
+    _fields_ = (
+        ("attr_set", ctypes.c_uint64),
+        ("attr_clr", ctypes.c_uint64),
+        ("propagation", ctypes.c_uint64),
+        ("userns_fd", ctypes.c_uint64),
+    )
+
+
+class _CapabilityHeader(ctypes.Structure):
+    _fields_ = (
+        ("version", ctypes.c_uint32),
+        ("pid", ctypes.c_int),
+    )
+
+
+class _CapabilityData(ctypes.Structure):
+    _fields_ = (
+        ("effective", ctypes.c_uint32),
+        ("permitted", ctypes.c_uint32),
+        ("inheritable", ctypes.c_uint32),
+    )
+
+
+def _raise_namespace_errno(label: str) -> None:
+    value = ctypes.get_errno()
+    raise CampaignError(label + " failed: " + os.strerror(value))
+
+
+def _write_complete(descriptor: int, payload: bytes, label: str) -> None:
+    offset = 0
+    while offset < len(payload):
+        try:
+            written = os.write(descriptor, payload[offset:])
+        except InterruptedError:
+            continue
+        if written <= 0:
+            _fail(label + " made no progress")
+        offset += written
+
+
+def _write_pipe_record(descriptor: int, record: Mapping[str, Any]) -> None:
+    payload = _json_bytes(record)
+    if len(payload) > MAX_ISOLATED_WORKER_MESSAGE_BYTES:
+        _fail("isolated-worker status exceeds its exact bound")
+    _write_complete(descriptor, payload, "isolated-worker status write")
+
+
+def _read_pipe_record(descriptor: int) -> Mapping[str, Any]:
+    content = bytearray()
+    while True:
+        try:
+            block = os.read(descriptor, 4096)
+        except InterruptedError:
+            continue
+        if not block:
+            break
+        content.extend(block)
+        if len(content) > MAX_ISOLATED_WORKER_MESSAGE_BYTES:
+            _fail("isolated-worker status exceeds its exact bound")
+    if not content or content[-1:] != b"\n" or bytes(content).count(b"\n") != 1:
+        _fail("isolated-worker status framing differs")
+    try:
+        result = schema.strict_json_loads(bytes(content))
+    except schema.SchemaError as exc:
+        raise CampaignError("isolated-worker status is not strict JSON") from exc
+    if not isinstance(result, Mapping):
+        _fail("isolated-worker status is not an object")
+    return result
+
+
+def _write_proc_map(path: str, content: bytes) -> None:
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        _write_complete(descriptor, content, "namespace identity-map write")
+    finally:
+        os.close(descriptor)
+
+
+def _mount_set_readonly(path: Path, readonly: bool, recursive: bool) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.syscall.restype = ctypes.c_long
+    attributes = _MountAttr(
+        _MOUNT_ATTR_RDONLY if readonly else 0,
+        0 if readonly else _MOUNT_ATTR_RDONLY,
+        0,
+        0,
+    )
+    result = libc.syscall(
+        ctypes.c_long(_SYS_MOUNT_SETATTR_X86_64),
+        ctypes.c_int(_AT_FDCWD),
+        ctypes.c_char_p(os.fsencode(str(path))),
+        ctypes.c_uint(_AT_RECURSIVE if recursive else 0),
+        ctypes.byref(attributes),
+        ctypes.c_size_t(ctypes.sizeof(attributes)),
+    )
+    if result != 0:
+        _raise_namespace_errno("mount_setattr " + str(path))
+
+
+def _current_mount_points() -> Tuple[Path, ...]:
+    try:
+        lines = Path("/proc/self/mountinfo").read_text(
+            encoding="utf-8", errors="strict"
+        ).splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise CampaignError("cannot read the current mount inventory") from exc
+    result = []
+    for line in lines:
+        fields = line.split(" ")
+        if len(fields) < 7 or "-" not in fields:
+            _fail("current mount inventory framing differs")
+        encoded = fields[4]
+        for escaped, literal in (
+            ("\\040", " "), ("\\011", "\t"),
+            ("\\012", "\n"), ("\\134", "\\"),
+        ):
+            encoded = encoded.replace(escaped, literal)
+        if not encoded.startswith("/") or os.path.normpath(encoded) != encoded:
+            _fail("current mount inventory contains a nonnormalized path")
+        result.append(Path(encoded))
+    return tuple(result)
+
+
+def _install_worker_mount_and_pid_namespaces(
+    writable_roots: Sequence[Tuple[Path, Tuple[int, ...]]],
+    bag_mounts: Sequence[_BagMountBinding],
+) -> None:
+    """Bind exact capabilities, make all other paths read-only, stage PID NS."""
+
+    platform = os.uname()
+    if platform.sysname != "Linux" or platform.machine != "x86_64":
+        _fail("CP2-C write sandbox requires native Linux x86_64")
+    if len(os.listdir("/proc/self/task")) != 1:
+        _fail("CP2-C write sandbox requires a single-threaded supervisor")
+    if len(writable_roots) != 2:
+        _fail("CP2-C write sandbox root population differs")
+    if len(bag_mounts) != len(BAG_SHA256):
+        _fail("CP2-C bag mount population differs")
+    roots = tuple(Path(item[0]).absolute() for item in writable_roots)
+    expected_root_identities = tuple(item[1] for item in writable_roots)
+    if len(set(roots)) != len(roots) or any(
+        item == Path("/") or str(item) != os.path.normpath(str(item))
+        for item in roots
+    ):
+        _fail("CP2-C write sandbox roots are not exact and distinct")
+    identities: List[Tuple[int, ...]] = []
+    mount_points = _current_mount_points()
+    for item, expected in zip(roots, expected_root_identities):
+        value = item.lstat()
+        if (
+            not stat.S_ISDIR(value.st_mode)
+            or stat.S_ISLNK(value.st_mode)
+            or value.st_uid != os.geteuid()
+            or stat.S_IMODE(value.st_mode) != 0o700
+            or _directory_object_identity(value) != expected
+        ):
+            _fail("CP2-C write sandbox root identity/mode differs")
+        if os.listdir(str(item)):
+            _fail("CP2-C write sandbox root was prepopulated before binding")
+        if any(
+            mount == item or item in mount.parents for mount in mount_points
+        ):
+            _fail("CP2-C write sandbox root contains a pre-existing mount")
+        identities.append(_directory_object_identity(value))
+    bag_targets = set()
+    for binding in bag_mounts:
+        target = Path(binding.target_path).absolute()
+        if (
+            target in bag_targets
+            or target.parent == Path("/")
+            or os.path.normpath(str(target)) != str(target)
+            or not str(target).startswith(str(target.parent) + os.path.sep)
+        ):
+            _fail("CP2-C bag mount target is not exact and distinct")
+        if any(
+            mount == target
+            or mount == target.parent
+            or target.parent in mount.parents
+            for mount in mount_points
+        ):
+            _fail("CP2-C bag mount workspace contains a pre-existing mount")
+        bag_targets.add(target)
+        source_status = os.fstat(binding.source_descriptor)
+        target_status = target.lstat()
+        if (
+            not _same_stat(source_status, binding.source_identity)
+            or not stat.S_ISREG(source_status.st_mode)
+            or source_status.st_nlink != 1
+            or not _same_stat(target_status, binding.target_identity)
+            or not stat.S_ISREG(target_status.st_mode)
+            or target_status.st_nlink != 1
+            or target_status.st_uid != os.geteuid()
+            or stat.S_IMODE(target_status.st_mode) != 0o600
+        ):
+            _fail("CP2-C bag mount source/target identity differs")
+
+    original_uid = os.geteuid()
+    original_gid = os.getegid()
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.syscall.restype = ctypes.c_long
+    libc.unshare.argtypes = (ctypes.c_int,)
+    libc.unshare.restype = ctypes.c_int
+    if libc.unshare(_CLONE_NEWUSER | _CLONE_NEWNS | _CLONE_NEWPID) != 0:
+        _raise_namespace_errno("unshare user/mount/PID namespaces")
+    _write_proc_map("/proc/self/setgroups", b"deny\n")
+    _write_proc_map(
+        "/proc/self/uid_map",
+        (str(original_uid) + " " + str(original_uid) + " 1\n").encode("ascii"),
+    )
+    _write_proc_map(
+        "/proc/self/gid_map",
+        (str(original_gid) + " " + str(original_gid) + " 1\n").encode("ascii"),
+    )
+    if os.geteuid() != original_uid or os.getegid() != original_gid:
+        _fail("namespace identity mapping changed the effective identity")
+
+    libc.mount.argtypes = (
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_ulong,
+        ctypes.c_void_p,
+    )
+    libc.mount.restype = ctypes.c_int
+    if libc.mount(None, b"/", None, _MS_REC | _MS_PRIVATE, None) != 0:
+        _raise_namespace_errno("private mount propagation")
+    for item in roots:
+        encoded = os.fsencode(str(item))
+        if libc.mount(encoded, encoded, None, _MS_BIND | _MS_REC, None) != 0:
+            _raise_namespace_errno("bind writable root " + str(item))
+    for binding in bag_mounts:
+        detached_mount = libc.syscall(
+            ctypes.c_long(_SYS_OPEN_TREE_X86_64),
+            ctypes.c_int(_AT_FDCWD),
+            ctypes.c_char_p(os.fsencode(str(binding.original_path))),
+            ctypes.c_uint(_OPEN_TREE_CLONE | _OPEN_TREE_CLOEXEC),
+        )
+        if detached_mount < 0:
+            _raise_namespace_errno(
+                "open_tree held recorded input " + str(binding.original_path)
+            )
+        try:
+            if not _same_stat(
+                os.fstat(detached_mount), binding.source_identity
+            ):
+                _fail("CP2-C detached bag mount changed source identity")
+            moved = libc.syscall(
+                ctypes.c_long(_SYS_MOVE_MOUNT_X86_64),
+                ctypes.c_int(detached_mount),
+                ctypes.c_char_p(b""),
+                ctypes.c_int(_AT_FDCWD),
+                ctypes.c_char_p(os.fsencode(str(binding.target_path))),
+                ctypes.c_uint(_MOVE_MOUNT_F_EMPTY_PATH),
+            )
+            if moved != 0:
+                _raise_namespace_errno(
+                    "move_mount held recorded input "
+                    + str(binding.target_path)
+                )
+        finally:
+            os.close(detached_mount)
+        mounted = os.lstat(str(binding.target_path))
+        if not _same_stat(mounted, binding.source_identity):
+            _fail("CP2-C read-only bag bind changed source identity")
+    _mount_set_readonly(Path("/"), True, True)
+    for item in roots:
+        _mount_set_readonly(item, False, True)
+    for item, expected in zip(roots, identities):
+        current = item.lstat()
+        if _directory_object_identity(current) != expected:
+            _fail("CP2-C write sandbox root binding changed")
+    for binding in bag_mounts:
+        mounted = os.lstat(str(binding.target_path))
+        if not _same_stat(mounted, binding.source_identity):
+            _fail("CP2-C read-only bag binding changed after sealing")
+        write_probe = -1
+        try:
+            write_probe = os.open(
+                str(binding.target_path),
+                os.O_WRONLY | os.O_CLOEXEC |
+                getattr(os, "O_NOFOLLOW", 0),
+            )
+        except OSError as exc:
+            if exc.errno not in (errno.EROFS, errno.EACCES, errno.EPERM):
+                raise
+        else:
+            _fail("CP2-C held bag mount is writable")
+        finally:
+            if write_probe >= 0:
+                os.close(write_probe)
+
+    denied = Path("/tmp") / (
+        ".schurvio-cp2-denied-write-" + os.urandom(16).hex()
+    )
+    denied_fd = -1
+    try:
+        denied_fd = os.open(
+            str(denied),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC |
+            getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except OSError as exc:
+        if exc.errno not in (errno.EROFS, errno.EACCES, errno.EPERM):
+            raise
+    else:
+        try:
+            created = os.fstat(denied_fd)
+            by_path = os.lstat(str(denied))
+            if not _same_stat(created, by_path):
+                _fail("denied write probe was substituted before cleanup")
+            denied.unlink()
+            if os.fstat(denied_fd).st_nlink != 0:
+                _fail("denied write probe survived exact cleanup")
+            _fsync_directory(denied.parent)
+        finally:
+            os.close(denied_fd)
+            denied_fd = -1
+        _fail("CP2-C write sandbox allowed an unbound /tmp creation")
+    finally:
+        if denied_fd >= 0:
+            os.close(denied_fd)
+    if os.path.lexists(str(denied)):
+        _fail("CP2-C write-sandbox denial probe left a path")
+
+    allowed_probe = roots[1] / (
+        ".namespace-write-probe-" + os.urandom(16).hex()
+    )
+    allowed_fd = os.open(
+        str(allowed_probe),
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC |
+        getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        _write_complete(allowed_fd, b"namespace write probe\n", "sandbox probe")
+        os.fsync(allowed_fd)
+    finally:
+        try:
+            before_unlink = os.fstat(allowed_fd)
+            by_path = os.lstat(str(allowed_probe))
+            if not _same_stat(before_unlink, by_path):
+                _fail("sandbox write probe was substituted before cleanup")
+            allowed_probe.unlink()
+            if os.fstat(allowed_fd).st_nlink != 0:
+                _fail("sandbox write probe survived exact cleanup")
+            _fsync_directory(allowed_probe.parent)
+        finally:
+            os.close(allowed_fd)
+
+
+def _install_trusted_verifier_mount_and_pid_namespaces(
+    writable_workspace: Path,
+    expected_workspace_identity: Tuple[int, ...],
+) -> None:
+    """Stage a fresh PID namespace with only one exact writable workspace."""
+
+    platform = os.uname()
+    if platform.sysname != "Linux" or platform.machine != "x86_64":
+        _fail("trusted verifier isolation requires native Linux x86_64")
+    if len(os.listdir("/proc/self/task")) != 1:
+        _fail("trusted verifier isolation requires a single-threaded supervisor")
+    workspace = Path(writable_workspace).absolute()
+    if (
+        workspace.parent != Path("/tmp")
+        or not workspace.name.startswith("schurvio-cp2-final-verifier-")
+        or os.path.normpath(str(workspace)) != str(workspace)
+    ):
+        _fail("trusted verifier writable workspace path differs")
+    before = workspace.lstat()
+    if (
+        not stat.S_ISDIR(before.st_mode)
+        or stat.S_ISLNK(before.st_mode)
+        or before.st_uid != os.geteuid()
+        or stat.S_IMODE(before.st_mode) != 0o700
+        or _directory_object_identity(before) != expected_workspace_identity
+    ):
+        _fail("trusted verifier writable workspace identity differs")
+    if any(
+        mount == workspace or workspace in mount.parents
+        for mount in _current_mount_points()
+    ):
+        _fail("trusted verifier writable workspace contains a mount")
+
+    original_uid = os.geteuid()
+    original_gid = os.getegid()
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.unshare.argtypes = (ctypes.c_int,)
+    libc.unshare.restype = ctypes.c_int
+    if libc.unshare(_CLONE_NEWUSER | _CLONE_NEWNS | _CLONE_NEWPID) != 0:
+        _raise_namespace_errno("unshare trusted verifier namespaces")
+    _write_proc_map("/proc/self/setgroups", b"deny\n")
+    _write_proc_map(
+        "/proc/self/uid_map",
+        (str(original_uid) + " " + str(original_uid) + " 1\n").encode("ascii"),
+    )
+    _write_proc_map(
+        "/proc/self/gid_map",
+        (str(original_gid) + " " + str(original_gid) + " 1\n").encode("ascii"),
+    )
+    if os.geteuid() != original_uid or os.getegid() != original_gid:
+        _fail("trusted verifier namespace identity mapping changed")
+
+    libc.mount.argtypes = (
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_ulong,
+        ctypes.c_void_p,
+    )
+    libc.mount.restype = ctypes.c_int
+    if libc.mount(None, b"/", None, _MS_REC | _MS_PRIVATE, None) != 0:
+        _raise_namespace_errno("trusted verifier private mount propagation")
+    encoded = os.fsencode(str(workspace))
+    if libc.mount(encoded, encoded, None, _MS_BIND | _MS_REC, None) != 0:
+        _raise_namespace_errno("bind trusted verifier writable workspace")
+    _mount_set_readonly(Path("/"), True, True)
+    _mount_set_readonly(workspace, False, True)
+    after = workspace.lstat()
+    if (
+        _directory_object_identity(after) != expected_workspace_identity
+        or stat.S_IMODE(after.st_mode) != 0o700
+    ):
+        _fail("trusted verifier writable workspace binding changed")
+
+
+def _enter_worker_pid_namespace_and_drop_capabilities(
+    capability_probe: Path,
+) -> None:
+    """Become PID 1, install the namespace-local procfs, and drop all caps."""
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.umount2.argtypes = (ctypes.c_char_p, ctypes.c_int)
+    libc.umount2.restype = ctypes.c_int
+    libc.mount.argtypes = (
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_ulong,
+        ctypes.c_void_p,
+    )
+    libc.mount.restype = ctypes.c_int
+    proc_flags = _MS_NOSUID | _MS_NODEV | _MS_NOEXEC
+    # A mount namespace created together with a user namespace receives
+    # locked copies of inherited mounts; overmounting is permitted whereas
+    # detaching that inherited procfs is deliberately rejected by the kernel.
+    if libc.mount(b"proc", b"/proc", b"proc", proc_flags, None) != 0:
+        _raise_namespace_errno("overmount PID-namespace procfs")
+    _mount_set_readonly(Path("/proc"), True, True)
+    if os.getpid() != 1 or len(os.listdir("/proc/self/task")) != 1:
+        _fail("campaign worker is not the sole PID-namespace init")
+
+    libc.prctl.restype = ctypes.c_int
+    if libc.prctl(_PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+        _raise_namespace_errno("PR_SET_NO_NEW_PRIVS")
+    ambient_result = libc.prctl(
+        _PR_CAP_AMBIENT,
+        _PR_CAP_AMBIENT_CLEAR_ALL,
+        0,
+        0,
+        0,
+    )
+    if ambient_result != 0 and ctypes.get_errno() != errno.EINVAL:
+        _raise_namespace_errno("clear ambient capabilities")
+    try:
+        last_capability = int(
+            Path("/proc/sys/kernel/cap_last_cap").read_text(
+                encoding="ascii"
+            ).strip()
+        )
+    except (OSError, ValueError) as exc:
+        raise CampaignError("cannot read the kernel capability bound") from exc
+    if last_capability < 0 or last_capability > 255:
+        _fail("kernel capability bound is outside the supported range")
+    for capability in range(last_capability + 1):
+        if libc.prctl(_PR_CAPBSET_DROP, capability, 0, 0, 0) != 0:
+            _raise_namespace_errno(
+                "drop capability bounding-set bit " + str(capability)
+            )
+    header = _CapabilityHeader(_LINUX_CAPABILITY_VERSION_3, 0)
+    data = (_CapabilityData * 2)()
+    capset = getattr(libc, "capset", None)
+    if capset is None:
+        _fail("capset is unavailable")
+    capset.argtypes = (ctypes.POINTER(_CapabilityHeader), ctypes.POINTER(_CapabilityData))
+    capset.restype = ctypes.c_int
+    if capset(ctypes.byref(header), data) != 0:
+        _raise_namespace_errno("drop namespace capabilities")
+    status_fields: Dict[str, str] = {}
+    for line in Path("/proc/self/status").read_text(encoding="ascii").splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            status_fields[key] = value.strip()
+    if any(
+        status_fields.get(name) != "0000000000000000"
+        for name in ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb")
+    ):
+        _fail("campaign worker retained a capability")
+    if status_fields.get("NoNewPrivs") != "1":
+        _fail("campaign worker did not retain no-new-privileges")
+
+    encoded = os.fsencode(str(capability_probe))
+    if libc.mount(encoded, encoded, None, _MS_BIND, None) == 0:
+        libc.umount2(encoded, _MNT_DETACH)
+        _fail("campaign worker retained mount authority")
+    if ctypes.get_errno() not in (errno.EPERM, errno.EACCES):
+        _raise_namespace_errno("post-drop mount denial")
+
+
+def _set_parent_death_signal(signal_number: int) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.prctl.restype = ctypes.c_int
+    if libc.prctl(_PR_SET_PDEATHSIG, signal_number, 0, 0, 0) != 0:
+        _raise_namespace_errno("PR_SET_PDEATHSIG")
 
 
 def _bind_regular_file(path: Path) -> BoundRegularFile:
@@ -419,27 +1533,71 @@ def _registry_bag_paths(registry_bytes: bytes) -> Tuple[Path, Path, Path]:
     return tuple(resolved)  # type: ignore[return-value]
 
 
-def encode_static_bundle(root: Path, repository: Optional[Any] = None
+def _prepare_parent_bag_mounts(
+    registry_bytes: bytes,
+    mount_owner: OwnedTemporaryWorkspace,
+) -> Tuple[Tuple[BoundRegularFile, ...], Tuple[_BagMountBinding, ...]]:
+    """Hold and hash each frozen bag, then allocate exact empty mount targets."""
+
+    mount_owner.revalidate()
+    original_paths = _registry_bag_paths(registry_bytes)
+    held: List[BoundRegularFile] = []
+    bindings: List[_BagMountBinding] = []
+    try:
+        for index, (original, expected_sha256) in enumerate(
+            zip(original_paths, BAG_SHA256)
+        ):
+            bound = _bind_regular_file(original)
+            held.append(bound)
+            if bound.sha256() != expected_sha256:
+                _fail("registry-resolved bag hash differs from frozen CP2 identity")
+            target = mount_owner.path / "{:02d}-recorded-input.bag".format(index)
+            _write_new(target, b"", 0o600)
+            target_status = target.lstat()
+            if (
+                not stat.S_ISREG(target_status.st_mode)
+                or target_status.st_nlink != 1
+                or target_status.st_uid != os.geteuid()
+                or stat.S_IMODE(target_status.st_mode) != 0o600
+            ):
+                _fail("recorded-input bind target identity differs")
+            bindings.append(_BagMountBinding(
+                original_path=original,
+                target_path=target,
+                source_descriptor=bound.descriptor,
+                source_identity=bound.identity,
+                target_identity=target_status,
+            ))
+        os.fsync(mount_owner.descriptor)
+        mount_owner.revalidate()
+        return tuple(held), tuple(bindings)
+    except BaseException:
+        for bound in held:
+            bound.close()
+        raise
+
+
+def encode_static_bundle(root: Path, authorization: Optional[Any] = None
                          ) -> Tuple[bytes, List[Dict[str, Any]]]:
     payload = bytearray(STATIC_BUNDLE_DOMAIN)
     payload.extend(len(STATIC_PATHS).to_bytes(8, "big"))
     records: List[Dict[str, Any]] = []
     for relative, expected in zip(STATIC_PATHS, STATIC_SHA256):
         path = root / relative
-        if repository is None:
+        if authorization is None:
             with _bind_regular_file(path) as bound:
                 content = _read_fd_all(bound.descriptor, 64 * 1024 * 1024,
                                        "frozen static input")
                 bound.revalidate()
         else:
-            repository.revalidate()
-            descriptor = repository.duplicate_tracked_fd(relative)
+            authorization.revalidate()
+            descriptor = authorization.duplicate_source_fd(relative)
             try:
                 content = _read_fd_all(descriptor, 64 * 1024 * 1024,
                                        "held frozen static input")
             finally:
                 os.close(descriptor)
-            repository.revalidate()
+            authorization.revalidate()
         digest = hashlib.sha256(content).hexdigest()
         if digest != expected:
             _fail("frozen static input hash mismatch: " + relative)
@@ -556,6 +1714,21 @@ class CommandRecorder:
         self.authorization = authorization
         self.records: List[Dict[str, Any]] = []
         self.environments: Dict[str, Dict[str, Any]] = {}
+        self._lifetime_guards: List[Callable[[], None]] = []
+
+    def add_lifetime_guard(self, guard: Callable[[], None]) -> None:
+        """Add one exact identity check around every later child command."""
+
+        if not callable(guard):
+            _fail("command lifetime guard is not callable")
+        guard()
+        self._lifetime_guards.append(guard)
+
+    def revalidate_lifetimes(self) -> None:
+        self.authorization.revalidate()
+        for guard in self._lifetime_guards:
+            guard()
+        self.authorization.revalidate()
 
     def add_environment(self, environment_id: str,
                         variables: Mapping[str, str]) -> str:
@@ -625,6 +1798,7 @@ class CommandRecorder:
             "trajectory", "evaluation", "verification",
         }:
             _fail("command phase is outside the frozen enum")
+        self.revalidate_lifetimes()
         environment_sha = self.add_environment(environment_id, variables)
         command_id = len(self.records)
         stdout_rel = "logs/{:03d}_{}.stdout".format(command_id, phase)
@@ -632,15 +1806,25 @@ class CommandRecorder:
         stdout_path = self.root / stdout_rel
         stderr_path = self.root / stderr_rel
         stdout_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        stdout_fd = os.open(str(stdout_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL |
-                            os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        stderr_fd = os.open(str(stderr_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL |
-                            os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        started = _utc_now()
-        timed_out = False
+        stdout_fd = -1
+        stderr_fd = -1
         process: Optional[subprocess.Popen[bytes]] = None
         try:
-            self.authorization.revalidate()
+            stdout_fd = os.open(
+                str(stdout_path),
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC |
+                getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            stderr_fd = os.open(
+                str(stderr_path),
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC |
+                getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            started = _utc_now()
+            timed_out = False
+            self.revalidate_lifetimes()
             process = subprocess.Popen(
                 list(argv), cwd=str(cwd), env=dict(variables), stdin=subprocess.DEVNULL,
                 stdout=stdout_fd, stderr=stderr_fd, start_new_session=True,
@@ -652,7 +1836,7 @@ class CommandRecorder:
             timed_out = outcome.timed_out
             if outcome.surviving_descendants:
                 _fail("command left a surviving process group")
-            self.authorization.revalidate()
+            self.revalidate_lifetimes()
             os.fsync(stdout_fd)
             os.fsync(stderr_fd)
         finally:
@@ -662,9 +1846,11 @@ class CommandRecorder:
                         process, "command")
             finally:
                 try:
-                    os.close(stdout_fd)
+                    if stdout_fd >= 0:
+                        os.close(stdout_fd)
                 finally:
-                    os.close(stderr_fd)
+                    if stderr_fd >= 0:
+                        os.close(stderr_fd)
         finished = _utc_now()
         record = {
             "schema_version": 1, "record_type": "command",
@@ -1203,11 +2389,16 @@ def _loader_dso_records(path: Path, executable: Path) -> List[Dict[str, Any]]:
     return records
 
 
-def _build_runtime(repo_root: Path, partial: Path, unit_artifact: Path,
-                   authorization: Any, recorder: CommandRecorder,
-                   source_commit: str) -> Dict[str, Any]:
-    workspace = Path(tempfile.mkdtemp(prefix="schurvio-cp2-recorded-build-", dir="/tmp"))
-    os.chmod(str(workspace), 0o700)
+def _build_runtime_in_workspace(
+    repo_root: Path,
+    partial: Path,
+    unit_artifact: Path,
+    authorization: Any,
+    recorder: CommandRecorder,
+    source_commit: str,
+    workspace: Path,
+) -> Dict[str, Any]:
+    workspace = Path(workspace).absolute()
     source_space = workspace / "src"
     source_space.mkdir(mode=0o700)
     archive = workspace / "source_snapshot.tar"
@@ -1326,6 +2517,54 @@ def _build_runtime(repo_root: Path, partial: Path, unit_artifact: Path,
     }
 
 
+def _build_runtime(
+    repo_root: Path,
+    partial: Path,
+    unit_artifact: Path,
+    authorization: Any,
+    recorder: CommandRecorder,
+    source_commit: str,
+    workspace_owner: Optional[OwnedTemporaryWorkspace] = None,
+) -> Dict[str, Any]:
+    """Build in one descriptor-owned workspace and transfer cleanup ownership."""
+
+    owner = workspace_owner
+    created_here = owner is None
+    if owner is None:
+        owner = OwnedTemporaryWorkspace.create()
+    try:
+        owner.revalidate()
+        recorder.add_lifetime_guard(owner.revalidate)
+        result = _build_runtime_in_workspace(
+            repo_root,
+            partial,
+            unit_artifact,
+            authorization,
+            recorder,
+            source_commit,
+            owner.path,
+        )
+        owner.revalidate()
+        if (
+            not isinstance(result, dict)
+            or Path(result.get("workspace", "")).absolute() != owner.path
+        ):
+            _fail("runtime build returned a different private workspace")
+        owner.revalidate()
+        result["workspace_owner"] = owner
+        return result
+    except BaseException as original_error:
+        if created_here:
+            try:
+                owner.remove()
+            except BaseException as cleanup_error:
+                raise CampaignError(
+                    "runtime build failed and private-workspace cleanup failed: "
+                    + str(cleanup_error)
+                ) from original_error
+        raise
+
+
 def _flatten_dump(raw: bytes) -> Dict[str, Any]:
     try:
         parsed = yaml.load(raw.decode("utf-8", "strict"), Loader=_UniqueKeyLoader)
@@ -1422,15 +2661,276 @@ def _copy_readiness(partial: Path, authorization: Any) -> None:
     _write_new(partial / "readiness/barrier.json", _json_bytes(authorization.record))
 
 
+def _pair_u64(value: Any, label: str) -> int:
+    try:
+        return schema.validate_u64(value, label)
+    except schema.SchemaError as exc:
+        raise CampaignError(str(exc)) from exc
+
+
+def _validate_pair_index_bytes(
+    payload: bytes, sequence_index: int, sequence_id: str
+) -> Tuple[Mapping[str, Any], ...]:
+    """Validate the independent selector output without importing CP2-D."""
+
+    if not isinstance(payload, bytes):
+        _fail("pair-index payload is not bytes")
+    try:
+        parsed = schema.strict_jsonl_loads(payload)
+        if schema.jsonl_bytes(parsed) != payload:
+            _fail("pair index is not canonical JSONL")
+    except schema.SchemaError as exc:
+        raise CampaignError("pair index is not strict JSONL") from exc
+    rows = tuple(parsed)
+    if len(rows) < 2:
+        _fail("pair index must contain at least two selected rows")
+    if (
+        isinstance(sequence_index, bool)
+        or not isinstance(sequence_index, int)
+        or not 0 <= sequence_index < len(SEQUENCES)
+        or SEQUENCES[sequence_index] != sequence_id
+    ):
+        _fail("pair-index requested sequence identity differs")
+    used_camera_indices = set()
+    previous_anchor = -1
+    selected_times: List[int] = []
+    for expected_index, row in enumerate(rows):
+        if not isinstance(row, Mapping) or set(row) != set(PAIR_INDEX_KEYS):
+            _fail("pair-index row has the wrong exact key set")
+        if (
+            type(row.get("schema_version")) is not int
+            or row.get("schema_version") != 1
+            or row.get("record_type") != "pair_index"
+            or _pair_u64(row.get("sequence_index"), "pair-index sequence")
+            != sequence_index
+            or row.get("sequence_id") != sequence_id
+        ):
+            _fail("pair-index row identity differs from the requested sequence")
+        if _pair_u64(row["pair_index"], "pair index") != expected_index:
+            _fail("pair indices are not contiguous from zero")
+        anchor = _pair_u64(
+            row["anchor_filtered_index"], "anchor filtered index"
+        )
+        camera_id = _pair_u64(row["anchor_camera_id"], "anchor camera ID")
+        cam0 = _pair_u64(row["cam0_filtered_index"], "cam0 filtered index")
+        cam1 = _pair_u64(row["cam1_filtered_index"], "cam1 filtered index")
+        if camera_id not in (0, 1) or anchor != (
+            cam0 if camera_id == 0 else cam1
+        ):
+            _fail("pair anchor camera/index relation is invalid")
+        if anchor <= previous_anchor or cam0 == cam1:
+            _fail("pair selection order or camera identity is invalid")
+        previous_anchor = anchor
+        if cam0 in used_camera_indices or cam1 in used_camera_indices:
+            _fail("a camera message is reused by the pair population")
+        used_camera_indices.update((cam0, cam1))
+        cam0_record = _pair_u64(row["cam0_record_time_ns"], "cam0 record time")
+        cam1_record = _pair_u64(row["cam1_record_time_ns"], "cam1 record time")
+        _pair_u64(row["cam0_header_time_ns"], "cam0 header time")
+        _pair_u64(row["cam1_header_time_ns"], "cam1 header time")
+        delta = _pair_u64(
+            row["absolute_record_delta_ns"], "absolute record delta"
+        )
+        if (
+            delta != abs(cam0_record - cam1_record)
+            or delta >= STRICT_PAIR_DELTA_NS
+        ):
+            _fail("pair record-time delta is not exact or outside the strict bound")
+        candidate_index = cam1 if camera_id == 0 else cam0
+        anchor_time = cam0_record if camera_id == 0 else cam1_record
+        candidate_time = cam1_record if camera_id == 0 else cam0_record
+        if candidate_index <= anchor or candidate_time < anchor_time:
+            _fail("pair candidate is not forward of its anchor")
+        selected_times.append(cam0_record)
+    if any(
+        selected_times[index] > selected_times[index + 1]
+        for index in range(len(selected_times) - 1)
+    ):
+        _fail("selected cam0 record times reverse")
+    if selected_times[-1] <= selected_times[0]:
+        _fail("selected pair population has no positive duration")
+    return rows
+
+
+def _project_serial_pairs_to_pair_index_bytes(
+    serial_pair_bytes: bytes, sequence_index: int, sequence_id: str
+) -> bytes:
+    """Project CP2-C serial rows onto the exact source-key population."""
+
+    index = _pair_u64(sequence_index, "serial projection sequence index")
+    if index >= len(SEQUENCES) or SEQUENCES[index] != sequence_id:
+        _fail("serial projection sequence identity differs from the frozen inventory")
+    if not isinstance(serial_pair_bytes, bytes):
+        _fail("serial projection input is not bytes")
+    try:
+        decoded = schema.strict_jsonl_loads(serial_pair_bytes)
+        if schema.jsonl_bytes(decoded) != serial_pair_bytes:
+            _fail("serial projection input is not canonical JSONL")
+    except schema.SchemaError as exc:
+        raise CampaignError("serial projection input is not strict JSONL") from exc
+    projected: List[Mapping[str, Any]] = []
+    previous: Optional[Tuple[int, int]] = None
+    for row in decoded:
+        if not isinstance(row, Mapping) or set(row) != set(SERIAL_PAIR_KEYS):
+            _fail("serial projection row has the wrong exact key set")
+        if (
+            type(row["schema_version"]) is not int
+            or row["schema_version"] != 1
+            or row["record_type"] != "serial_pair"
+        ):
+            _fail("serial projection row has the wrong schema identity")
+        row_sequence = _pair_u64(
+            row["sequence_index"], "serial projection row sequence"
+        )
+        pair_index = _pair_u64(row["pair_index"], "serial projection row pair")
+        if (
+            row_sequence >= len(SEQUENCES)
+            or row["sequence_id"] != SEQUENCES[row_sequence]
+        ):
+            _fail("serial projection row has an invalid frozen sequence identity")
+        order = (row_sequence, pair_index)
+        if previous is not None and order <= previous:
+            _fail("serial projection rows are duplicate or globally out of order")
+        previous = order
+        for field in (
+            "anchor_filtered_index",
+            "anchor_camera_id",
+            "cam0_filtered_index",
+            "cam1_filtered_index",
+            "cam0_record_time_ns",
+            "cam1_record_time_ns",
+            "cam0_header_time_ns",
+            "cam1_header_time_ns",
+            "camera_timestamp_ns",
+            "absolute_record_delta_ns",
+        ):
+            _pair_u64(row[field], "serial projection " + field)
+        if row["selected"] is not True:
+            _fail("serial projection row is not selected")
+        for field in (
+            "enqueue_entered",
+            "enqueue_returned",
+            "processing_entered",
+            "processing_returned",
+        ):
+            if not isinstance(row[field], bool):
+                _fail("serial projection event flag is not Boolean")
+        if not isinstance(row["enqueue_status"], str) or not isinstance(
+            row["processing_status"], str
+        ):
+            _fail("serial projection status is not a string")
+        invocation_ids = row["updater_invocation_ids"]
+        if not isinstance(invocation_ids, list):
+            _fail("serial projection invocation IDs are invalid")
+        normalized_invocations = [
+            _pair_u64(value, "serial projection invocation ID")
+            for value in invocation_ids
+        ]
+        if len(normalized_invocations) != len(set(normalized_invocations)):
+            _fail("serial projection invocation IDs are invalid")
+        if row_sequence == index:
+            source = {key: row[key] for key in PAIR_INDEX_KEYS}
+            source["record_type"] = "pair_index"
+            projected.append(source)
+    try:
+        payload = schema.jsonl_bytes(projected)
+    except schema.SchemaError as exc:
+        raise CampaignError("cannot encode projected pair index") from exc
+    _validate_pair_index_bytes(payload, index, sequence_id)
+    return payload
+
+
+def _bag_identity_argument(identity: os.stat_result) -> str:
+    values = []
+    for field in BAG_IDENTITY_FIELDS:
+        value = getattr(identity, field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            _fail("bound bag identity is not canonical nonnegative integers")
+        values.append(str(value))
+    return ":".join(values)
+
+
+def _run_pair_index_command(
+    *,
+    repo_root: Path,
+    partial: Path,
+    build: Mapping[str, Any],
+    recorder: CommandRecorder,
+    authorization: Any,
+    bound_bag: BoundRegularFile,
+    sequence_index: int,
+) -> bytes:
+    """Retain the independent bag selector output from fresh source."""
+
+    authorization.revalidate()
+    bound_bag.revalidate()
+    helper = Path(build["source_space"]) / "scripts/cp2/cp2_pair_index_extract.py"
+    helper_status = helper.lstat()
+    if not stat.S_ISREG(helper_status.st_mode) or helper_status.st_nlink != 1:
+        _fail("fresh source lacks the pair-index subprocess helper")
+    environment = {
+        PAIR_INDEX_POSTAUTH_ENV: PAIR_INDEX_POSTAUTH_VALUE,
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/bin:/bin",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONPATH": "/opt/ros/noetic/lib/python3/dist-packages",
+    }
+    argv = [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        str(helper),
+        "--sequence-index",
+        str(sequence_index),
+        "--sequence-id",
+        SEQUENCES[sequence_index],
+        "--bag-path",
+        str(bound_bag.path),
+        "--parent-bag-fd",
+        str(bound_bag.descriptor),
+        "--bag-identity",
+        _bag_identity_argument(bound_bag.identity),
+    ]
+    command = recorder.run(
+        "pair_index",
+        argv,
+        Path(repo_root),
+        "pair_index_v1",
+        environment,
+        sequence_index=sequence_index,
+    )
+    authorization.revalidate()
+    bound_bag.revalidate()
+    if command["exit_code"] != 0 or command["timed_out"]:
+        _fail("independent pair-index subprocess failed")
+    stdout_path = partial / command["stdout"]
+    stderr_path = partial / command["stderr"]
+    for label, path in (("stdout", stdout_path), ("stderr", stderr_path)):
+        status_value = path.lstat()
+        if not stat.S_ISREG(status_value.st_mode) or status_value.st_nlink != 1:
+            _fail("pair-index subprocess " + label + " is unsafe")
+        if schema.sha256_file(path) != command[label + "_sha256"]:
+            _fail("pair-index subprocess " + label + " digest differs")
+    stdout = stdout_path.read_bytes()
+    if stderr_path.read_bytes() != b"":
+        _fail("successful pair-index subprocess wrote diagnostics")
+    try:
+        if schema.jsonl_bytes(schema.strict_jsonl_loads(stdout)) != stdout:
+            _fail("pair-index subprocess stdout is not canonical JSONL")
+    except schema.SchemaError as exc:
+        raise CampaignError("pair-index subprocess stdout is invalid") from exc
+    _validate_pair_index_bytes(stdout, sequence_index, SEQUENCES[sequence_index])
+    authorization.revalidate()
+    bound_bag.revalidate()
+    return stdout
+
+
 def _run_sequences(repo_root: Path, partial: Path, build: Mapping[str, Any],
                    recorder: CommandRecorder, authorization: Any,
                    bags: Sequence[BoundRegularFile], source_commit: str,
                    config_sha: str) -> Tuple[List[Dict[str, Any]], str]:
-    # Imported only inside the already-authorized campaign.  Its subprocess
-    # implementation independently reads the held bag descriptor and retains
-    # its canonical pair-index result as command stdout.
-    import cp2_sequence_actual as sequence_actual
-
     serial_parts: List[bytes] = []
     run_records: List[Dict[str, Any]] = []
     for sequence_index, (bound, expected_hash, offset) in enumerate(
@@ -1438,7 +2938,7 @@ def _run_sequences(repo_root: Path, partial: Path, build: Mapping[str, Any],
         authorization.revalidate()
         if bound.sha256() != expected_hash:
             _fail("bag SHA-256 differs before run: " + SEQUENCES[sequence_index])
-        independent_pair_index = sequence_actual._run_pair_index_command(
+        independent_pair_index = _run_pair_index_command(
             repo_root=repo_root, partial=partial, build=build,
             recorder=recorder, authorization=authorization,
             bound_bag=bound, sequence_index=sequence_index)
@@ -1498,9 +2998,8 @@ def _run_sequences(repo_root: Path, partial: Path, build: Mapping[str, Any],
         if dso_before != dso_after:
             _fail("runtime DSO identity set changed during sequence run")
         serial_bytes = (trace / "serial.jsonl").read_bytes()
-        projected_pair_index = (
-            sequence_actual.project_serial_pairs_to_pair_index_bytes(
-                serial_bytes, sequence_index, SEQUENCES[sequence_index]))
+        projected_pair_index = _project_serial_pairs_to_pair_index_bytes(
+            serial_bytes, sequence_index, SEQUENCES[sequence_index])
         if projected_pair_index != independent_pair_index:
             _fail("runtime serial selection differs from independent pair-index replay: " +
                   SEQUENCES[sequence_index])
@@ -1907,15 +3406,15 @@ def _commands_bytes(recorder: CommandRecorder) -> bytes:
     return b"".join(_json_bytes(record) for record in recorder.records)
 
 
-def _held_source_hash(repository: Any, relative: str) -> str:
-    repository.revalidate()
-    descriptor = repository.duplicate_tracked_fd(relative)
+def _held_source_hash(authorization: Any, relative: str) -> str:
+    authorization.revalidate()
+    descriptor = authorization.duplicate_source_fd(relative)
     try:
         content = _read_fd_all(descriptor, 64 * 1024 * 1024,
                                "held provenance source")
     finally:
         os.close(descriptor)
-    repository.revalidate()
+    authorization.revalidate()
     return hashlib.sha256(content).hexdigest()
 
 
@@ -1928,7 +3427,7 @@ def _build_provenance(
         ) -> Dict[str, Any]:
     contracts = [
         {"path": relative,
-         "sha256": _held_source_hash(authorization.repository, relative)}
+         "sha256": _held_source_hash(authorization, relative)}
         for relative in CONTRACT_INPUTS
     ]
     readiness_entrypoints = authorization.record.get("entrypoints")
@@ -1980,7 +3479,8 @@ def _build_provenance(
         })
         inputs.append({
             "sequence_index": index, "sequence_id": SEQUENCES[index],
-            "offset_seconds": OFFSETS[index], "bag_path": str(bag.path),
+            "offset_seconds": OFFSETS[index],
+            "bag_path": str(bag.provenance_path or bag.path),
             "bag_size": row["bag_size"],
             "bag_sha256_before": BAG_SHA256[index],
             "bag_sha256_after": BAG_SHA256[index],
@@ -2083,14 +3583,24 @@ def _build_report(partial: Path, summary: Mapping[str, Any], replay: Mapping[str
     return report
 
 
-def _detached_verify_recorded(partial: Path, build: Mapping[str, Any],
-                              manifest_sha256: str, authorization: Any) -> None:
+def _detached_verify_recorded(
+    partial: Path,
+    build: Mapping[str, Any],
+    manifest_sha256: str,
+    authorization: Any,
+    temporary_owner: Optional[OwnedTemporaryWorkspace] = None,
+) -> None:
     verifier = Path(build["source_space"]) / "scripts/cp2/verify_report.py"
-    if _held_source_hash(authorization.repository,
+    if _held_source_hash(authorization,
                          "scripts/cp2/verify_report.py") != schema.sha256_file(verifier):
         _fail("detached verifier bytes differ from held source")
-    temporary = Path(tempfile.mkdtemp(prefix="schurvio-cp2-final-verifier-", dir="/tmp"))
-    os.chmod(str(temporary), 0o700)
+    created_here = temporary_owner is None
+    if temporary_owner is None:
+        temporary_owner = OwnedTemporaryWorkspace.create(
+            "schurvio-cp2-final-verifier-"
+        )
+    temporary_owner.revalidate()
+    temporary = temporary_owner.path
     stdout_path = temporary / "stdout"
     stderr_path = temporary / "stderr"
     environment = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
@@ -2123,56 +3633,419 @@ def _detached_verify_recorded(partial: Path, build: Mapping[str, Any],
         expected_line = "CP2-C recorded artifact independently verified: " + str(partial)
         if expected_line not in stdout_path.read_text(encoding="utf-8", errors="strict").splitlines():
             _fail("detached CP2-C verifier stdout lacks its exact success line")
-    finally:
-        for path in (stdout_path, stderr_path):
+        temporary_owner.revalidate()
+    except BaseException as original_error:
+        if created_here:
             try:
-                path.unlink()
+                temporary_owner.remove()
+            except BaseException as cleanup_error:
+                raise CampaignError(
+                    "detached verifier failed and private-workspace cleanup "
+                    "failed: " + str(cleanup_error)
+                ) from original_error
+        raise
+    else:
+        if created_here:
+            temporary_owner.remove()
+
+
+def _trusted_parent_detached_verify_recorded(
+    partial: Path,
+    manifest_sha256: str,
+    authorization: Any,
+    temporary_owner: OwnedTemporaryWorkspace,
+) -> None:
+    """Verify as PID 1; retain and read only exact parent-opened log inodes."""
+
+    partial = Path(partial).absolute()
+    if re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None:
+        _fail("trusted-parent verifier manifest identity is invalid")
+    temporary_owner.revalidate()
+    stdout_path = temporary_owner.path / "trusted-parent.stdout"
+    stderr_path = temporary_owner.path / "trusted-parent.stderr"
+    verifier_fd = -1
+    stdout_fd = -1
+    stderr_fd = -1
+    try:
+        verifier_fd = authorization.duplicate_source_fd(
+            "scripts/cp2/verify_report.py"
+        )
+        verifier_status = os.fstat(verifier_fd)
+        if not stat.S_ISREG(verifier_status.st_mode):
+            _fail("trusted-parent detached verifier is not a held regular file")
+        stdout_fd = os.open(
+            stdout_path.name,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC |
+            getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=temporary_owner.descriptor,
+        )
+        stdout_identity = _trusted_verifier_stream_identity(os.fstat(stdout_fd))
+        _validate_trusted_verifier_stream(
+            stdout_fd, stdout_path, stdout_identity,
+            temporary_owner, "stdout",
+        )
+        stderr_fd = os.open(
+            stderr_path.name,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC |
+            getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=temporary_owner.descriptor,
+        )
+        stderr_identity = _trusted_verifier_stream_identity(os.fstat(stderr_fd))
+        _validate_trusted_verifier_stream(
+            stderr_fd, stderr_path, stderr_identity,
+            temporary_owner, "stderr",
+        )
+        os.fsync(temporary_owner.descriptor)
+        authorization.revalidate()
+        verifier_path = "/proc/self/fd/{}".format(verifier_fd)
+        result = _run_trusted_verifier_in_namespaces(
+            [
+                "/usr/bin/python3", "-I", "-B", verifier_path,
+                "--verify-recorded", str(partial),
+                "--manifest-sha256", manifest_sha256,
+            ],
+            {
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+                "LC_ALL": "C.UTF-8",
+            },
+            verifier_fd,
+            stdout_fd,
+            stderr_fd,
+            stdout_path,
+            stderr_path,
+            stdout_identity,
+            stderr_identity,
+            temporary_owner,
+        )
+        required = {
+            "schema_version", "record_type", "worker_started",
+            "descendants_absent", "exit_code", "timed_out",
+            "error_type", "error",
+        }
+        if (
+            set(result) != required
+            or type(result.get("schema_version")) is not int
+            or result.get("schema_version") != 1
+            or result.get("record_type")
+            != "cp2_trusted_verifier_supervisor_result"
+            or not isinstance(result.get("worker_started"), bool)
+            or result.get("descendants_absent") is not True
+            or not isinstance(result.get("timed_out"), bool)
+            or (
+                result.get("error_type") is None
+                and (
+                    result.get("error") is not None
+                    or type(result.get("exit_code")) is not int
+                )
+            )
+            or (
+                result.get("error_type") is not None
+                and (
+                    not isinstance(result.get("error_type"), str)
+                    or not isinstance(result.get("error"), str)
+                    or result.get("exit_code") is not None
+                )
+            )
+        ):
+            _fail("trusted verifier supervisor result shape differs")
+        authorization.revalidate()
+        os.fsync(stdout_fd)
+        os.fsync(stderr_fd)
+        _validate_trusted_verifier_stream(
+            stdout_fd, stdout_path, stdout_identity,
+            temporary_owner, "stdout",
+        )
+        _validate_trusted_verifier_stream(
+            stderr_fd, stderr_path, stderr_identity,
+            temporary_owner, "stderr",
+        )
+        stdout_bytes = _read_fd_all(
+            stdout_fd, 16 * 1024 * 1024, "trusted verifier stdout"
+        )
+        stderr_bytes = _read_fd_all(
+            stderr_fd, 16 * 1024 * 1024, "trusted verifier stderr"
+        )
+        _validate_trusted_verifier_stream(
+            stdout_fd, stdout_path, stdout_identity,
+            temporary_owner, "stdout",
+        )
+        _validate_trusted_verifier_stream(
+            stderr_fd, stderr_path, stderr_identity,
+            temporary_owner, "stderr",
+        )
+        if result["error_type"] is not None:
+            _fail(
+                "trusted-parent detached verifier isolation failed: "
+                + result["error_type"] + ": " + result["error"]
+            )
+        if result["timed_out"]:
+            _fail("trusted-parent detached CP2-C verifier timed out")
+        if result["exit_code"] != 0:
+            _fail(
+                "trusted-parent detached CP2-C verifier rejected the sealed "
+                "artifact: "
+                + stderr_bytes.decode("utf-8", errors="replace")[-4000:]
+            )
+        expected_line = (
+            "CP2-C recorded artifact independently verified: " + str(partial)
+        )
+        try:
+            stdout_lines = stdout_bytes.decode("utf-8", errors="strict").splitlines()
+        except UnicodeError as exc:
+            raise CampaignError(
+                "trusted-parent detached verifier stdout is not UTF-8"
+            ) from exc
+        if expected_line not in stdout_lines:
+            _fail("trusted-parent detached verifier lacks its exact success line")
+        temporary_owner.revalidate()
+    finally:
+        if stderr_fd >= 0:
+            os.close(stderr_fd)
+        if stdout_fd >= 0:
+            os.close(stdout_fd)
+        if verifier_fd >= 0:
+            os.close(verifier_fd)
+
+
+def _validate_output_staging(
+    repo_root: Path,
+    run_id: str,
+    staging: Any,
+) -> Tuple[Path, Path, Path]:
+    parent = Path(staging.parent).absolute()
+    partial = Path(staging.partial).absolute()
+    final = Path(staging.final).absolute()
+    expected_parent = repo_root / "results/staging/cp2/recorded"
+    if (
+        staging.run_id != run_id
+        or parent != expected_parent
+        or partial.parent != parent
+        or final != parent / run_id
+        or re.fullmatch(
+            r"\." + re.escape(run_id) + r"\.partial\.[0-9a-f]{32}",
+            partial.name,
+        ) is None
+    ):
+        _fail("readiness output-staging capability returned an invalid binding")
+    if os.path.lexists(str(final)):
+        _fail("recorded final destination already exists")
+    partial_status = partial.lstat()
+    if (
+        not stat.S_ISDIR(partial_status.st_mode)
+        or stat.S_ISLNK(partial_status.st_mode)
+        or partial_status.st_uid != os.geteuid()
+        or stat.S_IMODE(partial_status.st_mode) not in (0o700, 0o555)
+    ):
+        _fail("readiness output-staging partial identity/mode is invalid")
+    return parent, partial, final
+
+
+def _retain_campaign_failure(
+    artifact_root: Path,
+    root_descriptor: int,
+    source_commit: str,
+    source_tree: str,
+    failure: BaseException,
+    *,
+    quarantine_untrusted_collision: bool = False,
+) -> None:
+    """Commit the sole failure marker descriptor-relatively without replace."""
+
+    artifact_root = Path(artifact_root).absolute()
+    root_status = artifact_root.lstat()
+    held_status = os.fstat(root_descriptor)
+    if (
+        not stat.S_ISDIR(root_status.st_mode)
+        or stat.S_ISLNK(root_status.st_mode)
+        or root_status.st_uid != os.geteuid()
+        or _directory_object_identity(root_status)
+        != _directory_object_identity(held_status)
+    ):
+        _fail("failed artifact root is no longer an owned real directory")
+    os.fchmod(root_descriptor, 0o700)
+    if stat.S_IMODE(os.fstat(root_descriptor).st_mode) != 0o700:
+        _fail("failed artifact exact mode transition differs")
+    primary_failure, cleanup_failures = _failure_components(failure)
+    quarantined_collision: Optional[str] = None
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        _fail("renameat2 is unavailable for failure-marker commit")
+    renameat2.argtypes = (
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
+        ctypes.c_char_p, ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    if quarantine_untrusted_collision:
+        try:
+            collision_before = os.stat(
+                "failure.json",
+                dir_fd=root_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            collision_before = None
+        if collision_before is not None:
+            quarantined_collision = (
+                ".untrusted-failure.json." + os.urandom(16).hex()
+            )
+            if renameat2(
+                root_descriptor,
+                b"failure.json",
+                root_descriptor,
+                os.fsencode(quarantined_collision),
+                1,
+            ) != 0:
+                _raise_namespace_errno(
+                    "failure-marker collision quarantine renameat2 noreplace"
+                )
+            collision_after = os.stat(
+                quarantined_collision,
+                dir_fd=root_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                _directory_object_identity(collision_before)
+                != _directory_object_identity(collision_after)
+            ):
+                _fail("failure-marker collision changed during quarantine")
+            try:
+                os.stat(
+                    "failure.json",
+                    dir_fd=root_descriptor,
+                    follow_symlinks=False,
+                )
             except FileNotFoundError:
                 pass
-        temporary.rmdir()
+            else:
+                _fail("failure-marker collision retained its trusted name")
+            os.fsync(root_descriptor)
+    payload = _json_bytes({
+        "schema_version": 1,
+        "record_type": "cp2_failure",
+        "checkpoint": "CP2-C",
+        "created_utc": _utc_now(),
+        "source_commit": source_commit,
+        "source_tree": source_tree,
+        "error_type": primary_failure["type"],
+        "error": primary_failure["message"],
+        "primary_failure": primary_failure,
+        "cleanup_failures": list(cleanup_failures),
+        "quarantined_untrusted_failure_name": quarantined_collision,
+        "recorded_input_authorized": True,
+    })
+    temporary_name = ".failure.json.partial." + os.urandom(16).hex()
+    temporary_fd = -1
+    created_status: Optional[os.stat_result] = None
+    renamed = False
+    try:
+        temporary_fd = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC |
+            getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=root_descriptor,
+        )
+        created_status = os.fstat(temporary_fd)
+        if (
+            not stat.S_ISREG(created_status.st_mode)
+            or created_status.st_nlink != 1
+        ):
+            _fail("failure-marker temporary is not a regular single-link file")
+        _write_complete(temporary_fd, payload, "failure-marker write")
+        os.fsync(temporary_fd)
+        created_status = os.fstat(temporary_fd)
+        if renameat2(
+            root_descriptor,
+            os.fsencode(temporary_name),
+            root_descriptor,
+            b"failure.json",
+            1,
+        ) != 0:
+            _raise_namespace_errno("failure-marker renameat2 noreplace")
+        renamed = True
+        marker_status = os.stat(
+            "failure.json", dir_fd=root_descriptor, follow_symlinks=False
+        )
+        if not _same_stat_without_ctime(created_status, marker_status):
+            _fail("failure marker changed during exact commit")
+        marker_fd = os.open(
+            "failure.json",
+            os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=root_descriptor,
+        )
+        try:
+            if (
+                not _same_stat(marker_status, os.fstat(marker_fd))
+                or _read_fd_all(
+                    marker_fd,
+                    MAX_ISOLATED_WORKER_MESSAGE_BYTES,
+                    "retained failure marker",
+                )
+                != payload
+            ):
+                _fail("failure marker bytes/binding differ after commit")
+        finally:
+            os.close(marker_fd)
+        os.fsync(root_descriptor)
+    finally:
+        if temporary_fd >= 0:
+            os.close(temporary_fd)
+        if not renamed:
+            try:
+                temporary_status = os.stat(
+                    temporary_name,
+                    dir_fd=root_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                pass
+            else:
+                if created_status is None or not _same_stat_without_ctime(
+                    temporary_status, created_status
+                ):
+                    _fail("failure-marker temporary was substituted")
+                os.unlink(temporary_name, dir_fd=root_descriptor)
+                os.fsync(root_descriptor)
 
 
-def execute_recorded_campaign(repo_root: Path, parsed_cli: Mapping[str, str],
-                              registry_bytes: bytes,
-                              authorization: Any) -> int:
-    """Execute CP2-C after a live readiness authorization.
+def _execute_recorded_campaign_worker(
+    repo_root: Path,
+    parsed_cli: Mapping[str, str],
+    registry_bytes: bytes,
+    authorization: Any,
+    staging: Any,
+    workspace_owner: OwnedTemporaryWorkspace,
+    bag_mounts: Sequence[_BagMountBinding],
+) -> str:
+    """Populate and seal one hidden artifact; never publish."""
 
-    Any failure after semantic registry authorization retains the hidden
-    partial directory with ``failure.json``.  No threshold or configuration is
-    changed and the function never retries a data run.
-    """
-
-    repo_root = Path(repo_root).absolute()
     source_commit = authorization.repository.commit
     source_tree = authorization.repository.tree
-    if HEX40.fullmatch(source_commit) is None or HEX40.fullmatch(source_tree) is None:
-        _fail("readiness source identity is invalid")
+    run_id = staging.run_id
+    parent, partial, _ = _validate_output_staging(repo_root, run_id, staging)
     original_unit_artifact = Path(parsed_cli["--unit-artifact"]).absolute()
     unit_artifact = Path(authorization.frozen_unit_artifact).absolute()
     if unit_artifact.parent != authorization.temporary_root:
         _fail("frozen unit artifact is outside the held readiness root")
-    run_id = parsed_cli.get("--run-id")
-    if run_id is None:
-        run_id = "cp2_recorded_{}-g{}".format(
-            dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ"),
-            source_commit[:12])
-    schema.validate_safe_id(run_id, "recorded run ID")
 
-    # Parse the sole verified buffer before resolving or stating any derived
-    # path.  This function never reopens the registry.
+    # Parse only the one verified postauthorization buffer.  This worker never
+    # reopens the registry and never retries a recorded command.
     bag_paths = _registry_bag_paths(registry_bytes)
-    parent = repo_root / "results/staging/cp2/recorded"
-    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    final = parent / run_id
-    if os.path.lexists(str(final)):
-        _fail("recorded final destination already exists")
-    partial = Path(tempfile.mkdtemp(prefix="." + run_id + ".partial.", dir=str(parent)))
-    os.chmod(str(partial), 0o700)
+    if (
+        len(bag_mounts) != len(bag_paths)
+        or tuple(binding.original_path for binding in bag_mounts) != bag_paths
+    ):
+        _fail("recorded-input mount/original-path binding differs")
     failure: Optional[BaseException] = None
     completed_manifest: Optional[str] = None
     bound_bags: List[BoundRegularFile] = []
-    workspace: Optional[Path] = None
     try:
+        workspace_owner.revalidate()
+        authorization.revalidate()
         _copy_readiness(partial, authorization)
         recorder = CommandRecorder(partial, authorization)
         recorder.import_readiness_unit_verification()
@@ -2203,18 +4076,34 @@ def execute_recorded_campaign(repo_root: Path, parsed_cli: Mapping[str, str],
             )
         ):
             _fail("readiness Git environment/command binding differs")
-        bundle, static_records = encode_static_bundle(
-            repo_root, authorization.repository)
+        bundle, static_records = encode_static_bundle(repo_root, authorization)
         config_sha = hashlib.sha256(bundle).hexdigest()
         _write_new(partial / "configuration/static_bundle.bin", bundle)
-        for path, expected in zip(bag_paths, BAG_SHA256):
-            bound = _bind_regular_file(path)
+        for binding, expected in zip(bag_mounts, BAG_SHA256):
+            bound = _bind_regular_file(binding.target_path)
+            bound.provenance_path = binding.original_path
             bound_bags.append(bound)
-            if bound.sha256() != expected:
+            if (
+                not _same_stat(bound.identity, binding.source_identity)
+                or bound.sha256() != expected
+            ):
                 _fail("registry-resolved bag hash differs from frozen CP2 identity")
-        build = _build_runtime(repo_root, partial, unit_artifact,
-                               authorization, recorder, source_commit)
-        workspace = Path(build["workspace"])
+        build = _build_runtime(
+            repo_root,
+            partial,
+            unit_artifact,
+            authorization,
+            recorder,
+            source_commit,
+            workspace_owner=workspace_owner,
+        )
+        candidate_owner = build.get("workspace_owner")
+        if (
+            candidate_owner is not workspace_owner
+            or Path(build["workspace"]).absolute() != candidate_owner.path
+        ):
+            _fail("runtime build did not return its exact workspace owner")
+        workspace_owner.revalidate()
         executable_before = schema.sha256_file(build["executable"])
         build_id_before, executable_soname = _elf_identity(
             Path(build["executable"]).absolute(), require_soname=False)
@@ -2223,11 +4112,14 @@ def execute_recorded_campaign(repo_root: Path, parsed_cli: Mapping[str, str],
         runs, serial_sha = _run_sequences(
             repo_root, partial, build, recorder, authorization, bound_bags,
             source_commit, config_sha)
+        workspace_owner.revalidate()
         summary = _invoke_assembler(partial, build, runs, serial_sha, recorder,
                                     authorization, config_sha)
+        workspace_owner.revalidate()
         replay = _invoke_offline_replay(
             partial, build, runs, recorder, authorization, source_commit,
             source_tree, executable_before, build_id_before)
+        workspace_owner.revalidate()
         executable_after = schema.sha256_file(build["executable"])
         build_id_after, _ = _elf_identity(
             Path(build["executable"]).absolute(), require_soname=False)
@@ -2262,46 +4154,1216 @@ def execute_recorded_campaign(repo_root: Path, parsed_cli: Mapping[str, str],
         _write_new(partial / "cp2_report.json", _json_bytes(report), 0o444)
         manifest_sha256 = _write_manifest(partial)
         _seal_directories(partial)
-        _detached_verify_recorded(partial, build, manifest_sha256, authorization)
+        workspace_owner.revalidate()
         authorization.revalidate()
-        _rename_noreplace(partial, final)
         completed_manifest = manifest_sha256
     except BaseException as exc:
         failure = exc
-        try:
-            # A detached-verifier or publication-tail failure can occur after
-            # the hidden tree was frozen 0555.  It is no longer a candidate
-            # passing artifact, so reopen only its root and append the exact
-            # failure marker; retained evidence bytes remain read-only.
-            partial_status = partial.lstat()
-            if (not stat.S_ISDIR(partial_status.st_mode) or
-                    stat.S_ISLNK(partial_status.st_mode)):
-                _fail("failed partial root is no longer a real directory")
-            os.chmod(str(partial), 0o700)
-            _write_new(partial / "failure.json", _json_bytes({
-                "schema_version": 1, "record_type": "cp2_failure",
-                "checkpoint": "CP2-C", "created_utc": _utc_now(),
-                "source_commit": source_commit, "source_tree": source_tree,
-                "error_type": type(exc).__name__, "error": str(exc),
-                "recorded_input_authorized": True,
-            }))
-            _fsync_directory(partial)
-            _fsync_directory(parent)
-        except BaseException:
-            pass
     finally:
+        cleanup_errors: List[BaseException] = []
         for bound in bound_bags:
-            bound.close()
+            try:
+                bound.close()
+            except BaseException as exc:
+                cleanup_errors.append(exc)
+        if cleanup_errors:
+            if failure is None:
+                failure = _CampaignFailureBundle(
+                    _bounded_failure_record(CampaignError(
+                        "recorded-input descriptor cleanup failed"
+                    )),
+                    tuple(
+                        _bounded_failure_record(item)
+                        for item in cleanup_errors
+                    ),
+                )
+            else:
+                failure = _append_cleanup_failures(
+                    failure, cleanup_errors
+                )
     if failure is not None:
         raise failure
     if completed_manifest is None:
         _fail("recorded campaign ended without a finalized manifest")
-    # Publication is the authoritative success boundary.  A closed reporting
-    # stream must not turn a durable, independently verified final artifact
-    # into a caller-visible campaign failure after that boundary.
+    return completed_manifest
+
+
+def _waitpid_exit_code(process_id: int) -> int:
+    while True:
+        try:
+            observed, status_value = os.waitpid(process_id, 0)
+            break
+        except InterruptedError:
+            continue
+    if observed != process_id:
+        _fail("isolated-worker wait returned a different process")
+    if os.WIFEXITED(status_value):
+        return os.WEXITSTATUS(status_value)
+    if os.WIFSIGNALED(status_value):
+        return 128 + os.WTERMSIG(status_value)
+    _fail("isolated-worker wait returned a nonterminal status")
+
+
+def _kill_and_reap_bounded(process_id: int, label: str) -> None:
+    """SIGKILL one exact child and bound the terminal wait."""
+
+    try:
+        os.kill(process_id, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + MAX_PROCESS_GROUP_CLEANUP_SECONDS
+    while True:
+        try:
+            observed, status_value = os.waitpid(process_id, os.WNOHANG)
+        except ChildProcessError:
+            return
+        except InterruptedError:
+            continue
+        if observed == process_id:
+            if not (os.WIFEXITED(status_value) or os.WIFSIGNALED(status_value)):
+                _fail(label + " cleanup returned a nonterminal status")
+            return
+        if observed != 0:
+            _fail(label + " cleanup reaped a different process")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            _fail(label + " could not be reaped after SIGKILL")
+        time.sleep(min(PROCESS_GROUP_POLL_SECONDS, remaining))
+
+
+def _waitpid_exit_code_bounded(
+    process_id: int,
+    timeout: float,
+    label: str,
+) -> Tuple[int, bool]:
+    """Wait for one exact child, SIGKILLing and reaping it at the deadline."""
+
+    if not math.isfinite(timeout) or timeout <= 0.0:
+        _fail(label + " wait bound is invalid")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            observed, status_value = os.waitpid(process_id, os.WNOHANG)
+        except InterruptedError:
+            continue
+        if observed == process_id:
+            if os.WIFEXITED(status_value):
+                return os.WEXITSTATUS(status_value), False
+            if os.WIFSIGNALED(status_value):
+                return 128 + os.WTERMSIG(status_value), False
+            _fail(label + " wait returned a nonterminal status")
+        if observed != 0:
+            _fail(label + " wait reaped a different process")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            _kill_and_reap_bounded(process_id, label)
+            return 128 + signal.SIGKILL, True
+        time.sleep(min(PROCESS_GROUP_POLL_SECONDS, remaining))
+
+
+def _pidfd_open(process_id: int) -> int:
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.syscall.restype = ctypes.c_long
+    descriptor = libc.syscall(
+        ctypes.c_long(_SYS_PIDFD_OPEN_X86_64),
+        ctypes.c_int(process_id),
+        ctypes.c_uint(0),
+    )
+    if descriptor < 0:
+        _raise_namespace_errno("pidfd_open trusted verifier worker")
+    os.set_inheritable(descriptor, False)
+    return int(descriptor)
+
+
+def _send_trusted_verifier_pidfd(
+    channel: socket.socket, process_id: int
+) -> None:
+    descriptor = _pidfd_open(process_id)
+    try:
+        sent = channel.sendmsg(
+            [b"V"],
+            [(
+                socket.SOL_SOCKET,
+                socket.SCM_RIGHTS,
+                struct.pack("=i", descriptor),
+            )],
+        )
+        if sent != 1:
+            _fail("trusted verifier pidfd announcement was incomplete")
+    finally:
+        os.close(descriptor)
+
+
+def _receive_trusted_verifier_pidfd(channel: socket.socket) -> int:
+    """Receive either one exact worker pidfd or a pre-worker failure token."""
+
+    channel.settimeout(MAX_PROCESS_GROUP_CLEANUP_SECONDS)
+    flags = getattr(socket, "MSG_CMSG_CLOEXEC", 0)
+    payload, ancillary, message_flags, _ = channel.recvmsg(
+        1,
+        socket.CMSG_SPACE(struct.calcsize("=i")),
+        flags,
+    )
+    received: List[int] = []
+    try:
+        if message_flags & getattr(socket, "MSG_CTRUNC", 0):
+            _fail("trusted verifier pidfd announcement was truncated")
+        for level, kind, content in ancillary:
+            if level != socket.SOL_SOCKET or kind != socket.SCM_RIGHTS:
+                _fail("trusted verifier pidfd announcement type differs")
+            width = struct.calcsize("=i")
+            if len(content) != width:
+                _fail("trusted verifier pidfd announcement count differs")
+            received.append(struct.unpack("=i", content)[0])
+        if payload == b"E" and not received:
+            return -1
+        if payload != b"V" or len(received) != 1:
+            _fail("trusted verifier pidfd announcement framing differs")
+        descriptor = received.pop()
+        os.set_inheritable(descriptor, False)
+        os.fstat(descriptor)
+        return descriptor
+    finally:
+        for descriptor in received:
+            os.close(descriptor)
+
+
+def _pidfd_ready(descriptor: int, timeout: float) -> bool:
+    if timeout < 0.0 or not math.isfinite(timeout):
+        _fail("trusted verifier pidfd wait bound is invalid")
+    deadline = time.monotonic() + timeout
+    poller = select.poll()
+    poller.register(
+        descriptor,
+        select.POLLIN | select.POLLHUP | select.POLLERR,
+    )
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            return bool(poller.poll(0))
+        try:
+            events = poller.poll(max(1, int(math.ceil(remaining * 1000.0))))
+        except InterruptedError:
+            continue
+        return bool(events)
+
+
+def _kill_and_wait_pidfd_bounded(descriptor: int, label: str) -> None:
+    """Make one exact pidfd non-live and observe its bounded terminal event."""
+
+    if not _pidfd_ready(descriptor, 0.0):
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.syscall.restype = ctypes.c_long
+        result = libc.syscall(
+            ctypes.c_long(_SYS_PIDFD_SEND_SIGNAL_X86_64),
+            ctypes.c_int(descriptor),
+            ctypes.c_int(signal.SIGKILL),
+            ctypes.c_void_p(),
+            ctypes.c_uint(0),
+        )
+        if result != 0 and ctypes.get_errno() != errno.ESRCH:
+            _raise_namespace_errno(label + " pidfd SIGKILL")
+    if not _pidfd_ready(descriptor, MAX_PROCESS_GROUP_CLEANUP_SECONDS):
+        _fail(label + " pidfd did not reach a terminal state")
+
+
+def _redirect_worker_standard_descriptors() -> None:
+    descriptor = os.open("/dev/null", os.O_RDWR | os.O_CLOEXEC)
+    try:
+        for target in (0, 1, 2):
+            if descriptor != target:
+                os.dup2(descriptor, target, inheritable=True)
+    finally:
+        if descriptor > 2:
+            os.close(descriptor)
+
+
+def _close_unapproved_worker_descriptors(approved: Iterable[int]) -> None:
+    """Close every inherited FD except exact current-namespace capabilities."""
+
+    keep = {0, 1, 2}
+    for descriptor in approved:
+        if isinstance(descriptor, bool) or not isinstance(descriptor, int):
+            _fail("worker descriptor inventory contains a noninteger")
+        if descriptor < 0:
+            _fail("worker descriptor inventory contains a closed descriptor")
+        os.fstat(descriptor)
+        keep.add(descriptor)
+    directory_fd = os.open(
+        "/proc/self/fd",
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC |
+        getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        population = tuple(os.listdir(directory_fd))
+    finally:
+        os.close(directory_fd)
+    for raw in population:
+        try:
+            descriptor = int(raw)
+        except ValueError:
+            _fail("worker descriptor namespace contains a nonnumeric name")
+        if descriptor in keep or descriptor == directory_fd:
+            continue
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise
+    for descriptor in keep:
+        os.fstat(descriptor)
+
+
+def _receive_exact_socket_message(
+    channel: socket.socket, expected: bytes, label: str
+) -> None:
+    """Receive one fixed handshake without assuming stream packet boundaries."""
+
+    observed = bytearray()
+    while len(observed) < len(expected):
+        block = channel.recv(len(expected) - len(observed))
+        if not block:
+            _fail(label + " ended before its complete fixed message")
+        observed.extend(block)
+    if bytes(observed) != expected:
+        _fail(label + " differs")
+
+
+def _worker_parent_liveness_handshake(channel: socket.socket) -> None:
+    """Close the pre-prctl parent-death race with a two-way handshake."""
+
+    _set_parent_death_signal(signal.SIGKILL)
+    channel.settimeout(MAX_PROCESS_GROUP_CLEANUP_SECONDS)
+    channel.sendall(b"CP2-WORKER-READY\n")
+    _receive_exact_socket_message(
+        channel,
+        b"CP2-SUPERVISOR-ACK\n",
+        "campaign worker supervisor-liveness acknowledgement",
+    )
+
+
+def _supervisor_worker_liveness_handshake(channel: socket.socket) -> None:
+    channel.settimeout(MAX_PROCESS_GROUP_CLEANUP_SECONDS)
+    _receive_exact_socket_message(
+        channel,
+        b"CP2-WORKER-READY\n",
+        "campaign supervisor worker-readiness handshake",
+    )
+    channel.sendall(b"CP2-SUPERVISOR-ACK\n")
+
+
+def _trusted_verifier_stream_identity(value: os.stat_result) -> Tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        stat.S_IFMT(value.st_mode),
+        value.st_uid,
+        value.st_gid,
+    )
+
+
+def _validate_trusted_verifier_stream(
+    descriptor: int,
+    path: Path,
+    expected_identity: Tuple[int, ...],
+    temporary_owner: OwnedTemporaryWorkspace,
+    label: str,
+) -> None:
+    temporary_owner.revalidate()
+    held = os.fstat(descriptor)
+    by_path = os.lstat(str(path))
+    if (
+        not stat.S_ISREG(held.st_mode)
+        or stat.S_ISLNK(by_path.st_mode)
+        or held.st_nlink != 1
+        or held.st_uid != os.geteuid()
+        or stat.S_IMODE(held.st_mode) != 0o600
+        or _trusted_verifier_stream_identity(held) != expected_identity
+        or not _same_stat(held, by_path)
+    ):
+        _fail("trusted verifier " + label + " leaf/path identity changed")
+
+
+def _redirect_trusted_verifier_standard_descriptors(
+    stdout_descriptor: int,
+    stderr_descriptor: int,
+) -> None:
+    null_descriptor = os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        os.dup2(null_descriptor, 0, inheritable=True)
+        os.dup2(stdout_descriptor, 1, inheritable=True)
+        os.dup2(stderr_descriptor, 2, inheritable=True)
+    finally:
+        if null_descriptor > 2:
+            os.close(null_descriptor)
+
+
+def _trusted_verifier_supervisor_record(
+    *,
+    worker_started: bool,
+    descendants_absent: bool,
+    exit_code: Optional[int],
+    timed_out: bool,
+    error_type: Optional[str],
+    error: Optional[str],
+) -> Dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "record_type": "cp2_trusted_verifier_supervisor_result",
+        "worker_started": worker_started,
+        "descendants_absent": descendants_absent,
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "error_type": error_type,
+        "error": error,
+    }
+
+
+def _run_trusted_verifier_in_namespaces(
+    argv: Sequence[str],
+    environment: Mapping[str, str],
+    verifier_descriptor: int,
+    stdout_descriptor: int,
+    stderr_descriptor: int,
+    stdout_path: Path,
+    stderr_path: Path,
+    stdout_identity: Tuple[int, ...],
+    stderr_identity: Tuple[int, ...],
+    temporary_owner: OwnedTemporaryWorkspace,
+) -> Mapping[str, Any]:
+    """Run verifier as PID 1 and return only after its namespace is dead."""
+
+    expected_outer_parent_pid = os.getpid()
+    status_read, status_write = os.pipe2(os.O_CLOEXEC)
+    parent_pid_channel, supervisor_pid_channel = socket.socketpair(
+        socket.AF_UNIX,
+        socket.SOCK_STREAM | getattr(socket, "SOCK_CLOEXEC", 0),
+    )
+    supervisor_pid = -1
+    worker_pidfd = -1
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        supervisor_pid = os.fork()
+    except BaseException:
+        os.close(status_read)
+        os.close(status_write)
+        parent_pid_channel.close()
+        supervisor_pid_channel.close()
+        raise
+    if supervisor_pid == 0:
+        os.close(status_read)
+        parent_pid_channel.close()
+        worker_pid = -1
+        worker_started = False
+        pidfd_announced = False
+        rebound_stdout = -1
+        rebound_stderr = -1
+        try:
+            _set_parent_death_signal(signal.SIGKILL)
+            if os.getppid() != expected_outer_parent_pid:
+                os._exit(125)
+            _install_trusted_verifier_mount_and_pid_namespaces(
+                temporary_owner.path,
+                temporary_owner.identity,
+            )
+            temporary_owner.rebind_current_mount_namespace()
+            rebound_stdout = os.open(
+                stdout_path.name,
+                os.O_WRONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=temporary_owner.descriptor,
+            )
+            rebound_stderr = os.open(
+                stderr_path.name,
+                os.O_WRONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=temporary_owner.descriptor,
+            )
+            _validate_trusted_verifier_stream(
+                rebound_stdout, stdout_path, stdout_identity,
+                temporary_owner, "stdout",
+            )
+            _validate_trusted_verifier_stream(
+                rebound_stderr, stderr_path, stderr_identity,
+                temporary_owner, "stderr",
+            )
+            supervisor_channel, worker_channel = socket.socketpair(
+                socket.AF_UNIX,
+                socket.SOCK_STREAM | getattr(socket, "SOCK_CLOEXEC", 0),
+            )
+            worker_pid = os.fork()
+            worker_started = True
+            if worker_pid == 0:
+                supervisor_channel.close()
+                supervisor_pid_channel.close()
+                os.close(status_write)
+                try:
+                    _worker_parent_liveness_handshake(worker_channel)
+                    worker_channel.close()
+                    _redirect_trusted_verifier_standard_descriptors(
+                        rebound_stdout, rebound_stderr
+                    )
+                    os.set_inheritable(verifier_descriptor, True)
+                    _close_unapproved_worker_descriptors({verifier_descriptor})
+                    os.chdir("/tmp")
+                    _enter_worker_pid_namespace_and_drop_capabilities(
+                        temporary_owner.path
+                    )
+                    os.execve(argv[0], list(argv), dict(environment))
+                except BaseException as exc:
+                    message = (
+                        "trusted verifier worker setup failed: "
+                        + type(exc).__name__ + ": " + str(exc) + "\n"
+                    ).encode("utf-8", errors="replace")[-4096:]
+                    try:
+                        _write_complete(2, message, "trusted verifier error")
+                    except BaseException:
+                        pass
+                    os._exit(126)
+
+            worker_channel.close()
+            _send_trusted_verifier_pidfd(supervisor_pid_channel, worker_pid)
+            pidfd_announced = True
+            supervisor_pid_channel.close()
+            os.close(verifier_descriptor)
+            os.close(stdout_descriptor)
+            os.close(stderr_descriptor)
+            os.close(rebound_stdout)
+            rebound_stdout = -1
+            os.close(rebound_stderr)
+            rebound_stderr = -1
+            _supervisor_worker_liveness_handshake(supervisor_channel)
+            supervisor_channel.close()
+            worker_exit, timed_out = _waitpid_exit_code_bounded(
+                worker_pid,
+                1800.0,
+                "trusted verifier PID namespace",
+            )
+            worker_pid = -1
+            record = _trusted_verifier_supervisor_record(
+                worker_started=True,
+                descendants_absent=True,
+                exit_code=worker_exit,
+                timed_out=timed_out,
+                error_type=None,
+                error=None,
+            )
+            _write_pipe_record(status_write, record)
+            os.close(status_write)
+            os._exit(0)
+        except BaseException as exc:
+            if worker_pid > 0:
+                try:
+                    _kill_and_reap_bounded(
+                        worker_pid, "trusted verifier PID namespace"
+                    )
+                    worker_pid = -1
+                except BaseException as cleanup_exc:
+                    exc = CampaignError(
+                        type(exc).__name__ + ": " + str(exc)
+                        + "; verifier PID-namespace cleanup failed: "
+                        + type(cleanup_exc).__name__ + ": " + str(cleanup_exc)
+                    )
+            if not pidfd_announced:
+                try:
+                    supervisor_pid_channel.sendall(b"E")
+                except BaseException:
+                    pass
+            try:
+                _write_pipe_record(status_write, _trusted_verifier_supervisor_record(
+                    worker_started=worker_started,
+                    descendants_absent=worker_pid <= 0,
+                    exit_code=None,
+                    timed_out=False,
+                    error_type=type(exc).__name__,
+                    error=str(exc)[:8192],
+                ))
+                os.close(status_write)
+                os._exit(0)
+            except BaseException:
+                os._exit(127)
+
+    os.close(status_write)
+    supervisor_pid_channel.close()
+    try:
+        worker_pidfd = _receive_trusted_verifier_pidfd(parent_pid_channel)
+        parent_pid_channel.close()
+        supervisor_exit, supervisor_timed_out = _waitpid_exit_code_bounded(
+            supervisor_pid,
+            1800.0 + 3.0 * MAX_PROCESS_GROUP_CLEANUP_SECONDS,
+            "trusted verifier supervisor",
+        )
+        supervisor_pid = -1
+        if worker_pidfd >= 0:
+            if not _pidfd_ready(worker_pidfd, 0.0):
+                _kill_and_wait_pidfd_bounded(
+                    worker_pidfd, "trusted verifier worker"
+                )
+                _fail("trusted verifier supervisor returned before its PID namespace")
+        if supervisor_timed_out:
+            _fail("trusted verifier supervisor timed out")
+        try:
+            result = _read_pipe_record(status_read)
+        finally:
+            os.close(status_read)
+            status_read = -1
+        if supervisor_exit != 0:
+            _fail("trusted verifier supervisor failed: exit " + str(supervisor_exit))
+        return result
+    except BaseException:
+        if supervisor_pid > 0:
+            _kill_and_reap_bounded(
+                supervisor_pid, "trusted verifier supervisor"
+            )
+            supervisor_pid = -1
+        if worker_pidfd >= 0:
+            _kill_and_wait_pidfd_bounded(
+                worker_pidfd, "trusted verifier worker"
+            )
+        raise
+    finally:
+        parent_pid_channel.close()
+        if status_read >= 0:
+            os.close(status_read)
+        if worker_pidfd >= 0:
+            os.close(worker_pidfd)
+
+
+def _isolated_worker_result(
+    *,
+    passed: bool,
+    worker_started: bool,
+    descendants_absent: bool,
+    manifest_sha256: Optional[str],
+    error_type: Optional[str],
+    error: Optional[str],
+    primary_failure: Optional[Mapping[str, Any]],
+    cleanup_failures: Sequence[Mapping[str, Any]],
+    failure_marker_retained: bool,
+) -> Dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "record_type": "cp2_isolated_worker_result",
+        "passed": passed,
+        "worker_started": worker_started,
+        "descendants_absent": descendants_absent,
+        "manifest_sha256": manifest_sha256,
+        "error_type": error_type,
+        "error": error,
+        "primary_failure": (
+            None if primary_failure is None else dict(primary_failure)
+        ),
+        "cleanup_failures": [dict(item) for item in cleanup_failures],
+        "failure_marker_retained": failure_marker_retained,
+    }
+
+
+def _run_campaign_in_namespaces(
+    repo_root: Path,
+    parsed_cli: Mapping[str, str],
+    registry_bytes: bytes,
+    authorization: Any,
+    staging: Any,
+    workspace_owner: OwnedTemporaryWorkspace,
+    bag_mounts: Sequence[_BagMountBinding],
+) -> Mapping[str, Any]:
+    """Return only after PID-namespace init and every descendant are absent."""
+
+    _, partial, _ = _validate_output_staging(repo_root, staging.run_id, staging)
+    partial_identity = authorization.output_staging_identity(staging)
+    workspace_owner.revalidate()
+    writable_roots = (
+        (partial, partial_identity),
+        (workspace_owner.path, workspace_owner.identity),
+    )
+    expected_outer_parent_pid = os.getpid()
+    status_read, status_write = os.pipe2(os.O_CLOEXEC)
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        supervisor_pid = os.fork()
+    except BaseException:
+        os.close(status_read)
+        os.close(status_write)
+        raise
+    if supervisor_pid == 0:
+        os.close(status_read)
+        campaign_pid = -1
+        try:
+            _set_parent_death_signal(signal.SIGKILL)
+            if os.getppid() != expected_outer_parent_pid:
+                os._exit(125)
+            _install_worker_mount_and_pid_namespaces(
+                writable_roots, bag_mounts
+            )
+            authorization.rebind_worker_mount_namespace(staging)
+            workspace_owner.rebind_current_mount_namespace()
+            result_read, result_write = os.pipe2(os.O_CLOEXEC)
+            supervisor_channel, worker_channel = socket.socketpair(
+                socket.AF_UNIX,
+                socket.SOCK_STREAM | getattr(socket, "SOCK_CLOEXEC", 0),
+            )
+            campaign_pid = os.fork()
+            if campaign_pid == 0:
+                supervisor_channel.close()
+                os.close(result_read)
+                os.close(status_write)
+                _worker_parent_liveness_handshake(worker_channel)
+                _redirect_worker_standard_descriptors()
+                authorization_inventory = authorization.descriptor_inventory()
+                approved_descriptors = {
+                    record["fd"] for record in authorization_inventory.values()
+                }
+                approved_descriptors.add(workspace_owner.descriptor)
+                approved_descriptors.add(result_write)
+                approved_descriptors.add(worker_channel.fileno())
+                _close_unapproved_worker_descriptors(approved_descriptors)
+                worker_channel.close()
+
+                def cancel_worker(signum: int, frame: Any) -> None:
+                    del frame
+                    raise CampaignError(
+                        "campaign worker received signal " + str(signum)
+                    )
+
+                signal.signal(signal.SIGTERM, cancel_worker)
+                signal.signal(signal.SIGINT, cancel_worker)
+                worker_started = False
+                try:
+                    _enter_worker_pid_namespace_and_drop_capabilities(
+                        workspace_owner.path
+                    )
+                    worker_started = True
+                    manifest = _execute_recorded_campaign_worker(
+                        repo_root,
+                        parsed_cli,
+                        registry_bytes,
+                        authorization,
+                        staging,
+                        workspace_owner,
+                        bag_mounts,
+                    )
+                    record = _isolated_worker_result(
+                        passed=True,
+                        worker_started=True,
+                        descendants_absent=False,
+                        manifest_sha256=manifest,
+                        error_type=None,
+                        error=None,
+                        primary_failure=None,
+                        cleanup_failures=(),
+                        failure_marker_retained=False,
+                    )
+                    exit_code = 0
+                except BaseException as exc:
+                    primary_failure, cleanup_failures = _failure_components(exc)
+                    record = _isolated_worker_result(
+                        passed=False,
+                        worker_started=worker_started,
+                        descendants_absent=False,
+                        manifest_sha256=None,
+                        error_type=primary_failure["type"],
+                        error=primary_failure["message"],
+                        primary_failure=primary_failure,
+                        cleanup_failures=cleanup_failures,
+                        failure_marker_retained=False,
+                    )
+                    exit_code = 1
+                try:
+                    _write_pipe_record(result_write, record)
+                except BaseException:
+                    exit_code = 126
+                try:
+                    os.close(result_write)
+                finally:
+                    os._exit(exit_code)
+
+            worker_channel.close()
+            _supervisor_worker_liveness_handshake(supervisor_channel)
+            supervisor_channel.close()
+            os.close(result_write)
+            try:
+                child_record = _read_pipe_record(result_read)
+            finally:
+                os.close(result_read)
+            campaign_exit = _waitpid_exit_code(campaign_pid)
+            campaign_pid = -1
+            required = {
+                "schema_version", "record_type", "passed", "worker_started",
+                "descendants_absent", "manifest_sha256", "error_type",
+                "error", "primary_failure", "cleanup_failures",
+                "failure_marker_retained",
+            }
+            if (
+                set(child_record) != required
+                or type(child_record.get("schema_version")) is not int
+                or child_record.get("schema_version") != 1
+                or child_record.get("record_type")
+                != "cp2_isolated_worker_result"
+                or not isinstance(child_record.get("passed"), bool)
+                or not isinstance(child_record.get("worker_started"), bool)
+                or child_record.get("descendants_absent") is not False
+                or child_record.get("failure_marker_retained") is not False
+                or (
+                    child_record.get("passed") is True
+                    and (
+                        not isinstance(child_record.get("manifest_sha256"), str)
+                        or re.fullmatch(
+                            r"[0-9a-f]{64}", child_record["manifest_sha256"]
+                        ) is None
+                        or child_record.get("error_type") is not None
+                        or child_record.get("error") is not None
+                        or child_record.get("primary_failure") is not None
+                        or child_record.get("cleanup_failures") != []
+                    )
+                )
+                or (
+                    child_record.get("passed") is False
+                    and (
+                        child_record.get("manifest_sha256") is not None
+                        or not isinstance(child_record.get("error_type"), str)
+                        or not isinstance(child_record.get("error"), str)
+                        or child_record.get("primary_failure") is None
+                        or not isinstance(
+                            child_record.get("cleanup_failures"), list
+                        )
+                    )
+                )
+            ):
+                _fail("campaign PID-namespace result shape differs")
+            if child_record["passed"] is False:
+                primary_failure = _validate_failure_record(
+                    child_record["primary_failure"], "worker primary"
+                )
+                cleanup_failures = tuple(
+                    _validate_failure_record(item, "worker cleanup")
+                    for item in child_record["cleanup_failures"]
+                )
+                if (
+                    len(cleanup_failures) > MAX_CLEANUP_FAILURES
+                    or child_record["error_type"] != primary_failure["type"]
+                    or child_record["error"] != primary_failure["message"]
+                ):
+                    _fail("campaign PID-namespace failure projection differs")
+            child_passed = child_record["passed"]
+            if (child_passed and campaign_exit != 0) or (
+                not child_passed and campaign_exit == 0
+            ):
+                _fail("campaign PID-namespace exit/result differs")
+            forwarded = dict(child_record)
+            forwarded["descendants_absent"] = True
+            if campaign_exit not in (0, 1):
+                abnormal = _bounded_failure_record(CampaignError(
+                    "campaign worker exit code " + str(campaign_exit)
+                ))
+                forwarded.update({
+                    "passed": False,
+                    "manifest_sha256": None,
+                    "error_type": abnormal["type"],
+                    "error": abnormal["message"],
+                    "primary_failure": abnormal,
+                    "cleanup_failures": [],
+                })
+            _write_pipe_record(status_write, forwarded)
+            os.close(status_write)
+            os._exit(0)
+        except BaseException as exc:
+            if campaign_pid > 0:
+                try:
+                    _kill_and_reap_bounded(
+                        campaign_pid, "isolated campaign PID namespace"
+                    )
+                    campaign_pid = -1
+                except BaseException as cleanup_exc:
+                    exc = _append_cleanup_failures(exc, (cleanup_exc,))
+            primary_failure, cleanup_failures = _failure_components(exc)
+            try:
+                _write_pipe_record(status_write, _isolated_worker_result(
+                    passed=False,
+                    worker_started=False,
+                    descendants_absent=campaign_pid <= 0,
+                    manifest_sha256=None,
+                    error_type=primary_failure["type"],
+                    error=primary_failure["message"],
+                    primary_failure=primary_failure,
+                    cleanup_failures=cleanup_failures,
+                    failure_marker_retained=False,
+                ))
+            except BaseException:
+                pass
+            try:
+                os.close(status_write)
+            finally:
+                os._exit(127)
+
+    os.close(status_write)
+    try:
+        try:
+            result = _read_pipe_record(status_read)
+        finally:
+            os.close(status_read)
+        supervisor_exit = _waitpid_exit_code(supervisor_pid)
+    except BaseException as original_error:
+        try:
+            _kill_and_reap_bounded(
+                supervisor_pid, "isolated campaign supervisor"
+            )
+        except BaseException as cleanup_error:
+            raise _append_cleanup_failures(
+                original_error, (cleanup_error,)
+            ) from original_error
+        raise
+    if supervisor_exit != 0:
+        primary_failure = _validate_failure_record(
+            result.get("primary_failure"), "campaign supervisor primary"
+        )
+        cleanup_failures = tuple(
+            _validate_failure_record(item, "campaign supervisor cleanup")
+            for item in result.get("cleanup_failures", [])
+        )
+        failure = _CampaignFailureBundle(
+            primary_failure, cleanup_failures
+        )
+        raise _append_cleanup_failures(
+            failure,
+            (CampaignError(
+                "isolated campaign supervisor exit " + str(supervisor_exit)
+            ),),
+        )
+    return result
+
+
+def _sealed_artifact_snapshot(partial: Path) -> Tuple[Any, ...]:
+    """Hash and bind every sealed artifact entry without following links."""
+
+    partial = Path(partial).absolute()
+    root_before = partial.lstat()
+    if (
+        not stat.S_ISDIR(root_before.st_mode)
+        or stat.S_ISLNK(root_before.st_mode)
+        or root_before.st_uid != os.geteuid()
+        or stat.S_IMODE(root_before.st_mode) != 0o555
+    ):
+        _fail("sealed artifact root identity/mode differs")
+    root_fd = os.open(
+        str(partial),
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC |
+        getattr(os, "O_NOFOLLOW", 0),
+    )
+    records: List[Tuple[Any, ...]] = []
+    try:
+        if not _same_stat(root_before, os.fstat(root_fd)):
+            _fail("sealed artifact root changed while opening")
+
+        def walk(directory_fd: int, prefix: str) -> None:
+            directory_before = os.fstat(directory_fd)
+            names = sorted(
+                os.listdir(directory_fd), key=lambda item: item.encode("utf-8")
+            )
+            for name in names:
+                if not name or name in (".", "..") or "/" in name or "\0" in name:
+                    _fail("sealed artifact contains an unsafe path component")
+                relative = name if not prefix else prefix + "/" + name
+                schema.validate_relpath(relative, "sealed artifact path")
+                before = os.stat(
+                    name, dir_fd=directory_fd, follow_symlinks=False
+                )
+                if before.st_uid != os.geteuid():
+                    _fail("sealed artifact entry owner differs: " + relative)
+                if stat.S_ISDIR(before.st_mode):
+                    if stat.S_IMODE(before.st_mode) != 0o555:
+                        _fail("sealed artifact directory mode differs: " + relative)
+                    child_fd = os.open(
+                        name,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC |
+                        getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=directory_fd,
+                    )
+                    try:
+                        if not _same_stat(before, os.fstat(child_fd)):
+                            _fail("sealed artifact directory binding changed")
+                        records.append((relative, "d", _stat_tuple(before), None))
+                        walk(child_fd, relative)
+                        if not _same_stat(before, os.fstat(child_fd)):
+                            _fail("sealed artifact directory changed while scanning")
+                    finally:
+                        os.close(child_fd)
+                elif stat.S_ISREG(before.st_mode):
+                    if (
+                        before.st_nlink != 1
+                        or stat.S_IMODE(before.st_mode) != 0o444
+                    ):
+                        _fail("sealed artifact file mode/link count differs: " + relative)
+                    descriptor = os.open(
+                        name,
+                        os.O_RDONLY | os.O_CLOEXEC |
+                        getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=directory_fd,
+                    )
+                    try:
+                        if not _same_stat(before, os.fstat(descriptor)):
+                            _fail("sealed artifact file binding changed")
+                        digest = hashlib.sha256()
+                        while True:
+                            block = os.read(descriptor, 1024 * 1024)
+                            if not block:
+                                break
+                            digest.update(block)
+                        if not _same_stat(before, os.fstat(descriptor)):
+                            _fail("sealed artifact file changed while hashing")
+                    finally:
+                        os.close(descriptor)
+                    records.append(
+                        (relative, "f", _stat_tuple(before), digest.hexdigest())
+                    )
+                else:
+                    _fail("sealed artifact contains a link or special entry")
+                if len(records) > MAX_DEPENDENCY_MEMBERS:
+                    _fail("sealed artifact entry count exceeds its exact bound")
+            if not _same_stat(directory_before, os.fstat(directory_fd)):
+                _fail("sealed artifact directory changed during traversal")
+
+        walk(root_fd, "")
+        root_after = os.fstat(root_fd)
+        by_path = partial.lstat()
+        if not _same_stat(root_before, root_after) or not _same_stat(
+            root_before, by_path
+        ):
+            _fail("sealed artifact root changed during snapshot")
+        return (_stat_tuple(root_before), tuple(records))
+    finally:
+        os.close(root_fd)
+
+
+def execute_recorded_campaign(
+    repo_root: Path,
+    parsed_cli: Mapping[str, str],
+    registry_bytes: bytes,
+    authorization: Any,
+    prepublication_guard: Optional[Callable[[], None]] = None,
+) -> int:
+    """Run one confined CP2-C campaign, then publish only in the trusted parent."""
+
+    repo_root = Path(repo_root).absolute()
+    source_commit = authorization.repository.commit
+    source_tree = authorization.repository.tree
+    if HEX40.fullmatch(source_commit) is None or HEX40.fullmatch(source_tree) is None:
+        _fail("readiness source identity is invalid")
+    if prepublication_guard is not None and not callable(prepublication_guard):
+        _fail("CP2-C prepublication guard is not callable")
+    run_id = parsed_cli.get("--run-id")
+    if run_id is None:
+        run_id = "cp2_recorded_{}-g{}".format(
+            dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ"),
+            source_commit[:12],
+        )
+    schema.validate_safe_id(run_id, "recorded run ID")
+    staging = authorization.create_output_staging(run_id)
+    _, partial, final = _validate_output_staging(repo_root, run_id, staging)
+    workspace_owner: Optional[OwnedTemporaryWorkspace] = None
+    verifier_owner: Optional[OwnedTemporaryWorkspace] = None
+    bag_mount_owner: Optional[OwnedTemporaryWorkspace] = None
+    parent_bound_bags: Tuple[BoundRegularFile, ...] = ()
+    bag_mounts: Tuple[_BagMountBinding, ...] = ()
+    result: Optional[Mapping[str, Any]] = None
+    sealed_snapshot: Optional[Tuple[Any, ...]] = None
+    failure: Optional[BaseException] = None
+    try:
+        workspace_owner = OwnedTemporaryWorkspace.create()
+        verifier_owner = OwnedTemporaryWorkspace.create(
+            "schurvio-cp2-final-verifier-"
+        )
+        bag_mount_owner = OwnedTemporaryWorkspace.create(
+            "schurvio-cp2-bag-bind-"
+        )
+        parent_bound_bags, bag_mounts = _prepare_parent_bag_mounts(
+            registry_bytes, bag_mount_owner
+        )
+        authorization.revalidate()
+        result = _run_campaign_in_namespaces(
+            repo_root,
+            parsed_cli,
+            registry_bytes,
+            authorization,
+            staging,
+            workspace_owner,
+            bag_mounts,
+        )
+        if result.get("passed") is False:
+            primary_failure = _validate_failure_record(
+                result.get("primary_failure"), "isolated worker primary"
+            )
+            cleanup_failures = tuple(
+                _validate_failure_record(item, "isolated worker cleanup")
+                for item in result.get("cleanup_failures", [])
+            )
+            if (
+                len(cleanup_failures) > MAX_CLEANUP_FAILURES
+                or result.get("error_type") != primary_failure["type"]
+                or result.get("error") != primary_failure["message"]
+            ):
+                _fail("isolated campaign failure projection differs")
+            raise _CampaignFailureBundle(
+                primary_failure, cleanup_failures
+            )
+        if (
+            result.get("passed") is not True
+            or result.get("worker_started") is not True
+            or result.get("descendants_absent") is not True
+            or not isinstance(result.get("manifest_sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", result["manifest_sha256"]) is None
+            or result.get("error_type") is not None
+            or result.get("error") is not None
+            or result.get("primary_failure") is not None
+            or result.get("cleanup_failures") != []
+            or result.get("failure_marker_retained") is not False
+        ):
+            raise CampaignError(
+                "isolated campaign worker failed closed: {}: {}".format(
+                    result.get("error_type"), result.get("error")
+                )
+            )
+        manifest_sha256 = result["manifest_sha256"]
+        authorization.revalidate()
+        for bound, expected in zip(parent_bound_bags, BAG_SHA256):
+            if bound.sha256() != expected:
+                _fail("parent-held recorded input changed across isolated run")
+        partial_status = partial.lstat()
+        if (
+            not stat.S_ISDIR(partial_status.st_mode)
+            or stat.S_ISLNK(partial_status.st_mode)
+            or stat.S_IMODE(partial_status.st_mode) != 0o555
+            or schema.sha256_file(partial / "SHA256SUMS") != manifest_sha256
+        ):
+            _fail("postworker sealed artifact identity differs")
+        _trusted_parent_detached_verify_recorded(
+            partial, manifest_sha256, authorization, verifier_owner
+        )
+        for bound, expected in zip(parent_bound_bags, BAG_SHA256):
+            if bound.sha256() != expected:
+                _fail("parent-held recorded input changed during detached verification")
+        authorization.revalidate()
+        sealed_snapshot = _sealed_artifact_snapshot(partial)
+    except BaseException as exc:
+        failure = exc
+    finally:
+        cleanup_errors: List[BaseException] = []
+        for bound in parent_bound_bags:
+            try:
+                bound.close()
+            except BaseException as exc:
+                cleanup_errors.append(exc)
+        for owner in (verifier_owner, bag_mount_owner, workspace_owner):
+            if owner is None:
+                continue
+            try:
+                owner.remove()
+            except BaseException as exc:
+                cleanup_errors.append(exc)
+        if cleanup_errors:
+            if failure is None:
+                failure = _CampaignFailureBundle(
+                    _bounded_failure_record(CampaignError(
+                        "isolated campaign capability cleanup failed"
+                    )),
+                    tuple(
+                        _bounded_failure_record(item)
+                        for item in cleanup_errors
+                    ),
+                )
+            else:
+                failure = _append_cleanup_failures(
+                    failure, cleanup_errors
+                )
+
+    if failure is not None:
+        try:
+            failure_state = authorization.output_publication_state(staging)
+            if failure_state != "hidden":
+                _fail(
+                    "prepublication campaign failure lost its hidden root"
+                )
+            partial_descriptor = authorization.duplicate_output_root_fd(staging)
+            try:
+                _retain_campaign_failure(
+                    partial,
+                    partial_descriptor,
+                    source_commit,
+                    source_tree,
+                    failure,
+                    quarantine_untrusted_collision=True,
+                )
+            finally:
+                os.close(partial_descriptor)
+        except BaseException as marker_error:
+            raise CampaignError(
+                "campaign failed and its exact retained failure marker failed: "
+                + str(marker_error)
+            ) from failure
+        raise failure
+    if result is None or sealed_snapshot is None:
+        _fail("isolated campaign returned no verified sealed result")
+    manifest_sha256 = result["manifest_sha256"]
+    publication_diagnostic: Optional[BaseException] = None
+    try:
+        authorization.revalidate()
+        if _sealed_artifact_snapshot(partial) != sealed_snapshot:
+            _fail("sealed artifact changed after detached verification")
+        if prepublication_guard is not None:
+            prepublication_guard()
+        authorization.revalidate()
+        if _sealed_artifact_snapshot(partial) != sealed_snapshot:
+            _fail("sealed artifact changed before trusted publication")
+        authorization.publish_output(staging)
+    except BaseException as exc:
+        publication_state: Optional[str] = None
+        try:
+            publication_state = authorization.output_publication_state(staging)
+            if publication_state == "published":
+                publication_diagnostic = exc
+            elif publication_state in ("hidden", "published_uncommitted"):
+                failure_root = (
+                    partial if publication_state == "hidden" else final
+                )
+                root_descriptor = authorization.duplicate_output_root_fd(staging)
+                try:
+                    _retain_campaign_failure(
+                        failure_root,
+                        root_descriptor,
+                        source_commit,
+                        source_tree,
+                        exc,
+                        quarantine_untrusted_collision=True,
+                    )
+                finally:
+                    os.close(root_descriptor)
+            else:
+                _fail("publication reconciliation returned an invalid state")
+        except BaseException as marker_error:
+            raise CampaignError(
+                "publication failed and its exact state/marker reconciliation "
+                "failed: " + str(marker_error)
+            ) from exc
+        if publication_state != "published":
+            raise
+
+    # Publication is the authoritative success boundary.  An exception after
+    # the authorization committed the exact sealed final inode is diagnostic;
+    # the artifact is never reopened or mutated in that state.
+    if publication_diagnostic is not None:
+        try:
+            sys.stderr.write(
+                "CP2-C publication committed; post-commit diagnostic: "
+                + type(publication_diagnostic).__name__ + ": "
+                + str(publication_diagnostic) + "\n"
+            )
+        except BaseException:
+            pass
+
+    # Closed reporting
+    # streams cannot turn a durable final artifact into a campaign failure.
     try:
         print("CP2-C recorded campaign passed: " + str(final))
-        print("SHA256SUMS SHA-256: " + completed_manifest)
+        print("SHA256SUMS SHA-256: " + manifest_sha256)
     except BaseException:
         pass
     return 0

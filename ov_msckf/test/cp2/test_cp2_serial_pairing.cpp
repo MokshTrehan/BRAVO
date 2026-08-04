@@ -43,7 +43,7 @@ TEST(CP2SerialPairing, StrictTwentyMillisecondBoundaryAndMetadataAreExact) {
               UINT64_C(2000000008)),
       Message(CP2SerialMessageKind::kCamera1, UINT64_C(300000000),
               UINT64_C(3000000009)),
-      Message(CP2SerialMessageKind::kCamera0, UINT64_C(280000001),
+      Message(CP2SerialMessageKind::kCamera0, UINT64_C(319999999),
               UINT64_C(3000000000)),
   };
 
@@ -67,7 +67,7 @@ TEST(CP2SerialPairing, StrictTwentyMillisecondBoundaryAndMetadataAreExact) {
 
   // The exact 20,000,000 ns pair at indices 3/4 is rejected. The later
   // cam1 anchor therefore pairs with cam0 and is normalized without losing
-  // its actual anchor identity or the unsigned absolute difference.
+  // its actual anchor identity or the strict forward record-time difference.
   const auto &second = result.pairs[1];
   EXPECT_EQ(second.pair_index, 1U);
   EXPECT_EQ(second.anchor_filtered_index, 5U);
@@ -80,15 +80,23 @@ TEST(CP2SerialPairing, StrictTwentyMillisecondBoundaryAndMetadataAreExact) {
 
 TEST(CP2SerialPairing, FirstForwardCandidateIsNeverReplacedByANearerMessage) {
   const std::vector<CP2SerialFilteredMessage> messages = {
-      Message(CP2SerialMessageKind::kCamera0, UINT64_C(100000000)),
+      Message(CP2SerialMessageKind::kCamera0, UINT64_C(100000000),
+              UINT64_C(1000000000)),
       Message(CP2SerialMessageKind::kImu, UINT64_C(100100000)),
-      Message(CP2SerialMessageKind::kCamera1, UINT64_C(121000000)),
-      Message(CP2SerialMessageKind::kCamera1, UINT64_C(100500000)),
+      Message(CP2SerialMessageKind::kCamera1, UINT64_C(110000000),
+              UINT64_C(2000000000)),
+      Message(CP2SerialMessageKind::kCamera1, UINT64_C(110000001),
+              UINT64_C(1000000001)),
   };
 
   const auto result = CP2SerialPairSelector::Select(0U, messages);
   ASSERT_TRUE(result.accepted());
-  EXPECT_TRUE(result.pairs.empty());
+  ASSERT_EQ(result.pairs.size(), 1U);
+  // The later cam1 has a much nearer header timestamp, but headers never
+  // choose the pair population and cannot replace the first forward ordinal.
+  EXPECT_EQ(result.pairs[0].cam1_filtered_index, 2U);
+  EXPECT_EQ(result.pairs[0].cam1_header_time_ns, UINT64_C(2000000000));
+  EXPECT_EQ(result.pairs[0].absolute_record_delta_ns, UINT64_C(10000000));
 }
 
 TEST(CP2SerialPairing, UsedFirstForwardCandidateCannotBeReusedOrSearchedPast) {
@@ -144,6 +152,18 @@ TEST(CP2SerialPairing, InvalidMessageKindFailsAtomicallyWithFrozenStatus) {
   EXPECT_STREQ(ov_msckf::cp2_serial_pairing_status_name(result.status),
                "invalid_message_kind");
   EXPECT_TRUE(result.pairs.empty());
+
+  const std::vector<CP2SerialFilteredMessage> reversed_messages = {
+      Message(CP2SerialMessageKind::kCamera0, 20U),
+      Message(CP2SerialMessageKind::kImu, 19U),
+      Message(CP2SerialMessageKind::kCamera1, 21U),
+  };
+  const auto reversed =
+      CP2SerialPairSelector::Select(0U, reversed_messages);
+  EXPECT_EQ(reversed.status, CP2SerialPairingStatus::kRecordTimeReversed);
+  EXPECT_STREQ(ov_msckf::cp2_serial_pairing_status_name(reversed.status),
+               "record_time_reversed");
+  EXPECT_TRUE(reversed.pairs.empty());
 }
 
 TEST(CP2SerialPairing, EvidenceModeConsumesImuTailPastLastCamera) {
