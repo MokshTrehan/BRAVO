@@ -5,7 +5,7 @@ timezone: America/Toronto
 gate:
   id: CP2
   name: one_pass_baseline_parity
-  status: in_progress_cp2_c_approval_bound_source_freeze_cp2_d_e_unexecuted
+  status: stopped_cp2_c_predata_readiness_tracked_results_conflict_no_retry_cp2_d_e_unexecuted
   due: "2026-07-31T23:59:00-04:00"
   deadline_status: missed
   deadline_decision_recorded_at: "2026-08-01"
@@ -106,20 +106,20 @@ checkpoints:
     name: recorded_updater_parity
     status: pending
     implementation_readiness:
-      status: data_free_source_candidate_incident_acknowledged_pending_commit_unit_and_readiness
-      final_implementation_commit: absent_not_yet_created
-      final_implementation_tree: absent_not_yet_created
+      status: stopped_predata_readiness_failed_tracked_results_conflict_no_retry
+      final_implementation_commit: c0dfecfd61e3ac067c4020bb61ab6421df926500
+      final_implementation_tree: bd5372514f62cae4e7505e8008ba01b76e9b8520
       self_identity_policy: containing_commit_cannot_be_predeclared_exact_head_is_bound_by_unit_artifact
       resume_base_head: 46b3010ad5e77ea61f9a571ccb7842ea2e0f1979
       resume_base_tree: 04aa071dd68133beb3877c7e07058936e359c3b2
       resume_remote_tip: f98eb347552ddab8965d899516143344dcb8a0b4
-      resume_worktree: dirty_uncommitted_candidate_not_a_final_identity
-      source_hardening_status: candidate_complete_pending_git_source_freeze
-      pairing_and_producer_mathematical_audit_status: passed_current_dirty_tree_data_free_nonformal
-      recorded_campaign_publication_audit_status: passed_postfix_current_dirty_tree_data_free_nonformal
+      resume_worktree: clean_at_formal_unit_and_readiness_invocations_handoff_edit_follows
+      source_hardening_status: source_frozen_at_final_implementation_commit
+      pairing_and_producer_mathematical_audit_status: passed_frozen_source_data_free_nonformal
+      recorded_campaign_publication_audit_status: passed_frozen_source_data_free_nonformal
       unit_artifact_publication_atomicity_status: implemented_fault_injection_passed_independent_postfix_audit_clean_nonformal
-      evidence_binding_audit_status: passed_current_dirty_tree_exact_incident_approval_binding_nonformal
-      protecting_test_status: current_dirty_tree_data_free_nonformal
+      evidence_binding_audit_status: passed_frozen_source_exact_incident_approval_binding_nonformal
+      protecting_test_status: frozen_source_data_free_nonformal_missed_tracked_results_topology
       protecting_test_results:
         campaign: 11_of_11_passed
         approval_bound_actual_runner: 12_of_12_passed
@@ -129,8 +129,14 @@ checkpoints:
         strict_cpp_pairing: 6_of_6_passed
         readiness: 31_of_31_passed_after_exact_incident_approval_binding
         readiness_engine_aggregate: 43_of_43_passed
-      fresh_exact_head_unit_gate: not_run
-      readiness_digest_pins: synchronized_to_c0c09525dab693fd984430bc23b5dfe5888a701236ee8f676d348570612adeab_pending_commit
+      fresh_exact_head_unit_gate: passed_exactly_once_at_final_implementation_commit
+      formal_unit_gate_attempt_count: 1
+      formal_unit_gate_runner_exit_code: 0
+      formal_unit_artifact_path: /home/moksh/newSlam variant/results/staging/cp2/unit/cp2_unit_20260804T115532208174128Z-gc0dfecfd61e3-1b7s3Qlz
+      formal_unit_external_sha256sums_anchor: 8676cb804692230a639b9f212f979955d2ef7da48187467ef4863ee8766950c7
+      formal_unit_postcleanup_positional_verifier_diagnostic: failed_nonprotocol_live_workspace_mode_not_a_gate_failure
+      formal_unit_protocol_status: unit_gate_passed_readiness_nested_prevalidated_verifier_not_reached
+      readiness_digest_pins: synchronized_to_c0c09525dab693fd984430bc23b5dfe5888a701236ee8f676d348570612adeab_at_final_implementation_commit
       unit_evidence_record: project/cp2_ab_unit_evidence.json
       historical_unit_evidence_only_not_valid_for_live_head: true
       clarification_document: docs/cp2_c_composite_and_readiness_clarification.md
@@ -138,11 +144,11 @@ checkpoints:
       clarification_reviewed_commit: b37eff6e5baa035175e1dde3cae52ee496ca9e2d
       clarification_approval_record: project/cp2_c_clarification_approval.json
       detached_readiness_clarification_document: docs/cp2_c_detached_readiness_binding_clarification_proposed.md
-      detached_readiness_clarification_status: approved_complete_replacement_no_exceptions_in_source_freeze_candidate
+      detached_readiness_clarification_status: approved_complete_replacement_no_exceptions_source_bound
       detached_readiness_reviewed_commit: 0d71fee98499a10df4e92176709c1afe14077f90
       detached_readiness_reviewed_tree: 9e3dd0c72134b319f17c002c41aa63337de26414
       detached_readiness_approval_record: project/cp2_c_detached_readiness_binding_approval.json
-      detached_readiness_approval_record_status: present_in_source_freeze_candidate_effective_at_clean_commit
+      detached_readiness_approval_record_status: source_bound_at_final_implementation_commit
       incident_log: docs/cp2_predata_incident_log.md
       prior_acknowledged_incident_log_commit: c2f3ad9c54ed126cc69526c76adb3134c3bf9545
       prior_incident_disposition: acknowledged_and_accepted_no_incident_derived_influence
@@ -153,23 +159,31 @@ checkpoints:
       incident_disposition_approval_record: project/cp2_predata_incident_disposition_approval.json
       incident_disposition_approval_record_git_blob: c6c1a1b29324b31152cf038d6375fc216ca6f57c
       incident_disposition_approval_record_sha256: 80d227032c77a060d4bae5b48c869cc207c999ab7e2f2259bc884767ca11412e
-      incident_disposition_approval_record_status: present_in_source_freeze_candidate
-      incident_disposition_source_binding: complete_candidate_effective_at_clean_commit
+      incident_disposition_approval_record_status: source_bound_at_final_implementation_commit
+      incident_disposition_source_binding: complete_at_final_implementation_commit
       incident_derived_value_influence_permitted: false
-      recorded_access_authority: conditional_unopened_pending_exact_source_commit_fresh_unit_and_readiness
-      post_acknowledgment_recorded_access_authority: conditional_on_exact_source_binding_and_fresh_unit_and_readiness_pass
-      live_shadow_and_raw_proposal_codec: historical_or_current_dirty_tree_nonformal_not_exact_head_evidence
-      composite_state_snapshot: historical_unit_or_current_dirty_tree_nonformal_not_exact_head_evidence
-      detached_commit_oracle: historical_unit_or_current_dirty_tree_nonformal_not_exact_head_evidence
-      state_snapshot_file: historical_or_current_dirty_tree_codec_and_phase_integration_nonformal_not_recorded_joined
-      updater_phase_ordering_and_failure_atomicity: historical_unit_or_current_dirty_tree_nonformal_not_exact_head_evidence
-      updater_commit_oracle_and_commit_boundary: historical_unit_or_current_dirty_tree_nonformal_not_exact_head_evidence
-      production_fault_link_isolation: historical_unit_or_current_dirty_tree_nonformal_not_exact_head_evidence
-      authoritative_sink_and_fatal_latch: historical_unit_or_current_dirty_tree_nonformal_not_exact_head_evidence
-      literal_commit_clock_fill_boundary: historical_unit_or_current_dirty_tree_nonformal_not_exact_head_evidence
-      exact_checked_counters_and_retained_gamma: historical_unit_or_current_dirty_tree_nonformal_not_exact_head_evidence
+      recorded_access_authority: stopped_after_single_failed_predata_readiness_attempt_no_retry
+      post_acknowledgment_recorded_access_authority: not_exercised_readiness_never_authorized_registry_or_bag_access
+      live_shadow_and_raw_proposal_codec: passed_frozen_source_commit_unit_evidence
+      composite_state_snapshot: passed_frozen_source_commit_unit_evidence
+      detached_commit_oracle: passed_frozen_source_commit_unit_evidence
+      state_snapshot_file: passed_frozen_source_commit_unit_evidence_not_recorded_joined
+      updater_phase_ordering_and_failure_atomicity: passed_frozen_source_commit_unit_evidence
+      updater_commit_oracle_and_commit_boundary: passed_frozen_source_commit_unit_evidence
+      production_fault_link_isolation: passed_frozen_source_commit_unit_evidence
+      authoritative_sink_and_fatal_latch: passed_frozen_source_commit_unit_evidence
+      literal_commit_clock_fill_boundary: passed_frozen_source_commit_unit_evidence
+      exact_checked_counters_and_retained_gamma: passed_frozen_source_commit_unit_evidence
       candidate_live_writes_required_and_observed_in_unit_fixtures: 0
-      recorded_readiness_barrier: not_run
+      recorded_process_attempt_count: 1
+      recorded_process_exit_code: 78
+      recorded_readiness_barrier: failed_predata_before_self_tests_lock_unit_anchor_registry_or_bag
+      recorded_readiness_failure: tracked_source_may_not_live_under_separately_snapshotted_roots
+      recorded_readiness_failure_cause: 75_stage0_tracked_cp0_cp1_evidence_files_under_results
+      recorded_readiness_unit_archive_contains_conflicting_tracked_files: 75
+      recorded_readiness_retry_attempted: false
+      recorded_input_accessed: false
+      recorded_campaign_started: false
       recorded_artifact_reporting: not_run
       cp2_c_recorded_evidence: not_run
     minimum_visual_updates: 1000
@@ -376,7 +390,7 @@ evidence_policy:
     timing_pair: scripts/cp2/run_timing_pair.py
     verifier: scripts/cp2/verify_report.py
   commands_must_exist_and_pass_self_tests_before_evidence: true
-  current_exact_head_artifact: absent_fresh_exact_head_unit_gate_not_run
+  current_exact_head_artifact: frozen_source_commit_unit_only_at_c0dfecfd_not_valid_for_later_handoff_head
   historical_artifact:
     path: results/staging/cp2/unit/cp2_unit_20260802T185623152114466Z-g162ed140cb3f-WtrFa1xv
     report: results/staging/cp2/unit/cp2_unit_20260802T185623152114466Z-g162ed140cb3f-WtrFa1xv/cp2_report.json
@@ -413,9 +427,10 @@ protecting_configuration_tests:
   - runtime_failure_zero_silent_fallback
 
 blockers:
-  - cp2_c_clean_source_freeze_commit_not_yet_created
-  - fresh_exact_head_unit_gate_not_run
-  - cp2_c3_recorded_readiness_barrier_not_passed
+  - cp2_c_readiness_rejects_75_tracked_historical_evidence_files_under_results
+  - cp2_c_tracked_results_topology_repair_and_protecting_test_not_approved
+  - cp2_c_new_exact_source_identity_unit_and_readiness_attempt_not_authorized
+  - cp2_c3_recorded_readiness_barrier_failed_predata_no_retry
   - recorded_updater_parity_not_collected
   - cp2_d_exact_committed_approved_capsule_identity_absent
   - cp2_d_detached_first_forward_no_search_past_proof_artifact_insufficient

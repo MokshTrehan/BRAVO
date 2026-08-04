@@ -6,16 +6,16 @@ Last updated: 2026-08-04 (America/Toronto)
 
 - Repository: `/home/moksh/newSlam variant`
 - Branch: `schurvio-lite/cp2-one-pass`
-- Pre-freeze committed base `HEAD`:
-  `46b3010ad5e77ea61f9a571ccb7842ea2e0f1979`
-- Current committed base tree:
-  `04aa071dd68133beb3877c7e07058936e359c3b2`
-- Remote branch tip observed during source preparation:
-  `f98eb347552ddab8965d899516143344dcb8a0b4`. Recompute divergence after Git
-  creates the source-freeze commit.
-- These are preparation/resume coordinates, not a predeclared identity for the
-  commit containing this document. The unit artifact must record the actual
-  clean `HEAD` and tree selected by Git.
+- Approval-bound source-freeze commit:
+  `c0dfecfd61e3ac067c4020bb61ab6421df926500`
+- Approval-bound source-freeze tree:
+  `bd5372514f62cae4e7505e8008ba01b76e9b8520`
+- The worktree was clean at source freeze, formal unit-gate invocation, and the
+  single authorized CP2-C process invocation. Any later handoff-only commit is
+  not the tested source identity and cannot reuse this unit artifact.
+- Remote branch tip observed immediately before the failed readiness handoff:
+  `f98eb347552ddab8965d899516143344dcb8a0b4`; local source-freeze `HEAD` was
+  ahead by two commits and had not yet been pushed.
 - Pinned OpenVINS upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 - CP2-A and CP2-B are passed. CP2-C, CP2-D, and CP2-E are not passed.
 - The complete CP2-C detached-readiness replacement in
@@ -23,9 +23,7 @@ Last updated: 2026-08-04 (America/Toronto)
   approved as reviewed at commit
   `0d71fee98499a10df4e92176709c1afe14077f90`, with no exceptions.
 - `project/cp2_c_detached_readiness_binding_approval.json` records that human
-  approval and is included in the source-freeze candidate with all executable
-  bindings. Its source binding becomes effective at the clean containing
-  commit; do not predeclare that commit's identity.
+  approval and is source-bound with all executable bindings at `c0dfecfd...`.
 - Moksh exactly acknowledged and accepted the expanded, quarantined incident
   disposition reviewed at commit
   `46b3010ad5e77ea61f9a571ccb7842ea2e0f1979`, with no exceptions and with the
@@ -36,12 +34,33 @@ Last updated: 2026-08-04 (America/Toronto)
   `project/cp2_predata_incident_disposition_approval.json` records the exact
   statement with Git blob `c6c1a1b29324b31152cf038d6375fc216ca6f57c` and
   SHA-256 `80d227032c77a060d4bae5b48c869cc207c999ab7e2f2259bc884767ca11412e`.
-  The record is present in the source-freeze candidate; binding becomes
-  effective only when Git creates the clean candidate commit.
-- CP2-C recorded-input authorization remains conditional and unopened until
-  that record and all bindings are committed at the final clean source identity
-  and the fresh exactly-once unit gate plus readiness barrier pass.
-- The current dirty-tree, data-free CP2-C candidate has clean pairing/producer
+  The record and its governing bindings are source-bound at `c0dfecfd...`.
+- The sanitized exact-HEAD unit gate was invoked exactly once at `c0dfecfd...`
+  and exited `0`. It published the immutable unit-only staging artifact
+  `/home/moksh/newSlam variant/results/staging/cp2/unit/cp2_unit_20260804T115532208174128Z-gc0dfecfd61e3-1b7s3Qlz`
+  with external `SHA256SUMS` anchor
+  `8676cb804692230a639b9f212f979955d2ef7da48187467ef4863ee8766950c7`.
+- One supplemental post-cleanup invocation used the ordinary positional unit
+  verifier and failed its dependency source checks because that mode requires
+  the intentionally deleted live unit workspace. Contract and code audits
+  confirmed that this was a non-protocol diagnostic, not the required detached
+  readiness check. The gate was not rerun, and the hidden prevalidated verifier
+  was not invoked manually.
+- The single authorized CP2-C process was then invoked once at the same clean
+  source identity. It exited `78` during the pre-data readiness barrier with
+  `tracked source may not live under separately snapshotted roots`.
+- Exact cause: `HEAD` tracks 75 historical CP0/CP1 evidence files under
+  `results/immutable/{baseline,cp1}`, while `cp2_readiness.py` unconditionally
+  rejects every tracked path whose first component is `build`, `results`, or
+  `Testing`. The unit artifact's `source_snapshot.tar` contains all 75 tracked
+  files, so this is a readiness source-topology/invariant defect, not missing
+  frozen source evidence. The rejection also contradicts the approved
+  replacement rule that the canonical context contains every stage-0 tracked
+  file; this is an implementation-conformance defect, not a new math contract.
+- Readiness failed before its self-tests, data lock, detached unit-anchor check,
+  registry open, bag resolution, or campaign. No recorded input was accessed;
+  no CP2-C recorded result was created; no retry or tuning was attempted.
+- The frozen, data-free CP2-C source has clean pairing/producer
   math and post-fix campaign-publication audits. Nonformal protecting runs pass
   campaign `11/11`, approval-bound actual runner `12/12`, opaque repository
   `12/12`, sequence actual `15/15`, sequence runner `15/15`, and strict C++
@@ -49,15 +68,11 @@ Last updated: 2026-08-04 (America/Toronto)
   the approval-bound actual runner passes `12/12`, and the aggregated verifier
   self-test passes all `43` readiness-engine cases. These are protecting
   results, not current formal evidence.
-- Unit-artifact publication was further changed to perform anchored frozen
+- Unit-artifact publication performs anchored frozen
   verification before its no-replace rename, exact-inode rollback after a
   post-rename failure, and caller reconciliation after interruption. Its
   synthetic fault-injection corpus passes and the independent post-fix audit is
-  clean; final source freeze remains pending. There is no final implementation
-  commit/tree.
-- The fresh exact-HEAD unit gate, CP2-C readiness barrier, CP2-C recorded
-  campaign, and detached recorded verification have not run for this source
-  candidate.
+  clean at the frozen source identity.
 - Moksh selected desktop `x86_64` for CP2-D and retained the frozen fixed-clock
   desktop checkpoint for CP2-E. Jetson work is deferred beyond CP2; desktop
   results are not Jetson evidence.
@@ -91,8 +106,8 @@ new complete exact-commit unit gate before a later actual invocation.
 
 ## Non-negotiable boundary
 
-Until the acknowledged `46b3010...` incident disposition and its exact approval
-record are source-bound in a committed candidate and readiness passes:
+Readiness did not pass. Until a repaired exact source identity is reviewed,
+approved, unit-tested, and passes the one-shot readiness barrier:
 
 - do not inspect or semantically parse the dataset registry;
 - do not resolve, open, hash, or sample a bag or ground-truth file;
@@ -128,44 +143,37 @@ Any mathematical or evidence-contract discrepancy stops source freeze. Never
 tune a threshold, profile, sequence, fixture, or implementation after looking
 at recorded data.
 
-## Exact continuation flow
+## Exact continuation flow after the failed readiness attempt
 
 The order below is mandatory. CP2-C/D/E must not be run in parallel.
 
-1. Finish the data-free CP2-C source hardening, protecting tests, and
-   independent math/security audits. Resolve findings only from the frozen
-   contracts and synthetic fixtures.
-2. Preserve Moksh's received exact acknowledgment of
-   `docs/cp2_predata_incident_log.md` at commit `46b3010...` in
-   `project/cp2_predata_incident_disposition_approval.json`; bind its exact
-   bytes, semantics, reviewed document, and historical commit identity.
-3. Create the approval-binding implementation commit. It must include the
-   detached-readiness approval record, exact reviewed replacement identity,
-   exact acknowledged incident-log identity and disposition, complete source
-   bindings, tests, and the nonauthorizing D/E inventory status. Record its
-   actual commit and tree only after Git creates them. As the final source
-   operation before commit, recheck that `cp2_readiness.py` remains SHA-256
-   `c0c09525dab693fd984430bc23b5dfe5888a701236ee8f676d348570612adeab`
-   and that both actual entrypoints retain that exact pin; any later readiness
-   edit invalidates those pins again.
-4. Require that exact implementation `HEAD` and tree to be clean. Run the full
-   sanitized unit gate exactly once and bind the resulting immutable unit
-   artifact and external manifest anchor to that exact commit/tree. If it
-   fails, stop. Do not retry, tune, or relabel it.
-5. Only if the unit gate passes, execute the complete fresh-process CP2-C
-   readiness barrier. It must validate the exact source, approval records,
-   incident disposition, held repository/private-tree identities, unit
-   artifact, manifest, lock, commands, and zero preauthorization data access.
-   If it fails, stop before recorded input and do not retry.
-6. Only if readiness passes, run exactly one frozen CP2-C recorded campaign.
-   Use only the preregistered sequences, offsets, hashes, launch/configuration,
-   thresholds, and exact command. A failure stops the campaign and all later
-   stages; retain only the failure evidence the contract permits. There is no
-   silent retry.
-7. After all worker descendants are gone, require trusted-parent detached
-   verification, immutable sealing, no-replace publication, and an independent
-   detached verification of the published CP2-C artifact. Publication is the
-   success boundary.
+1. Preserve the failed attempt exactly. Do not rerun its unit gate, readiness
+   barrier, hidden verifier, or campaign, and do not relabel its exit-`78`
+   readiness failure as a pass.
+2. Prepare a data-free implementation-conformance repair under the already
+   approved replacement: remove the blanket tracked-path rejection for all
+   three separately snapshotted roots. Do not exclude those tracked files from
+   the source context or source archive; retain their simultaneous exact
+   coverage in the physical root snapshot.
+3. Add positive tracked `0100644` and `0100755` fixtures under the snapshotted
+   roots; prove exact source-context/archive and root-snapshot coverage while a
+   neighboring untracked leaf remains root-only. Add missing/mode/hash/blob,
+   mutation/substitution, special-file/control-file, and detached
+   tracked-versus-other classification rejections, all with zero registry/bag-
+   provider access. Re-run the full math, source-binding, publication, and
+   corruption audits data-free.
+4. Commit the complete repair and repin every readiness digest. Obtain Moksh's
+   explicit approval of that exact repaired commit/tree. No new contract
+   clarification is presently required, but the current approval does not
+   authorize a second attempt at a changed identity.
+5. Only after that approval, run one new clean exact-HEAD unit gate exactly once.
+   If it fails, stop without retry or tuning.
+6. Only if the new unit gate passes, invoke the one-shot CP2-C process exactly
+   once. Its readiness stage must pass before its sole registry read and frozen
+   recorded campaign. Any readiness or campaign failure stops the attempt.
+7. After successful no-replace publication, independently verify the externally
+   anchored recorded artifact. Publication plus detached verification is the
+   CP2-C success boundary.
 8. Do not execute CP2-D or CP2-E. First freeze exact committed D capsule and E
    profile candidates, including all evaluator/native/license/source/known-
    answer and host/CPU/affinity/clock/boost/thermal bindings. Then obtain
