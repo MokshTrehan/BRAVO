@@ -13,9 +13,10 @@ Last updated: 2026-08-04 (America/Toronto)
 - The worktree was clean at source freeze, formal unit-gate invocation, and the
   single authorized CP2-C process invocation. Any later handoff-only commit is
   not the tested source identity and cannot reuse this unit artifact.
-- Remote branch tip observed immediately before the failed readiness handoff:
-  `f98eb347552ddab8965d899516143344dcb8a0b4`; local source-freeze `HEAD` was
-  ahead by two commits and had not yet been pushed.
+- Readiness-failure handoff commit:
+  `99cb8ebcca0513d18898d4ffe5854cacc04b01c4`, tree
+  `958040dcc4bc808eb03bbb4bf91474c01d5248e2`. It was pushed, and local and
+  remote branch tips matched at that identity before this pickup-only update.
 - Pinned OpenVINS upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 - CP2-A and CP2-B are passed. CP2-C, CP2-D, and CP2-E are not passed.
 - The complete CP2-C detached-readiness replacement in
@@ -60,6 +61,12 @@ Last updated: 2026-08-04 (America/Toronto)
 - Readiness failed before its self-tests, data lock, detached unit-anchor check,
   registry open, bag resolution, or campaign. No recorded input was accessed;
   no CP2-C recorded result was created; no retry or tuning was attempted.
+- Moksh intends to provide his own chained authorization later for the CP2-C
+  repair and conditional fresh execution, because the intended human review
+  target is the final CP2-C evidence rather than an intermediate repair
+  candidate. This scheduling statement is not itself that authorization; do not
+  begin the repair or infer any execution authority until Moksh supplies the
+  exact chained statement.
 - The frozen, data-free CP2-C source has clean pairing/producer
   math and post-fix campaign-publication audits. Nonformal protecting runs pass
   campaign `11/11`, approval-bound actual runner `12/12`, opaque repository
@@ -143,6 +150,31 @@ Any mathematical or evidence-contract discrepancy stops source freeze. Never
 tune a threshold, profile, sequence, fixture, or implementation after looking
 at recorded data.
 
+## Pending chained CP2-C authorization
+
+Moksh will supply the governing text himself when work resumes. Unless his exact
+statement says otherwise, interpret the intended chain as one fail-closed
+authorization with these ordered predicates:
+
+1. Data-free repair, protecting tests, independent math/evidence audits,
+   readiness-digest repinning, and creation of one clean repair commit are
+   permitted first. Registry, bag, ground-truth, recorded-result, actual-mode,
+   network-installation, and host-control access remain forbidden in this phase.
+2. The repair commit/tree must be discovered and recorded after Git creates it;
+   it may not be predeclared. All data-free tests and audits must pass at that
+   exact identity with no contract, threshold, profile, or sequence drift.
+3. Only if the chained statement expressly authorizes the transition and every
+   prior predicate passes may one fresh exact-HEAD unit gate run. A unit failure
+   ends the chain without retry or tuning.
+4. Only if that unit gate passes may the same chain authorize one CP2-C process.
+   Readiness must pass before the sole registry read and frozen campaign; any
+   failure ends the chain. Successful publication must then pass independent
+   detached verification.
+5. The final externally anchored CP2-C artifact and audit record are the human
+   review target. The chain does not preapprove that result or permit CP2-D/E.
+
+Do not substitute this description for Moksh's future authorization bytes.
+
 ## Exact continuation flow after the failed readiness attempt
 
 The order below is mandatory. CP2-C/D/E must not be run in parallel.
@@ -150,7 +182,8 @@ The order below is mandatory. CP2-C/D/E must not be run in parallel.
 1. Preserve the failed attempt exactly. Do not rerun its unit gate, readiness
    barrier, hidden verifier, or campaign, and do not relabel its exit-`78`
    readiness failure as a pass.
-2. Prepare a data-free implementation-conformance repair under the already
+2. After the exact chained authorization is received, prepare a data-free
+   implementation-conformance repair under the already
    approved replacement: remove the blanket tracked-path rejection for all
    three separately snapshotted roots. Do not exclude those tracked files from
    the source context or source archive; retain their simultaneous exact
@@ -162,15 +195,17 @@ The order below is mandatory. CP2-C/D/E must not be run in parallel.
    tracked-versus-other classification rejections, all with zero registry/bag-
    provider access. Re-run the full math, source-binding, publication, and
    corruption audits data-free.
-4. Commit the complete repair and repin every readiness digest. Obtain Moksh's
-   explicit approval of that exact repaired commit/tree. No new contract
-   clarification is presently required, but the current approval does not
-   authorize a second attempt at a changed identity.
-5. Only after that approval, run one new clean exact-HEAD unit gate exactly once.
-   If it fails, stop without retry or tuning.
-6. Only if the new unit gate passes, invoke the one-shot CP2-C process exactly
-   once. Its readiness stage must pass before its sole registry read and frozen
-   recorded campaign. Any readiness or campaign failure stops the attempt.
+4. Commit the complete repair and repin every readiness digest. Record the
+   actual commit/tree after Git creates them. No new contract clarification is
+   presently required. Continue without an intermediate review only if Moksh's
+   future chained statement expressly authorizes that conditional transition.
+5. If and only if every authorization predicate and data-free gate passes, run
+   one new clean exact-HEAD unit gate exactly once. If it fails, stop without
+   retry or tuning.
+6. Only if the new unit gate passes and the chain expressly permits it, invoke
+   the one-shot CP2-C process exactly once. Its readiness stage must pass before
+   its sole registry read and frozen recorded campaign. Any readiness or
+   campaign failure stops the attempt.
 7. After successful no-replace publication, independently verify the externally
    anchored recorded artifact. Publication plus detached verification is the
    CP2-C success boundary.
@@ -218,6 +253,8 @@ At the next stop, report separately:
 - exact unit, readiness, CP2-C campaign, and detached-verification status;
 - whether any recorded input was accessed;
 - any immutable artifact path and external anchor that was actually created;
+- the exact chained-authorization identity and which predicates, if any, were
+  reached;
 - D capsule and E profile identity/approval status; and
 - whether local and remote branch tips are identical.
 
