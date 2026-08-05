@@ -15,6 +15,11 @@ C -> D -> E recorded chain were deliberately not started.
 - Repository: `/home/moksh/newSlam variant`
 - Branch: `schurvio-lite/cp2-one-pass`
 - Starting authorization commit: `1218d3fb73066760f099f87c621fe607f9de8b63`
+- Data-free implementation/handoff candidate commit:
+  `d960f90567bf113d9d04a4449bc5c9721c250aea`
+- Candidate tree: `575f5819696d2f50f3ec447f6025a5b71e75b9cf`
+- The later pickup-only commit at the branch tip changes no implementation,
+  contract, incident log, profile, threshold, or test source.
 - Pinned OpenVINS upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 - Desktop x86_64 remains the CP2 target.  Jetson work remains deferred beyond
   CP2.
