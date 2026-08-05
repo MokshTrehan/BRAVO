@@ -57,6 +57,9 @@ class SE3Alignment:
     source_count: int
     source_singular_values: np.ndarray
     source_rank_threshold: np.float64
+    cross_covariance_singular_values: np.ndarray
+    cross_covariance_rank_threshold: np.float64
+    reflection_correction_applied: bool
     determinant: np.float64
     orthogonality_error_frobenius: np.float64
     applied_identically_to_both_modes: bool = True
@@ -68,8 +71,23 @@ class SE3Alignment:
         singular_values, rank_threshold = validate_source_singular_values(
             self.source_singular_values, self.source_count
         )
+        cross_singular_values, cross_rank_threshold = (
+            validate_cross_covariance_singular_values(
+                self.cross_covariance_singular_values,
+                self.source_count,
+                self.reflection_correction_applied,
+            )
+        )
         if not _same_f64(self.source_rank_threshold, rank_threshold):
             raise SequenceMathError("alignment source-rank threshold does not match its frozen spectrum")
+        if not _same_f64(self.cross_covariance_rank_threshold, cross_rank_threshold):
+            raise SequenceMathError(
+                "alignment cross-covariance-rank threshold does not match its frozen spectrum"
+            )
+        if type(self.reflection_correction_applied) is not bool:
+            raise SequenceMathError(
+                "alignment reflection-correction flag is not Boolean"
+            )
         if not _same_f64(self.determinant, determinant):
             raise SequenceMathError("alignment determinant does not match its rotation")
         if not _same_f64(self.orthogonality_error_frobenius, orthogonality_error):
@@ -80,11 +98,18 @@ class SE3Alignment:
         rotation.setflags(write=False)
         translation.setflags(write=False)
         singular_values.setflags(write=False)
+        cross_singular_values.setflags(write=False)
         object.__setattr__(self, "rotation", rotation)
         object.__setattr__(self, "translation", translation)
         object.__setattr__(self, "source_count", _positive_integer(self.source_count, "alignment source count"))
         object.__setattr__(self, "source_singular_values", singular_values)
         object.__setattr__(self, "source_rank_threshold", rank_threshold)
+        object.__setattr__(
+            self, "cross_covariance_singular_values", cross_singular_values
+        )
+        object.__setattr__(
+            self, "cross_covariance_rank_threshold", cross_rank_threshold
+        )
         object.__setattr__(self, "determinant", determinant)
         object.__setattr__(self, "orthogonality_error_frobenius", orthogonality_error)
 
@@ -353,6 +378,66 @@ def validate_source_singular_values(singular_values: Any, population_count: Any)
     return values, threshold
 
 
+def validate_cross_covariance_singular_values(
+    singular_values: Any,
+    population_count: Any,
+    reflection_correction_applied: Any,
+) -> Tuple[np.ndarray, np.float64]:
+    """Require enough cross-covariance rank for a unique proper 3-D rotation.
+
+    Source non-collinearity alone is insufficient: a degenerate target can
+    make the Kabsch cross-covariance rank zero or one and leave an arbitrary
+    SVD-basis rotation.  Rank at least two is necessary and is sufficient when
+    no reflection correction is required.  When a correction is required,
+    the two smallest singular values must also be numerically distinct: if
+    they coincide, the corrected axis is arbitrary within their repeated
+    singular subspace.  The strict numerical threshold uses the common
+    population count because every covariance element is an ordered sum of
+    that many products; equality is rejected.
+    """
+
+    count = _positive_integer(population_count, "cross-covariance population count")
+    if type(reflection_correction_applied) is not bool:
+        raise SequenceMathError(
+            "cross-covariance reflection-correction flag is not Boolean"
+        )
+    if count < 3:
+        raise SequenceMathError("common alignment requires at least three poses")
+    if count > EXACT_BINARY64_INTEGER_MAX:
+        raise SequenceMathError(
+            "cross-covariance population count exceeds the exact binary64 integer range"
+        )
+    values = _as_f64_vector(
+        singular_values, 3, "cross-covariance singular values"
+    )
+    if (
+        np.any(values < np.float64(0.0))
+        or values[0] < values[1]
+        or values[1] < values[2]
+    ):
+        raise SequenceMathError(
+            "cross-covariance singular values are not a complete descending nonnegative spectrum"
+        )
+    largest = values[0]
+    if not largest > np.finfo(np.float64).tiny:
+        raise SequenceMathError("alignment cross-covariance is numerically zero")
+    multiplier = np.float64(max(count, 3))
+    threshold = np.float64(
+        np.float64(multiplier * np.finfo(np.float64).eps) * largest
+    )
+    if not values[1] > threshold:
+        raise SequenceMathError(
+            "alignment cross-covariance does not define a unique proper rotation"
+        )
+    if reflection_correction_applied:
+        smallest_gap = np.float64(values[1] - values[2])
+        if not smallest_gap > threshold:
+            raise SequenceMathError(
+                "alignment reflection correction has no unique smallest singular direction"
+            )
+    return values, threshold
+
+
 def _source_rank(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.float64]:
     count = points.shape[0]
     if count < 3:
@@ -426,7 +511,9 @@ def baseline_kabsch_alignment(nullspace_positions: Any, ground_truth_positions: 
     target_centroid = _ordered_centroid(target)
     covariance = _ordered_cross_covariance(source, target, source_centroid, target_centroid)
     try:
-        left, _, right_transpose = np.linalg.svd(covariance, full_matrices=True)
+        left, cross_singular_values_raw, right_transpose = np.linalg.svd(
+            covariance, full_matrices=True
+        )
     except np.linalg.LinAlgError as exc:
         raise SequenceMathError("alignment cross-covariance SVD failed") from exc
     if (
@@ -436,13 +523,28 @@ def baseline_kabsch_alignment(nullspace_positions: Any, ground_truth_positions: 
         or not np.all(np.isfinite(right_transpose))
     ):
         raise SequenceMathError("alignment SVD did not return complete finite factors")
-
     uv_transpose = np.matmul(left, right_transpose, dtype=np.float64)
     uv_determinant = np.float64(np.linalg.det(uv_transpose))
-    if not np.isfinite(uv_determinant) or uv_determinant == np.float64(0.0):
-        raise SequenceMathError("alignment determinant sign is zero or nonfinite")
+    if (
+        not np.isfinite(uv_determinant)
+        or abs(np.float64(abs(uv_determinant) - np.float64(1.0)))
+        > ROTATION_VALIDATION_TOLERANCE
+    ):
+        raise SequenceMathError(
+            "alignment determinant correction is not a finite orthogonal sign"
+        )
+    reflection_correction_applied = bool(uv_determinant < np.float64(0.0))
+    cross_singular_values, cross_rank_threshold = (
+        validate_cross_covariance_singular_values(
+            cross_singular_values_raw,
+            source.shape[0],
+            reflection_correction_applied,
+        )
+    )
     correction = np.eye(3, dtype=np.float64)
-    correction[2, 2] = np.float64(1.0 if uv_determinant > np.float64(0.0) else -1.0)
+    correction[2, 2] = np.float64(
+        -1.0 if reflection_correction_applied else 1.0
+    )
     # The multiplication is intentionally left-associated: R = (U D) V^T.
     rotation = np.matmul(np.matmul(left, correction, dtype=np.float64), right_transpose, dtype=np.float64)
     determinant, orthogonality_error = validate_proper_rotation(rotation)
@@ -459,6 +561,9 @@ def baseline_kabsch_alignment(nullspace_positions: Any, ground_truth_positions: 
         source_count=source.shape[0],
         source_singular_values=source_singular_values,
         source_rank_threshold=source_rank_threshold,
+        cross_covariance_singular_values=cross_singular_values,
+        cross_covariance_rank_threshold=cross_rank_threshold,
+        reflection_correction_applied=reflection_correction_applied,
         determinant=determinant,
         orthogonality_error_frobenius=orthogonality_error,
         applied_identically_to_both_modes=True,
@@ -564,6 +669,14 @@ def _alignment_payload_equal(left: SE3Alignment, right: SE3Alignment) -> bool:
         and left.source_count == right.source_count
         and left.source_singular_values.tobytes(order="C") == right.source_singular_values.tobytes(order="C")
         and _same_f64(left.source_rank_threshold, right.source_rank_threshold)
+        and left.cross_covariance_singular_values.tobytes(order="C")
+        == right.cross_covariance_singular_values.tobytes(order="C")
+        and _same_f64(
+            left.cross_covariance_rank_threshold,
+            right.cross_covariance_rank_threshold,
+        )
+        and left.reflection_correction_applied
+        is right.reflection_correction_applied
         and _same_f64(left.determinant, right.determinant)
         and _same_f64(left.orthogonality_error_frobenius, right.orthogonality_error_frobenius)
         and left.applied_identically_to_both_modes is True

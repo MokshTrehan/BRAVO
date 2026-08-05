@@ -27,6 +27,7 @@
 #include "state/Propagator.h"
 #include "state/State.h"
 #include "state/StateHelper.h"
+#include "update/CP2OutputCapability.h"
 #include "utils/dataset_reader.h"
 #include "utils/print.h"
 #include "utils/sensor_data.h"
@@ -50,7 +51,9 @@ const char *ov_msckf::cp2_serial_enqueue_status_name(
   return "invalid";
 }
 
-ROS1Visualizer::ROS1Visualizer(std::shared_ptr<ros::NodeHandle> nh, std::shared_ptr<VioManager> app, std::shared_ptr<Simulator> sim)
+ROS1Visualizer::ROS1Visualizer(std::shared_ptr<ros::NodeHandle> nh,
+                               std::shared_ptr<VioManager> app,
+                               std::shared_ptr<Simulator> sim)
     : _nh(nh), _app(app), _sim(sim), thread_update_running(false) {
 
   // Setup our transform broadcaster
@@ -121,23 +124,41 @@ ROS1Visualizer::ROS1Visualizer(std::shared_ptr<ros::NodeHandle> nh, std::shared_
     nh->param<std::string>("filepath_std", filepath_std, "state_deviation.txt");
     nh->param<std::string>("filepath_gt", filepath_gt, "state_groundtruth.txt");
 
-    // If it exists, then delete it
-    if (boost::filesystem::exists(filepath_est))
-      boost::filesystem::remove(filepath_est);
-    if (boost::filesystem::exists(filepath_std))
-      boost::filesystem::remove(filepath_std);
-
-    // Create folder path to this location if not exists
-    boost::filesystem::create_directories(boost::filesystem::path(filepath_est.c_str()).parent_path());
-    boost::filesystem::create_directories(boost::filesystem::path(filepath_std.c_str()).parent_path());
-
-    // Open the files
-    of_state_est.open(filepath_est.c_str());
-    of_state_std.open(filepath_std.c_str());
+    const VioManagerOptions app_params = _app->get_params();
+    if (app_params.cp2_preopened_output_mode) {
+      if (!OpenCP2PreopenedLegacyStream(
+              app_params.cp2_legacy_state_canonical_path, filepath_est,
+              app_params.cp2_legacy_state_capability,
+              of_state_est) ||
+          !OpenCP2PreopenedLegacyStream(
+              app_params.cp2_legacy_deviation_canonical_path, filepath_std,
+              app_params.cp2_legacy_deviation_capability,
+              of_state_std)) {
+        throw std::runtime_error(
+            "CP2 preopened state output could not be bound");
+      }
+    } else {
+      // Ordinary OpenVINS behavior owns these pathname outputs.
+      if (boost::filesystem::exists(filepath_est))
+        boost::filesystem::remove(filepath_est);
+      if (boost::filesystem::exists(filepath_std))
+        boost::filesystem::remove(filepath_std);
+      boost::filesystem::create_directories(boost::filesystem::path(filepath_est.c_str()).parent_path());
+      boost::filesystem::create_directories(boost::filesystem::path(filepath_std.c_str()).parent_path());
+      of_state_est.open(filepath_est.c_str());
+      of_state_std.open(filepath_std.c_str());
+    }
+    if (!of_state_est.is_open() || !of_state_est.good() ||
+        !of_state_std.is_open() || !of_state_std.good()) {
+      throw std::runtime_error("state output streams failed to open");
+    }
     of_state_est << "# timestamp(s) q p v bg ba cam_imu_dt num_cam cam0_k cam0_d cam0_rot cam0_trans ... imu_model dw da tg wtoI atoI etc"
                  << std::endl;
     of_state_std << "# timestamp(s) q p v bg ba cam_imu_dt num_cam cam0_k cam0_d cam0_rot cam0_trans ... imu_model dw da tg wtoI atoI etc"
                  << std::endl;
+    if (!of_state_est.good() || !of_state_std.good()) {
+      throw std::runtime_error("state output header write failed");
+    }
 
     // Groundtruth if we are simulating
     if (_sim != nullptr) {

@@ -127,6 +127,16 @@ CP2FeatureGateResult CP2FeatureGate::Evaluate(CP2FeatureGateInput input,
     return result;
   }
 
+  // Match the UpdaterMSCKF configuration invariant at this mathematical
+  // boundary as well. A nonpositive or nonfinite measurement variance must
+  // not be hidden by a positive H P H^T contribution.
+  if (!std::isfinite(input.sigma_px_sq) || !(input.sigma_px_sq > 0.0)) {
+    result.stage = evidence_reduction_available
+                       ? CP2FeatureGateStage::kInnovationNonfinite
+                       : CP2FeatureGateStage::kReductionUnavailable;
+    return result;
+  }
+
   // Construct the exact marginal in raw-layout order from one immutable full
   // prior snapshot; callers cannot inject an independently assembled P_marg.
   Eigen::MatrixXd P_marg = Eigen::MatrixXd::Zero(input.H.cols(), input.H.cols());

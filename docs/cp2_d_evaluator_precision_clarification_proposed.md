@@ -1,10 +1,31 @@
 # Proposed CP2-D evaluator-precision clarification
 
-Status: **proposed, not approved, and non-authorizing**
+Status: **historical conflict record; replacement implementation authorized,
+but exact capsule/source freeze remains pending**
 
 Recorded-input access used for this finding: **none**
 
 Date: 2026-08-03
+
+## Authorization update
+
+Moksh Trehan's tracked CP2-D addendum
+`project/cp2_d_completion_authorization_addendum.txt` (SHA-256
+`1193feb1dd2f0d440f9b9f1390baf716eada7d1d9ac705520b7be0cfd31d1429`,
+Git blob `91ebdc2ebe81765ab8b96c5d05d422b6e415998a`) expressly authorizes replacing
+the rounded console value with either evo's full-precision result archive or an
+equivalently exact capsule-local API, plus independent direct math and the
+unchanged absolute-plus-relative agreement tolerance. It also authorizes the
+private relocatable capsule, complete candidate witness, failure-atomic
+publication, and wholly synthetic rehearsal described here. The chained CP2
+authorization defers intermediate identity approval until final review.
+
+The implementation candidate selects the authorized equivalent API: a
+stdlib-only translation-RMSE evaluator independent of NumPy, SciPy, evo, and
+the NumPy-backed direct-math worker. Historical evo-specific findings below
+explain why the replacement was necessary; they are not the identity claimed
+by the selected equivalent evaluator. This update does not itself declare the
+working tree source-frozen or authorize recorded access.
 
 ## Conflict discovered before execution
 
@@ -89,12 +110,13 @@ path syntax and manifest-digest syntax, then fails before artifact access.
 Removing either pre-access block requires the approval-bound implementation
 and dependency identities below.
 
-## Recommended replacement contract
+## Historical evo-archive alternative (not selected)
 
-Subject to explicit approval, replace the evaluator-result transport and bind
-the evaluator execution surface as follows. All associations, common
-alignment bytes, direct-RMSE arithmetic, limits, mode order, and other CP2-D
-requirements remain unchanged.
+The following numbered alternative records the earlier evo-specific repair.
+It explains the origin of the eleven-element command and full-precision ZIP
+surface, but it is not the selected implementation's normative identity. The
+selected equivalent-evaluator requirements immediately following this list
+supersede evo-specific distribution, archive-parser, and statistics claims.
 
 1. Each mode's exact evaluator argv has exactly eleven elements:
    `${CAPSULE_ROOT}/APPROVED_LAUNCHER tum GT_SHARED.tum
@@ -128,9 +150,36 @@ requirements remain unchanged.
    ZIP member, archive hash drift, wrong result path, forbidden alignment
    option, and a no-op result archive.
 
-This replacement retains the independent direct calculation while preserving
-evo's full-precision result, rather than weakening the mathematical tolerance
-to accommodate a presentation-only string.
+The shared evaluator inputs are a preassociated transport. Each selected
+ground-truth pose retains its original ground-truth timestamp and source-row
+identity in the shared population and direct-math response, while its
+`GT_SHARED.tum` row uses the matching estimator timestamp. The aligned mode
+row uses that same estimator timestamp. Detached verification requires the two
+TUM timestamp columns to be byte-identical and to contain exactly the retained
+shared association count. This prevents evo's binary64 timestamp conversion
+from changing membership at the exact integer 10 ms boundary; it changes no
+selected pose, alignment, RMSE arithmetic, metric, or acceptance threshold.
+
+### Selected equivalent-evaluator requirements
+
+The authorized implementation keeps the same eleven-element command shape,
+preassociated/common-aligned TUM inputs, translation RMSE metric, direct-value
+relative term, tolerance, and six-decimal diagnostic console token. Its
+capsule-local evaluator is independent of NumPy, SciPy, evo, and the
+NumPy-backed direct worker. The result ZIP contains exactly
+`error_array.npy`, `info.json`, and `stats.json`. The nonextracting parser
+retains the complete finite nonnegative binary64 error population and the
+exact metric-identity document. It reconstructs count, min, max, mean, median,
+SSE, population standard deviation, and ordered population RMSE from those
+error bits and requires bit equality with `stats.json`; it does not impose
+rounded-binary64 inequalities that are not safe for every representable
+population. The reconstructed archive RMSE is compared with the independent
+direct RMSE using the unchanged absolute-plus-relative tolerance.
+
+This selected replacement retains two independently implemented computations
+without weakening the mathematical tolerance to accommodate a presentation
+string. Historical evo bytes or source are license/provenance records only and
+must never be claimed as the executed evaluator.
 
 ### Private relocatable evaluator capsule
 
@@ -148,8 +197,9 @@ mixed capsule/host fallback is forbidden.
    change fails before data authorization and removes the partial capsule.
 9. Stage the capsule only from an explicitly approved, locally retained input
    archive or installation-artifact set. Freeze a canonical root-relative
-   inventory containing every launcher, interpreter, standard-library file,
-   native extension, evo module, `evo` distribution-metadata file, dependency
+   inventory containing every sandbox runner, launcher, interpreter,
+   standard-library file, selected evaluator module, native extension,
+   applicable distribution-metadata file, dependency
    file, license/notice file, relative path, role, mode, size, and SHA-256.
    Reject an omitted, duplicate, extra, absolute, parent-traversing, linked,
    device, socket, or writable member. The canonical inventory and capsule
@@ -159,13 +209,13 @@ mixed capsule/host fallback is forbidden.
     to the capsule root, not through a shebang using `/usr/bin/env`, `PATH`,
     the user site, or host package discovery. The command is executed through
     the already verified capsule path or held descriptor. Provenance binds the
-    exact launcher bytes, interpreter bytes and version, entry-point module
-    and callable, distribution name `evo`, distribution version `1.31.1`,
+    exact sandbox/launcher bytes, interpreter bytes and version, entry-point
+    module and callable, applicable distribution identities,
     complete distribution/dependency inventory digest, and native-library
     closure. Relocating the identical capsule changes no canonical inventory
     byte or semantic binding.
-11. Replace the nullable host field with mandatory evaluator identity. At a
-    minimum retain exact nonnull `evo_version="1.31.1"`, evaluator-profile,
+11. Replace the nullable host field with mandatory selected-evaluator identity.
+    At a minimum retain its exact nonnull version, evaluator-profile,
     capsule-manifest, launcher, interpreter, entry-point,
     distribution-inventory, dependency-closure, sanitized-environment, and
     preflight-record SHA-256 fields. Absence, null, wrong type, version drift,
@@ -183,8 +233,8 @@ mixed capsule/host fallback is forbidden.
     SHA-256 for every preflight and evaluator command.
 13. Complete a dataset-free preflight before the authorization barrier
     releases registry, bag, ground-truth, or trajectory access. It revalidates
-    the held capsule identity, obtains version `1.31.1` from the bound
-    distribution and the exact evaluator version command, and runs the exact
+    the held capsule identity, obtains the selected equivalent evaluator's
+    exact version from its bound module and version command, and runs the exact
     evaluator path on a generated synthetic TUM fixture with predetermined
     association, archive statistics, console formatting, and exit status.
     The preflight uses the same launcher, interpreter, module closure,
@@ -201,12 +251,12 @@ mixed capsule/host fallback is forbidden.
     validates archive paths, modes, identities, launcher/interpreter/module and
     distribution bindings, dependency/native-library closure, version and
     environment records, preflight result, and all six real command joins. It
-    rejects a report whose host record has a null evo version even if all
-    numeric evaluator fields appear to pass.
+    rejects a report whose mandatory selected-evaluator identity is absent or
+    null even if all numeric evaluator fields appear to pass.
 16. Add protecting cases for missing capsule execution permission, ambient
     `PATH` shadowing, host-evaluator fallback, group/other-writable capsule
     input, symlink/hardlink/path replacement, launcher/interpreter/module or
-    distribution drift, null/wrong evo version, dependency omission,
+    distribution drift, null/wrong selected-evaluator version, dependency omission,
     `PYTHONPATH`/user-site/loader injection, post-preflight mutation,
     relocation to two distinct private roots, preflight no-op, detached use of
     a host evaluator, and coordinated metadata/hash substitution.
@@ -237,9 +287,11 @@ deriving those values from the mutable host during a recorded run.
 
 ## Data-free implementation candidate
 
-The source tree now contains four non-authorizing, data-free candidate
-primitives. They are not imported by either public actual-mode path and do not
-remove either pre-access block:
+The source tree now contains the non-authorizing capsule, evaluator,
+direct-math, construction, and detached-replay primitives described below.
+Both the formal producer implementation and detached replay are wired to the
+same sealed execution transport, but their public actual-mode entry points
+remain blocked until final source freeze and the chained readiness predicates:
 
 - `scripts/cp2/cp2_capsule.py` defines an uncompressed, length-prefixed
   `.cp2cap` regular-file-only stream, a canonical relocation-independent
@@ -252,16 +304,15 @@ remove either pre-access block:
   mode drift and device crossings, and rejects directory/file substitution
   without deleting the substituted bytes. Unsupported descriptor capabilities
   fail closed. Separate evaluator and direct-math profiles are mandatory.
-- `scripts/cp2/cp2_evo_result.py` manually accounts for every classic-ZIP
-  local, central-directory, and EOCD byte. It accepts only an exact Unix ZIP
-  2.0 regular-file surface, STORE or version-consistent raw DEFLATE, no extra
-  fields/comments/preamble/gaps/overlap/trailing bytes/ZIP64/encryption/data
-  descriptors, and decompresses only root `stats.json` under fixed bounds.
-  The exact seven finite nonnegative, non-negative-zero statistics and basic
-  min/mean/median/RMSE/max ordering are checked, including the mathematically
-  necessary exact `RMSE >= mean` relation for nonnegative errors. Console RMSE
-  is diagnostic six-decimal formatting; the archive RMSE is the full-precision
-  value.
+- `scripts/cp2/cp2_evaluator_result.py` manually accounts for the selected
+  equivalent evaluator's bounded ZIP and NPY surfaces without extracting or
+  executing an archive member. It retains the complete error population and
+  reconstructs all reported statistics with the selected evaluator's frozen
+  binary64 order. Protecting logic deliberately does not compare rounded
+  binary64 statistics through unsafe textbook inequalities. Console RMSE is a
+  diagnostic canonical six-decimal rendering; reconstructed archive RMSE is
+  the full-precision comparison value. `cp2_evo_result.py` remains only a
+  historical evo-parser record and is not the selected evaluator identity.
 - `scripts/cp2/cp2_f64_codec.py` defines canonical finite-binary64 array IPC.
   Values are lower-case 16-hex-digit big-endian IEEE-754 bit strings; shape is
   checked u64 arithmetic; JSON has exact keys/order/spacing and one LF; signed
@@ -288,22 +339,34 @@ reachability; every license/notice; an exact private single-thread
 environment; exact execution, version, and preflight commands; injection
 denylist; floating-point rounding/subnormal/control-state identity; retained
 preflight fixtures and known-answer bytes; and a canonical full-profile
-SHA-256. The x86 candidate requires MXCSR `0x1f80` and x87 control word
-`0x027f` (round-to-nearest, 53-bit significand, no FTZ/DAZ); the AArch64
+SHA-256. The x86 candidate requires MXCSR `0x1f80`, x87 control word
+`0x027f` (round-to-nearest, 53-bit significand, no FTZ/DAZ), and independently
+checks both MXCSR and x87 sticky exception-status domains. Invalid,
+divide-by-zero, and overflow are fatal; only the explicitly frozen
+denormal/underflow/inexact observations may be cleared after a successful
+check. The direct profile records the literal NumPy policy identity
+`invalid-divide-over-raise_under-ignore`: invalid, divide, and overflow use
+`raise`, while underflow uses `ignore` solely so gradual binary64 underflow
+rounds according to the preserved-subnormal control state. The AArch64
 candidate requires zero FPCR/FPSR under the stated mask. The evaluator command
 template is the eleven-element command above. The direct-math command template
 is a five-element absolute launcher request/response command. A retained
 known-answer digest must equal the selected capsule member's actual SHA-256;
 an unrelated opaque digest is rejected.
 
-No real capsule archive or `project` profile has been created. The synthetic
-tests use invented bytes only; passing them proves parser/stager logic, not an
-evo, CPython, NumPy, BLAS, LAPACK, libc, libm, or CPU identity. “Relocatable”
-at this stage means transport bytes and canonical inventory are root-neutral.
-Executable relocation and identical numerical answers at two roots remain an
-approved-capsule preflight requirement. The evidenced data-free inventory is
-78 tests: 26 capsule/profile/stager cases, 29 ZIP/statistics cases, 12
-binary64-codec cases, and 11 direct-KAT bundle cases.
+Private construction roots and earlier candidate archives now exist, but none
+is formal evidence and the final source/capsule/profile identities remain to be
+regenerated after this review closure. Construction and relocation preflights,
+formal producer commands, and detached replay all execute the sandbox runner,
+launcher, interpreter, modules, capsule inputs, and writable response through
+sealed anonymous descriptors inside fresh user/mount/network/IPC/UTS/cgroup/PID
+namespaces with a private read-only-root tmpfs. The tmpfs byte/inode budget is
+independently checked from exact page-rounded member and output capacities;
+namespace unavailability fails closed. No raw staged capsule pathname is an
+executable, input, or response surface. Passing synthetic tests proves these
+bindings and the selected candidate identity only; the exact current test
+population is emitted by the source-bound data-free aggregate rather than
+duplicated as a stale prose constant.
 
 ## Direct-math known-answer plan
 
@@ -316,12 +379,16 @@ bits are deliberately not populated from the ambient host.
    `(3,0,0),(-3,0,0),(0,2,0),(0,-2,0),(0,0,1),(0,0,-1)` and target rows
    `(1,1,.5),(1,-5,.5),(-1,-2,.5),(3,-2,.5),(1,-2,1.5),(1,-2,-.5)`.
    The mathematical transform is `Rz(+90 degrees)`, translation `(1,-2,.5)`.
-   Retain rotation, translation, singular values, rank threshold, determinant,
-   and orthogonality-error bits from the selected approved stack.
+   Retain rotation, translation, source and cross-covariance singular values,
+   both rank thresholds, the exact `+1` determinant-correction-sign bits,
+   determinant, and orthogonality-error bits from the selected approved stack.
 2. `kabsch_reflection_correction` uses the same source and target rows
    `(-4,2,-.5),(2,2,-.5),(-1,4,-.5),(-1,0,-.5),(-1,2,.5),(-1,2,-1.5)`.
    The unconstrained reflection is `diag(-1,1,1)`; the production correction
-   must return a proper rotation (mathematically `diag(-1,1,-1)`).
+   must return a proper rotation (mathematically `diag(-1,1,-1)`). Retain both
+   spectra, both strict rank thresholds, and the exact `-1`
+   determinant-correction-sign bits here as well. The correction is admissible only when the frozen
+   binary64 `c_2-c_3` gap is strictly above the cross-covariance threshold.
 3. `common_alignment_matrix_products` reuses case 1's alignment byte-for-byte
    for both modes. The Schur source adds dyadic delta `(.125,-.25,.5)` and uses
    stored quaternion `(0,0,.6,.8)`. Retain both aligned position/rotation
@@ -346,10 +413,10 @@ floating-point state: preflight must report and verify actual backend thread
 count, CPU dispatch/core policy, FE_TONEAREST, and x86 MXCSR or AArch64 FPCR
 state with subnormal preservation.
 
-## Decisions still required before a profile can exist
+## Historical decisions and current disposition
 
-Moksh Trehan must explicitly select and approve all of the following before
-real capsule bytes may be inspected, built, or bound:
+The original proposal listed the following decisions before real capsule bytes
+could be inspected, built, or bound:
 
 1. the CP2-D execution target: desktop `x86_64` or Jetson `aarch64`. The
    current CP2 proposal is desktop evidence and Jetson remains CP6 unless that
@@ -369,13 +436,23 @@ real capsule bytes may be inspected, built, or bound:
    using `PyConfig` isolated mode with a fixed hash seed, or explicit approval
    and proof that the capsule protocol is hash-order-independent.
 
-After those choices, the exact profile/capsule implementation must be
-committed for review and approved. A separate source-binding commit, fresh
-exact-HEAD unit anchor, and readiness pass then precede any CP2-D data access.
+The later authorization resolves items 1 and 2 as desktop `x86_64` and grants
+authority to construct/freeze the private capsule from authoritative source
+artifacts. The exact interpreter/native closure, selected thread/dispatch
+identity, known-answer bits, license/source inventory, and relocation receipts
+must still be completed and source-bound before the one formal gate. The
+equivalent evaluator makes an evo distribution identity unnecessary in its
+execution closure; evo source retained historically is not evidence that evo
+executed. A separate source-binding commit, fresh exact-HEAD unit anchor, and
+readiness pass still precede any CP2-D data access.
 
 ## Approval boundary
 
-This document does not itself change the frozen contract. Implementation and
-recorded execution require Moksh Trehan's explicit approval of the exact
-committed version of this clarification. Until then, CP2-D remains
-`blocked_pending_evaluator_precision_clarification`.
+The CP2-D addendum supplies implementation authority for the precision,
+provenance, witness, and publication replacement. This document alone still
+does not make a working tree or artifact formal evidence. CP2-D remains locked
+until the complete candidate is committed, source-bound, independently audited,
+and the chained formal predicates pass. The separately discovered Kabsch
+uniqueness defect and its new acceptance boundary are governed by
+`docs/cp2_d_alignment_uniqueness_clarification_proposed.md` and require explicit
+approval before source freeze.

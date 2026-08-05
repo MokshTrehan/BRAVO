@@ -92,6 +92,9 @@ def cases_fixture():
             translation,
             [bits(3.0), bits(2.0), bits(1.0)],
             [bits(1.0e-15)],
+            [bits(3.0), bits(2.0), bits(1.0)],
+            [bits(1.0e-15)],
+            [direct_kat.FROZEN_OUTPUT_BITS[(0, "determinant_correction_sign")]],
             [bits(1.0)],
             [bits(0.0)],
         ),
@@ -100,6 +103,9 @@ def cases_fixture():
             [bits(value) for value in (-1.0, 2.0, -0.5)],
             [bits(3.0), bits(2.0), bits(1.0)],
             [bits(1.0e-15)],
+            [bits(3.0), bits(2.0), bits(1.0)],
+            [bits(1.0e-15)],
+            [direct_kat.FROZEN_OUTPUT_BITS[(1, "determinant_correction_sign")]],
             [bits(1.0)],
             [bits(0.0)],
         ),
@@ -198,6 +204,28 @@ class DirectKatValidTests(unittest.TestCase):
             )
             self.assertEqual(tuple(item.name for item in case.outputs), tuple(name for name, _ in specs))
             self.assertEqual(tuple(item.shape for item in case.outputs), tuple(shape for _, shape in specs))
+
+    def test_frozen_input_only_request_is_unique_expectation_projection(self):
+        expectation = canonical(expectation_fixture())
+        request = direct_kat.encode_frozen_request()
+        decoded = direct_kat.decode_request(request)
+        self.assertEqual(request, direct_kat.encode_request_from_expectation(expectation))
+        self.assertEqual(tuple(case.name for case in decoded.cases), direct_kat.CASE_ORDER)
+        self.assertTrue(all(case.outputs == () for case in decoded.cases))
+        self.assertEqual(
+            tuple(tuple(item.bits for item in case.inputs) for case in decoded.cases),
+            direct_kat.FROZEN_INPUT_BITS,
+        )
+
+    def test_request_rejects_output_smuggling_and_input_substitution(self):
+        request = json.loads(direct_kat.encode_frozen_request().decode("ascii"))
+        request["cases"][0]["outputs"] = []
+        with self.assertRaises(direct_kat.DirectKatError):
+            direct_kat.decode_request(canonical(request))
+        del request["cases"][0]["outputs"]
+        request["cases"][0]["inputs"][0]["bits"][0] = bits(4.0)
+        with self.assertRaises(direct_kat.DirectKatError):
+            direct_kat.decode_request(canonical(request))
 
 
 class DirectKatSchemaTests(unittest.TestCase):

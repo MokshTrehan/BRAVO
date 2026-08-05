@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "record_type": "cp2_completion_authorization_binding",
+  "reviewer": "Moksh Trehan",
+  "recorded_date": "2026-08-04",
+  "starting_branch": "schurvio-lite/cp2-one-pass",
+  "starting_commit": "1218d3fb73066760f099f87c621fe607f9de8b63",
+  "base_authorization": {
+    "user_supplied_byte_count": 8606,
+    "user_supplied_sha256": "8e07b1e1d5418b65b5d1993e791e9dab5340d7e77f9ea687e6d064e3bc803cca",
+    "tracked_path": "project/cp2_completion_chained_authorization.txt",
+    "tracked_canonicalization": "user_bytes_plus_one_terminal_lf",
+    "tracked_byte_count": 8607,
+    "tracked_sha256": "385193b010462c75622d0ff777310df1d96f773036eb7d93885200810e8f021e",
+    "tracked_git_blob": "7a9fe092abf28c6548ce26cacdd9b134594b5ad5"
+  },
+  "cp2_d_addendum": {
+    "tracked_path": "project/cp2_d_completion_authorization_addendum.txt",
+    "tracked_canonicalization": "one_semantic_copy_with_terminal_lf",
+    "conversation_receipt_repetitions": 2,
+    "tracked_byte_count": 4206,
+    "tracked_sha256": "1193feb1dd2f0d440f9b9f1390baf716eada7d1d9ac705520b7be0cfd31d1429",
+    "tracked_git_blob": "91ebdc2ebe81765ab8b96c5d05d422b6e415998a"
+  },
+  "cp2_e_addendum": {
+    "tracked_path": "project/cp2_e_completion_authorization_addendum.txt",
+    "tracked_canonicalization": "one_semantic_copy_with_terminal_lf",
+    "conversation_receipt_repetitions": 1,
+    "tracked_byte_count": 2913,
+    "tracked_sha256": "96b758e8ed8346720ab9fa1006c6c8c3cb68b31448fe54b676a71ee2e14149eb",
+    "tracked_git_blob": "3f9ea1f33f25a66f8cf715bfcd88cdc823a4878e"
+  },
+  "human_acceptance_timing": "deferred_until_final_cp2_review_package",
+  "cp3_authorized": false,
+  "jetson_deferred_beyond_cp2": true,
+  "exceptions": []
+}

@@ -54,6 +54,7 @@
 #include "ros/ROS1Visualizer.h"
 #include "update/CP2RuntimeContext.h"
 #include "update/CP2OfflineReplay.h"
+#include "update/CP2OutputCapability.h"
 #include "update/CP2SerialPairing.h"
 #include "update/CP2SerialRuntimeTrace.h"
 #include "update/CP2TraceJournal.h"
@@ -83,6 +84,61 @@ CP2SerialRuntimeEnqueueStatus cp2_runtime_enqueue_status(
     return CP2SerialRuntimeEnqueueStatus::kCam1DecodeFailed;
   }
   throw std::logic_error("invalid CP2 serial enqueue status");
+}
+
+bool read_cp2_output_capabilities(
+    ros::NodeHandle &node,
+    CP2RuntimeOutputCapabilities &output) noexcept {
+  struct Binding {
+    const char *parameter;
+    CP2OutputCapability CP2RuntimeOutputCapabilities::*member;
+  };
+  static const std::array<Binding, 14U> bindings = {{
+      {"cp2_serial_trace_sink_capability",
+       &CP2RuntimeOutputCapabilities::serial_trace},
+      {"cp2_callback_trace_sink_capability",
+       &CP2RuntimeOutputCapabilities::callback_trace},
+      {"cp2_trajectory_trace_sink_capability",
+       &CP2RuntimeOutputCapabilities::trajectory_trace},
+      {"cp2_updater_trace_sink_capability",
+       &CP2RuntimeOutputCapabilities::updater_trace},
+      {"cp2_state_payload_sink_capability",
+       &CP2RuntimeOutputCapabilities::state_payload},
+      {"cp2_proposal_payload_sink_capability",
+       &CP2RuntimeOutputCapabilities::proposal_payload},
+      {"cp2_raw_system_payload_sink_capability",
+       &CP2RuntimeOutputCapabilities::raw_system_payload},
+      {"cp2_timing_trace_sink_capability",
+       &CP2RuntimeOutputCapabilities::timing_trace},
+      {"cp2_runtime_parameters_sink_capability",
+       &CP2RuntimeOutputCapabilities::runtime_parameters},
+      {"cp2_loader_map_before_sink_capability",
+       &CP2RuntimeOutputCapabilities::loader_map_before},
+      {"cp2_loader_map_after_sink_capability",
+       &CP2RuntimeOutputCapabilities::loader_map_after},
+      {"cp2_legacy_state_sink_capability",
+       &CP2RuntimeOutputCapabilities::legacy_state},
+      {"cp2_legacy_deviation_sink_capability",
+       &CP2RuntimeOutputCapabilities::legacy_deviation},
+      {"cp2_legacy_timing_sink_capability",
+       &CP2RuntimeOutputCapabilities::legacy_timing},
+  }};
+  try {
+    CP2RuntimeOutputCapabilities parsed;
+    for (const Binding &binding : bindings) {
+      std::string encoded;
+      if (!node.getParam(binding.parameter, encoded) ||
+          !ParseCP2OutputCapability(encoded, parsed.*(binding.member))) {
+        output = CP2RuntimeOutputCapabilities{};
+        return false;
+      }
+    }
+    output = std::move(parsed);
+    return true;
+  } catch (...) {
+    output = CP2RuntimeOutputCapabilities{};
+    return false;
+  }
 }
 
 } // namespace
@@ -172,6 +228,7 @@ int main(int argc, char **argv) {
   // create an output sink and before constructing/opening a rosbag object.
   bool cp2_evidence_mode = false;
   CP2RuntimeContext cp2_context;
+  CP2RuntimeOutputCapabilities cp2_output_capabilities;
   std::string cp2_trace_level;
   if (nh->getParam("cp2_trace_level", cp2_trace_level)) {
     cp2_evidence_mode = true;
@@ -218,13 +275,22 @@ int main(int argc, char **argv) {
       return EXIT_FAILURE;
     }
     cp2_context = parsed.context;
-    // CP2-E's launch/runtime combination is preregistered, but no eligible
-    // fixed-clock profile or complete artifact schema is committed yet.  Keep
-    // this guard in the executable itself so an accidental direct launch
-    // cannot reach path_bag or construct a rosbag object while that contract
-    // remains incomplete.
+    if (!read_cp2_output_capabilities(*nh, cp2_output_capabilities) ||
+        !ValidateCP2RuntimeOutputCapabilities(
+            cp2_context, cp2_output_capabilities)) {
+      PRINT_ERROR(RED "[SERIAL-CP2]: held output capability population is invalid\n" RESET);
+      ros::shutdown();
+      return EXIT_FAILURE;
+    }
+    // The timing trace implementation is deliberately reviewable before the
+    // final CP2-E profile is frozen, but no direct executable invocation may
+    // cross the recorded-input boundary yet.  Keep this second, in-binary
+    // lock in addition to the Python runner's pre-access lock.  The lock may
+    // only be replaced by an approval-bound capability check at the final
+    // clean source identity after the privileged apply/validate/restore
+    // rehearsal succeeds.
     if (cp2_context.trace_level == CP2RuntimeTraceLevel::kTiming) {
-      PRINT_ERROR(RED "[SERIAL-CP2]: CP2-E is blocked before bag access pending the committed fixed-clock profile and complete artifact schema\n" RESET);
+      PRINT_ERROR(RED "[SERIAL-CP2]: CP2-E is blocked before bag access pending the frozen timing profile, privilege rehearsal, and formal gate\n" RESET);
       ros::shutdown();
       return EXIT_FAILURE;
     }
@@ -240,18 +306,51 @@ int main(int argc, char **argv) {
     if (sequence_outputs) {
       std::string filepath_est;
       std::string filepath_std;
+      std::string expected_filepath_est;
+      std::string expected_filepath_std;
+      std::string expected_timing_path;
       nh->param<std::string>("filepath_est", filepath_est, "");
       nh->param<std::string>("filepath_std", filepath_std, "");
       if (!cp2_context.legacy_state_path.available ||
           !cp2_context.legacy_deviation_path.available ||
           !cp2_context.legacy_timing_path.available ||
-          filepath_est != cp2_context.legacy_state_path.value ||
-          filepath_std != cp2_context.legacy_deviation_path.value ||
-          params.record_timing_filepath != cp2_context.legacy_timing_path.value) {
-        PRINT_ERROR(RED "[SERIAL-CP2]: legacy output paths differ from runtime context\n" RESET);
+          !CP2OutputCapabilityPath(cp2_output_capabilities.legacy_state,
+                                   expected_filepath_est) ||
+          !CP2OutputCapabilityPath(cp2_output_capabilities.legacy_deviation,
+                                   expected_filepath_std) ||
+          !CP2OutputCapabilityPath(cp2_output_capabilities.legacy_timing,
+                                   expected_timing_path) ||
+          !ValidateCP2OutputCapabilityBinding(
+              cp2_context.legacy_state_path.value,
+              cp2_output_capabilities.legacy_state) ||
+          !ValidateCP2OutputCapabilityBinding(
+              cp2_context.legacy_deviation_path.value,
+              cp2_output_capabilities.legacy_deviation) ||
+          !ValidateCP2OutputCapabilityBinding(
+              cp2_context.legacy_timing_path.value,
+              cp2_output_capabilities.legacy_timing) ||
+          filepath_est != expected_filepath_est ||
+          filepath_std != expected_filepath_std ||
+          params.record_timing_filepath != expected_timing_path) {
+        PRINT_ERROR(RED "[SERIAL-CP2]: legacy outputs do not use held inode capabilities\n" RESET);
         ros::shutdown();
         return EXIT_FAILURE;
       }
+      // This field is not parser-controlled. Set it only after all three
+      // exact held-capability paths and their required launch Booleans pass.
+      params.cp2_preopened_output_mode = true;
+      params.cp2_legacy_state_capability =
+          cp2_output_capabilities.legacy_state;
+      params.cp2_legacy_deviation_capability =
+          cp2_output_capabilities.legacy_deviation;
+      params.cp2_legacy_timing_capability =
+          cp2_output_capabilities.legacy_timing;
+      params.cp2_legacy_state_canonical_path =
+          cp2_context.legacy_state_path.value;
+      params.cp2_legacy_deviation_canonical_path =
+          cp2_context.legacy_deviation_path.value;
+      params.cp2_legacy_timing_canonical_path =
+          cp2_context.legacy_timing_path.value;
     }
     if (nh->hasParam("path_gt")) {
       PRINT_ERROR(RED "[SERIAL-CP2]: ground-truth initialization parameter is forbidden\n" RESET);
@@ -300,8 +399,9 @@ int main(int argc, char **argv) {
     if (!runtime_parameters.accepted() ||
         runtime_parameters.canonical_sha256 !=
             cp2_context.resolved_parameters_sha256 ||
-        !CP2SerialRuntimeTrace::WriteNewFile(
+        !WriteCP2OutputCapability(
             cp2_context.runtime_parameters_path.value,
+            cp2_output_capabilities.runtime_parameters,
             runtime_parameters.raw_json)) {
       PRINT_ERROR(RED "[SERIAL-CP2]: runtime parameter capture/binding failed: %s\n" RESET,
                   cp2_ros1_parameter_status_name(runtime_parameters.status));
@@ -313,12 +413,13 @@ int main(int argc, char **argv) {
   // Capture the complete loaded-object set after construction-time ROS/plugin
   // loading but immediately before the bag path is retrieved.  This is the
   // stable pre-run boundary compared with the post-run map; the output is
-  // exclusive and fsynced, and any failure remains pre-bag.
+  // capability-bound and fsynced, and any failure remains pre-bag.
   if (cp2_evidence_mode) {
     std::string loader_map_before;
     if (!CP2SerialRuntimeTrace::ReadLoaderMap(loader_map_before) ||
-        !CP2SerialRuntimeTrace::WriteNewFile(
+        !WriteCP2OutputCapability(
             cp2_context.loader_map_before_path.value,
+            cp2_output_capabilities.loader_map_before,
             loader_map_before)) {
       PRINT_ERROR(RED "[SERIAL-CP2]: unable to seal pre-run loader map\n" RESET);
       ros::shutdown();
@@ -398,6 +499,7 @@ int main(int argc, char **argv) {
   PRINT_DEBUG("[SERIAL]: total of %zu messages!\n", msgs.size());
 
   std::shared_ptr<CP2SerialRuntimeTrace> cp2_runtime_trace;
+  CP2OpenedOutput cp2_journal_output;
   std::shared_ptr<CP2TraceJournalSink> cp2_journal_sink;
   std::map<std::size_t, CP2SerialPair> cp2_pair_by_anchor;
   if (cp2_evidence_mode) {
@@ -458,7 +560,8 @@ int main(int argc, char **argv) {
         }
       }
       cp2_runtime_trace = std::make_shared<CP2SerialRuntimeTrace>(
-          cp2_context, std::move(selected.pairs));
+          cp2_context, cp2_output_capabilities,
+          std::move(selected.pairs));
     } catch (const std::exception &error) {
       PRINT_ERROR(RED "[SERIAL-CP2]: serial trace initialization failed: %s\n" RESET,
                   error.what());
@@ -496,22 +599,17 @@ int main(int argc, char **argv) {
     }
 
     if (cp2_context.trace_level == CP2RuntimeTraceLevel::kRecordedFull) {
-      const int journal_descriptor =
-          ::open(cp2_context.updater_trace_path.value.c_str(),
-                 O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
-                 S_IRUSR | S_IWUSR);
-      if (journal_descriptor < 0 ||
+      if (!OpenCP2OutputCapability(
+              cp2_context.updater_trace_path.value,
+              cp2_output_capabilities.updater_trace,
+              cp2_journal_output) ||
           !CP2TraceJournalSink::CreateForPreopenedFile(
-              journal_descriptor, cp2_journal_sink)) {
-        if (journal_descriptor >= 0) {
-          (void)::close(journal_descriptor);
-        }
+              cp2_journal_output.descriptor(), cp2_journal_sink)) {
         PRINT_ERROR(RED "[SERIAL-CP2]: authoritative journal creation failed\n" RESET);
         ros::shutdown();
         return EXIT_FAILURE;
       }
-      if (::close(journal_descriptor) != 0 ||
-          !sys->set_cp2_recorded_sink(cp2_journal_sink)) {
+      if (!sys->set_cp2_recorded_sink(cp2_journal_sink)) {
         PRINT_ERROR(RED "[SERIAL-CP2]: authoritative sink installation failed\n" RESET);
         ros::shutdown();
         return EXIT_FAILURE;
@@ -695,11 +793,15 @@ int main(int argc, char **argv) {
       ros::shutdown();
       return EXIT_FAILURE;
     }
-    if (cp2_journal_sink && !cp2_journal_sink->Finalize()) {
-      PRINT_ERROR(RED "[SERIAL-CP2]: authoritative journal durability failed: %s\n" RESET,
-                  cp2_trace_journal_failure_name(cp2_journal_sink->failure()));
-      ros::shutdown();
-      return EXIT_FAILURE;
+    if (cp2_journal_sink) {
+      if (!cp2_journal_sink->Finalize() ||
+          !SealCP2OutputCapability(cp2_journal_output,
+                                   cp2_journal_sink->bytes_written())) {
+        PRINT_ERROR(RED "[SERIAL-CP2]: authoritative journal durability failed: %s\n" RESET,
+                    cp2_trace_journal_failure_name(cp2_journal_sink->failure()));
+        ros::shutdown();
+        return EXIT_FAILURE;
+      }
     }
     if (!cp2_runtime_trace->Finalize()) {
       PRINT_ERROR(RED "[SERIAL-CP2]: serial trace finalization failed: %s\n" RESET,
@@ -709,8 +811,9 @@ int main(int argc, char **argv) {
     }
     std::string loader_map_after;
     if (!CP2SerialRuntimeTrace::ReadLoaderMap(loader_map_after) ||
-        !CP2SerialRuntimeTrace::WriteNewFile(
+        !WriteCP2OutputCapability(
             cp2_context.loader_map_after_path.value,
+            cp2_output_capabilities.loader_map_after,
             loader_map_after)) {
       PRINT_ERROR(RED "[SERIAL-CP2]: unable to seal post-run loader map\n" RESET);
       ros::shutdown();

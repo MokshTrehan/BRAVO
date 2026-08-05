@@ -1,0 +1,71 @@
+I, Moksh Trehan, reaffirm the complete chained CP2 authorization contained in
+the 8,606-byte approval file with SHA-256
+8e07b1e1d5418b65b5d1993e791e9dab5340d7e77f9ea687e6d064e3bc803cca.
+
+For CP2-D preparation, I additionally authorize the following data-free work
+before formal source freeze.
+
+Codex may construct a private, relocatable evaluator/direct-math capsule from
+exact authoritative upstream or operating-system source archives, packages, or
+wheels downloaded before source freeze. The capsule may include its own Python
+interpreter or private environment, evo, NumPy, SciPy, native libraries,
+launchers, and deterministic single-thread controls. Nothing may be installed
+system-wide. Every component must be frozen by version, URL, SHA-256,
+executable/module/native dependency closure, license, notices, and applicable
+corresponding source.
+
+I authorize replacement of evo’s rounded six-decimal console value as the
+machine-readable evidence surface. Codex may use evo’s full-precision retained
+result archive or an equivalently exact capsule-local API result, provided the
+mathematical metric remains the already frozen translation RMSE on the exact
+shared, commonly aligned population. The artifact must retain the evo result,
+the full-precision parsed value, and an independently recomputed direct-math
+value. The verifier must reconstruct the direct value and require the frozen
+absolute-plus-relative agreement tolerance. This authorization changes only
+the precision/provenance surface, not alignment, association, metric, threshold,
+or pass/fail mathematics.
+
+Codex may complete and freeze a D evidence-schema extension retaining the
+complete chronological filtered camera-message candidate view or an
+equivalently sufficient witness. The detached verifier must independently
+replay strict first-forward, no-search-past, strict-less-than-20-ms, and
+no-message-reuse selection. Synthetic protecting cases must include an earlier
+ineligible candidate, an earlier eligible candidate followed by another
+eligible candidate, the exact 20-ms boundary, interleaved cameras, duplicate
+timestamps, exhausted candidates, and coordinated substitution of a later
+otherwise-valid pair.
+
+Codex may complete descriptor-relative, held-inode, no-replace D publication
+with exact parent-fsync ordering, rollback and reconciliation, and explicit
+indeterminate-state handling. Data-free fault injection must cover name
+collision, post-rename fsync failure, rollback failure, interruption at every
+publication boundary, and caller cleanup after each authoritative publication
+state.
+
+To improve first-formal-run confidence, Codex may generate wholly synthetic ROS
+bags, camera messages, callback traces, trajectories, and ground truth under a
+private temporary directory and run nonformal end-to-end D integration
+rehearsals through both nullspace and Schur paths, the capsule evaluator,
+direct-math verifier, artifact assembly, publication, and detached verification.
+These fixtures must be generated independently of project/dataset registry,
+recorded bags, ground truth, recorded results, and all incident-exposed values.
+They may not reuse real dataset timing, trajectory, metric, or threshold-derived
+values.
+
+Synthetic integration rehearsals and disposable builds may iterate before
+formal source freeze, but they are protecting diagnostics only and must never be
+reported as formal D evidence. The actual D entry point must remain disabled
+until the final source/capsule/schema identity is frozen, every data-free
+mathematical and evidence audit passes, and the single authorized formal unit
+gate passes.
+
+The RTX 5090 must not be introduced into D’s estimator, evaluator, alignment, or
+metric path. Build parallelism may use the available desktop CPU, but every
+formal D estimator/evaluator execution must use the frozen deterministic serial
+and single-thread environment.
+
+No actual registry, recorded bag, ground truth, or recorded-result access is
+authorized by this addendum before the chained readiness conditions pass. No
+record-derived repair, tuning, alternate sequence, threshold change, or retry is
+permitted. All other chained-authorization conditions remain unchanged. No
+exceptions.

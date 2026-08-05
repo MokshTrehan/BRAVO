@@ -22,6 +22,7 @@ enum class CP2CommitBoundaryStatus {
   kProofRejected,
   kCommittedFillSucceeded,
   kCommittedFillFailed,
+  kCommittedEndpointInvalid,
 };
 
 /**
@@ -50,8 +51,9 @@ template <typename Endpoint> struct CP2CommitBoundaryOutput {
  * postcommit_fill must be allocation-free in addition to being noexcept. C++14
  * cannot express allocation freedom as a type trait, so the caller and the
  * protecting allocation-failure test own that part of the contract. Endpoint
- * is restricted to a trivially copyable value so publishing it after commit
- * cannot invoke user code or allocate.
+ * must expose a bool `valid` member and is restricted to a trivially copyable
+ * value so validating and publishing it after commit cannot invoke user code
+ * or allocate.
  */
 class CP2CommitBoundary final {
 public:
@@ -65,6 +67,8 @@ public:
     using CommitResult = decltype(std::declval<SoleCommit &>()());
     using ClockResult = decltype(std::declval<Clock &>().now());
     using FillResult = decltype(std::declval<PostcommitFill &>()());
+    using EndpointValidity =
+        decltype(std::declval<const Endpoint &>().valid);
 
     static_assert(std::is_same<typename std::decay<ProofResult>::type,
                                bool>::value,
@@ -83,6 +87,9 @@ public:
                   "CP2 postcommit fill must be noexcept");
     static_assert(std::is_trivially_copyable<Endpoint>::value,
                   "CP2 endpoint must be trivially copyable");
+    static_assert(std::is_same<typename std::decay<EndpointValidity>::type,
+                               bool>::value,
+                  "CP2 endpoint must expose a bool valid member");
     static_assert(std::is_nothrow_constructible<Endpoint, ClockResult>::value,
                   "CP2 endpoint capture must be nonthrowing");
     static_assert(
@@ -100,10 +107,11 @@ public:
     const Endpoint endpoint = clock.now();
     const CP2PostcommitFillStatus fill_status = postcommit_fill();
     const CP2CommitBoundaryStatus boundary_status =
-        StatusFromPostcommitFill(fill_status);
+        endpoint.valid ? StatusFromPostcommitFill(fill_status)
+                       : CP2CommitBoundaryStatus::kCommittedEndpointInvalid;
 
     output.endpoint = endpoint;
-    output.endpoint_valid = true;
+    output.endpoint_valid = endpoint.valid;
     output.status = boundary_status;
     return output.status;
   }

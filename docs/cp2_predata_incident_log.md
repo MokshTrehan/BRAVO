@@ -186,3 +186,82 @@ Impact and disposition:
   not acknowledge it. Recorded-input access is therefore paused pending an
   explicit acknowledgment and acceptance of this disposition; data-free
   implementation, synthetic tests, and source review may continue.
+
+## 2026-08-04T17:45:11-04:00 — CP2-E public-document web lookup outside the D-only network scope
+
+- Repository `HEAD` was
+  `1218d3fb73066760f099f87c621fe607f9de8b63`; the worktree contained the
+  authorized, uncommitted data-free CP2-C/D/E implementation candidate.
+- While assessing whether this desktop exposed an adequate AMD thermal or
+  throttle witness, Codex issued one public web-search request containing
+  three queries for official AMD processor documentation and Linux `k10temp`
+  documentation. The search returned public result titles, URLs, and snippets
+  from AMD and Linux documentation.
+- This was outside the chained authorization's narrower rule that pre-freeze
+  network use is permitted only when necessary to construct the CP2-D capsule
+  from authoritative source material. It was therefore not an authorized
+  CP2-E feasibility input even though it accessed no project, dataset, or
+  private service.
+- No registry, bag, ground-truth file, recorded result, credential, host
+  control, service, module, or device state was opened or changed by the web
+  request. No downloaded file was installed, retained in the repository, or
+  added to a capsule.
+
+Impact and disposition:
+
+- Every fact returned by that web request is quarantined. It may not influence
+  the CP2-E helper, timing profile, telemetry definition, threshold, test,
+  feasibility decision, source freeze, or execution choice and supplies no
+  audit credit.
+- The admissible CP2-E candidate remains based only on the authorization,
+  approved local contract, wholly synthetic fixtures, and the separately
+  authorized local read-only host inventory collected without network access.
+  That local inventory had already established that noninteractive `sudo`
+  fails and that no adequate bound throttle witness had yet been proved.
+- Codex instructed the helper workstream to disregard all web-derived E facts.
+  Any later thermal/throttle decision must be derived afresh from local,
+  profile-bound surfaces during an authorized privileged apply/validate/
+  restore feasibility trial.
+- Data-free implementation and synthetic testing may continue. Formal source
+  freeze, the unit gate, recorded-input access, and actual C/D/E execution are
+  paused until Moksh Trehan explicitly acknowledges and accepts this incident
+  disposition in addition to every other chained readiness predicate.
+
+## 2026-08-04T21:31:51-04:00 — replacement CP2-E audit repeated unauthorized web access
+
+- Repository `HEAD` remained
+  `1218d3fb73066760f099f87c621fe607f9de8b63`; the working tree contained the
+  authorized, uncommitted, data-free CP2-C/D/E implementation candidate.
+- During a follow-up review of estimator-CPU isolation, the CP2-E audit
+  workstream used public web search/open requests and then `curl` requests for
+  Linux kernel cgroup-v1 cpuset and cgroup-v2 documentation, including the
+  rendered HTML and source-RST URLs at `docs.kernel.org`.
+- The returned v1 direct-ancestor overlap and v2 partition semantics materially
+  informed the uncommitted
+  `docs/cp2_e_isolation_feasibility.md` decision text. This repeated the earlier
+  E-network scope violation: pre-freeze network use is authorized only when
+  necessary for the D capsule, not for E feasibility work.
+- No dataset registry, bag, ground truth, recorded result, private service,
+  credential, host control, module, cgroup, affinity, clock, or device state
+  was opened or changed by the web requests.
+
+Impact and disposition:
+
+- The web-informed isolation document and every E implementation, profile,
+  test, or execution choice influenced by those returned semantics are
+  quarantined and supply no audit credit. They may not be used to justify
+  source freeze or any formal or recorded execution.
+- The audit workstream was stopped immediately after disclosure. A replacement
+  isolation derivation must be performed without that workstream's context,
+  without network access, using only explicitly permitted local read-only host
+  surfaces and locally installed documentation. The locally installed
+  `/usr/share/man/man7/cpuset.7.gz` and `cgroups.7.gz` were identified as
+  candidate offline sources, with SHA-256 values
+  `bebe87a0dadfa490015f8c0a4028c5cb07b85a31bf2895cb8d151da53dd85a88`
+  and `b642b0c570ecadd8ca7ff30a0e3d1fcd5f15567ff3eba96cb71b0357ae3b1153`
+  respectively.
+- Data-free work unrelated to the quarantined E conclusion may continue.
+  Formal source freeze, the unit gate, readiness, recorded-input access, host
+  mutation, and actual C/D/E execution remain paused. Moksh Trehan must
+  explicitly acknowledge and accept this incident disposition at the exact
+  committed identity before the chained formal transition can resume.

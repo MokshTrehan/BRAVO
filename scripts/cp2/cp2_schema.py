@@ -37,6 +37,7 @@ RESOLVED_PARAMETER_PREFIX = "/cp2_vio/"
 ALLOWED_COMMAND_ENVIRONMENT_NAMES = frozenset(
     {
         "CC",
+        "BLIS_NUM_THREADS",
         "CFLAGS",
         "CMAKE_PREFIX_PATH",
         "CP2_FORBID_BAG_ACCESS",
@@ -62,7 +63,15 @@ ALLOWED_COMMAND_ENVIRONMENT_NAMES = frozenset(
         "LDFLAGS",
         "LIBRARY_PATH",
         "LOGNAME",
+        "MKL_DYNAMIC",
+        "MKL_NUM_THREADS",
+        "MPLCONFIGDIR",
+        "NPY_DISABLE_CPU_FEATURES",
+        "NUMEXPR_NUM_THREADS",
+        "OMP_DYNAMIC",
         "OMP_NUM_THREADS",
+        "OPENBLAS_CORETYPE",
+        "OPENBLAS_NUM_THREADS",
         "PATH",
         "PKG_CONFIG_PATH",
         "PYTHONDONTWRITEBYTECODE",
@@ -79,7 +88,11 @@ ALLOWED_COMMAND_ENVIRONMENT_NAMES = frozenset(
         "ROS_VERSION",
         "SOURCE_DATE_EPOCH",
         "TMPDIR",
+        "TZ",
         "USER",
+        "VECLIB_MAXIMUM_THREADS",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
     }
 )
 

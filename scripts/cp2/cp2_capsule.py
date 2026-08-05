@@ -35,6 +35,7 @@ from __future__ import annotations
 import ctypes
 from dataclasses import dataclass
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -42,14 +43,17 @@ from pathlib import Path, PurePosixPath
 import re
 import secrets
 import stat
-from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 import cp2_schema as schema
 
 
 CAPSULE_MAGIC = b"SchurVIO-CP2-capsule-v1\0"
 INVENTORY_MAGIC = b"SchurVIO-CP2-capsule-inventory-v1\0"
-ENVIRONMENT_MAGIC = b"SchurVIO-CP2-capsule-environment-v1\0"
+# The command record and capsule profile bind the same logical environment.
+# One domain prevents a profile/record pair from carrying identical variables
+# under two digests that can never compare equal.
+ENVIRONMENT_MAGIC = schema.COMMAND_ENVIRONMENT_DOMAIN
 NATIVE_EDGE_MAGIC = b"SchurVIO-CP2-native-closure-edges-v1\0"
 NATIVE_CONSUMER_MAGIC = b"SchurVIO-CP2-native-consumers-v1\0"
 
@@ -63,20 +67,55 @@ MAX_IN_MEMORY_ARCHIVE_BYTES = 64 << 20
 IO_CHUNK_BYTES = 1 << 20
 MAX_COMMAND_OUTPUT_BYTES = 16 << 20
 MAX_PREFLIGHT_OUTPUT_BYTES = 64 << 20
+MAX_SOURCE_LOCK_BYTES = 16 << 20
+
+EXPECTED_CAPSULE_UNIT_PATHS = {
+    "direct_math": (
+        "capsules/direct_math.cp2cap",
+        "capsules/direct_math.profile.json",
+    ),
+    "evaluator": (
+        "capsules/evaluator.cp2cap",
+        "capsules/evaluator.profile.json",
+    ),
+}
+EXPECTED_CAPSULE_IDENTITY_RECORD_TYPE = "cp2_d_expected_capsule_identity"
+EXPECTED_CAPSULE_SOURCE_LOCK_PATH = "project/cp2_capsule_source_lock.json"
+CONTRACT_BINDING_PATHS = (
+    "docs/cp2_d_alignment_uniqueness_clarification_proposed.md",
+    "docs/cp2_d_evaluator_precision_clarification_proposed.md",
+    "project/cp2_completion_authorization_binding.json",
+    "project/cp2_d_completion_authorization_addendum.txt",
+)
+_SOURCE_LOCK_FORBIDDEN_OUTPUT_KEYS = frozenset(
+    (
+        "archive_sha256",
+        "archive_size",
+        "archive_size_bytes",
+        "capsule_archive_identity",
+        "capsule_output_identity",
+        "capsule_profile_identity",
+        "expected_capsule_identity",
+        "expected_capsule_outputs",
+        "profile_sha256",
+        "profile_size",
+        "profile_size_bytes",
+    )
+)
 
 CAPSULE_KINDS = frozenset(("evaluator", "direct_math"))
 FILE_MODES = frozenset((0o444, 0o555))
 FILE_ROLES = frozenset(
     (
         "capsule_launcher",
+        "capsule_sandbox",
         "python_interpreter",
         "python_stdlib",
         "python_extension",
         "numpy_extension",
         "numpy_module",
         "numpy_distribution_metadata",
-        "evo_module",
-        "evo_distribution_metadata",
+        "evaluator_module",
         "python_dependency",
         "direct_math_module",
         "direct_math_known_answer",
@@ -85,25 +124,23 @@ FILE_ROLES = frozenset(
         "preflight_fixture",
         "preflight_known_answer",
         "license_notice",
+        "source_lock",
     )
 )
 EXECUTABLE_ROLES = frozenset(
-    ("capsule_launcher", "python_interpreter", "native_loader")
+    ("capsule_launcher", "capsule_sandbox", "python_interpreter", "native_loader")
 )
 DISTRIBUTION_ROLES = frozenset(
     (
-        "python_extension",
         "numpy_extension",
         "numpy_module",
         "numpy_distribution_metadata",
-        "evo_module",
-        "evo_distribution_metadata",
-        "python_dependency",
     )
 )
 NATIVE_CONSUMER_ROLES = frozenset(
     (
         "capsule_launcher",
+        "capsule_sandbox",
         "python_interpreter",
         "python_extension",
         "numpy_extension",
@@ -113,6 +150,7 @@ NATIVE_CONSUMER_ROLES = frozenset(
 )
 
 PATH_COMPONENT = re.compile(r"^[A-Za-z0-9_+.-]{1,128}$")
+PARTIAL_NAME = re.compile(r"^\.cp2-stage-[0-9a-f]{32}$")
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
 PYTHON_MODULE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
 PYTHON_CALLABLE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -134,8 +172,10 @@ FIXED_ENVIRONMENT = {
     "MKL_DYNAMIC": "FALSE",
     "MKL_NUM_THREADS": "1",
     "NUMEXPR_NUM_THREADS": "1",
+    "NPY_DISABLE_CPU_FEATURES": "X86_V3,X86_V4,AVX512_ICL,AVX512_SPR",
     "OMP_DYNAMIC": "FALSE",
     "OMP_NUM_THREADS": "1",
+    "OPENBLAS_CORETYPE": "SkylakeX",
     "OPENBLAS_NUM_THREADS": "1",
     "PYTHONDONTWRITEBYTECODE": "1",
     "PYTHONNOUSERSITE": "1",
@@ -167,6 +207,32 @@ INJECTION_DENYLIST = (
 
 class CapsuleError(ValueError):
     """Raised when capsule bytes, provenance, or staging fail closed."""
+
+
+class CapsulePublicationIncident(CapsuleError):
+    """A failed publication whose exact capsule inode may need caller cleanup.
+
+    ``authoritative_state`` is one of ``partial``, ``destination``, or
+    ``indeterminate``.  The exception deliberately retains both names and the
+    expected inode identity so a caller can invoke
+    :func:`reconcile_capsule_publication` without guessing which path is safe
+    to remove.  An indeterminate state is diagnostic only and never grants
+    deletion authority.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        destination: Path,
+        partial_name: str,
+        expected_identity: Optional[Tuple[int, int]],
+        authoritative_state: str,
+    ) -> None:
+        super().__init__(message)
+        self.destination = destination
+        self.partial_name = partial_name
+        self.expected_identity = expected_identity
+        self.authoritative_state = authoritative_state
 
 
 def _fail(message: str) -> None:
@@ -299,7 +365,7 @@ class CapsuleEntry:
         if mode not in FILE_MODES:
             _fail("capsule member mode must be 0444 or 0555")
         if (self.role in EXECUTABLE_ROLES) != (mode == 0o555):
-            _fail("only launcher/interpreter/native-loader roles may and must be executable")
+            _fail("only sandbox/launcher/interpreter/native-loader roles may and must be executable")
         size = _u64(self.size, "capsule member size")
         if size > MAX_MEMBER_BYTES:
             _fail("capsule member exceeds its size bound")
@@ -324,6 +390,22 @@ class CapsuleMember:
 
 
 @dataclass(frozen=True)
+class CapsuleFileSource:
+    """One already inventoried regular file for streaming capsule encoding."""
+
+    entry: CapsuleEntry
+    source_path: Path
+
+    def __post_init__(self) -> None:
+        if type(self.entry) is not CapsuleEntry:
+            _fail("capsule file source lacks one exact inventory entry")
+        path = Path(self.source_path)
+        if not path.is_absolute() or os.path.normpath(str(path)) != str(path):
+            _fail("capsule file source path is not normalized absolute")
+        object.__setattr__(self, "source_path", path)
+
+
+@dataclass(frozen=True)
 class ParsedCapsule:
     entries: Tuple[CapsuleEntry, ...]
     payloads: Tuple[bytes, ...]
@@ -339,6 +421,7 @@ class TargetIdentity:
     endianness: str
     libc_abi: str
     loader_abi: str
+    elf_interpreter: str
     cpu_dispatch_policy: str
 
 
@@ -378,6 +461,11 @@ class NativeClosure:
     inventory_sha256: str
     consumers_sha256: str
     edges_sha256: str
+    loader_argv_prefix: Tuple[str, ...]
+    effective_library_directories: Tuple[str, ...]
+    cache_policy: str
+    default_search_policy: str
+    pathname_policy: str
 
 
 @dataclass(frozen=True)
@@ -428,11 +516,28 @@ class FloatingPointIdentity:
 
 
 @dataclass(frozen=True)
+class NumericalRuntimeIdentity:
+    runtime_kind: str
+    canonical_bytes: bytes
+    sha256: str
+
+
+@dataclass(frozen=True)
+class ContractBinding:
+    path: str
+    size: int
+    sha256: str
+
+
+@dataclass(frozen=True)
 class CapsuleProfile:
-    clarification_commit: str
+    contract_bindings: Tuple[ContractBinding, ...]
     profile_id: str
     capsule_kind: str
     target: TargetIdentity
+    source_lock_path: str
+    source_lock_size: int
+    source_lock_sha256: str
     archive_size: int
     archive_sha256: str
     entries: Tuple[CapsuleEntry, ...]
@@ -448,6 +553,7 @@ class CapsuleProfile:
     environment_sha256: str
     execution: ExecutionIdentity
     floating_point: FloatingPointIdentity
+    numerical_runtime: NumericalRuntimeIdentity
     version_probe: CommandExpectation
     synthetic_preflight: PreflightExpectation
     canonical_bytes: bytes
@@ -528,6 +634,153 @@ def encode_capsule(members: Iterable[CapsuleMember]) -> bytes:
         output.extend(bytes.fromhex(entry.sha256))
         output.extend(member.payload)
     return bytes(output)
+
+
+def encode_capsule_file(sources: Iterable[CapsuleFileSource], destination: Any) -> Tuple[int, str]:
+    """Stream a large capsule to one new immutable file without buffering it.
+
+    Every source is hashed once before construction and again from its held
+    descriptor while its payload is streamed.  A failure unlinks the incomplete
+    destination and fsyncs the held parent directory; no partial capsule is an
+    authoritative output.
+    """
+
+    values = _bounded_tuple(sources, MAX_MEMBER_COUNT, "capsule file sources")
+    if not values or any(type(item) is not CapsuleFileSource for item in values):
+        _fail("capsule file sources must be a nonempty exact sequence")
+    entries = _validated_entries(item.entry for item in values)
+    target = Path(destination)
+    if not target.is_absolute() or os.path.normpath(str(target)) != str(target) or target.name in ("", ".", ".."):
+        _fail("capsule output path is not normalized absolute")
+    parent_fd = _open_absolute_directory(target.parent, "capsule output parent")
+    descriptor = -1
+    created = False
+
+    def source_digest(item: CapsuleFileSource) -> None:
+        source_fd = os.open(
+            str(item.source_path),
+            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+        )
+        try:
+            before = os.fstat(source_fd)
+            by_path = os.stat(str(item.source_path), follow_symlinks=False)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or before.st_uid != os.geteuid()
+                or stat.S_IMODE(before.st_mode) != item.entry.mode
+                or before.st_size != item.entry.size
+                or (before.st_dev, before.st_ino) != (by_path.st_dev, by_path.st_ino)
+            ):
+                _fail("capsule source identity/mode/size differs: " + item.entry.path)
+            digest = hashlib.sha256()
+            remaining = before.st_size
+            while remaining:
+                block = os.read(source_fd, min(IO_CHUNK_BYTES, remaining))
+                if not block:
+                    _fail("capsule source became short: " + item.entry.path)
+                digest.update(block)
+                remaining -= len(block)
+            if os.read(source_fd, 1):
+                _fail("capsule source grew during hashing: " + item.entry.path)
+            after = os.fstat(source_fd)
+            if _identity(before) != _identity(after) or digest.hexdigest() != item.entry.sha256:
+                _fail("capsule source changed or has the wrong digest: " + item.entry.path)
+        finally:
+            os.close(source_fd)
+
+    try:
+        _require_private_directory_fd(parent_fd, "capsule output parent")
+        for item in values:
+            source_digest(item)
+        descriptor = os.open(
+            target.name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        created = True
+        archive_digest = hashlib.sha256()
+        archive_size = 0
+
+        def write(payload: bytes) -> None:
+            nonlocal archive_size
+            if archive_size > MAX_ARCHIVE_BYTES - len(payload):
+                _fail("streamed capsule exceeds its archive-size bound")
+            offset = 0
+            while offset < len(payload):
+                count = os.write(descriptor, payload[offset:])
+                if count <= 0:
+                    _fail("streamed capsule write made no progress")
+                offset += count
+            archive_digest.update(payload)
+            archive_size += len(payload)
+
+        write(CAPSULE_MAGIC)
+        write(len(values).to_bytes(8, "big"))
+        for item, entry in zip(values, entries):
+            write(_lp(entry.path.encode("ascii")))
+            write(_lp(entry.role.encode("ascii")))
+            write(entry.mode.to_bytes(8, "big"))
+            write(entry.size.to_bytes(8, "big"))
+            write(bytes.fromhex(entry.sha256))
+            source_fd = os.open(
+                str(item.source_path),
+                os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+            )
+            try:
+                before = os.fstat(source_fd)
+                digest = hashlib.sha256()
+                remaining = entry.size
+                while remaining:
+                    block = os.read(source_fd, min(IO_CHUNK_BYTES, remaining))
+                    if not block:
+                        _fail("capsule source became short during streaming: " + entry.path)
+                    write(block)
+                    digest.update(block)
+                    remaining -= len(block)
+                if os.read(source_fd, 1):
+                    _fail("capsule source grew during streaming: " + entry.path)
+                after = os.fstat(source_fd)
+                if (
+                    _identity(before) != _identity(after)
+                    or before.st_nlink != 1
+                    or before.st_uid != os.geteuid()
+                    or stat.S_IMODE(before.st_mode) != entry.mode
+                    or digest.hexdigest() != entry.sha256
+                ):
+                    _fail("capsule source changed during streaming: " + entry.path)
+            finally:
+                os.close(source_fd)
+        os.fchmod(descriptor, 0o444)
+        os.fsync(descriptor)
+        output_status = os.fstat(descriptor)
+        by_name = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(output_status.st_mode)
+            or output_status.st_nlink != 1
+            or stat.S_IMODE(output_status.st_mode) != 0o444
+            or output_status.st_size != archive_size
+            or _inode_identity(output_status) != _inode_identity(by_name)
+        ):
+            _fail("streamed capsule output identity differs")
+        os.fsync(parent_fd)
+        return archive_size, archive_digest.hexdigest()
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+            descriptor = -1
+        if created:
+            try:
+                os.unlink(target.name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except OSError:
+                pass
+        raise
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent_fd)
 
 
 class _BytesReader:
@@ -773,27 +1026,229 @@ def _canonical_profile_document(record: Mapping[str, Any]) -> bytes:
         raise CapsuleError("capsule profile is not canonical JSON data") from exc
 
 
+def validate_embedded_source_lock(payload: Any) -> Mapping[str, Any]:
+    """Reject output identities that would make an embedded lock circular."""
+
+    if type(payload) is not bytes or not payload or len(payload) > MAX_SOURCE_LOCK_BYTES:
+        _fail("embedded capsule source lock is not bounded nonempty bytes")
+    try:
+        record = schema.strict_json_loads(payload)
+    except schema.SchemaError as exc:
+        raise CapsuleError("embedded capsule source lock is not strict JSON") from exc
+    if not isinstance(record, Mapping):
+        _fail("embedded capsule source lock is not an object")
+    if (
+        record.get("record_type") != "cp2_d_minimal_two_capsule_source_lock"
+        or record.get("checkpoint") != "CP2-D"
+        or type(record.get("schema_version")) is not int
+        or record.get("schema_version") != 2
+        or record.get("formal_execution_permitted_by_this_record") is not False
+    ):
+        _fail("embedded capsule source-lock identity differs")
+
+    def visit(value: Any, path: Tuple[str, ...]) -> None:
+        if isinstance(value, Mapping):
+            for key, child in value.items():
+                if type(key) is not str:
+                    _fail("embedded capsule source lock has a nontext key")
+                if key in _SOURCE_LOCK_FORBIDDEN_OUTPUT_KEYS:
+                    _fail(
+                        "embedded capsule source lock contains a self-referential "
+                        "archive/profile identity field: " + ".".join(path + (key,))
+                    )
+                if key in ("archive", "profile") and isinstance(child, Mapping):
+                    if set(child).intersection(
+                        ("sha256", "size", "size_bytes", "profile_sha256")
+                    ):
+                        _fail(
+                            "embedded capsule source lock contains a self-referential "
+                            "archive/profile identity object: "
+                            + ".".join(path + (key,))
+                        )
+                visit(child, path + (key,))
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                visit(child, path + (str(index),))
+
+    visit(record, ())
+    return record
+
+
+def validate_expected_capsule_identity(value: Any) -> Mapping[str, Any]:
+    """Validate the acyclic, capsule-external archive/profile identity record."""
+
+    record = _exact_keys(
+        value,
+        (
+            "schema_version",
+            "record_type",
+            "checkpoint",
+            "formal_execution_permitted_by_this_record",
+            "embedded_source_lock",
+            "unit_artifact_members",
+        ),
+        "expected capsule identity",
+    )
+    if (
+        type(record["schema_version"]) is not int
+        or record["schema_version"] != 1
+        or record["record_type"] != EXPECTED_CAPSULE_IDENTITY_RECORD_TYPE
+        or record["checkpoint"] != "CP2-D"
+        or record["formal_execution_permitted_by_this_record"] is not False
+    ):
+        _fail("expected capsule identity header differs")
+    lock = _exact_keys(
+        record["embedded_source_lock"],
+        ("path", "size_bytes", "sha256"),
+        "expected capsule source lock",
+    )
+    if lock["path"] != EXPECTED_CAPSULE_SOURCE_LOCK_PATH:
+        _fail("expected capsule source-lock path differs")
+    _u64(lock["size_bytes"], "expected capsule source-lock size")
+    _sha(lock["sha256"], "expected capsule source-lock SHA-256")
+    members = _exact_keys(
+        record["unit_artifact_members"],
+        tuple(sorted(EXPECTED_CAPSULE_UNIT_PATHS)),
+        "expected capsule member kinds",
+    )
+    for kind in sorted(EXPECTED_CAPSULE_UNIT_PATHS):
+        pair = _exact_keys(
+            members[kind], ("archive", "profile"), kind + " expected identity"
+        )
+        for index, label in enumerate(("archive", "profile")):
+            item = _exact_keys(
+                pair[label],
+                ("path", "size_bytes", "sha256"),
+                kind + " expected " + label,
+            )
+            if item["path"] != EXPECTED_CAPSULE_UNIT_PATHS[kind][index]:
+                _fail(kind + " expected " + label + " path differs")
+            _u64(item["size_bytes"], kind + " expected " + label + " size")
+            _sha(item["sha256"], kind + " expected " + label + " SHA-256")
+    return record
+
+
+def make_expected_capsule_identity(
+    source_lock_payload: bytes,
+    artifacts: Mapping[str, Tuple[bytes, bytes]],
+) -> Mapping[str, Any]:
+    """Construct an external identity from exact archive/profile byte pairs."""
+
+    validate_embedded_source_lock(source_lock_payload)
+    if not isinstance(artifacts, Mapping) or set(artifacts) != set(
+        EXPECTED_CAPSULE_UNIT_PATHS
+    ):
+        _fail("expected capsule artifact population differs")
+    output: Dict[str, Any] = {}
+    source_lock_sha256 = hashlib.sha256(source_lock_payload).hexdigest()
+    for kind in sorted(EXPECTED_CAPSULE_UNIT_PATHS):
+        pair = artifacts[kind]
+        if (
+            type(pair) is not tuple
+            or len(pair) != 2
+            or any(type(item) is not bytes for item in pair)
+        ):
+            _fail(kind + " expected capsule inputs are not exact byte pairs")
+        archive_payload, profile_payload = pair
+        try:
+            profile_record = schema.strict_json_loads(profile_payload)
+        except schema.SchemaError as exc:
+            raise CapsuleError(kind + " expected profile is not strict JSON") from exc
+        profile = validate_capsule_profile(profile_record)
+        if (
+            profile.capsule_kind != kind
+            or profile.canonical_bytes != profile_payload
+            or profile.archive_size != len(archive_payload)
+            or profile.archive_sha256 != hashlib.sha256(archive_payload).hexdigest()
+            or profile.source_lock_size != len(source_lock_payload)
+            or profile.source_lock_sha256 != source_lock_sha256
+        ):
+            _fail(kind + " archive/profile/source-lock identity differs")
+        output[kind] = {
+            "archive": {
+                "path": EXPECTED_CAPSULE_UNIT_PATHS[kind][0],
+                "size_bytes": len(archive_payload),
+                "sha256": profile.archive_sha256,
+            },
+            "profile": {
+                "path": EXPECTED_CAPSULE_UNIT_PATHS[kind][1],
+                "size_bytes": len(profile_payload),
+                "sha256": profile.profile_sha256,
+            },
+        }
+    record = {
+        "schema_version": 1,
+        "record_type": EXPECTED_CAPSULE_IDENTITY_RECORD_TYPE,
+        "checkpoint": "CP2-D",
+        "formal_execution_permitted_by_this_record": False,
+        "embedded_source_lock": {
+            "path": EXPECTED_CAPSULE_SOURCE_LOCK_PATH,
+            "size_bytes": len(source_lock_payload),
+            "sha256": source_lock_sha256,
+        },
+        "unit_artifact_members": output,
+    }
+    return validate_expected_capsule_identity(record)
+
+
+def expected_capsule_identity_bytes(record: Any) -> bytes:
+    return _canonical_profile_document(validate_expected_capsule_identity(record))
+
+
+def verify_expected_capsule_identity(
+    value: Any,
+    source_lock_payload: bytes,
+    artifacts: Mapping[str, Tuple[bytes, bytes]],
+) -> None:
+    retained = validate_expected_capsule_identity(value)
+    reconstructed = make_expected_capsule_identity(source_lock_payload, artifacts)
+    if retained != reconstructed:
+        _fail("external expected capsule identity differs from exact artifacts")
+
+
 def validate_capsule_profile(value: Any) -> CapsuleProfile:
     """Validate one exact proposed profile without inspecting its capsule path."""
 
     record = _exact_keys(
         value,
         (
-            "schema_version", "record_type", "checkpoint", "clarification_commit",
-            "profile_id", "capsule_kind", "target", "archive", "inventory",
+            "schema_version", "record_type", "checkpoint", "contract_bindings",
+            "profile_id", "capsule_kind", "target", "source_lock", "archive", "inventory",
             "inventory_sha256", "entry_point", "distributions", "native_closure",
-            "environment", "execution", "floating_point", "version_probe",
+            "environment", "execution", "floating_point", "numerical_runtime", "version_probe",
             "synthetic_preflight",
         ),
         "capsule profile",
     )
-    if type(record["schema_version"]) is not int or record["schema_version"] != 1:
-        _fail("capsule profile schema_version must be integer 1")
+    if type(record["schema_version"]) is not int or record["schema_version"] != 2:
+        _fail("capsule profile schema_version must be integer 2")
     if record["record_type"] != "cp2_d_capsule_profile" or record["checkpoint"] != "CP2-D":
         _fail("capsule profile record type/checkpoint differs")
-    clarification_commit = record["clarification_commit"]
-    if type(clarification_commit) is not str or GIT_COMMIT.fullmatch(clarification_commit) is None:
-        _fail("capsule clarification commit must be a lowercase 40-hex Git id")
+    raw_contract_bindings = record["contract_bindings"]
+    if (
+        type(raw_contract_bindings) is not list
+        or len(raw_contract_bindings) != len(CONTRACT_BINDING_PATHS)
+    ):
+        _fail("capsule contract-binding population differs")
+    contract_bindings = []
+    for index, expected_path in enumerate(CONTRACT_BINDING_PATHS):
+        binding = _exact_keys(
+            raw_contract_bindings[index],
+            ("path", "size", "sha256"),
+            "capsule contract binding",
+        )
+        if binding["path"] != expected_path:
+            _fail("capsule contract-binding path/order differs")
+        size = _u64(binding["size"], "capsule contract-binding size")
+        if size == 0 or size > MAX_SOURCE_LOCK_BYTES:
+            _fail("capsule contract-binding size is outside its bound")
+        contract_bindings.append(
+            ContractBinding(
+                expected_path,
+                size,
+                _sha(binding["sha256"], "capsule contract-binding SHA-256"),
+            )
+        )
     profile_id = _safe_id(record["profile_id"], "capsule profile id")
     kind = record["capsule_kind"]
     if type(kind) is not str or kind not in CAPSULE_KINDS:
@@ -801,7 +1256,10 @@ def validate_capsule_profile(value: Any) -> CapsuleProfile:
 
     target_record = _exact_keys(
         record["target"],
-        ("os", "machine", "elf_class", "endianness", "libc_abi", "loader_abi", "cpu_dispatch_policy"),
+        (
+            "os", "machine", "elf_class", "endianness", "libc_abi",
+            "loader_abi", "elf_interpreter", "cpu_dispatch_policy",
+        ),
         "capsule target",
     )
     if target_record["os"] != "linux" or target_record["machine"] not in ("x86_64", "aarch64"):
@@ -810,10 +1268,18 @@ def validate_capsule_profile(value: Any) -> CapsuleProfile:
         _fail("capsule target ELF class must be integer 64")
     if target_record["endianness"] != "little":
         _fail("capsule target endianness must be little")
+    elf_interpreter = _safe_text(
+        target_record["elf_interpreter"], "target ELF interpreter", 256
+    )
+    if target_record["machine"] == "x86_64" and elf_interpreter != "/lib64/ld-linux-x86-64.so.2":
+        _fail("x86_64 target ELF interpreter differs")
+    if target_record["machine"] == "aarch64" and elf_interpreter != "/lib/ld-linux-aarch64.so.1":
+        _fail("aarch64 target ELF interpreter differs")
     target = TargetIdentity(
         "linux", target_record["machine"], 64, "little",
         _safe_text(target_record["libc_abi"], "target libc ABI"),
         _safe_text(target_record["loader_abi"], "target loader ABI"),
+        elf_interpreter,
         _safe_id(target_record["cpu_dispatch_policy"], "target CPU dispatch policy"),
     )
 
@@ -830,15 +1296,40 @@ def validate_capsule_profile(value: Any) -> CapsuleProfile:
     role_paths = {
         role: tuple(entry.path for entry in entries if entry.role == role) for role in FILE_ROLES
     }
-    if len(role_paths["capsule_launcher"]) != 1 or len(role_paths["python_interpreter"]) != 1:
-        _fail("capsule must have exactly one launcher and one interpreter")
+    if (
+        len(role_paths["capsule_sandbox"]) != 1
+        or role_paths["capsule_sandbox"][0] != "bin/sandbox"
+        or len(role_paths["capsule_launcher"]) != 1
+        or len(role_paths["python_interpreter"]) != 1
+    ):
+        _fail("capsule must have exactly one sandbox, launcher, and interpreter")
     if len(role_paths["native_loader"]) != 1:
         _fail("capsule must have exactly one executable native loader")
     if not role_paths["license_notice"] or not role_paths["preflight_fixture"]:
         _fail("capsule must retain license/notice and preflight-fixture members")
+    if len(role_paths["source_lock"]) != 1:
+        _fail("capsule must retain exactly one authoritative source lock")
+    source_lock_record = _exact_keys(
+        record["source_lock"], ("path", "size", "sha256"), "capsule source lock"
+    )
+    source_lock_path = _relpath(source_lock_record["path"], "source lock path")
+    source_lock_size = _positive_u64(
+        source_lock_record["size"], "source lock size", MAX_MEMBER_BYTES
+    )
+    source_lock_sha256 = _sha(
+        source_lock_record["sha256"], "source lock SHA-256"
+    )
+    source_lock_entry = by_path.get(source_lock_path)
+    if (
+        source_lock_entry is None
+        or source_lock_entry.role != "source_lock"
+        or source_lock_entry.size != source_lock_size
+        or source_lock_entry.sha256 != source_lock_sha256
+    ):
+        _fail("capsule source lock does not bind its unique inventory member")
     if kind == "evaluator":
-        if not role_paths["evo_module"] or not role_paths["evo_distribution_metadata"]:
-            _fail("evaluator capsule lacks evo module or distribution metadata")
+        if len(role_paths["evaluator_module"]) != 1:
+            _fail("evaluator capsule lacks its unique equivalent evaluator module")
         if role_paths["direct_math_module"] or role_paths["direct_math_known_answer"]:
             _fail("evaluator capsule contains direct-math-only roles")
         if len(role_paths["preflight_known_answer"]) != 1:
@@ -852,7 +1343,7 @@ def validate_capsule_profile(value: Any) -> CapsuleProfile:
             or not role_paths["numpy_distribution_metadata"]
         ):
             _fail("direct-math capsule lacks module, known answers, or complete NumPy roles")
-        if role_paths["evo_module"] or role_paths["evo_distribution_metadata"]:
+        if role_paths["evaluator_module"]:
             _fail("direct-math capsule contains evaluator-only roles")
         if role_paths["preflight_known_answer"]:
             _fail("direct-math capsule must use its direct-math known-answer member")
@@ -867,7 +1358,7 @@ def validate_capsule_profile(value: Any) -> CapsuleProfile:
     module_path = _relpath(entry_record["module_path"], "entry module path")
     if launcher_path != role_paths["capsule_launcher"][0] or interpreter_path != role_paths["python_interpreter"][0]:
         _fail("entry point does not select the unique launcher/interpreter")
-    expected_module_role = "evo_module" if kind == "evaluator" else "direct_math_module"
+    expected_module_role = "evaluator_module" if kind == "evaluator" else "direct_math_module"
     if module_path not in by_path or by_path[module_path].role != expected_module_role:
         _fail("entry module path does not select the kind-specific module row")
     module = entry_record["module"]
@@ -877,8 +1368,8 @@ def validate_capsule_profile(value: Any) -> CapsuleProfile:
     if type(callable_name) is not str or PYTHON_CALLABLE.fullmatch(callable_name) is None:
         _fail("entry-point callable name is invalid")
 
-    if type(record["distributions"]) is not list or not record["distributions"]:
-        _fail("capsule distributions must be a nonempty array")
+    if type(record["distributions"]) is not list:
+        _fail("capsule distributions must be an array")
     distributions = []
     claimed_distribution_paths = set()
     for item in record["distributions"]:
@@ -906,20 +1397,11 @@ def validate_capsule_profile(value: Any) -> CapsuleProfile:
     }
     if claimed_distribution_paths != required_distribution_paths:
         _fail("distribution subsets do not exactly cover distribution-role files")
-    versions = {(item.name.lower(), item.version) for item in distributions}
-    if kind == "evaluator" and ("evo", "1.31.1") not in versions:
-        _fail("evaluator capsule must bind evo 1.31.1")
+    if kind == "evaluator" and distributions:
+        _fail("stdlib-only equivalent evaluator must not claim a third-party distribution")
     if kind == "direct_math" and "numpy" not in {item.name.lower() for item in distributions}:
         _fail("direct-math capsule must bind NumPy")
     distribution_by_name = {item.name: item for item in distributions}
-    if kind == "evaluator":
-        expected_evo_paths = {
-            entry.path
-            for entry in entries
-            if entry.role in ("evo_module", "evo_distribution_metadata")
-        }
-        if set(distribution_by_name["evo"].paths) != expected_evo_paths:
-            _fail("evo distribution does not exactly own every evo-role member")
     if "numpy" in distribution_by_name:
         expected_numpy_paths = {
             entry.path
@@ -929,11 +1411,14 @@ def validate_capsule_profile(value: Any) -> CapsuleProfile:
         }
         if set(distribution_by_name["numpy"].paths) != expected_numpy_paths:
             _fail("NumPy distribution does not exactly own every NumPy-role member")
+    if kind == "direct_math" and set(distribution_by_name) != {"numpy"}:
+        _fail("direct-math capsule distribution inventory must be exactly NumPy")
 
     closure_record = _exact_keys(
         record["native_closure"],
         (
-            "loader_path",
+            "loader_path", "loader_argv_prefix", "effective_library_directories",
+            "cache_policy", "default_search_policy", "pathname_policy",
             "mapped_paths",
             "consumers",
             "needed_edges",
@@ -953,6 +1438,51 @@ def validate_capsule_profile(value: Any) -> CapsuleProfile:
         or loader_path != role_paths["native_loader"][0]
     ):
         _fail("native closure must exactly cover all native-library rows and its loader")
+    loader_argv_prefix = _ordered_ascii_texts(
+        closure_record["loader_argv_prefix"], "native loader argv prefix", 16
+    )
+    effective_library_directories = _sorted_paths(
+        closure_record["effective_library_directories"],
+        "effective native library directory",
+    )
+    expected_library_directories = (
+        ("native", "python/lib", "python/lib/python3.11/numpy.libs")
+        if kind == "direct_math"
+        else ("native", "python/lib")
+    )
+    if effective_library_directories != expected_library_directories:
+        _fail("effective native library directory order differs from the launcher")
+    library_path_token = ":".join(
+        {
+            "native": "${HELD_NATIVE_DIR}",
+            "python/lib": "${HELD_PYTHON_LIB_DIR}",
+            "python/lib/python3.11/numpy.libs": "${HELD_NUMPY_LIBS_DIR}",
+        }[path]
+        for path in effective_library_directories
+    )
+    expected_loader_prefix = (
+        "${HELD_LOADER_FD}",
+        "--inhibit-cache",
+        "--library-path",
+        library_path_token,
+        "${HELD_PYTHON_FD}",
+        "-I",
+        "-S",
+        "-B",
+        "-m",
+        module,
+    )
+    if loader_argv_prefix != expected_loader_prefix:
+        _fail("native loader argv prefix differs from the held-descriptor launcher")
+    if closure_record["cache_policy"] != "inhibit-cache":
+        _fail("native loader cache policy differs")
+    if closure_record["default_search_policy"] != "runtime-maps-reject-outside-capsule":
+        _fail("native loader fallback policy differs")
+    if (
+        closure_record["pathname_policy"]
+        != "descriptor-held-loader-python-and-library-directories"
+    ):
+        _fail("native loader pathname policy differs")
     if type(closure_record["consumers"]) is not list:
         _fail("native consumers must be an array")
     consumers = []
@@ -979,25 +1509,32 @@ def validate_capsule_profile(value: Any) -> CapsuleProfile:
             _fail("native consumer linkage kind is invalid")
         interpreter = consumer_record["interpreter"]
         if interpreter != "none":
-            interpreter = _relpath(interpreter, "native consumer interpreter")
-            if interpreter != loader_path:
-                _fail("native consumer interpreter does not select the bound loader")
-        if linkage == "dynamic-executable" and interpreter != loader_path:
-            _fail("dynamic executable lacks its bound ELF interpreter")
+            interpreter = _safe_text(
+                interpreter, "native consumer ELF PT_INTERP", 256
+            )
+        if linkage == "dynamic-executable" and interpreter != target.elf_interpreter:
+            _fail("dynamic executable lacks its exact on-disk ELF PT_INTERP")
         if linkage == "static-executable" and (
             elf_type != "ET_EXEC" or interpreter != "none"
         ):
             _fail("static executable linkage/interpreter is inconsistent")
-        if linkage in ("shared-object", "dynamic-loader") and (
+        if linkage == "shared-object" and (
+            elf_type != "ET_DYN"
+            or interpreter not in ("none", target.elf_interpreter)
+        ):
+            _fail("shared-object linkage/interpreter identity is inconsistent")
+        if linkage == "dynamic-loader" and (
             elf_type != "ET_DYN" or interpreter != "none"
         ):
-            _fail("shared-object/loader linkage identity is inconsistent")
+            _fail("dynamic-loader linkage/interpreter identity is inconsistent")
         if by_path[consumer_path].role == "native_loader" and linkage != "dynamic-loader":
             _fail("native-loader role lacks dynamic-loader linkage")
         if by_path[consumer_path].role != "native_loader" and linkage == "dynamic-loader":
             _fail("dynamic-loader linkage is assigned to the wrong role")
         consumer_role = by_path[consumer_path].role
-        if consumer_role in ("capsule_launcher", "python_interpreter") and linkage not in (
+        if consumer_role in (
+            "capsule_sandbox", "capsule_launcher", "python_interpreter"
+        ) and linkage not in (
             "dynamic-executable", "static-executable"
         ):
             _fail("executable role has non-executable linkage")
@@ -1070,8 +1607,8 @@ def validate_capsule_profile(value: Any) -> CapsuleProfile:
         if provider_identity is None or provider_identity.soname != edge.needed:
             _fail("native edge provider SONAME does not match DT_NEEDED")
         provider_directory = str(PurePosixPath(edge.provider).parent)
-        if provider_directory not in search_directories_by_consumer[edge.consumer]:
-            _fail("native edge provider is unreachable under the consumer search policy")
+        if provider_directory not in effective_library_directories:
+            _fail("native edge provider is outside the explicit launcher library path")
     referenced_native = {loader_path}.union(edge.provider for edge in edges)
     if referenced_native != set(mapped_paths):
         _fail("native edge graph leaves an unreferenced mapped library")
@@ -1096,6 +1633,11 @@ def validate_capsule_profile(value: Any) -> CapsuleProfile:
         closure_inventory_digest,
         consumer_digest,
         edge_digest,
+        loader_argv_prefix,
+        effective_library_directories,
+        "inhibit-cache",
+        "runtime-maps-reject-outside-capsule",
+        "descriptor-held-loader-python-and-library-directories",
     )
 
     environment_record = _exact_keys(record["environment"], ("variables", "sha256"), "environment")
@@ -1182,12 +1724,150 @@ def validate_capsule_profile(value: Any) -> CapsuleProfile:
         or floating_record["control_value_hex"] != expected_control_value
         or floating_record["secondary_control_register"] != expected_secondary_register
         or floating_record["secondary_control_value_hex"] != expected_secondary_value
-        or floating_record["numpy_error_policy"] != "raise"
+        or floating_record["numpy_error_policy"]
+        != (
+            "invalid-divide-over-raise_under-ignore"
+            if kind == "direct_math"
+            else "not-applicable"
+        )
     ):
         _fail("floating-point identity is incomplete or target-inconsistent")
     floating_point = FloatingPointIdentity(
         "IEEE-754-binary64", "FE_TONEAREST", "preserve", expected_register,
-        expected_control_value, expected_secondary_register, expected_secondary_value, "raise",
+        expected_control_value, expected_secondary_register, expected_secondary_value,
+        (
+            "invalid-divide-over-raise_under-ignore"
+            if kind == "direct_math"
+            else "not-applicable"
+        ),
+    )
+
+    numerical_record = _exact_keys(
+        record["numerical_runtime"], ("identity", "sha256"), "numerical runtime"
+    )
+    identity = numerical_record["identity"]
+    if kind == "evaluator":
+        evaluator_identity = _exact_keys(
+            identity,
+            ("runtime_kind", "implementation"),
+            "equivalent evaluator numerical runtime",
+        )
+        if (
+            evaluator_identity["runtime_kind"]
+            != "stdlib-binary64-independent-v1"
+            or evaluator_identity["implementation"]
+            != "CPython-math-no-NumPy-no-SciPy-no-evo"
+            or target.cpu_dispatch_policy != "stdlib-binary64-fixed-x86-64"
+        ):
+            _fail("equivalent evaluator numerical runtime identity differs")
+        runtime_kind = evaluator_identity["runtime_kind"]
+    else:
+        direct_identity = _exact_keys(
+            identity,
+            (
+                "runtime_kind", "numpy_version", "numpy_cpu_baseline",
+                "numpy_cpu_dispatch_targets", "numpy_disabled_targets",
+                "numpy_effective_target_states", "openblas_library_path",
+                "openblas_library_sha256", "openblas_version", "openblas_config",
+                "openblas_corename", "openblas_threads", "openblas_parallel", "cpuid",
+            ),
+            "direct numerical runtime",
+        )
+        baseline = _ordered_ascii_texts(
+            direct_identity["numpy_cpu_baseline"], "NumPy CPU baseline", 16
+        )
+        dispatch = _ordered_ascii_texts(
+            direct_identity["numpy_cpu_dispatch_targets"],
+            "NumPy CPU dispatch targets",
+            16,
+        )
+        disabled = _ordered_ascii_texts(
+            direct_identity["numpy_disabled_targets"],
+            "NumPy disabled targets",
+            16,
+        )
+        expected_dispatch = ("X86_V3", "X86_V4", "AVX512_ICL", "AVX512_SPR")
+        if (
+            direct_identity["runtime_kind"] != "numpy-openblas-fixed-dispatch-v1"
+            or direct_identity["numpy_version"] != "2.4.6"
+            or baseline != ("X86_V2",)
+            or dispatch != expected_dispatch
+            or disabled != expected_dispatch
+            or target.cpu_dispatch_policy != "numpy-x86-v2-openblas-skylakex"
+        ):
+            _fail("NumPy dispatch identity differs")
+        effective = _exact_keys(
+            direct_identity["numpy_effective_target_states"],
+            ("X86_V2", "X86_V3", "X86_V4", "AVX512_ICL", "AVX512_SPR"),
+            "NumPy effective target states",
+        )
+        if effective != {
+            "X86_V2": True,
+            "X86_V3": False,
+            "X86_V4": False,
+            "AVX512_ICL": False,
+            "AVX512_SPR": False,
+        } or any(type(value) is not bool for value in effective.values()):
+            _fail("NumPy effective target state differs")
+        openblas_path = _relpath(
+            direct_identity["openblas_library_path"], "OpenBLAS library path"
+        )
+        openblas_entry = by_path.get(openblas_path)
+        if (
+            openblas_entry is None
+            or openblas_entry.role != "native_library"
+            or direct_identity["openblas_library_sha256"] != openblas_entry.sha256
+            or direct_identity["openblas_version"] != "0.3.31.188.0"
+            or direct_identity["openblas_config"]
+            != (
+                "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH "
+                "NO_AFFINITY SkylakeX MAX_THREADS=64"
+            )
+            or direct_identity["openblas_corename"] != "SkylakeX"
+            or type(direct_identity["openblas_threads"]) is not int
+            or direct_identity["openblas_threads"] != 1
+            or type(direct_identity["openblas_parallel"]) is not int
+            or direct_identity["openblas_parallel"] != 1
+        ):
+            _fail("OpenBLAS runtime identity differs")
+        cpuid = _exact_keys(
+            direct_identity["cpuid"],
+            (
+                "vendor", "family", "model", "stepping", "leaf1_eax",
+                "leaf1_ecx", "leaf1_edx", "leaf7_ebx", "leaf7_ecx",
+                "leaf7_edx", "extended_leaf1_ecx", "extended_leaf1_edx", "xcr0",
+            ),
+            "x86 CPUID identity",
+        )
+        expected_cpuid = {
+            "vendor": "AuthenticAMD",
+            "family": 26,
+            "model": 68,
+            "stepping": 0,
+            "leaf1_eax": 11800384,
+            "leaf1_ecx": 2128097803,
+            "leaf1_edx": 395049983,
+            "leaf7_ebx": 4055865259,
+            "leaf7_ecx": 423649246,
+            "leaf7_edx": 268435728,
+            "extended_leaf1_ecx": 1975662591,
+            "extended_leaf1_edx": 802421759,
+            "xcr0": 743,
+        }
+        if cpuid != expected_cpuid or any(
+            type(value) is not (str if key == "vendor" else int)
+            for key, value in cpuid.items()
+        ):
+            _fail("x86 CPUID identity differs")
+        runtime_kind = direct_identity["runtime_kind"]
+    numerical_bytes = _canonical_profile_document(identity)
+    numerical_sha256 = _sha(
+        numerical_record["sha256"], "numerical runtime SHA-256"
+    )
+    if hashlib.sha256(numerical_bytes).hexdigest() != numerical_sha256:
+        _fail("numerical runtime digest differs from its exact identity")
+    numerical_runtime = NumericalRuntimeIdentity(
+        runtime_kind, numerical_bytes, numerical_sha256
     )
 
     version_probe = _command(record["version_probe"], "version probe", launcher_token)
@@ -1207,7 +1887,11 @@ def validate_capsule_profile(value: Any) -> CapsuleProfile:
         for path in preflight_paths
     ):
         _fail("synthetic preflight inputs do not select fixture/KAT members")
-    expected_codec = "evo_result_zip_v1" if kind == "evaluator" else "cp2_f64_known_answer_bundle_v1"
+    expected_codec = (
+        "cp2_translation_rmse_result_zip_v1"
+        if kind == "evaluator"
+        else "cp2_f64_known_answer_bundle_v1"
+    )
     if preflight_record["output_codec"] != expected_codec:
         _fail("synthetic preflight output codec differs")
     if kind == "evaluator":
@@ -1284,10 +1968,13 @@ def validate_capsule_profile(value: Any) -> CapsuleProfile:
     canonical = _canonical_profile_document(record)
     profile_digest = hashlib.sha256(canonical).hexdigest()
     return CapsuleProfile(
-        clarification_commit, profile_id, kind, target, archive_size, archive_digest,
+        tuple(contract_bindings), profile_id, kind, target,
+        source_lock_path, source_lock_size, source_lock_sha256,
+        archive_size, archive_digest,
         entries, inv_digest, launcher_path, interpreter_path, module_path, module,
         callable_name, tuple(distributions), native_closure, environment, env_digest,
-        execution, floating_point, version_probe, preflight, canonical, profile_digest,
+        execution, floating_point, numerical_runtime, version_probe, preflight,
+        canonical, profile_digest,
     )
 
 
@@ -1354,17 +2041,34 @@ def _require_private_directory_fd(descriptor: int, label: str) -> os.stat_result
 
 
 class _BoundArchive:
-    def __init__(self, path: Path, profile: CapsuleProfile) -> None:
-        self.path = path
+    def __init__(self, path: Any, profile: CapsuleProfile) -> None:
+        self.path: Optional[Path] = None
         self.profile = profile
-        self.parent_fd = _open_absolute_directory(path.parent, "capsule archive parent")
+        self.parent_fd = -1
         self.fd = -1
         try:
-            before_path = os.stat(path.name, dir_fd=self.parent_fd, follow_symlinks=False)
-            self.fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=self.parent_fd)
+            if type(path) is int:
+                if path < 0:
+                    _fail("held capsule archive descriptor is invalid")
+                self.fd = os.dup(path)
+            else:
+                self.path = _absolute_normal_path(path, "capsule archive path")
+                self.parent_fd = _open_absolute_directory(
+                    self.path.parent, "capsule archive parent"
+                )
+                before_path = os.stat(
+                    self.path.name,
+                    dir_fd=self.parent_fd,
+                    follow_symlinks=False,
+                )
+                self.fd = os.open(
+                    self.path.name,
+                    os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    dir_fd=self.parent_fd,
+                )
             before_fd = os.fstat(self.fd)
             self.identity = _identity(before_fd)
-            if self.identity != _identity(before_path):
+            if self.path is not None and self.identity != _identity(before_path):
                 _fail("capsule archive path/descriptor identity differs")
             if (
                 not stat.S_ISREG(before_fd.st_mode)
@@ -1376,6 +2080,7 @@ class _BoundArchive:
             if before_fd.st_size != profile.archive_size:
                 _fail("capsule archive size differs from profile")
             digest = hashlib.sha256()
+            os.lseek(self.fd, 0, os.SEEK_SET)
             remaining = before_fd.st_size
             while remaining:
                 chunk = os.read(self.fd, min(IO_CHUNK_BYTES, remaining))
@@ -1417,9 +2122,14 @@ class _BoundArchive:
 
     def revalidate(self) -> None:
         fd_status = os.fstat(self.fd)
-        path_status = os.stat(self.path.name, dir_fd=self.parent_fd, follow_symlinks=False)
-        if _identity(fd_status) != self.identity or _identity(path_status) != self.identity:
+        if _identity(fd_status) != self.identity:
             _fail("capsule archive identity changed")
+        if self.path is not None:
+            path_status = os.stat(
+                self.path.name, dir_fd=self.parent_fd, follow_symlinks=False
+            )
+            if _identity(path_status) != self.identity:
+                _fail("capsule archive path identity changed")
 
     def close(self) -> None:
         fd, parent_fd = self.fd, getattr(self, "parent_fd", -1)
@@ -1704,6 +2414,7 @@ def _remove_tree_at(parent_fd: int, name: str, expected_identity: Tuple[int, int
                         ):
                             _fail("capsule cleanup directory identity changed after recursion")
                         os.rmdir(child, dir_fd=directory_fd)
+                        os.fsync(directory_fd)
                         if _inode_identity(os.fstat(child_fd)) != _inode_identity(child_before):
                             _fail("capsule cleanup directory descriptor changed during removal")
                     finally:
@@ -1735,6 +2446,7 @@ def _remove_tree_at(parent_fd: int, name: str, expected_identity: Tuple[int, int
                         ):
                             _fail("capsule cleanup member identity changed before unlink")
                         os.unlink(child, dir_fd=directory_fd)
+                        os.fsync(directory_fd)
                         if _inode_identity(os.fstat(child_fd)) != _inode_identity(
                             child_before
                         ):
@@ -1759,6 +2471,7 @@ def _remove_tree_at(parent_fd: int, name: str, expected_identity: Tuple[int, int
         ):
             _fail("capsule cleanup root identity changed before removal")
         os.rmdir(name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
         if _inode_identity(os.fstat(root_fd)) != _inode_identity(root_status):
             _fail("capsule cleanup root descriptor changed during removal")
     finally:
@@ -1779,6 +2492,86 @@ def _rename_noreplace(parent_fd: int, old_name: str, new_name: str) -> None:
     if result != 0:
         error = ctypes.get_errno()
         raise CapsuleError("atomic capsule publication failed: " + os.strerror(error))
+
+
+def _publication_parent_fsync(parent_fd: int) -> None:
+    os.fsync(parent_fd)
+
+
+def _publication_return_revalidate(
+    root_fd: int, entries: Sequence[CapsuleEntry]
+) -> None:
+    """Last fail-closed content boundary before publication returns success."""
+
+    _revalidate_tree_fd(root_fd, entries)
+
+
+def _capsule_publication_location(
+    parent_fd: int,
+    partial_name: str,
+    destination_name: str,
+    expected_identity: Tuple[int, int],
+) -> str:
+    def observed(name: str) -> Optional[os.stat_result]:
+        try:
+            return os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+
+    partial = observed(partial_name)
+    destination = observed(destination_name)
+    partial_is_exact = partial is not None and _inode_identity(partial) == expected_identity
+    destination_is_exact = (
+        destination is not None and _inode_identity(destination) == expected_identity
+    )
+    if partial_is_exact and not destination_is_exact:
+        return "partial"
+    if destination_is_exact and partial is None:
+        return "destination"
+    return "indeterminate"
+
+
+def reconcile_capsule_publication(incident: CapsulePublicationIncident) -> str:
+    """Remove only the exact failed-publication inode named by an incident.
+
+    The current namespace is independently reconstructed.  Cleanup proceeds
+    only if exactly one authoritative name still selects the retained inode;
+    a replacement, disappearance, or dual/otherwise ambiguous state rejects
+    without deleting anything.  The returned value records whether the inode
+    was recovered from the hidden partial or the public destination name.
+    """
+
+    if type(incident) is not CapsulePublicationIncident:
+        _fail("publication reconciliation requires one exact incident")
+    destination = _absolute_normal_path(
+        incident.destination, "publication-incident destination"
+    )
+    if PARTIAL_NAME.fullmatch(incident.partial_name) is None:
+        _fail("publication-incident partial name is invalid")
+    identity = incident.expected_identity
+    if (
+        type(identity) is not tuple
+        or len(identity) != 2
+        or any(type(value) is not int or value < 0 for value in identity)
+    ):
+        _fail("publication incident lacks one exact inode identity")
+    parent_fd = _open_absolute_directory(
+        destination.parent, "publication reconciliation parent"
+    )
+    try:
+        _require_private_directory_fd(parent_fd, "publication reconciliation parent")
+        location = _capsule_publication_location(
+            parent_fd, incident.partial_name, destination.name, identity
+        )
+        if location not in ("partial", "destination"):
+            _fail("failed publication remains indeterminate; refusing cleanup")
+        cleanup_name = (
+            incident.partial_name if location == "partial" else destination.name
+        )
+        _remove_tree_at(parent_fd, cleanup_name, identity)
+        return location
+    finally:
+        os.close(parent_fd)
 
 
 def revalidate_staged_capsule(root: Any, entries: Iterable[CapsuleEntry]) -> None:
@@ -1809,7 +2602,13 @@ def stage_capsule(archive_path: Any, profile_record: Any, destination: Any) -> S
 
     _require_linux_descriptor_capabilities()
     profile = validate_capsule_profile(profile_record)
-    archive_path_value = _absolute_normal_path(archive_path, "capsule archive path")
+    archive_source: Any
+    if type(archive_path) is int:
+        if archive_path < 0:
+            _fail("held capsule archive descriptor is invalid")
+        archive_source = archive_path
+    else:
+        archive_source = _absolute_normal_path(archive_path, "capsule archive path")
     destination_path = _absolute_normal_path(destination, "capsule destination")
     if PATH_COMPONENT.fullmatch(destination_path.name) is None:
         _fail("capsule destination basename is not portable ASCII")
@@ -1819,10 +2618,11 @@ def stage_capsule(archive_path: Any, profile_record: Any, destination: Any) -> S
     partial_opened = False
     published = False
     root_fd = -1
+    final_fd = -1
     parent_fd = -1
     archive: Optional[_BoundArchive] = None
     try:
-        archive = _BoundArchive(archive_path_value, profile)
+        archive = _BoundArchive(archive_source, profile)
         parent_fd = _open_absolute_directory(
             destination_path.parent, "capsule destination parent"
         )
@@ -1869,68 +2669,619 @@ def stage_capsule(archive_path: Any, profile_record: Any, destination: Any) -> S
                 _fail("capsule destination parent path identity changed")
         finally:
             os.close(fresh_parent_fd)
-        _rename_noreplace(parent_fd, partial_name, destination_path.name)
+        _publication_parent_fsync(parent_fd)
+        try:
+            _rename_noreplace(parent_fd, partial_name, destination_path.name)
+        except BaseException:
+            location = _capsule_publication_location(
+                parent_fd, partial_name, destination_path.name, partial_identity
+            )
+            if location == "destination":
+                # The syscall completed before an injected/asynchronous error.
+                # Failure cleanup must now target the exact destination inode.
+                published = True
+            elif location != "partial":
+                _fail("capsule publication interruption left an indeterminate exact inode")
+            raise
         published = True
+        _publication_parent_fsync(parent_fd)
 
         final_fd = os.open(
             destination_path.name,
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=parent_fd,
         )
-        try:
-            if _inode_identity(os.fstat(final_fd)) != partial_identity:
-                _fail("published capsule identity differs from partial")
-            if _inode_identity(os.fstat(root_fd)) != partial_identity:
-                _fail("held capsule identity differs after publication")
-            _revalidate_tree_fd(final_fd, profile.entries)
-            _revalidate_tree_fd(root_fd, profile.entries)
-        finally:
-            os.close(final_fd)
+        if _inode_identity(os.fstat(final_fd)) != partial_identity:
+            _fail("published capsule identity differs from partial")
+        if _inode_identity(os.fstat(root_fd)) != partial_identity:
+            _fail("held capsule identity differs after publication")
+        _revalidate_tree_fd(final_fd, profile.entries)
+        _revalidate_tree_fd(root_fd, profile.entries)
         archive.revalidate()
+        result = StagedCapsule(
+            destination_path, profile.profile_id, profile.profile_sha256,
+            profile.capsule_kind, profile.target.machine, profile.archive_sha256,
+            profile.inventory_sha256, profile.environment_sha256, profile.entries,
+        )
+        # The injected test boundary is intentionally the final substantive
+        # operation before success.  A same-root-inode content/mode swap must
+        # enter the ordinary rollback path, never become a successful return.
+        _publication_return_revalidate(final_fd, profile.entries)
+        archive.revalidate()
+        os.close(final_fd)
+        final_fd = -1
         os.close(root_fd)
         root_fd = -1
         archive.close()
         archive = None
         os.close(parent_fd)
         parent_fd = -1
-        return StagedCapsule(
-            destination_path, profile.profile_id, profile.profile_sha256,
-            profile.capsule_kind, profile.target.machine, profile.archive_sha256,
-            profile.inventory_sha256, profile.environment_sha256, profile.entries,
-        )
+        return result
     except BaseException as exc:
+        if final_fd >= 0:
+            os.close(final_fd)
         if root_fd >= 0:
             os.close(root_fd)
         if archive is not None:
             archive.close()
+        incident: Optional[CapsulePublicationIncident] = None
+        incident_cause: Optional[BaseException] = None
         if partial_created and parent_fd >= 0:
-            cleanup_name = destination_path.name if published else partial_name
-            try:
-                if partial_identity is None:
-                    cleanup_status = os.stat(
-                        cleanup_name, dir_fd=parent_fd, follow_symlinks=False
-                    )
-                    if (
-                        not stat.S_ISDIR(cleanup_status.st_mode)
-                        or cleanup_status.st_uid != os.geteuid()
-                    ):
-                        _fail("refusing to clean an unbound capsule partial")
-                    partial_identity = _inode_identity(cleanup_status)
-                if partial_opened:
-                    _remove_tree_at(parent_fd, cleanup_name, partial_identity)
+            if partial_identity is not None:
+                location = _capsule_publication_location(
+                    parent_fd, partial_name, destination_path.name, partial_identity
+                )
+                if location == "destination":
+                    published = True
+                elif location == "partial":
+                    published = False
                 else:
-                    cleanup_status = os.stat(
-                        cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                    incident = CapsulePublicationIncident(
+                        "capsule staging failed and exact publication state is indeterminate",
+                        destination_path,
+                        partial_name,
+                        partial_identity,
+                        "indeterminate",
                     )
-                    if _inode_identity(cleanup_status) != partial_identity:
-                        _fail("refusing to remove a replacement empty capsule partial")
-                    os.rmdir(cleanup_name, dir_fd=parent_fd)
-            except BaseException as cleanup_exc:
-                raise CapsuleError("capsule staging failed and safe cleanup could not complete") from cleanup_exc
+                    incident_cause = exc
+            if incident is None:
+                cleanup_name = destination_path.name if published else partial_name
+                try:
+                    if partial_identity is None:
+                        cleanup_status = os.stat(
+                            cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                        )
+                        if (
+                            not stat.S_ISDIR(cleanup_status.st_mode)
+                            or cleanup_status.st_uid != os.geteuid()
+                        ):
+                            _fail("refusing to clean an unbound capsule partial")
+                        partial_identity = _inode_identity(cleanup_status)
+                    if partial_opened:
+                        _remove_tree_at(parent_fd, cleanup_name, partial_identity)
+                    else:
+                        cleanup_status = os.stat(
+                            cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                        )
+                        if _inode_identity(cleanup_status) != partial_identity:
+                            _fail("refusing to remove a replacement empty capsule partial")
+                        os.rmdir(cleanup_name, dir_fd=parent_fd)
+                        _publication_parent_fsync(parent_fd)
+                except BaseException as cleanup_exc:
+                    state = (
+                        _capsule_publication_location(
+                            parent_fd,
+                            partial_name,
+                            destination_path.name,
+                            partial_identity,
+                        )
+                        if partial_identity is not None
+                        else "indeterminate"
+                    )
+                    incident = CapsulePublicationIncident(
+                        "capsule staging failed and safe cleanup could not complete",
+                        destination_path,
+                        partial_name,
+                        partial_identity,
+                        state,
+                    )
+                    incident_cause = cleanup_exc
         if parent_fd >= 0:
             os.close(parent_fd)
+        if incident is not None:
+            raise incident from incident_cause
         if isinstance(exc, CapsuleError):
             raise
         if isinstance(exc, OSError):
             raise CapsuleError("capsule staging failed") from exc
         raise
+
+
+# Linux sealed-memfd/mount-namespace execution boundary.  These values are
+# intentionally exact: accepting a subset of seals would reintroduce a
+# pre-opened-writer path after the staged tree has been validated.
+_SANDBOX_SEALS = (
+    fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
+)
+_SANDBOX_PAGE_BYTES = 4096
+_SANDBOX_GUARD_INODES = 64
+_SANDBOX_MAX_TMPFS_BYTES = 2 << 30
+_SANDBOX_PRIVATE_DIRECTORIES = (
+    "/private",
+    "/private/home",
+    "/private/mpl",
+    "/private/preflight",
+    "/private/tmp",
+    "/private/work",
+    "/private/xdg-cache",
+    "/private/xdg-config",
+    "/proc",
+)
+
+
+def _sealed_memfd(payload: bytes, mode: int, label: str) -> int:
+    if (
+        type(payload) is not bytes
+        or mode not in FILE_MODES
+        or not hasattr(os, "memfd_create")
+        or not hasattr(os, "MFD_ALLOW_SEALING")
+    ):
+        _fail(label + " cannot be represented by one sealed memfd")
+    descriptor = -1
+    try:
+        descriptor = os.memfd_create(
+            "schurvio-cp2-sealed",
+            os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING,
+        )
+        os.fchmod(descriptor, mode)
+        offset = 0
+        while offset < len(payload):
+            count = os.write(descriptor, payload[offset:])
+            if count <= 0:
+                _fail(label + " sealed-memfd write made no progress")
+            offset += count
+        os.fsync(descriptor)
+        fcntl.fcntl(descriptor, fcntl.F_ADD_SEALS, _SANDBOX_SEALS)
+        status_value = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(status_value.st_mode)
+            or status_value.st_uid != os.geteuid()
+            or status_value.st_nlink != 0
+            or stat.S_IMODE(status_value.st_mode) != mode
+            or status_value.st_size != len(payload)
+            or fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) != _SANDBOX_SEALS
+        ):
+            _fail(label + " sealed-memfd identity differs")
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        digest = hashlib.sha256()
+        remaining = len(payload)
+        while remaining:
+            block = os.read(descriptor, min(IO_CHUNK_BYTES, remaining))
+            if not block:
+                _fail(label + " sealed-memfd became short")
+            digest.update(block)
+            remaining -= len(block)
+        if os.read(descriptor, 1) or digest.hexdigest() != hashlib.sha256(payload).hexdigest():
+            _fail(label + " sealed-memfd bytes differ")
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        return descriptor
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+
+
+def _empty_output_memfd(label: str) -> int:
+    if not hasattr(os, "memfd_create") or not hasattr(os, "MFD_ALLOW_SEALING"):
+        _fail(label + " cannot be represented by one anonymous output memfd")
+    descriptor = os.memfd_create(
+        "schurvio-cp2-output",
+        os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING,
+    )
+    try:
+        os.fchmod(descriptor, 0o600)
+        status_value = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(status_value.st_mode)
+            or status_value.st_uid != os.geteuid()
+            or status_value.st_nlink != 0
+            or stat.S_IMODE(status_value.st_mode) != 0o600
+            or status_value.st_size != 0
+            or fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) != 0
+        ):
+            _fail(label + " output memfd identity differs")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _read_bound_entry(root_fd: int, entry: CapsuleEntry) -> bytes:
+    components = entry.path.split("/")
+    parent_fd = os.dup(root_fd)
+    descriptor = -1
+    try:
+        for component in components[:-1]:
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=parent_fd,
+            )
+            os.close(parent_fd)
+            parent_fd = next_fd
+            _require_private_directory_fd(parent_fd, "sealed capsule member parent")
+        descriptor = os.open(
+            components[-1],
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent_fd,
+        )
+        before = os.fstat(descriptor)
+        by_name = os.stat(
+            components[-1], dir_fd=parent_fd, follow_symlinks=False
+        )
+        if (
+            _identity(before) != _identity(by_name)
+            or not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != entry.mode
+            or before.st_size != entry.size
+        ):
+            _fail("staged capsule member differs before sealed copy: " + entry.path)
+        digest = hashlib.sha256()
+        payload = bytearray()
+        remaining = entry.size
+        while remaining:
+            block = os.read(descriptor, min(IO_CHUNK_BYTES, remaining))
+            if not block:
+                _fail("staged capsule member became short: " + entry.path)
+            payload.extend(block)
+            digest.update(block)
+            remaining -= len(block)
+        if os.read(descriptor, 1) or digest.hexdigest() != entry.sha256:
+            _fail("staged capsule member bytes differ: " + entry.path)
+        if (
+            _identity(os.fstat(descriptor)) != _identity(before)
+            or _identity(
+                os.stat(components[-1], dir_fd=parent_fd, follow_symlinks=False)
+            )
+            != _identity(before)
+        ):
+            _fail("staged capsule member changed during sealed copy: " + entry.path)
+        return bytes(payload)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent_fd)
+
+
+def _sandbox_directories(entries: Sequence[CapsuleEntry]) -> Tuple[str, ...]:
+    values = {"/capsule", *_SANDBOX_PRIVATE_DIRECTORIES}
+    for relative in _expected_directories(entries):
+        values.add("/capsule/" + relative)
+    return tuple(
+        sorted(values, key=lambda value: (value.count("/"), value.encode("ascii")))
+    )
+
+
+class CapsuleSandboxInvocation:
+    """One descriptor-complete sandbox argv and its anonymous transports."""
+
+    def __init__(
+        self,
+        owner: "SealedCapsuleSandbox",
+        command: Sequence[str],
+        read_only_inputs: Mapping[str, bytes],
+        writable_outputs: Mapping[str, int],
+    ) -> None:
+        self._owner = owner
+        self._extra_fds: Dict[str, int] = {}
+        self._output_fds: Dict[str, int] = {}
+        self._output_limits: Dict[str, int] = {}
+        self._closed = False
+        try:
+            normalized_command = tuple(command)
+            if (
+                not normalized_command
+                or any(type(value) is not str for value in normalized_command)
+                or not normalized_command[0].startswith("/capsule/")
+            ):
+                _fail("capsule sandbox command differs")
+            read_only_rows = [
+                ("/capsule/" + entry.path, owner._fds[entry.path], entry.mode)
+                for entry in owner.entries
+            ]
+            for destination, payload in sorted(read_only_inputs.items()):
+                if (
+                    type(destination) is not str
+                    or not destination.startswith("/private/")
+                    or _relpath(destination[1:], "sandbox input destination")
+                    != destination[1:]
+                    or type(payload) is not bytes
+                    or not payload
+                    or len(payload) > MAX_MEMBER_BYTES
+                ):
+                    _fail("capsule sandbox input differs")
+                descriptor = _sealed_memfd(
+                    payload, 0o444, "capsule sandbox input " + destination
+                )
+                self._extra_fds[destination] = descriptor
+                read_only_rows.append((destination, descriptor, 0o444))
+            if type(writable_outputs) is not dict:
+                try:
+                    output_values = dict(writable_outputs)
+                except (TypeError, ValueError) as exc:
+                    raise CapsuleError(
+                        "capsule sandbox writable-output mapping differs"
+                    ) from exc
+            else:
+                output_values = dict(writable_outputs)
+            if len(output_values) > 1:
+                _fail("capsule sandbox writable-output population differs")
+            for destination, maximum in output_values.items():
+                if (
+                    type(destination) is not str
+                    or not destination.startswith("/private/")
+                    or _relpath(destination[1:], "sandbox output destination")
+                    != destination[1:]
+                    or destination in self._extra_fds
+                    or type(maximum) is not int
+                    or maximum <= 0
+                    or maximum > MAX_MEMBER_BYTES
+                ):
+                    _fail("capsule sandbox output differs")
+                self._output_fds[destination] = _empty_output_memfd(
+                    "capsule sandbox output " + destination
+                )
+                self._output_limits[destination] = maximum
+            all_destinations = [row[0] for row in read_only_rows] + list(
+                self._output_fds
+            )
+            if (
+                len(all_destinations) != len(set(all_destinations))
+                or normalized_command[0] not in all_destinations
+            ):
+                _fail("capsule sandbox destination/command join differs")
+            parent_directories = set(owner.directories)
+            if any(
+                str(PurePosixPath(destination).parent) not in parent_directories
+                for destination in all_destinations
+            ):
+                _fail("capsule sandbox transport parent is outside the closed tree")
+            read_only_rows.sort(key=lambda row: row[0].encode("ascii"))
+            writable_rows = sorted(
+                self._output_fds.items(), key=lambda row: row[0].encode("ascii")
+            )
+            page = _SANDBOX_PAGE_BYTES
+            payload_bytes = sum(
+                ((os.fstat(descriptor).st_size + page - 1) // page) * page
+                for _, descriptor, _ in read_only_rows
+            )
+            payload_bytes += sum(
+                ((self._output_limits[destination] + page - 1) // page) * page
+                for destination, _ in writable_rows
+            )
+            inode_population = (
+                len(owner.directories)
+                + len(read_only_rows)
+                + len(writable_rows)
+                + _SANDBOX_GUARD_INODES
+            )
+            tmpfs_size = payload_bytes + ((inode_population + page - 1) // page) * page
+            if tmpfs_size <= 0 or tmpfs_size > _SANDBOX_MAX_TMPFS_BYTES:
+                _fail("capsule sandbox checked tmpfs size exceeds its bound")
+            arguments = [
+                owner.executable,
+                "--tmpfs-size-bytes",
+                str(tmpfs_size),
+                "--directory-count",
+                str(len(owner.directories)),
+                *owner.directories,
+                "--read-only-file-count",
+                str(len(read_only_rows)),
+            ]
+            for destination, descriptor, mode in read_only_rows:
+                arguments.extend((str(descriptor), format(mode, "o"), destination))
+            arguments.extend(("--writable-file-count", str(len(writable_rows))))
+            for destination, descriptor in writable_rows:
+                arguments.extend(
+                    (
+                        str(descriptor),
+                        "600",
+                        str(self._output_limits[destination]),
+                        destination,
+                    )
+                )
+            arguments.extend(("--cwd", "/private/work", "--", *normalized_command))
+            self.argv = tuple(arguments)
+            self.executable = owner.executable
+            self.pass_fds = tuple(
+                sorted(
+                    set(owner._fds.values())
+                    | set(self._extra_fds.values())
+                    | set(self._output_fds.values())
+                )
+            )
+        except BaseException:
+            self.close()
+            raise
+
+    def seal_output(self, destination: str, maximum: int) -> bytes:
+        if self._closed or destination not in self._output_fds:
+            _fail("capsule sandbox output is not retained")
+        if (
+            type(maximum) is not int
+            or maximum <= 0
+            or maximum != self._output_limits[destination]
+        ):
+            _fail("capsule sandbox output bound differs")
+        descriptor = self._output_fds[destination]
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_nlink != 0
+            or stat.S_IMODE(before.st_mode) != 0o444
+            or before.st_size <= 0
+            or before.st_size > maximum
+            or fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) != 0
+        ):
+            _fail("capsule sandbox output identity differs before sealing")
+        try:
+            fcntl.fcntl(descriptor, fcntl.F_ADD_SEALS, _SANDBOX_SEALS)
+        except OSError as exc:
+            raise CapsuleError(
+                "capsule sandbox output retains a writable descriptor"
+            ) from exc
+        if fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) != _SANDBOX_SEALS:
+            _fail("capsule sandbox output seal set differs")
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        chunks = []
+        remaining = before.st_size
+        while remaining:
+            block = os.read(descriptor, min(IO_CHUNK_BYTES, remaining))
+            if not block:
+                _fail("capsule sandbox output became short")
+            chunks.append(block)
+            remaining -= len(block)
+        if os.read(descriptor, 1) or _identity(os.fstat(descriptor)) != _identity(before):
+            # Adding seals changes ctime but no content-bearing identity.  Check
+            # the fields that must remain stable across F_ADD_SEALS explicitly.
+            after = os.fstat(descriptor)
+            if (
+                after.st_dev != before.st_dev
+                or after.st_ino != before.st_ino
+                or after.st_mode != before.st_mode
+                or after.st_nlink != before.st_nlink
+                or after.st_uid != before.st_uid
+                or after.st_gid != before.st_gid
+                or after.st_size != before.st_size
+                or after.st_mtime_ns != before.st_mtime_ns
+            ):
+                _fail("capsule sandbox output changed while sealing")
+        return b"".join(chunks)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for descriptor in tuple(self._extra_fds.values()) + tuple(
+            self._output_fds.values()
+        ):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        self._extra_fds.clear()
+        self._output_fds.clear()
+        self._output_limits.clear()
+
+    def __enter__(self) -> "CapsuleSandboxInvocation":
+        if self._closed:
+            _fail("capsule sandbox invocation is closed")
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
+
+
+class SealedCapsuleSandbox:
+    """Sealed copy of every staged capsule member, including its static runner."""
+
+    def __init__(self, staged: StagedCapsule) -> None:
+        if type(staged) is not StagedCapsule:
+            _fail("sealed capsule sandbox requires one staged capsule")
+        self.entries = _validated_entries(staged.entries)
+        self.directories = _sandbox_directories(self.entries)
+        self._fds: Dict[str, int] = {}
+        self._closed = False
+        root_fd = -1
+        try:
+            revalidate_staged_capsule(staged.root, self.entries)
+            root_fd = _open_absolute_directory(staged.root, "staged capsule root")
+            _require_private_directory_fd(root_fd, "staged capsule root")
+            _revalidate_tree_fd(root_fd, self.entries)
+            for entry in self.entries:
+                payload = _read_bound_entry(root_fd, entry)
+                self._fds[entry.path] = _sealed_memfd(
+                    payload, entry.mode, "capsule member " + entry.path
+                )
+            _revalidate_tree_fd(root_fd, self.entries)
+            sandbox_paths = tuple(
+                entry.path for entry in self.entries if entry.role == "capsule_sandbox"
+            )
+            if sandbox_paths != ("bin/sandbox",):
+                _fail("capsule must retain exactly bin/sandbox")
+            self.executable = "/proc/{}/fd/{}".format(
+                os.getpid(), self._fds["bin/sandbox"]
+            )
+        except BaseException:
+            self.close()
+            raise
+        finally:
+            if root_fd >= 0:
+                os.close(root_fd)
+
+    def invocation(
+        self,
+        command: Sequence[str],
+        *,
+        read_only_inputs: Optional[Mapping[str, bytes]] = None,
+        writable_outputs: Optional[Mapping[str, int]] = None,
+    ) -> CapsuleSandboxInvocation:
+        if self._closed:
+            _fail("sealed capsule sandbox is closed")
+        return CapsuleSandboxInvocation(
+            self,
+            command,
+            {} if read_only_inputs is None else read_only_inputs,
+            {} if writable_outputs is None else writable_outputs,
+        )
+
+    def read_member(self, relative: str, maximum: int) -> bytes:
+        if (
+            self._closed
+            or relative not in self._fds
+            or type(maximum) is not int
+            or maximum <= 0
+        ):
+            _fail("sealed capsule member read differs")
+        entry = next(item for item in self.entries if item.path == relative)
+        if entry.size > maximum:
+            _fail("sealed capsule member exceeds its read bound")
+        descriptor = self._fds[relative]
+        payload = bytearray()
+        offset = 0
+        while offset < entry.size:
+            block = os.pread(
+                descriptor, min(IO_CHUNK_BYTES, entry.size - offset), offset
+            )
+            if not block:
+                _fail("sealed capsule member became short: " + relative)
+            payload.extend(block)
+            offset += len(block)
+        if (
+            hashlib.sha256(payload).hexdigest() != entry.sha256
+            or fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) != _SANDBOX_SEALS
+        ):
+            _fail("sealed capsule member bytes differ: " + relative)
+        return bytes(payload)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for descriptor in self._fds.values():
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        self._fds.clear()
+
+    def __enter__(self) -> "SealedCapsuleSandbox":
+        if self._closed:
+            _fail("sealed capsule sandbox is closed")
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()

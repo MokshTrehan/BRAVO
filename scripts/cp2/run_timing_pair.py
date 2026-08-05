@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Fail-closed CP2-E timing-runner surface.
 
-The committed CP2-E artifact schema and fixed-clock profile do not yet exist.
-Consequently, actual mode deliberately stops after syntax-only CLI validation:
+The candidate evidence layer is intentionally not a formal-run unlock.  The
+source-frozen profile still lacks the complete helper-owned schema-v2 control,
+topology, telemetry, and descendant-guardian contract.  Consequently, actual
+mode deliberately stops after syntax-only CLI validation:
 it does not import project modules, inspect a dataset registry, import a bag
 provider, create an evidence directory, or alter host controls.
 
@@ -27,6 +29,8 @@ import re
 import shutil
 import stat
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 
@@ -39,6 +43,17 @@ SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 PAIR_ORDER = (("nullspace", "schur"), ("schur", "nullspace"), ("nullspace", "schur"))
 FROZEN_CLOCK_KEYS = ("cpu_ids", "affinity", "driver", "governor", "min_frequency", "max_frequency", "boost")
 U64_MAX = (1 << 64) - 1
+# Protecting-fixture diagnostic only.  These rationals are not formal policy;
+# actual mode remains locked until a source-frozen schema-v2 profile binds its
+# own exact APERF/MPERF bounds and raw telemetry specification population.
+COMMAND_PHASES = ("clock_pre", "runtime_preflight", "ros_run", "clock_post")
+SYNTHETIC_APERF_MPERF_RATIO_BOUNDS = ((99, 100), (101, 100))
+RUN_CAPTURE_NAMES = (
+    "context.json", "serial.jsonl", "callbacks.jsonl", "updater.jsonl",
+    "timing.jsonl", "runtime_parameters.json", "loader_before.txt",
+    "loader_after.txt", "affinity_audit.json",
+)
+SYNTHETIC_ONLY_AUTHORIZATION = object()
 
 # This literal tuple is the readiness barrier's deterministic expected-case
 # inventory.  The common runner cases come first in contract order, followed
@@ -474,6 +489,1098 @@ def _parse_actual_cli(arguments: Sequence[str]) -> Dict[str, str]:
     return parsed
 
 
+class TimingOrchestrationError(RuntimeError):
+    """The synthetic CP2-E campaign candidate failed closed."""
+
+
+class TimingOrchestrationIndeterminate(TimingOrchestrationError):
+    """Cleanup, restoration, or publication state cannot be proved exact."""
+
+
+def _orchestration_fail(message: str) -> None:
+    raise TimingOrchestrationError(message)
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8") + b"\n"
+
+
+def _sha256_bytes(payload: bytes) -> str:
+    if type(payload) is not bytes:
+        _orchestration_fail("digest input is not bytes")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _exact_orchestration_keys(
+    value: Any, expected: Iterable[str], label: str,
+) -> Mapping[str, Any]:
+    if type(value) is not dict or set(value) != set(expected):
+        _orchestration_fail(label + " keys differ from the frozen schema")
+    return value
+
+
+def _bounded_text(value: Any, label: str, maximum: int = 4096) -> str:
+    if (
+        type(value) is not str
+        or not value
+        or len(value.encode("utf-8")) > maximum
+        or any(character in value for character in "\0\r\n")
+    ):
+        _orchestration_fail(label + " is not bounded nonempty text")
+    return value
+
+
+def _lower_sha256(value: Any, label: str) -> str:
+    text = _bounded_text(value, label, 64)
+    if SHA256_PATTERN.fullmatch(text) is None:
+        _orchestration_fail(label + " is not lowercase SHA-256")
+    return text
+
+
+def _lower_git_oid(value: Any, label: str) -> str:
+    text = _bounded_text(value, label, 40)
+    if re.fullmatch(r"[0-9a-f]{40}", text) is None:
+        _orchestration_fail(label + " is not a lowercase Git object ID")
+    return text
+
+
+def _orchestration_absolute(value: Any, label: str) -> str:
+    text = _bounded_text(value, label)
+    if not os.path.isabs(text) or os.path.normpath(text) != text or text == os.path.sep:
+        _orchestration_fail(label + " is not normalized absolute non-root")
+    return text
+
+
+EXECUTION_BINDING_KEYS = (
+    "schema_version", "record_type", "checkpoint", "profile_sha256",
+    "source_commit", "source_tree", "unit_manifest_sha256",
+    "sequence_set_manifest_sha256", "executable_path", "executable_sha256",
+    "dso_closure_sha256", "configuration_sha256", "boot_id_sha256",
+    "machine_identity_sha256", "cwd", "environment", "phase_templates",
+)
+TEMPLATE_TOKENS = frozenset((
+    "{profile_sha256}", "{run_index}", "{timing_pair_index}", "{mode}",
+    "{run_id}", "{trace_directory}", "{sequence_index}", "{sequence_id}",
+))
+
+
+@dataclass(frozen=True)
+class TimingExecutionBinding:
+    """Canonical source/profile-bound executable and argv templates."""
+
+    canonical_bytes: bytes
+    profile_sha256: str
+    source_commit: str
+    source_tree: str
+    unit_manifest_sha256: str
+    sequence_set_manifest_sha256: str
+    executable_path: str
+    executable_sha256: str
+    dso_closure_sha256: str
+    configuration_sha256: str
+    boot_id_sha256: str
+    machine_identity_sha256: str
+    cwd: str
+    environment: Tuple[Tuple[str, str], ...]
+    phase_templates: Tuple[Tuple[str, Tuple[str, ...]], ...]
+
+    @property
+    def launch_sha256(self) -> str:
+        return _sha256_bytes(self.canonical_bytes)
+
+    def template(self, phase: str) -> Tuple[str, ...]:
+        retained = dict(self.phase_templates)
+        if phase not in retained:
+            _orchestration_fail("phase is outside the exact four-phase schedule")
+        return retained[phase]
+
+    def render(
+        self,
+        phase: str,
+        *,
+        run_index: int,
+        mode: str,
+        run_id: str,
+        trace_directory: str,
+        sequence_index: int,
+        sequence_id: str,
+    ) -> Tuple[str, ...]:
+        values = {
+            "{profile_sha256}": self.profile_sha256,
+            "{run_index}": str(run_index),
+            "{timing_pair_index}": str(run_index // 2),
+            "{mode}": mode,
+            "{run_id}": run_id,
+            "{trace_directory}": trace_directory,
+            "{sequence_index}": str(sequence_index),
+            "{sequence_id}": sequence_id,
+        }
+        return tuple(values.get(item, item) for item in self.template(phase))
+
+
+def load_execution_binding(value: Any) -> TimingExecutionBinding:
+    """Strictly freeze one exact launch binding from a canonical JSON record."""
+
+    row = _exact_orchestration_keys(value, EXECUTION_BINDING_KEYS, "execution binding")
+    if (
+        row["schema_version"] != 1
+        or row["record_type"] != "cp2_timing_execution_binding"
+        or row["checkpoint"] != "CP2-E"
+    ):
+        _orchestration_fail("execution-binding identity differs")
+    profile_sha = _lower_sha256(row["profile_sha256"], "binding profile SHA-256")
+    source_commit = _lower_git_oid(row["source_commit"], "binding source commit")
+    source_tree = _lower_git_oid(row["source_tree"], "binding source tree")
+    unit_manifest = _lower_sha256(
+        row["unit_manifest_sha256"], "binding unit-manifest SHA-256"
+    )
+    sequence_manifest = _lower_sha256(
+        row["sequence_set_manifest_sha256"],
+        "binding sequence-set manifest SHA-256",
+    )
+    executable = _orchestration_absolute(row["executable_path"], "binding executable")
+    if executable in ("/bin/sh", "/bin/bash", "/usr/bin/env"):
+        _orchestration_fail("binding executable is a shell or ambient launcher")
+    executable_sha = _lower_sha256(
+        row["executable_sha256"], "binding executable SHA-256"
+    )
+    dso_sha = _lower_sha256(
+        row["dso_closure_sha256"], "binding DSO-closure SHA-256"
+    )
+    configuration_sha = _lower_sha256(
+        row["configuration_sha256"], "binding configuration SHA-256"
+    )
+    boot_sha = _lower_sha256(row["boot_id_sha256"], "binding boot-id SHA-256")
+    machine_sha = _lower_sha256(
+        row["machine_identity_sha256"], "binding machine-identity SHA-256"
+    )
+    cwd = _orchestration_absolute(row["cwd"], "binding working directory")
+    environment_value = row["environment"]
+    if type(environment_value) is not dict or not environment_value:
+        _orchestration_fail("binding environment is not one nonempty exact mapping")
+    environment: List[Tuple[str, str]] = []
+    for name in sorted(environment_value):
+        if type(name) is not str or re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", name) is None:
+            _orchestration_fail("binding environment contains an invalid name")
+        environment.append((name, _bounded_text(environment_value[name], "environment value")))
+    if list(environment_value) != [name for name, _item in environment]:
+        _orchestration_fail("binding environment names are not sorted")
+
+    templates_value = row["phase_templates"]
+    _exact_orchestration_keys(templates_value, COMMAND_PHASES, "phase templates")
+    templates: List[Tuple[str, Tuple[str, ...]]] = []
+    common_required = frozenset(("{profile_sha256}", "{run_index}"))
+    for phase in COMMAND_PHASES:
+        raw = templates_value[phase]
+        if type(raw) is not list or not raw:
+            _orchestration_fail("phase template is not a nonempty argv list")
+        argv = tuple(_bounded_text(item, "phase-template argument") for item in raw)
+        _orchestration_absolute(argv[0], "phase-template executable")
+        if argv[0] in ("/bin/sh", "/bin/bash", "/usr/bin/env"):
+            _orchestration_fail("phase template invokes a forbidden launcher")
+        brace_arguments = frozenset(item for item in argv if "{" in item or "}" in item)
+        if not brace_arguments.issubset(TEMPLATE_TOKENS):
+            _orchestration_fail("phase template contains an unknown or embedded token")
+        required = common_required
+        if phase == "ros_run":
+            required = required.union((
+                "{timing_pair_index}", "{mode}", "{run_id}",
+                "{trace_directory}", "{sequence_index}", "{sequence_id}",
+            ))
+            if argv[0] != executable:
+                _orchestration_fail("ROS phase executable differs from the source binding")
+        if not required.issubset(brace_arguments):
+            _orchestration_fail("phase template omits a required exact token")
+        templates.append((phase, argv))
+    canonical = _canonical_json_bytes(dict(row))
+    return TimingExecutionBinding(
+        canonical, profile_sha, source_commit, source_tree, unit_manifest,
+        sequence_manifest, executable, executable_sha, dso_sha,
+        configuration_sha, boot_sha, machine_sha, cwd, tuple(environment),
+        tuple(templates),
+    )
+
+
+@dataclass(frozen=True)
+class ProcessIdentityObservation:
+    observed_monotonic_ns: int
+    pid: int
+    start_time_ticks: int
+    executable_sha256: str
+    loader_before_sha256: str
+    loader_after_sha256: str
+
+    def validate(self) -> None:
+        if type(self.observed_monotonic_ns) is not int or self.observed_monotonic_ns <= 0:
+            _orchestration_fail("process-identity observation time is invalid")
+        if type(self.pid) is not int or self.pid <= 0:
+            _orchestration_fail("observed process PID is invalid")
+        if type(self.start_time_ticks) is not int or self.start_time_ticks <= 0:
+            _orchestration_fail("observed process start time is invalid")
+        _lower_sha256(self.executable_sha256, "observed executable SHA-256")
+        _lower_sha256(self.loader_before_sha256, "observed loader-before SHA-256")
+        _lower_sha256(self.loader_after_sha256, "observed loader-after SHA-256")
+
+    def record(
+        self, profile_sha256: str, execution_binding_sha256: str,
+        run_index: int,
+    ) -> Mapping[str, Any]:
+        self.validate()
+        return {
+            "schema_version": 1,
+            "record_type": "cp2_timing_process_identity_observation",
+            "checkpoint": "CP2-E",
+            "profile_sha256": _lower_sha256(
+                profile_sha256, "process-identity profile SHA-256",
+            ),
+            "execution_binding_sha256": _lower_sha256(
+                execution_binding_sha256,
+                "process-identity execution-binding SHA-256",
+            ),
+            "run_index": run_index,
+            "observed_monotonic_ns": self.observed_monotonic_ns,
+            "pid": self.pid,
+            "start_time_ticks": self.start_time_ticks,
+            "executable_sha256": self.executable_sha256,
+            "loader_before_sha256": self.loader_before_sha256,
+            "loader_after_sha256": self.loader_after_sha256,
+        }
+
+
+@dataclass(frozen=True)
+class TimingPhaseRequest:
+    phase: str
+    run_index: int
+    timing_pair_index: int
+    mode: str
+    run_id: str
+    trace_directory: str
+    profile_sha256: str
+    control_applied_sha256: str
+    argv: Tuple[str, ...]
+    environment: Tuple[Tuple[str, str], ...]
+    cwd: str
+
+
+@dataclass(frozen=True)
+class TimingPhaseOutcome:
+    started_monotonic_ns: int
+    ended_monotonic_ns: int
+    exit_code: int
+    timed_out: bool
+    process_group_complete: bool
+    stdout: bytes
+    stderr: bytes
+    payload: Any
+    run_support: Mapping[str, bytes]
+    process_identity: Any
+    raw_telemetry: Any = None
+
+
+@dataclass(frozen=True)
+class SyntheticTimingCampaignResult:
+    artifact: Path
+    manifest_sha256: str
+    passed: bool
+    run_identity_sha256: str
+
+
+def _fresh_process_identity(
+    observation: ProcessIdentityObservation,
+    profile_sha256: str,
+    run_index: int,
+) -> str:
+    observation.validate()
+    payload = _canonical_json_bytes({
+        "domain": "SchurVIO-CP2-E-fresh-process-v1",
+        "profile_sha256": profile_sha256,
+        "run_index": run_index,
+        "pid": observation.pid,
+        "start_time_ticks": observation.start_time_ticks,
+        "executable_sha256": observation.executable_sha256,
+        "loader_before_sha256": observation.loader_before_sha256,
+        "loader_after_sha256": observation.loader_after_sha256,
+    })
+    return _sha256_bytes(payload)
+
+
+def _canonical_record_bytes(value: Any, label: str) -> Tuple[Mapping[str, Any], bytes]:
+    if hasattr(value, "as_record") and callable(value.as_record):
+        record = value.as_record()
+    elif type(value) is dict:
+        record = value
+    else:
+        _orchestration_fail(label + " is not a canonical record")
+    if type(record) is not dict:
+        _orchestration_fail(label + " record is not one exact mapping")
+    payload = _canonical_json_bytes(record)
+    if hasattr(value, "canonical_bytes") and value.canonical_bytes != payload:
+        _orchestration_fail(label + " canonical bytes differ from its record")
+    return record, payload
+
+
+def _strict_canonical_json_bytes(payload: bytes, label: str) -> Mapping[str, Any]:
+    if type(payload) is not bytes or not payload or len(payload) > 64 * 1024 * 1024:
+        _orchestration_fail(label + " byte count is invalid")
+
+    def pairs(items: List[Tuple[str, Any]]) -> Dict[str, Any]:
+        retained: Dict[str, Any] = {}
+        for key, value in items:
+            if key in retained:
+                _orchestration_fail(label + " contains a duplicate JSON key")
+            retained[key] = value
+        return retained
+
+    try:
+        value = json.loads(
+            payload.decode("utf-8", "strict"), object_pairs_hook=pairs,
+            parse_float=lambda _token: _orchestration_fail(
+                label + " contains a floating-point value"
+            ),
+            parse_constant=lambda token: _orchestration_fail(
+                label + " contains " + token
+            ),
+        )
+    except TimingOrchestrationError:
+        raise
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        raise TimingOrchestrationError(label + " is not strict JSON") from exc
+    if type(value) is not dict or _canonical_json_bytes(value) != payload:
+        _orchestration_fail(label + " is not one canonical JSON mapping")
+    return value
+
+
+def _expected_helper_binding(
+    profile_sha256: str, profile: Mapping[str, Any],
+) -> Mapping[str, str]:
+    helper = profile["privileged_helper"]
+    return {
+        "profile_sha256": profile_sha256,
+        "plan_sha256": helper["plan_sha256"],
+        "source_sha256": helper["source_sha256"],
+        "protocol_core_sha256": helper["protocol_core_sha256"],
+        "root_launcher_sha256": helper["root_launcher_sha256"],
+        "import_closure_sha256": helper["import_closure_sha256"],
+        "sudoers_sha256": helper["sudoers_sha256"],
+    }
+
+
+def _helper_evidence_bytes(
+    value: Any, profile_sha256: str, profile: Mapping[str, Any],
+    *, require_success: bool,
+) -> Tuple[bytes, bytes, bytes, bytes, Mapping[str, Any]]:
+    if type(value) is not dict or set(value) != {
+        "transcript_bytes", "terminal_receipt_bytes", "guardian_evidence_bytes",
+        "control_evidence_bytes",
+    }:
+        _orchestration_fail("privileged-helper evidence keys differ")
+    transcript = value["transcript_bytes"]
+    terminal_payload = value["terminal_receipt_bytes"]
+    guardian_evidence = value["guardian_evidence_bytes"]
+    control_evidence = value["control_evidence_bytes"]
+    if (
+        type(transcript) is not bytes or not transcript
+        or len(transcript) > 64 * 1024 * 1024
+        or not transcript.endswith(b"\n")
+    ):
+        _orchestration_fail("privileged-helper transcript bytes are invalid")
+    if (
+        type(guardian_evidence) is not bytes or not guardian_evidence
+        or len(guardian_evidence) > profile["limits"]["maximum_guardian_evidence_bytes"]
+        or not guardian_evidence.endswith(b"\n")
+    ):
+        _orchestration_fail("privileged-helper guardian evidence bytes are invalid")
+    if (
+        type(control_evidence) is not bytes or not control_evidence
+        or len(control_evidence) > 3 * (2 * 1024 * 1024 + 4096)
+        or not control_evidence.endswith(b"\n")
+    ):
+        _orchestration_fail("privileged-helper control evidence bytes are invalid")
+    terminal = _strict_canonical_json_bytes(
+        terminal_payload, "privileged-helper terminal receipt",
+    )
+    expected_binding = _expected_helper_binding(profile_sha256, profile)
+    expected_binding_digest = _sha256_bytes(
+        _canonical_json_bytes(expected_binding)
+    )
+    expected_terminal_keys = {
+        "abnormal_recovery", "binding", "binding_digest",
+        "control_evidence_seal_sha256", "descriptor_closure", "error_type", "event_count",
+        "first_record_sha256", "journal_id", "last_record_sha256",
+        "population_seal_sha256", "population_stop_count", "record_type",
+        "restoration_proved", "schema_version", "session_id",
+        "terminal_journal_sha256", "terminal_status", "transcript_sha256",
+        "transcript_size_bytes",
+    }
+    closure = terminal.get("descriptor_closure")
+    if (
+        set(terminal) != expected_terminal_keys
+        or terminal.get("record_type") != "cp2e_privileged_transcript_terminal"
+        or type(terminal.get("schema_version")) is not int
+        or terminal.get("schema_version") != 2
+        or terminal.get("binding") != expected_binding
+        or terminal.get("binding_digest") != expected_binding_digest
+        or terminal.get("transcript_sha256") != _sha256_bytes(transcript)
+        or terminal.get("transcript_size_bytes") != len(transcript)
+        or type(terminal.get("transcript_size_bytes")) is not int
+        or type(terminal.get("event_count")) is not int
+        or terminal.get("event_count") < 0
+        or type(terminal.get("population_stop_count")) is not int
+        or type(closure) is not dict
+        or set(closure) != {"attempted", "error_type", "passed"}
+        or closure.get("attempted") is not True
+        or closure.get("passed") is not True
+        or closure.get("error_type") is not None
+    ):
+        _orchestration_fail(
+            "privileged-helper terminal receipt does not prove normal exact closure"
+        )
+    if require_success:
+        if (
+            terminal["terminal_status"] != "success"
+            or terminal["abnormal_recovery"] is not False
+            or terminal["restoration_proved"] is not True
+            or terminal["population_stop_count"] != 1
+            or terminal["event_count"] != 16
+            or terminal["error_type"] is not None
+            or terminal["control_evidence_seal_sha256"] is None
+        ):
+            _orchestration_fail(
+                "privileged-helper terminal receipt does not prove successful exact closure"
+            )
+    elif (
+        terminal["terminal_status"] not in ("success", "fail_closed")
+        or terminal["restoration_proved"] is not True
+        or terminal["error_type"] is None
+    ):
+        _orchestration_fail(
+            "failed campaign lacks a fail-closed privileged-helper terminal receipt"
+        )
+    for key in (
+        "binding_digest", "transcript_sha256", "first_record_sha256",
+        "last_record_sha256", "terminal_journal_sha256",
+        "population_seal_sha256",
+        "control_evidence_seal_sha256",
+    ):
+        _lower_sha256(terminal.get(key), "privileged-helper " + key)
+    return (
+        transcript, terminal_payload, guardian_evidence, control_evidence,
+        terminal,
+    )
+
+
+def _control_receipt_bytes(
+    value: Any, phase: str, profile_sha256: str,
+) -> Tuple[Mapping[str, Any], bytes]:
+    record, payload = _canonical_record_bytes(value, phase + " control receipt")
+    expected = {
+        "schema_version", "record_type", "profile_sha256", "phase",
+        "captured_monotonic_ns", "state", "state_sha256", "passed",
+    }
+    if (
+        set(record) != expected
+        or record["schema_version"] != 1
+        or record["record_type"] != "cp2_timing_control_state_receipt"
+        or record["profile_sha256"] != profile_sha256
+        or record["phase"] != phase
+        or record["passed"] is not True
+        or type(record["captured_monotonic_ns"]) is not int
+        or record["captured_monotonic_ns"] < 0
+        or type(record["state"]) is not dict
+        or record["state_sha256"] != _sha256_bytes(
+            _canonical_json_bytes(record["state"])
+        )
+    ):
+        _orchestration_fail(phase + " control receipt is malformed or unbound")
+    return record, payload
+
+
+def _runtime_preflight_receipt(
+    request: TimingPhaseRequest, outcome: TimingPhaseOutcome,
+    execution_binding_sha256: str,
+) -> bytes:
+    return _canonical_json_bytes({
+        "schema_version": 1,
+        "record_type": "cp2_timing_runtime_preflight_receipt",
+        "checkpoint": "CP2-E",
+        "profile_sha256": request.profile_sha256,
+        "execution_binding_sha256": execution_binding_sha256,
+        "run_index": request.run_index,
+        "argv": list(request.argv),
+        "environment": dict(request.environment),
+        "cwd": request.cwd,
+        "started_monotonic_ns": outcome.started_monotonic_ns,
+        "ended_monotonic_ns": outcome.ended_monotonic_ns,
+        "exit_code": outcome.exit_code,
+        "timed_out": outcome.timed_out,
+        "process_group_complete": outcome.process_group_complete,
+        "stdout_hex": outcome.stdout.hex(),
+        "stdout_sha256": _sha256_bytes(outcome.stdout),
+        "stderr_hex": outcome.stderr.hex(),
+        "stderr_sha256": _sha256_bytes(outcome.stderr),
+        "passed": True,
+    })
+
+
+def _validate_phase_outcome(
+    outcome: Any,
+    request: TimingPhaseRequest,
+    maximum_seconds: int,
+    maximum_output_bytes: int,
+    previous_end_ns: Any,
+    controls_module: Any,
+) -> TimingPhaseOutcome:
+    if type(outcome) is not TimingPhaseOutcome:
+        _orchestration_fail("phase executor returned the wrong result type")
+    for value, label in (
+        (outcome.started_monotonic_ns, "phase start"),
+        (outcome.ended_monotonic_ns, "phase end"),
+    ):
+        if type(value) is not int or value < 0 or value > U64_MAX:
+            _orchestration_fail(label + " is outside u64")
+    if (
+        outcome.ended_monotonic_ns < outcome.started_monotonic_ns
+        or outcome.ended_monotonic_ns - outcome.started_monotonic_ns
+        > maximum_seconds * 1_000_000_000
+    ):
+        _orchestration_fail("phase interval is reverse ordered or oversized")
+    if previous_end_ns is not None and outcome.started_monotonic_ns < previous_end_ns:
+        _orchestration_fail("phase intervals overlap or reverse order")
+    if (
+        type(outcome.exit_code) is not int
+        or outcome.exit_code != 0
+        or outcome.timed_out is not False
+        or outcome.process_group_complete is not True
+    ):
+        _orchestration_fail("phase command failed, timed out, or leaked its process group")
+    if type(outcome.stdout) is not bytes or type(outcome.stderr) is not bytes:
+        _orchestration_fail("phase output is not exact bytes")
+    if len(outcome.stdout) > maximum_output_bytes or len(outcome.stderr) > maximum_output_bytes:
+        _orchestration_fail("phase output exceeds the frozen resource limit")
+    if request.phase in ("clock_pre", "clock_post") and (outcome.stdout or outcome.stderr):
+        _orchestration_fail("clock phase retained unexpected aggregate output")
+    if type(outcome.run_support) is not dict:
+        _orchestration_fail("phase run-support value is not an exact mapping")
+    if request.phase == "ros_run":
+        if set(outcome.run_support) != set(RUN_CAPTURE_NAMES):
+            _orchestration_fail("ROS run support differs from the exact raw inventory")
+        if type(outcome.process_identity) is not ProcessIdentityObservation:
+            _orchestration_fail("ROS run lacks an observed fresh-process identity")
+        if outcome.payload is not None:
+            _orchestration_fail("ROS run returned an unexpected aggregate payload")
+        if outcome.raw_telemetry is not None:
+            _orchestration_fail("ROS run returned unexpected telemetry")
+    elif request.phase in ("clock_pre", "clock_post"):
+        if type(outcome.payload) is not bytes or not outcome.payload:
+            _orchestration_fail("clock phase lacks its raw snapshot bytes")
+        if outcome.run_support or outcome.process_identity is not None:
+            _orchestration_fail("clock phase returned ROS-only support")
+        expected_phase = "pre" if request.phase == "clock_pre" else "post"
+        if (
+            type(outcome.raw_telemetry) is not controls_module.RawTelemetrySnapshot
+            or outcome.raw_telemetry.phase != expected_phase
+            or outcome.raw_telemetry.canonical_bytes == b""
+        ):
+            _orchestration_fail("clock phase lacks its exact raw telemetry snapshot")
+    elif request.phase == "runtime_preflight":
+        if (
+            outcome.payload is not None or outcome.run_support
+            or outcome.process_identity is not None or outcome.raw_telemetry is not None
+        ):
+            _orchestration_fail("runtime preflight returned an unexpected payload")
+    return outcome
+
+
+def _run_synthetic_orchestration(
+    *,
+    synthetic_authorization: object,
+    frozen_profile: Any,
+    execution_binding: TimingExecutionBinding,
+    campaign_id: str,
+    bag_begin_record_time_ns: int,
+    working_root: str,
+    staging_path: str,
+    destination_path: str,
+    control_transaction: Any,
+    phase_executor: Callable[[TimingPhaseRequest], TimingPhaseOutcome],
+    artifact_module: Any = None,
+    publication_module: Any = None,
+) -> SyntheticTimingCampaignResult:
+    """Exercise the complete candidate using only explicitly synthetic inputs.
+
+    The formal CLI never calls this seam while source freeze and privileged
+    feasibility remain unsatisfied.  It deliberately accepts no registry or
+    bag-provider capability.
+    """
+
+    if synthetic_authorization is not SYNTHETIC_ONLY_AUTHORIZATION:
+        _orchestration_fail("synthetic-only orchestration authorization is absent")
+    if type(execution_binding) is not TimingExecutionBinding:
+        _orchestration_fail("execution binding was not strictly loaded")
+    if not callable(phase_executor):
+        _orchestration_fail("phase executor is not callable")
+    if artifact_module is None:
+        artifact_module = __import__("cp2_timing_artifact")
+    if publication_module is None:
+        publication_module = __import__("cp2_timing_publication")
+    profile_codec = __import__("cp2_timing_profile")
+    controls_module = __import__("cp2_timing_controls")
+    try:
+        rebound = profile_codec.load_profile_bytes(frozen_profile.canonical_bytes)
+    except (AttributeError, profile_codec.TimingProfileError) as exc:
+        raise TimingOrchestrationError("timing profile is not fully validated") from exc
+    if rebound.sha256 != frozen_profile.sha256 or rebound.sha256 != execution_binding.profile_sha256:
+        _orchestration_fail("profile identity differs across the orchestration binding")
+    profile = rebound.value
+    if execution_binding.machine_identity_sha256 != profile["target"]["machine_identity_sha256"]:
+        _orchestration_fail("execution binding machine identity differs from the profile")
+    expected_environment = tuple(sorted(profile["runtime"]["environment"].items()))
+    if execution_binding.environment != expected_environment:
+        _orchestration_fail("execution environment differs from the frozen profile")
+    if type(campaign_id) is not str or SAFE_ID_PATTERN.fullmatch(campaign_id) is None:
+        _orchestration_fail("campaign ID is unsafe")
+    if (
+        type(bag_begin_record_time_ns) is not int
+        or bag_begin_record_time_ns < 0
+        or bag_begin_record_time_ns > U64_MAX
+    ):
+        _orchestration_fail("bag-begin record time is outside u64")
+    work_root = _orchestration_absolute(working_root, "synthetic working root")
+    staging = Path(_orchestration_absolute(staging_path, "artifact staging path"))
+    destination = Path(_orchestration_absolute(destination_path, "artifact destination path"))
+    publication_parent = Path(profile["artifact"]["publication_parent"])
+    if staging.parent != publication_parent or destination.parent != publication_parent:
+        _orchestration_fail("artifact paths differ from the frozen publication parent")
+    if destination.name != campaign_id:
+        _orchestration_fail("artifact destination name differs from the campaign ID")
+    if not staging.name.startswith("." + campaign_id + ".partial."):
+        _orchestration_fail("artifact staging name differs from the hidden campaign partial")
+    if os.path.commonpath((work_root, "/tmp")) != "/tmp" or work_root == "/tmp":
+        _orchestration_fail("synthetic working root is not a private /tmp child")
+
+    required_transaction_methods = (
+        "apply", "validate_applied", "capture_applied_state", "restore",
+        "control_receipts", "helper_evidence",
+    )
+    if any(not callable(getattr(control_transaction, name, None)) for name in required_transaction_methods):
+        _orchestration_fail("control transaction lacks the audited API")
+
+    commands: List[Mapping[str, Any]] = []
+    support_files: Dict[str, bytes] = {}
+    runs: List[Any] = []
+    process_keys = set()
+    fresh_identities: List[str] = []
+    previous_end_ns: Any = None
+    prior_digest: Any = None
+    applied_digest: Any = None
+    restored_digest: Any = None
+    prior_receipt_record: Any = None
+    applied_receipt_record: Any = None
+    restored_receipt_record: Any = None
+    prior_receipt_bytes: Any = None
+    applied_receipt_bytes: Any = None
+    restored_receipt_bytes: Any = None
+    helper_transcript_bytes: Any = None
+    helper_terminal_receipt_bytes: Any = None
+    helper_guardian_evidence_bytes: Any = None
+    helper_control_evidence_bytes: Any = None
+    helper_terminal_receipt: Any = None
+    transaction_applied = False
+    execution_error: Any = None
+    try:
+        prior = control_transaction.apply()
+        transaction_applied = True
+        applied = control_transaction.capture_applied_state()
+        prior_receipt_record, prior_receipt_bytes = _control_receipt_bytes(
+            getattr(control_transaction, "prior_receipt", None), "prior",
+            rebound.sha256,
+        )
+        applied_receipt_record, applied_receipt_bytes = _control_receipt_bytes(
+            getattr(control_transaction, "applied_receipt", None), "applied",
+            rebound.sha256,
+        )
+        prior_record, _prior_state_bytes = _canonical_record_bytes(
+            prior, "returned prior control snapshot",
+        )
+        applied_record, _applied_state_bytes = _canonical_record_bytes(
+            applied, "returned applied control state",
+        )
+        if prior_receipt_record["state"] != prior_record:
+            _orchestration_fail("prior receipt differs from the returned captured state")
+        if applied_receipt_record["state"] != applied_record:
+            _orchestration_fail("applied receipt differs from the returned applied state")
+        prior_digest = _sha256_bytes(prior_receipt_bytes)
+        applied_digest = _sha256_bytes(applied_receipt_bytes)
+        control_transaction.validate_applied()
+        for run_index, slot in enumerate(profile["pairing"]["run_slots"]):
+            if (
+                slot["run_index"] != run_index
+                or slot["timing_pair_index"] != run_index // 2
+                or slot["position_in_pair"] != run_index % 2
+            ):
+                _orchestration_fail("profile run-slot schedule changed after validation")
+            mode = PAIR_ORDER[run_index // 2][run_index % 2]
+            if slot["mode"] != mode:
+                _orchestration_fail("profile run mode differs from the exact interleaving")
+            run_id = "{}-r{}".format(campaign_id, run_index)
+            trace_directory = os.path.join(work_root, "run_{}".format(run_index))
+            run_phase_payloads: Dict[str, bytes] = {}
+            run_phase_telemetry: Dict[str, Any] = {}
+            runtime_preflight_bytes: Any = None
+            ros_outcome: Any = None
+            for phase in COMMAND_PHASES:
+                control_transaction.validate_applied()
+                argv = execution_binding.render(
+                    phase,
+                    run_index=run_index,
+                    mode=mode,
+                    run_id=run_id,
+                    trace_directory=trace_directory,
+                    sequence_index=profile["input"]["sequence_index"],
+                    sequence_id=profile["input"]["sequence_id"],
+                )
+                request = TimingPhaseRequest(
+                    phase, run_index, run_index // 2, mode, run_id,
+                    trace_directory, rebound.sha256, applied_digest, argv,
+                    execution_binding.environment, execution_binding.cwd,
+                )
+                outcome = _validate_phase_outcome(
+                    phase_executor(request), request,
+                    profile["limits"]["maximum_process_seconds"],
+                    profile["limits"]["maximum_command_output_bytes"],
+                    previous_end_ns,
+                    controls_module,
+                )
+                previous_end_ns = outcome.ended_monotonic_ns
+                control_transaction.validate_applied()
+                if phase in ("clock_pre", "clock_post"):
+                    run_phase_payloads[phase] = outcome.payload
+                    run_phase_telemetry[phase] = outcome.raw_telemetry
+                elif phase == "runtime_preflight":
+                    runtime_preflight_bytes = _runtime_preflight_receipt(
+                        request, outcome, execution_binding.launch_sha256,
+                    )
+                elif phase == "ros_run":
+                    ros_outcome = outcome
+                command_id = len(commands)
+                commands.append({
+                    "schema_version": 1,
+                    "record_type": "timing_command",
+                    "command_id": command_id,
+                    "run_index": run_index,
+                    "timing_pair_index": run_index // 2,
+                    "phase": phase,
+                    "argv": list(argv),
+                    "environment": dict(execution_binding.environment),
+                    "cwd": execution_binding.cwd,
+                    "started_monotonic_ns": outcome.started_monotonic_ns,
+                    "ended_monotonic_ns": outcome.ended_monotonic_ns,
+                    "exit_code": outcome.exit_code,
+                    "timed_out": outcome.timed_out,
+                    "process_group_complete": outcome.process_group_complete,
+                    "stdout_sha256": _sha256_bytes(outcome.stdout),
+                    "stderr_sha256": _sha256_bytes(outcome.stderr),
+                })
+            if (
+                ros_outcome is None
+                or set(run_phase_payloads) != {"clock_pre", "clock_post"}
+                or set(run_phase_telemetry) != {"clock_pre", "clock_post"}
+                or type(runtime_preflight_bytes) is not bytes
+            ):
+                _orchestration_fail("run did not complete the exact four-phase schedule")
+            observation = ros_outcome.process_identity
+            observation.validate()
+            if not (
+                ros_outcome.started_monotonic_ns
+                <= observation.observed_monotonic_ns
+                <= ros_outcome.ended_monotonic_ns
+            ):
+                _orchestration_fail("process identity was observed outside the ROS command")
+            if observation.executable_sha256 != execution_binding.executable_sha256:
+                _orchestration_fail("observed executable differs from the source binding")
+            if observation.loader_before_sha256 != _sha256_bytes(ros_outcome.run_support["loader_before.txt"]):
+                _orchestration_fail("observed loader-before identity differs from raw support")
+            if observation.loader_after_sha256 != _sha256_bytes(ros_outcome.run_support["loader_after.txt"]):
+                _orchestration_fail("observed loader-after identity differs from raw support")
+            process_key = (observation.pid, observation.start_time_ticks)
+            if process_key in process_keys:
+                _orchestration_fail("six run slots do not retain six fresh process observations")
+            process_keys.add(process_key)
+            affinity = _strict_json_loads(
+                ros_outcome.run_support["affinity_audit.json"].decode("utf-8", "strict")
+            )
+            if _canonical_json_bytes(affinity) != ros_outcome.run_support["affinity_audit.json"]:
+                _orchestration_fail("affinity audit is not canonical JSON")
+            if affinity.get("root_pid") != observation.pid:
+                _orchestration_fail("affinity audit root PID differs from process observation")
+            identity = _fresh_process_identity(observation, rebound.sha256, run_index)
+            if identity in fresh_identities:
+                _orchestration_fail("fresh-process identity digest is duplicate")
+            fresh_identities.append(identity)
+            prefix = "runs/run_{}/".format(run_index)
+            run_support = {
+                prefix + name: payload
+                for name, payload in ros_outcome.run_support.items()
+            }
+            run_support[prefix + "clock_pre.json"] = run_phase_payloads["clock_pre"]
+            run_support[prefix + "clock_post.json"] = run_phase_payloads["clock_post"]
+            pre_raw = run_phase_telemetry["clock_pre"]
+            post_raw = run_phase_telemetry["clock_post"]
+            thermal_ranges = [
+                item["expected"] for item in profile["observations"]
+                if item["parser"] == "hwmon_temperature_millicelsius"
+            ]
+            if len(thermal_ranges) != 1:
+                _orchestration_fail("profile does not bind one thermal range")
+            comparison = controls_module.compare_raw_telemetry(
+                pre_raw, post_raw, profile["runtime"]["cpu_ids"],
+                profile["runtime"]["accepted_current_frequency_khz"],
+                (
+                    thermal_ranges[0]["minimum"],
+                    thermal_ranges[0]["maximum"],
+                ),
+                SYNTHETIC_APERF_MPERF_RATIO_BOUNDS,
+            )
+            process_identity_bytes = _canonical_json_bytes(observation.record(
+                rebound.sha256, execution_binding.launch_sha256, run_index,
+            ))
+            run_support[prefix + "process_identity.json"] = process_identity_bytes
+            run_support[prefix + "runtime_preflight.json"] = runtime_preflight_bytes
+            run_support[prefix + "telemetry_pre.json"] = pre_raw.canonical_bytes
+            run_support[prefix + "telemetry_post.json"] = post_raw.canonical_bytes
+            run_support[prefix + "telemetry_comparison.json"] = comparison["canonical_bytes"]
+            run_support[prefix + "stdout.bin"] = ros_outcome.stdout
+            run_support[prefix + "stderr.bin"] = ros_outcome.stderr
+            support_files.update(run_support)
+            runs.append(artifact_module.TimingRun(
+                run_index=run_index,
+                profile_sha256=rebound.sha256,
+                run_id=run_id,
+                fresh_process_identity=identity,
+                pre_snapshot_sha256=_sha256_bytes(run_phase_payloads["clock_pre"]),
+                post_snapshot_sha256=_sha256_bytes(run_phase_payloads["clock_post"]),
+                process_identity_sha256=_sha256_bytes(process_identity_bytes),
+                runtime_preflight_sha256=_sha256_bytes(runtime_preflight_bytes),
+                telemetry_pre_sha256=pre_raw.sha256,
+                telemetry_post_sha256=post_raw.sha256,
+                telemetry_comparison_sha256=comparison["sha256"],
+                trace_bundle_sha256=artifact_module.trace_bundle_sha256(
+                    run_support, run_index
+                ),
+            ))
+    except BaseException as exc:
+        execution_error = exc
+    finally:
+        if transaction_applied:
+            try:
+                control_transaction.restore()
+                if getattr(control_transaction, "state", None) != "restored":
+                    _orchestration_fail("control transaction did not reach restored state")
+                abnormal_recovery = getattr(
+                    control_transaction, "had_abnormal_recovery", False
+                )
+                if type(abnormal_recovery) is not bool or abnormal_recovery:
+                    raise TimingOrchestrationIndeterminate(
+                        "control transaction required abnormal guardian recovery"
+                    )
+                receipts = control_transaction.control_receipts()
+                if type(receipts) is not dict or set(receipts) != {
+                    "prior", "applied", "restored",
+                }:
+                    _orchestration_fail("control transaction returned an incomplete receipt set")
+                final_prior, final_prior_bytes = _control_receipt_bytes(
+                    receipts["prior"], "prior", rebound.sha256,
+                )
+                final_applied, final_applied_bytes = _control_receipt_bytes(
+                    receipts["applied"], "applied", rebound.sha256,
+                )
+                restored_receipt_record, restored_receipt_bytes = (
+                    _control_receipt_bytes(
+                        receipts["restored"], "restored", rebound.sha256,
+                    )
+                )
+                if (
+                    final_prior != prior_receipt_record
+                    or final_applied != applied_receipt_record
+                    or final_prior_bytes != prior_receipt_bytes
+                    or final_applied_bytes != applied_receipt_bytes
+                    or restored_receipt_record["state"]
+                    != prior_receipt_record["state"]
+                ):
+                    _orchestration_fail("final control receipts drifted or restoration is inexact")
+                if not (
+                    prior_receipt_record["captured_monotonic_ns"]
+                    < applied_receipt_record["captured_monotonic_ns"]
+                    < restored_receipt_record["captured_monotonic_ns"]
+                ):
+                    _orchestration_fail("control receipt chronology is not strict")
+                restored_digest = _sha256_bytes(restored_receipt_bytes)
+                (
+                    helper_transcript_bytes,
+                    helper_terminal_receipt_bytes,
+                    helper_guardian_evidence_bytes,
+                    helper_control_evidence_bytes,
+                    helper_terminal_receipt,
+                ) = _helper_evidence_bytes(
+                    control_transaction.helper_evidence(execution_error is None),
+                    rebound.sha256,
+                    profile, require_success=execution_error is None,
+                )
+            except BaseException as restore_error:
+                if isinstance(restore_error, TimingOrchestrationIndeterminate):
+                    raise
+                raise TimingOrchestrationIndeterminate(
+                    "timing execution did not prove exact host-control restoration: {}".format(
+                        restore_error
+                    )
+                ) from restore_error
+    if execution_error is not None:
+        raise execution_error
+    if (
+        len(commands) != 24
+        or len(runs) != 6
+        or len(fresh_identities) != 6
+        or prior_digest is None
+        or applied_digest is None
+        or restored_digest is None
+        or prior_receipt_bytes is None
+        or applied_receipt_bytes is None
+        or restored_receipt_bytes is None
+        or helper_transcript_bytes is None
+        or helper_terminal_receipt_bytes is None
+        or helper_guardian_evidence_bytes is None
+        or helper_control_evidence_bytes is None
+        or helper_terminal_receipt is None
+    ):
+        _orchestration_fail("campaign did not retain its exact complete schedule/state")
+
+    run_identity_sha = _sha256_bytes(_canonical_json_bytes({
+        "domain": "SchurVIO-CP2-E-six-fresh-processes-v1",
+        "profile_sha256": rebound.sha256,
+        "fresh_process_identities": fresh_identities,
+    }))
+    provenance = {
+        "schema_version": 1,
+        "record_type": "cp2_timing_provenance",
+        "checkpoint": "CP2-E",
+        "profile_sha256": rebound.sha256,
+        "source_commit": execution_binding.source_commit,
+        "source_tree": execution_binding.source_tree,
+        "unit_manifest_sha256": execution_binding.unit_manifest_sha256,
+        "sequence_set_manifest_sha256": execution_binding.sequence_set_manifest_sha256,
+        "bag_sha256": profile["input"]["bag_sha256"],
+        "executable_sha256": execution_binding.executable_sha256,
+        "dso_closure_sha256": execution_binding.dso_closure_sha256,
+        "configuration_sha256": execution_binding.configuration_sha256,
+        "launch_sha256": execution_binding.launch_sha256,
+        "boot_id_sha256": execution_binding.boot_id_sha256,
+        "machine_identity_sha256": execution_binding.machine_identity_sha256,
+        "run_identity_sha256": run_identity_sha,
+        "control_prior_sha256": prior_digest,
+        "control_applied_sha256": applied_digest,
+        "control_restored_sha256": restored_digest,
+        "helper_transcript_sha256": _sha256_bytes(helper_transcript_bytes),
+        "helper_terminal_receipt_sha256": _sha256_bytes(
+            helper_terminal_receipt_bytes
+        ),
+        "helper_binding_digest": helper_terminal_receipt["binding_digest"],
+        "helper_terminal_journal_sha256": helper_terminal_receipt[
+            "terminal_journal_sha256"
+        ],
+        "helper_population_seal_sha256": helper_terminal_receipt[
+            "population_seal_sha256"
+        ],
+        "helper_guardian_evidence_sha256": _sha256_bytes(
+            helper_guardian_evidence_bytes
+        ),
+        "helper_control_evidence_sha256": _sha256_bytes(
+            helper_control_evidence_bytes
+        ),
+        "helper_control_evidence_seal_sha256": helper_terminal_receipt[
+            "control_evidence_seal_sha256"
+        ],
+    }
+    assembly_source = artifact_module.TimingAssemblyInput(
+        profile_bytes=rebound.canonical_bytes,
+        profile_sha256=rebound.sha256,
+        execution_binding_bytes=execution_binding.canonical_bytes,
+        control_prior_bytes=prior_receipt_bytes,
+        control_applied_bytes=applied_receipt_bytes,
+        control_restored_bytes=restored_receipt_bytes,
+        helper_transcript_bytes=helper_transcript_bytes,
+        helper_terminal_receipt_bytes=helper_terminal_receipt_bytes,
+        helper_guardian_evidence_bytes=helper_guardian_evidence_bytes,
+        helper_control_evidence_bytes=helper_control_evidence_bytes,
+        sequence_index=profile["input"]["sequence_index"],
+        sequence_id=profile["input"]["sequence_id"],
+        bag_begin_record_time_ns=bag_begin_record_time_ns,
+        frozen_offset_ns=profile["input"]["frozen_offset_ns"],
+        runs=tuple(runs),
+        provenance=provenance,
+        commands=tuple(commands),
+        support_files=support_files,
+    )
+
+    staging_identity: Any = None
+    try:
+        staging_identity = publication_module.create_staging_directory(staging)
+        assembled = artifact_module.assemble_timing_artifact(staging, assembly_source)
+        detached = artifact_module.verify_timing_artifact(staging, assembled.manifest_sha256)
+        if detached.get("passed") is not assembled.passed:
+            _orchestration_fail("staging detached verification result differs from assembly")
+        sealed_identity = publication_module.seal_artifact_directory(staging)
+        if sealed_identity != staging_identity:
+            _orchestration_fail("artifact staging inode changed before publication")
+
+        def verify_published(path: Path) -> None:
+            verified = artifact_module.verify_timing_artifact(
+                path, assembled.manifest_sha256
+            )
+            if verified.get("passed") is not assembled.passed:
+                _orchestration_fail(
+                    "published detached verification result differs from assembly"
+                )
+
+        published = publication_module.publish_artifact_noreplace(
+            staging,
+            destination,
+            published_validator=verify_published,
+            expected_staging_identity=staging_identity,
+        )
+        if published.identity != staging_identity or published.path != destination:
+            raise TimingOrchestrationIndeterminate(
+                "publisher returned a different final artifact identity"
+            )
+        return SyntheticTimingCampaignResult(
+            destination, assembled.manifest_sha256, assembled.passed,
+            run_identity_sha,
+        )
+    except BaseException as artifact_error:
+        indeterminate_type = getattr(
+            publication_module, "TimingPublicationIndeterminate", ()
+        )
+        if indeterminate_type and isinstance(artifact_error, indeterminate_type):
+            raise TimingOrchestrationIndeterminate(
+                "timing artifact publication is indeterminate"
+            ) from artifact_error
+        if staging_identity is not None:
+            try:
+                publication_module.cleanup_unpublished_artifact(
+                    staging, staging_identity
+                )
+            except BaseException as cleanup_error:
+                raise TimingOrchestrationIndeterminate(
+                    "timing artifact failed and exact caller cleanup also failed"
+                ) from cleanup_error
+        raise
+
+
 def _case_functions(temporary_root: str) -> Mapping[str, Callable[[], None]]:
     file_a = os.path.join(temporary_root, "file-a")
     file_b = os.path.join(temporary_root, "file-b")
@@ -645,17 +1752,16 @@ def _actual_mode(arguments: Sequence[str]) -> int:
         sys.stderr.write("CP2-E timing runner CLI rejected: {}\n".format(exc))
         return 2
 
-    # This is intentionally checked only after exact CLI syntax validation and
-    # before any project import, registry access, bag-provider import, output
-    # creation, or host-setting operation.  Even an untracked profile cannot
-    # authorize execution while the committed artifact section is still a
-    # non-authorizing preregistration.
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    profile_path = os.path.join(repo_root, PROFILE_RELPATH)
-    if os.path.lexists(profile_path):
-        reason = "the complete authorizing CP2-E artifact schema is absent"
-    else:
-        reason = "project/cp2_timing_profile.yaml and the complete authorizing CP2-E artifact schema are absent"
+    # The lock is a source constant, intentionally checked after syntax-only
+    # CLI validation and before even a pathname lookup for the profile,
+    # registry, bag, result tree, project module, or host-control surface.
+    # An untracked or locally substituted profile can therefore never unlock
+    # this candidate by its mere presence.
+    reason = (
+        "the source-frozen schema-v2 helper/plan/topology/cpuset/IRQ/telemetry/"
+        "descendant-guardian binding and successful noninteractive privileged "
+        "feasibility proof are absent"
+    )
     sys.stderr.write(
         "CP2-E actual mode is blocked before registry or bag access: {}. "
         "No evidence directory was created and no host setting was changed.\n".format(reason)

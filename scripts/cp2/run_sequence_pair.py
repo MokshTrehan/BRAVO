@@ -38,8 +38,9 @@ READINESS_MAX_BYTES = 4 * 1024 * 1024
 CP2_D_ACTUAL_AUTHORIZED = False
 CP2_D_BLOCK_REASON = (
     "CP2-D actual execution is blocked before readiness/data access: the "
-    "evaluator precision/provenance and direct numerical-stack replacement "
-    "contract is pending explicit approval"
+    "final evaluator/direct-math capsules, hardware floating-point launcher, "
+    "profiles, preflights, and detached-verifier bindings are not source-frozen, "
+    "and the proposed alignment-uniqueness boundary is not approved"
 )
 
 EXPECTED_CASE_NAMES = (

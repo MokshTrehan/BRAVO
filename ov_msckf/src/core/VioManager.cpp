@@ -40,6 +40,7 @@
 #include "state/State.h"
 #include "state/StateHelper.h"
 #include "update/UpdaterMSCKF.h"
+#include "update/CP2OutputCapability.h"
 #include "update/UpdaterSLAM.h"
 #include "update/UpdaterZeroVelocity.h"
 
@@ -106,22 +107,37 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
 
   // If we are recording statistics, then open our file
   if (params.record_timing_information) {
-    // If the file exists, then delete it
-    if (boost::filesystem::exists(params.record_timing_filepath)) {
-      boost::filesystem::remove(params.record_timing_filepath);
-      PRINT_INFO(YELLOW "[STATS]: found old file found, deleted...\n" RESET);
+    if (params.cp2_preopened_output_mode) {
+      if (!OpenCP2PreopenedLegacyStream(
+              params.cp2_legacy_timing_canonical_path,
+              params.record_timing_filepath,
+              params.cp2_legacy_timing_capability, of_statistics)) {
+        throw std::runtime_error(
+            "CP2 preopened timing output could not be bound");
+      }
+    } else {
+      // Ordinary OpenVINS behavior owns the pathname and may replace it.
+      if (boost::filesystem::exists(params.record_timing_filepath)) {
+        boost::filesystem::remove(params.record_timing_filepath);
+        PRINT_INFO(YELLOW "[STATS]: found old file found, deleted...\n" RESET);
+      }
+      boost::filesystem::path p(params.record_timing_filepath);
+      boost::filesystem::create_directories(p.parent_path());
+      of_statistics.open(params.record_timing_filepath,
+                         std::ofstream::out | std::ofstream::app);
     }
-    // Create the directory that we will open the file in
-    boost::filesystem::path p(params.record_timing_filepath);
-    boost::filesystem::create_directories(p.parent_path());
-    // Open our statistics file!
-    of_statistics.open(params.record_timing_filepath, std::ofstream::out | std::ofstream::app);
+    if (!of_statistics.is_open() || !of_statistics.good()) {
+      throw std::runtime_error("timing output stream failed to open");
+    }
     // Write the header information into it
     of_statistics << "# timestamp (sec),tracking,propagation,msckf update,";
     if (state->_options.max_slam_features > 0) {
       of_statistics << "slam update,slam delayed,";
     }
     of_statistics << "re-tri & marg,total" << std::endl;
+    if (!of_statistics.good()) {
+      throw std::runtime_error("timing output header write failed");
+    }
   }
 
   //===================================================================================

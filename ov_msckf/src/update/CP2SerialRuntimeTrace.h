@@ -7,6 +7,7 @@
 #define OV_MSCKF_CP2_SERIAL_RUNTIME_TRACE_H
 
 #include "CP2RuntimeContext.h"
+#include "CP2OutputCapability.h"
 #include "CP2SerialPairing.h"
 #include "UpdaterMSCKF.h"
 
@@ -40,6 +41,12 @@ public:
   CP2SerialRuntimeTrace(CP2RuntimeContext context,
                         std::vector<CP2SerialPair> pairs) noexcept;
 
+  /** Formal constructor: every emitted sink is a parent-held inode. */
+  CP2SerialRuntimeTrace(
+      CP2RuntimeContext context,
+      CP2RuntimeOutputCapabilities output_capabilities,
+      std::vector<CP2SerialPair> pairs) noexcept;
+
   bool NoteEnqueue(std::uint64_t pair_index,
                    CP2SerialRuntimeEnqueueStatus status) noexcept;
 
@@ -54,7 +61,13 @@ public:
 
   bool NoteUpdate(const CP2LiveUpdateEvent &event) noexcept;
 
-  /** Write every level-authorized JSONL sink with O_EXCL and fsync. */
+  /**
+   * Serialize every level-authorized sink exactly once.
+   *
+   * The formal constructor writes only through runner-held capabilities. The
+   * two-argument constructor retains the older O_EXCL path solely for
+   * artifact-free unit fixtures.
+   */
   bool Finalize() noexcept;
 
   bool ready() const noexcept { return !failed_; }
@@ -66,11 +79,30 @@ public:
   /** Read /proc/self/maps into a bounded owning byte string. */
   static bool ReadLoaderMap(std::string &output) noexcept;
 
-  /** Create one single-link regular file without overwrite and fsync it. */
+  /**
+   * Data-free fixture helper: create a single-link file and fsync it.
+   * Formal CP2 execution must use WriteCP2OutputCapability instead.
+   */
   static bool WriteNewFile(const std::string &path,
                            const std::string &bytes) noexcept;
 
 private:
+  struct UpdateRow {
+    std::uint64_t invocation_id = 0U;
+    std::uint64_t timing_start_ns = 0U;
+    std::uint64_t timing_end_ns = 0U;
+    std::uint64_t duration_ns = 0U;
+    std::uint64_t input_feature_count = 0U;
+    std::uint64_t raw_system_count = 0U;
+    std::string terminal_status;
+    std::string terminal_subreason;
+    bool nonempty = false;
+    bool baseline_preflight_attempted = false;
+    bool preflight_accepted = false;
+    bool committed = false;
+    bool primary = false;
+  };
+
   struct Row {
     CP2SerialPair pair;
     bool enqueue_noted = false;
@@ -83,6 +115,7 @@ private:
     std::string processing_status = "not_queued";
     bool updater_invoked = false;
     std::vector<std::uint64_t> updater_invocation_ids;
+    std::vector<UpdateRow> updates;
     bool state_row_emitted = false;
     bool trajectory_index_available = false;
     std::uint64_t trajectory_index = 0U;
@@ -95,14 +128,21 @@ private:
   bool SerializeSerial(std::string &output) const;
   bool SerializeCallbacks(std::string &output) const;
   bool SerializeTrajectory(std::string &output) const;
+  bool SerializeUpdater(std::string &output) const;
+  bool SerializeTiming(std::string &output) const;
+  bool WriteOutput(const CP2NullablePath &path,
+                   const CP2OutputCapability &capability,
+                   const std::string &bytes) noexcept;
 
   CP2RuntimeContext context_;
+  CP2RuntimeOutputCapabilities output_capabilities_;
   std::vector<Row> rows_;
   std::uint64_t next_invocation_id_ = 0U;
   std::uint64_t next_trajectory_index_ = 0U;
   std::string failure_;
   bool failed_ = false;
   bool finalized_ = false;
+  bool held_capability_mode_ = false;
 };
 
 const char *cp2_serial_runtime_enqueue_status_name(

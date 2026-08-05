@@ -336,6 +336,9 @@ std::vector<std::uint8_t> zero_event_journal() {
   event->update.pair_index = 0U;
   event->update.camera_timestamp_ns = 100U;
   event->update.invocation_id = 0U;
+  event->update.timing_endpoint_valid = true;
+  event->update.timing_start_ns = 1000U;
+  event->update.timing_end_ns = 1001U;
   event->update.duration_ns = 1U;
   event->update.terminal_status =
       ov_msckf::CP2UpdateTerminalStatus::kEmptyInput;
@@ -372,6 +375,9 @@ std::vector<std::uint8_t> one_gate_event_journal(
   event->update.pair_index = 0U;
   event->update.camera_timestamp_ns = 100U;
   event->update.invocation_id = 0U;
+  event->update.timing_endpoint_valid = true;
+  event->update.timing_start_ns = 1000U;
+  event->update.timing_end_ns = 1001U;
   event->update.duration_ns = 1U;
   event->update.terminal_status =
       ov_msckf::CP2UpdateTerminalStatus::kAllRejected;

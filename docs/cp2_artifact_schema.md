@@ -1,29 +1,24 @@
 # CP2 artifact and runner schema
 
-Status: **CP2-C detached-readiness replacement draft pending explicit approval;
-CP2-D/E evidence remains blocked; no dataset access authorized**
+Status: **approved CP2-C replacement plus data-free CP2-D/E implementation
+candidate; actual CP2-D/E execution remains source-freeze locked**
 
 This schema is subordinate to `docs/cp2_one_pass_contract.md` and
-`docs/cp2_recorded_evidence_contract.md`. The working-tree replacement of its
-CP2-C readiness section is non-authorizing until the exact commit containing
-it and
-`docs/cp2_c_detached_readiness_binding_clarification_proposed.md` receives the
-required explicit approval. Once approved, it freezes the CP2-C machine
-interface and the common readiness barrier that must run before a bag path is
-resolved, hashed, imported through `rosbag`, or opened. The CP2-D section
-preregisters its stricter sequence interface for the next hard checkpoint,
-but its runner and verifier stop before readiness/artifact access while the
-evaluator-precision/provenance and direct numerical-stack replacement in
-`docs/cp2_d_evaluator_precision_clarification_proposed.md` is pending.
-CP2-E remains a non-authorizing draft until its fixed-clock profile and complete
-machine schema are separately committed; no text in its section can make a
-timing artifact eligible before then.
+`docs/cp2_recorded_evidence_contract.md`. The CP2-C detached-readiness
+replacement was explicitly approved at commit
+`0d71fee98499a10df4e92176709c1afe14077f90`. The later chained CP2
+authorization and CP2-D addendum authorize the evaluator-neutral,
+population-bearing result surface and complete pair-selection witness described
+below without changing association, alignment, metric, threshold, or pass/fail
+mathematics. The common readiness barrier must pass before a registry or bag
+path is resolved, hashed, imported through `rosbag`, or opened.
 
-While the CP2-C replacement remains pending, the actual recorded runner is
-hard blocked before readiness or registry access and the actual recorded
-artifact verifier is hard blocked before artifact access. The implementation
-and synthetic/unit verifier paths remain reviewable, but no CP2-C recorded
-evidence can be created or accepted by this source state.
+The working-tree CP2-D/E implementation remains nonformal until it is complete,
+committed, source-bound, data-free audited, and admitted by the exact chained
+transition. CP2-E additionally requires a separately frozen fixed-clock profile
+and a successful privileged apply/validate/restore feasibility transaction.
+No text in this document alone authorizes recorded access or makes an artifact
+eligible.
 
 ## Strict data conventions
 
@@ -79,7 +74,7 @@ bag, offset, config, mode, order, tolerance, quantile, alignment, affinity,
 clock, or output-directory override. Those values come only from committed
 frozen project files. Every ROS run uses exactly
 `project/cp2_serial.launch` at SHA-256
-`bede519721575d769a1fcef67c5527661cb39ba05ab77faa6c20771b0756c49a`;
+`a29c9b74aa6d4f0a5d783d0ba1eadeaca49ad0783f3b8121c5b68c8091023a12`;
 no other launch surface is eligible. Static config, bag, and ground-truth
 hashes are the exact values in `project/cp2_gate.yaml`. The verifier retains its existing unit-artifact modes
 and adds these mutually exclusive actual modes:
@@ -172,6 +167,25 @@ legacy sinks become exactly the mode-prefixed state, deviation, and OpenVINS
 timing files declared by CP2-D. No context sink is itself authorized as an
 extra final file, no sink may alias another, and assembled bytes are verified
 before a staging sink is removed.
+
+Every nonnull runtime sink is precreated by the trusted runner and retained by
+one read-only parent descriptor. The ROS child receives only the corresponding
+`/proc/PARENT_PID/fd/FD` capability after the complete encoded stat identity
+and canonical context path have joined. CP2-D's three historical OpenVINS
+state/deviation/timing writers enter an explicit internal preopened-output
+mode only after that join: they do not remove or create a pathname and do not
+request truncation, and a failed open or header write aborts before bag access.
+The runner checks exact inode identity and bytes after the child exits; path
+replacement and any observed later same-inode mutation fail.
+
+This trace-sink design has one explicit operational trust boundary: CP2 assumes
+a dedicated, quiescent execution account/session with no deliberately
+coordinating arbitrary same-UID process that preopens and later writes a sink
+inode or the child's inherited descriptor. Linux discretionary permissions and
+`chmod(0444)` do not revoke an already open writer. That same-UID adversary is
+not claimed to be defeated; the synthetic test demonstrates detection of a
+later mutation. This limitation applies to ROS trace/legacy sinks, not to the
+sealed capsule transport below.
 
 ## Mandatory pre-bag readiness barrier
 
@@ -544,6 +558,34 @@ self-test class is referenced only by the five barrier records. The five readine
 self-tests use the exact five-variable class frozen by the readiness barrier;
 their `CP2_SELF_TEST` and `CP2_FORBID_BAG_ACCESS` names are forbidden in every
 other class.
+
+The three CP2-D numerical command rows are an explicitly defined logical-API
+projection. Their retained `argv`, `cwd`, and environment class bind the
+profile's five-element direct-math or eleven-element evaluator command and
+`${PRIVATE_ROOT}` templates. They are not a claim that a raw staged capsule
+pathname was passed to `execve`. For construction preflight, formal production,
+and detached replay alike, the actual executable is the exact static
+`bin/sandbox` copied to a fully sealed anonymous memfd. Every capsule member and
+read-only request/input is independently copied to a sealed memfd; the sandbox
+creates fresh user, mount, network, IPC, UTS, cgroup, and PID namespaces, copies
+those bytes into a private tmpfs, makes the root read-only, mounts an isolated
+`proc`, applies `no_new_privs`/nondumpable/capability dropping, and invokes the
+logical command at `/capsule/...`. `${PRIVATE_ROOT}` resolves only to
+`/private`; the detached verifier repeats that expansion and recomputes the
+same logical environment digest.
+
+One bounded writable output lives only in the sandbox tmpfs. After the capsule
+PID namespace is empty, the static runner validates it and copies it into the
+parent's anonymous response memfd; the parent then requires the exact
+write/grow/shrink/seal seal set before parsing or retaining bytes. Stdout and
+stderr are likewise parent-held. The sandbox and Python caller independently
+compute the tmpfs size as the checked sum of every page-rounded read-only size,
+page-rounded output capacity, and page-rounded directory/file/guard-inode
+population, with a 2 GiB ceiling. Namespace failure, budget disagreement,
+overflow, path/member substitution, extra output, descendant survival, or
+response-seal failure aborts. Thus the formal producer and detached verifier
+execute evaluator/direct math through the same descriptor-complete boundary;
+neither executes or reads a mutable raw staged capsule path.
 
 The command population is exact: it contains every top-level subprocess the
 trusted runner starts after the five readiness self-tests and before
@@ -1125,6 +1167,7 @@ orders.
 
 One invocation produces one read-only artifact containing exactly
 `cp2_report.json`, `provenance.json`, `commands.jsonl`, `pair_index.jsonl`,
+`pair_selection_witness.jsonl`,
 `nullspace_callbacks.jsonl`, `schur_callbacks.jsonl`,
 `nullspace_trajectory.jsonl`, `schur_trajectory.jsonl`,
 `parameters/nullspace_prelaunch_raw.yaml`,
@@ -1137,20 +1180,28 @@ One invocation produces one read-only artifact containing exactly
 `schur_openvins_timing.csv`, `nullspace_raw.tum`,
 `schur_raw.tum`, `ground_truth_shared.tum`,
 `nullspace_shared_aligned.tum`, `schur_shared_aligned.tum`,
-`shared_population.bin`, `shared_timestamps.bin`, evaluator logs, and
-`SHA256SUMS`. `cp2_report.json`
+`shared_population.bin`, `shared_timestamps.bin`,
+`evaluation/nullspace_evaluator_result.zip`,
+`evaluation/schur_evaluator_result.zip`, `direct_math/request.json`,
+`direct_math/response.json`, evaluator/direct-math logs, and `SHA256SUMS`.
+Additional source, build, readiness, configuration, and command-support files
+are present only through the exact provenance inventory. `cp2_report.json`
 has exact keys:
 
 `schema_version`, `record_type`=`sequence_pair`, `checkpoint`=`CP2-D`,
 `status`, `sequence_index`, `sequence_id`, `offset_seconds`, `provenance_sha256`,
 `pair_index_sha256`, `valid_pair_count`, `runs`, `normalized_parameter_diff`,
-`shared_timestamp_count`, `shared_timestamp_sha256`, `shared_population_sha256`, `baseline_alignment`,
+`shared_timestamp_count`, `shared_timestamp_sha256`, `shared_population_sha256`,
+`direct_math_request_sha256`, `direct_math_response_sha256`, `baseline_alignment`,
 `position_p95_m`, `orientation_p95_deg`, `ate_nullspace_m`, `ate_schur_m`,
 `relative_ate_difference`, `coverage_passed`, `trajectory_passed`, and `passed`.
 
 `runs` has exactly two records in `nullspace`, `schur` order, each with exact
 keys `run_index`, `mode`, `executable_sha256`, `loader_map_sha256`,
 `resolved_parameters_sha256`, `callback_trace_sha256`, `trajectory_sha256`,
+`evaluator_result_path`, `evaluator_result_sha256`,
+`evaluator_archive_rmse_m`, `evaluator_console_rmse`,
+`evaluator_error_count`,
 `processed_unique_pairs`, `processing_fraction`, `first_selected_timestamp_ns`,
 `last_selected_timestamp_ns`, `first_processed_timestamp_ns`,
 `last_processed_timestamp_ns`, `selected_duration_ns`, `processed_duration_ns`,
@@ -1179,6 +1230,25 @@ Each `pair_index.jsonl` row has exact keys `schema_version`, `record_type`
 `absolute_record_delta_ns`. Pair indices are contiguous from zero and rows are
 exactly the independently selected valid pairs; the delta is strictly below
 20,000,000 ns.
+
+`pair_selection_witness.jsonl` is the complete chronological filtered view
+from which those pairs were selected. Each row has exact keys
+`schema_version`, `record_type`=`filtered_message`, `sequence_index`,
+`sequence_id`, `filtered_index`, `kind`, `camera_id`, `record_time_ns`, and
+`header_time_ns`. Filtered indices are contiguous from zero; record times are
+nondecreasing, so equal record times retain their original filtered order.
+`kind` is exactly `imu`, `cam0`, or `cam1`; `camera_id` is null for `imu`, 0 for
+`cam0`, and 1 for `cam1`, and an IMU row has header time zero.
+
+The detached verifier reconstructs `pair_index.jsonl` byte-for-byte from this
+witness. For each unused camera row in filtered-index order, the first later
+row of the opposite camera is the only candidate. A missing or already-used
+candidate skips the anchor. A candidate at a delta greater than or equal to
+20,000,000 ns also skips the anchor. Neither case may search past that first
+candidate. An accepted pair consumes both messages. This independently proves
+strict first-forward, no-search-past, strict-less-than-20-ms, chronological
+tie handling, and no reuse; local validity of already selected rows is not a
+substitute for this replay.
 
 Each mode callback JSONL row has exact keys `schema_version`, `record_type`
 =`serial_callback`, `sequence_index`, `sequence_id`, `mode`, `callback_index`,
@@ -1231,8 +1301,9 @@ Mode output population is the exact intersection of unique
 In increasing
 estimator time, each timestamp is associated to the ground-truth row with
 minimum absolute integer-nanosecond difference at most 10,000,000; ties select
-the lower ground-truth row index and ground-truth reuse is allowed, matching
-evo 1.31.1. `shared_population.bin` starts with domain bytes
+the lower ground-truth row index and ground-truth reuse is allowed. This is the
+authoritative direct association; evo receives its already associated
+projection as described below. `shared_population.bin` starts with domain bytes
 `SchurVIO-CP2-shared-population-v1\0`, then a u64 count, then for every row:
 estimator timestamp u64, ground-truth timestamp u64, nullspace position and
 quaternion, Schur position and quaternion, and ground-truth position and
@@ -1242,12 +1313,22 @@ SHA-256 is `shared_population_sha256`. `shared_timestamp_sha256` hashes domain
 estimator timestamps as u64. That exact second payload is retained as
 `shared_timestamps.bin`. The two raw TUM files are deterministic projections of
 their full trajectory JSONL; the three `*_shared*` TUM files are deterministic
-projections of the shared payload and the one common alignment.
+projections of the shared payload and the one common alignment. In
+`ground_truth_shared.tum`, each already selected ground-truth pose is written
+with its associated estimator timestamp, not its original ground-truth
+timestamp. The original ground-truth timestamp and row index remain bound in
+`shared_population.bin`, the association record, and the direct-math response.
+This transport-only retimestamping makes the two TUM files an exact one-to-one
+preassociated population and prevents an evaluator's binary64 timestamp parser from
+performing a numerically different second association at the inclusive 10 ms
+integer boundary. It does not change the selected pose, common alignment, ATE
+population, metric, threshold, or original timestamp evidence.
 
 `baseline_alignment` has exact keys `source`=`nullspace_to_ground_truth`,
 `shared_population_sha256`, `rotation_row_major` (nine f64), `translation`
 (three f64), `quaternion_xyzw` (four f64), `source_singular_values` (three
-f64), `source_rank_threshold`, `determinant`,
+f64), `source_rank_threshold`, `cross_covariance_singular_values` (three f64),
+`cross_covariance_rank_threshold`, `reflection_correction_applied` (Boolean), `determinant`,
 `orthogonality_error_frobenius`, and `applied_identically_to_both_modes`=true.
 One common association population and transform are used; independent mode
 alignment is forbidden. The verifier independently recomputes pair selection,
@@ -1258,7 +1339,8 @@ ground-truth positions be `y_k`. With binary64 arithmetic, compute their
 centroids and `C=(1/N) sum_k (y_k-y_bar)(x_k-x_bar)^T`. For a full SVD
 `C=U Sigma V^T`, set
 `D=diag(1,1,sign(det(U V^T)))`, `R=U D V^T`, and
-`t=y_bar-R x_bar`; a zero determinant sign, nonfinite value, or failed SVD is
+`t=y_bar-R x_bar`; require the determinant-correction value `d=det(UV^T)` to
+be finite with `abs(abs(d)-1)<=1e-10`. An invalid orthogonal sign or failed SVD is
 invalid. Apply the identical retained bytes `(R,t)` to both modes as
 `p'_k=R p_k+t`. OpenVINS stores `R_GtoI`, so the aligned state rotation is
 `R_G'toI=R_GtoI R^T`; the aligned TUM quaternion encodes its transpose
@@ -1270,11 +1352,43 @@ The retained rotation must satisfy `|det(R)-1|<=1e-10` and
 `||R^T R-I||_F<=1e-10`; these are validation tolerances, not repairs.
 
 ATE is the translation RMSE on these already associated and commonly aligned
-TUM rows. The retained evaluator command is exactly
-`evo_ape tum GT_SHARED.tum MODE_SHARED_ALIGNED.tum -r trans_part
---t_max_diff 0.01`; `-a`, `--align`, scale correction, and a second association
-population are forbidden. The verifier recomputes RMSE directly and requires
-the parsed evo value to agree within `1e-12 + 1e-10*|reference|`.
+TUM rows. The detached verifier independently requires equal TUM row counts,
+byte-identical increasing estimator timestamps in both evaluator inputs, and
+one row for every retained shared association before accepting any evaluator
+statistic. For each mode the retained evaluator command has exactly eleven
+elements:
+`${CAPSULE_ROOT}/APPROVED_LAUNCHER tum ground_truth_shared.tum
+MODE_shared_aligned.tum -r trans_part --t_max_diff 0.01 --save_results
+ABS_MODE_RESULT.zip --no_warnings`. The launcher and result paths are absolute
+and identity-bound; ambient `PATH` lookup is forbidden. `-a`, `--align`, scale
+correction, and any second association population are forbidden.
+
+The approved evaluator is the independently frozen capsule-local equivalent
+translation-RMSE API. It does not import NumPy, SciPy, evo, or the direct-math
+worker. Its ZIP result contains exactly `error_array.npy`, `info.json`, and
+`stats.json` under the bounded, nonextracting ZIP grammar implemented by the
+detached parser. `stats.json` contains exactly finite nonnegative `max`,
+`mean`, `median`, `min`, `rmse`, `sse`, and `std`; `error_array.npy` contains
+the complete binary64 translation-error population; and `info.json` is the
+exact frozen metric-identity document. The detached verifier independently
+reconstructs all seven statistics from the retained error bits and requires
+bit equality with `stats.json`. The error count must equal the exact shared
+population and the report field. The archive's full-precision RMSE must agree
+with the independent direct-math RMSE within
+`1e-12 + 1e-10*abs(direct_RMSE)`, using the direct value as the relative-term
+reference. The console row is presentation-only: it must contain exactly the
+archive RMSE formatted as one canonical six-decimal token and is never used as
+the full-precision comparison surface.
+
+The direct-math command has exactly five elements:
+`${DIRECT_CAPSULE_LAUNCHER} --input ABS_REQUEST --output ABS_RESPONSE`.
+`direct_math/request.json` is the canonical trace/ground-truth projection and
+`direct_math/response.json` binds that request digest, every selected
+association, the common Kabsch transform, aligned arrays, singular values,
+rotation checks, difference populations, and metric results as finite
+binary64 bit strings. Assembly and detached verification both decode that
+response through the frozen direct numerical capsule, reconstruct its joins,
+and compare the evaluator only after establishing a single shared population.
 `ate_nullspace_m` must be finite and strictly positive before evaluating the
 frozen relative-ATE formula; a zero baseline ATE is invalid rather than a
 special-case pass. Before alignment, require `N>=3` and compute the singular
@@ -1282,8 +1396,23 @@ values `a_1>=a_2>=a_3>=0` of the 3-by-N centered nullspace position matrix in
 increasing timestamp column order. Require a complete finite spectrum,
 `a_1>std::numeric_limits<double>::min()`, and
 `a_2>max(N,3)*epsilon*a_1`; equality fails. The last product is the retained
-`source_rank_threshold`. Thus a collinear or coincident population cannot
-obtain an arbitrary alignment rotation.
+`source_rank_threshold`.
+
+Source non-collinearity alone does not prove that the source-to-target rotation
+is unique. Retain the complete cross-covariance spectrum
+`c_1>=c_2>=c_3>=0` from the same SVD used by Kabsch. Require
+`c_1>std::numeric_limits<double>::min()` and
+`c_2>max(N,3)*epsilon*c_1`; equality fails. The last product is the retained
+`cross_covariance_rank_threshold`, a frozen reproducible numerical-admissibility
+margin rather than a claimed certified SVD forward-error bound. Retain
+`reflection_correction_applied=(det(UV^T)<0)`. If that Boolean is true, also
+compute the left-to-right binary64 subtraction `smallest_gap=c_2-c_3` and
+require `smallest_gap>cross_covariance_rank_threshold`; equality fails. In
+exact SO(3) Procrustes mathematics, uniqueness requires `c_2>0` and either no
+reflection correction or `c_2>c_3`. A coincident or collinear target,
+rank-zero/rank-one cross-covariance, orientation-reversing repeated-smallest
+singular subspace, incomplete/nonfinite spectrum, or arbitrary SVD-basis
+rotation is rejected before any ATE is accepted.
 
 Across final CP2-D assembly, sequence artifacts must have exact indices
 `0,1,2` in argument order with no duplicate or missing sequence. The
@@ -1303,6 +1432,38 @@ sampling commands. The runner validates but never changes these controls.
 Without that profile, or under `ondemand`, it may produce only a clearly marked
 functional diagnostic outside timing evidence and must not open a bag through
 the actual evidence CLI.
+
+Subject to exact approval of
+`docs/cp2_e_offline_descendant_confinement_clarification_proposed.md`, every
+privileged-v2 prior/applied control extension has exact keys `cpuset`,
+`dma_latency_held_by_helper`, `helper_affinity_cpu_ids`,
+`descendant_process_ids`, `descendant_threads`, `irq_numbers`,
+`irq_population_sha256`, `peer`, `peer_start_time_ticks`, `profile_sha256`,
+`record_type`, and `schema_version`.  `descendant_process_ids` is the complete
+sorted stabilized descendant PID closure.  `descendant_threads` is the
+complete sorted stabilized TID closure; each row has exact keys
+`affinity_cpu_ids`, `cpuset_membership`, `start_time_ticks`, and `tid`.
+Applied evidence requires every row's exact estimator affinity and exact child
+membership, and the child cpuset member population equals the complete TID
+closure.  The peer process leader is present in both populations and its
+identity matches the bound peer/start time.  Process-only, subset, unstable,
+or substituted closure evidence rejects.
+
+Every guardian row has exact keys `complete_descendant_population`,
+`complete_descendant_tid_population`, `drift`, `ended_monotonic_ns`,
+`foreign_affinity_eligibility`, `irq_population_sha256`,
+`previous_record_sha256`, `record_type`, `schema_version`, `sequence`,
+`started_monotonic_ns`, `surface_states`, `thermal_or_throttle_event`, and
+`typed_telemetry`.  Each foreign-affinity row has exact keys
+`effective_affinity_cpu_ids`, `process_start_time_ticks`, and `tid`, with
+strictly increasing positive TIDs and sorted nonempty controlled-CPU
+affinities that intersect the estimator set.  The terminal population seal
+retains exact `final_descendant_population`,
+`final_descendant_tid_population`, and
+`final_foreign_affinity_eligibility` populations bound to the final guardian
+row.  Empty, nonempty, or changing valid foreign populations are observations
+only and cannot alter feasibility, timing mathematics, or pass/fail; malformed
+or substituted rows and chain/seal disagreement reject.
 
 A future eligible artifact will contain `cp2_report.json`, `provenance.json`,
 `commands.jsonl`, `timing_samples.jsonl`, six run traces, clock snapshots, and

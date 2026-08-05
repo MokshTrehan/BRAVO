@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import stat
 import sys
@@ -20,8 +21,17 @@ from unittest import mock
 SCRIPT_DIRECTORY = Path(__file__).resolve().parents[1]
 if str(SCRIPT_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIRECTORY))
+TEST_DIRECTORY = Path(__file__).resolve().parent
+if str(TEST_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(TEST_DIRECTORY))
 
 import cp2_recorded_campaign as campaign  # noqa: E402
+import cp2_capsule as capsule  # noqa: E402
+from test_cp2_capsule import (  # noqa: E402
+    direct_math_members,
+    evaluator_members,
+    profile_for,
+)
 
 
 class _SyntheticAuthorization:
@@ -66,6 +76,205 @@ class RecordedCampaignTests(unittest.TestCase):
 
     def _assert_group_absent(self, process_group_id):
         self.assertFalse(campaign._process_group_exists(process_group_id))
+
+    def test_cp2_c_launch_surface_and_held_output_population_are_exact(self):
+        repository = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(
+            prefix="cp2-c-held-runtime-", dir="/tmp"
+        ) as raw:
+            root = Path(raw)
+            os.chmod(root, 0o700)
+            trace = root / "trace"
+            trace.mkdir(mode=0o700)
+            held = campaign._HeldRuntimeOutputs(trace)
+            required = tuple(
+                name
+                for name in campaign.C_SINK_NAMES.values()
+                if name is not None
+            )
+            support = (
+                "context.json",
+                "prelaunch_parameters.yaml",
+                "parameters_canonical.bin",
+            )
+            try:
+                held.precreate(required + support)
+                capabilities = {
+                    field: (
+                        "null"
+                        if campaign.C_SINK_NAMES[field] is None
+                        else held.capability(campaign.C_SINK_NAMES[field])
+                    )
+                    for field in campaign.SINK_CAPABILITY_FIELDS
+                }
+                arguments = campaign._launch_arguments(
+                    {"source_space": str(repository)},
+                    Path("/proc/self/fd/99"),
+                    40.0,
+                    trace,
+                    trace / "context.json",
+                    0,
+                    capabilities,
+                )
+                import xml.etree.ElementTree as element_tree
+
+                launch = element_tree.parse(
+                    repository / "project/cp2_serial.launch"
+                ).getroot()
+                declared = {
+                    element.attrib["name"]
+                    for element in launch.findall("arg")
+                }
+                supplied = {
+                    item.split(":=", 1)[0] for item in arguments[1:]
+                }
+                self.assertEqual(supplied, declared)
+                capability_arguments = {
+                    item.split(":=", 1)[0][len("cp2_") : -len("_sink_capability")]:
+                    item.split(":=", 1)[1]
+                    for item in arguments[1:]
+                    if item.startswith("cp2_")
+                    and "_sink_capability:=" in item
+                }
+                self.assertEqual(
+                    tuple(capability_arguments),
+                    campaign.SINK_CAPABILITY_FIELDS,
+                )
+                self.assertEqual(capability_arguments, capabilities)
+                for field, name in campaign.C_SINK_NAMES.items():
+                    if name is None:
+                        self.assertEqual(capabilities[field], "null")
+                    else:
+                        fields = capabilities[field].split(":")
+                        self.assertEqual(fields[0], "v1")
+                        self.assertEqual(int(fields[1]), os.getpid())
+                        self.assertEqual(len(fields), 12)
+
+                held.fill_parent("context.json", b"context\n")
+                held.fill_parent(
+                    "prelaunch_parameters.yaml", b"parameters\n"
+                )
+                held.fill_parent("parameters_canonical.bin", b"canonical\n")
+                for name in required:
+                    writer = os.open(
+                        str(held.proc_path(name)),
+                        os.O_WRONLY | os.O_CLOEXEC,
+                    )
+                    try:
+                        os.write(writer, (name + "\n").encode("ascii"))
+                        os.fchmod(writer, 0o444)
+                        os.fsync(writer)
+                    finally:
+                        os.close(writer)
+                held.accept_external(required)
+                held.revalidate()
+
+                # Owner DAC is not a same-UID security boundary.  The
+                # protecting claim is instead that any post-accept byte drift
+                # is detected, even when the inode, size, and final mode are
+                # restored by a coordinating same-UID writer.
+                victim = required[0]
+                original = held.payload(victim)
+                os.chmod(trace / victim, 0o600)
+                descriptor = os.open(
+                    trace / victim,
+                    os.O_WRONLY | os.O_TRUNC | os.O_CLOEXEC,
+                )
+                try:
+                    replacement = b"X" + original[1:]
+                    self.assertEqual(len(replacement), len(original))
+                    os.write(descriptor, replacement)
+                    os.fchmod(descriptor, 0o444)
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+                with self.assertRaisesRegex(
+                    campaign.CampaignError,
+                    "held runtime trace (?:member|bytes) changed",
+                ):
+                    held.revalidate()
+            finally:
+                held.close()
+
+    def test_unit_capsules_stage_exact_profiles_and_reject_mutation_or_substitution(self):
+        with tempfile.TemporaryDirectory(
+            prefix="cp2-campaign-capsules-", dir="/tmp"
+        ) as raw:
+            root = Path(raw)
+            os.chmod(root, 0o700)
+            unit_artifact = root / "unit"
+            capsules = unit_artifact / "capsules"
+            capsules.mkdir(mode=0o700, parents=True)
+            fixtures = {
+                "direct_math": direct_math_members(),
+                "evaluator": evaluator_members(),
+            }
+            for kind, members in fixtures.items():
+                archive_bytes = capsule.encode_capsule(members)
+                profile_record = profile_for(kind, archive_bytes)
+                profile = capsule.validate_capsule_profile(profile_record)
+                archive_relative, profile_relative = campaign.UNIT_CAPSULE_PATHS[kind]
+                campaign._write_new(
+                    unit_artifact / archive_relative, archive_bytes, mode=0o444
+                )
+                campaign._write_new(
+                    unit_artifact / profile_relative,
+                    profile.canonical_bytes,
+                    mode=0o444,
+                )
+
+            stage_parent = root / "staged"
+            private_parent = root / "private"
+            stage_parent.mkdir(mode=0o700)
+            private_parent.mkdir(mode=0o700)
+            runtimes = {
+                kind: campaign._stage_unit_capsule(
+                    unit_artifact, kind, stage_parent, private_parent
+                )
+                for kind in fixtures
+            }
+            for kind, runtime in runtimes.items():
+                self.assertEqual(runtime.kind, kind)
+                runtime.revalidate()
+
+            runtime = runtimes["evaluator"]
+            member = runtime.staged.root / "notices/GPL-3.0.txt"
+            original = member.read_bytes()
+            os.chmod(member, 0o644)
+            member.write_bytes(b"X" + original[1:])
+            os.chmod(member, 0o444)
+            with self.assertRaises(campaign.CampaignError):
+                runtime.revalidate()
+
+            direct_runtime = runtimes["direct_math"]
+            direct_member = direct_runtime.staged.root / "notices/BSD-3-Clause.txt"
+            displaced_member = root / "displaced-license"
+            os.rename(direct_member, displaced_member)
+            shutil.copy2(displaced_member, direct_member)
+            capsule.revalidate_staged_capsule(
+                direct_runtime.staged.root, direct_runtime.staged.entries
+            )
+            with self.assertRaises(campaign.CampaignError):
+                direct_runtime.revalidate()
+
+            second_stage_parent = root / "staged-second"
+            second_private_parent = root / "private-second"
+            second_stage_parent.mkdir(mode=0o700)
+            second_private_parent.mkdir(mode=0o700)
+            runtime = campaign._stage_unit_capsule(
+                unit_artifact,
+                "evaluator",
+                second_stage_parent,
+                second_private_parent,
+            )
+            displaced = root / "displaced-evaluator"
+            os.rename(runtime.staged.root, displaced)
+            shutil.copytree(displaced, runtime.staged.root, copy_function=shutil.copy2)
+            capsule.revalidate_staged_capsule(
+                runtime.staged.root, runtime.staged.entries
+            )
+            with self.assertRaises(campaign.CampaignError):
+                runtime.revalidate()
 
     def test_static_bundle_is_frozen_and_domain_separated(self):
         root = Path(__file__).resolve().parents[3]
@@ -144,6 +353,20 @@ class RecordedCampaignTests(unittest.TestCase):
                 changed = json.loads(json.dumps(rows))
                 changed[0]["arguments"].append(injected)
                 corruptions.append(changed)
+            for source in (
+                "ov_msckf/src/ros1_serial_msckf.cpp",
+                "ov_msckf/src/update/CP2OutputCapability.cpp",
+                "ov_msckf/src/update/CP2TimingClock.cpp",
+            ):
+                changed = json.loads(json.dumps(rows))
+                selected = next(
+                    row
+                    for row in changed
+                    if Path(row["file"]).relative_to(source_space).as_posix()
+                    == source
+                )
+                selected["arguments"].remove("-fsigned-zeros")
+                corruptions.append(changed)
             duplicate = json.loads(json.dumps(rows))
             duplicate.append(dict(duplicate[0]))
             corruptions.append(duplicate)
@@ -157,8 +380,14 @@ class RecordedCampaignTests(unittest.TestCase):
             corruptions.append(spoof)
             wrong_target = json.loads(json.dumps(rows))
             output_index = wrong_target[0]["arguments"].index("-o") + 1
+            source_relative = Path(wrong_target[0]["file"]).relative_to(
+                source_space
+            ).as_posix()
+            expected_target = campaign.STRICT_FP_SOURCE_TARGETS[
+                source_relative
+            ]
             wrong_output = wrong_target[0]["arguments"][output_index].replace(
-                "ov_msckf_lib.dir", "spoof_target.dir")
+                expected_target + ".dir", "spoof_target.dir")
             wrong_target[0]["arguments"][output_index] = wrong_output
             wrong_target[0]["output"] = wrong_output
             corruptions.append(wrong_target)
@@ -609,6 +838,52 @@ class RecordedCampaignTests(unittest.TestCase):
                 worker_staging = args[4]
                 worker_partial = Path(worker_staging.partial)
                 worker_mounts = args[6]
+                if os.getpid() != 1:
+                    raise campaign.CampaignError(
+                        "campaign worker is not PID 1"
+                    )
+                capability_root = worker_partial / "pid1-output-capability"
+                capability_root.mkdir(mode=0o700)
+                held_output = campaign._HeldRuntimeOutputs(capability_root)
+                try:
+                    held_output.precreate(("sink",))
+                    encoded = held_output.capability("sink")
+                    if not encoded.startswith("v1:1:"):
+                        raise campaign.CampaignError(
+                            "PID-namespace output capability does not bind PID 1"
+                        )
+                    writer_pid = os.fork()
+                    if writer_pid == 0:
+                        try:
+                            writer = os.open(
+                                str(held_output.proc_path("sink")),
+                                os.O_WRONLY | os.O_CLOEXEC,
+                            )
+                            try:
+                                os.write(writer, b"pid1-held-output\n")
+                                os.fchmod(writer, 0o444)
+                                os.fsync(writer)
+                            finally:
+                                os.close(writer)
+                            os._exit(0)
+                        except BaseException:
+                            os._exit(1)
+                    observed_writer, writer_status = os.waitpid(writer_pid, 0)
+                    if (
+                        observed_writer != writer_pid
+                        or not os.WIFEXITED(writer_status)
+                        or os.WEXITSTATUS(writer_status) != 0
+                    ):
+                        raise campaign.CampaignError(
+                            "PID-namespace output-capability writer failed"
+                        )
+                    held_output.accept_external(("sink",))
+                    if held_output.payload("sink") != b"pid1-held-output\n":
+                        raise campaign.CampaignError(
+                            "PID-namespace held output bytes differ"
+                        )
+                finally:
+                    held_output.close()
                 for descriptor in os.listdir("/proc/1/fd"):
                     try:
                         target = os.readlink("/proc/1/fd/" + descriptor)
@@ -1193,6 +1468,48 @@ class RecordedCampaignTests(unittest.TestCase):
                              campaign.schema.sha256_file(root / record["stdout"]))
             self.assertEqual(record["stderr_sha256"],
                              campaign.schema.sha256_file(root / record["stderr"]))
+
+            # Prepared capsule execution records the frozen logical API while
+            # execve receives only the descriptor-held transport executable.
+            held_true = os.open(
+                "/usr/bin/true", os.O_RDONLY | os.O_CLOEXEC
+            )
+            try:
+                transport = "/proc/{}/fd/{}".format(
+                    os.getpid(), held_true
+                )
+                logical_cwd = Path("/tmp/logical-capsule-work")
+                logical_environment = dict(
+                    environment, HOME="${PRIVATE_ROOT}/home"
+                )
+                prepared = recorder.run(
+                    "evaluation",
+                    [
+                        "/staged/bin/launcher",
+                        "--input",
+                        "/staged/work/request.json",
+                        "--output",
+                        "/staged/work/response.json",
+                    ],
+                    Path("/tmp"),
+                    "synthetic_prepared_capsule",
+                    environment,
+                    process_argv=(transport,),
+                    process_executable=transport,
+                    process_pass_fds=(held_true,),
+                    evidence_variables=logical_environment,
+                    evidence_cwd=logical_cwd,
+                )
+            finally:
+                os.close(held_true)
+            self.assertEqual(prepared["argv"][0], "/staged/bin/launcher")
+            self.assertEqual(prepared["cwd"], str(logical_cwd))
+            self.assertEqual(
+                prepared["environment_sha256"],
+                campaign.schema.command_environment_sha256(
+                    logical_environment
+                ),
+            )
 
             fault_root = root / "stderr-open-fault"
             fault_root.mkdir()

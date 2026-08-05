@@ -40,6 +40,7 @@ READINESS_MAX_BYTES = 4 * 1024 * 1024
 POSTAUTHORIZATION_MODULE_MAX_BYTES = 4 * 1024 * 1024
 POSTAUTHORIZATION_MODULE_SOURCES = (
     ("cp2_schema", "scripts/cp2/cp2_schema.py"),
+    ("cp2_capsule", "scripts/cp2/cp2_capsule.py"),
     ("cp2_recorded_campaign", "scripts/cp2/cp2_recorded_campaign.py"),
 )
 
@@ -172,7 +173,7 @@ def _read_held_module(descriptor: int, identity: os.stat_result,
 
 
 class _HeldPostauthorizationModules:
-    """Descriptor-load the two local campaign modules after authorization."""
+    """Descriptor-load the dependency-closed local campaign modules."""
 
     def __init__(self, repo_root: Path, authorization: Any) -> None:
         self.authorization = authorization

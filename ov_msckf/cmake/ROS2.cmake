@@ -70,9 +70,11 @@ list(APPEND LIBRARY_SOURCES
         src/update/CP2CompositeState.cpp
         src/update/CP2FeatureGate.cpp
         src/update/CP2OfflineReplay.cpp
+        src/update/CP2OutputCapability.cpp
         src/update/CP2RuntimeContext.cpp
         src/update/CP2SerialPairing.cpp
         src/update/CP2SerialRuntimeTrace.cpp
+        src/update/CP2TimingClock.cpp
         src/update/CP2ShadowMath.cpp
         src/update/CP2StateTraceCodec.cpp
         src/update/CP2TraceCodec.cpp
@@ -96,10 +98,12 @@ set_source_files_properties(
         src/update/CP2CompositeState.cpp
         src/update/CP2FeatureGate.cpp
         src/update/CP2OfflineReplay.cpp
+        src/update/CP2OutputCapability.cpp
         src/update/CP2RecordedAssemble.cpp
         src/update/CP2RuntimeContext.cpp
         src/update/CP2SerialPairing.cpp
         src/update/CP2SerialRuntimeTrace.cpp
+        src/update/CP2TimingClock.cpp
         src/update/CP2ShadowMath.cpp
         src/update/CP2StateTraceCodec.cpp
         src/update/CP2TraceCodec.cpp

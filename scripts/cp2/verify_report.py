@@ -76,22 +76,22 @@ CP2_TESTS = {
     "test_cp2_fej_golden": 1,
     "test_cp2_state_update_semantics": 2,
     "test_cp2_configuration_contract": 10,
-    "test_cp2_updater_msckf_end_to_end": 16,
-    "test_cp2_updater_msckf_fault_injection": 31,
+    "test_cp2_updater_msckf_end_to_end": 17,
+    "test_cp2_updater_msckf_fault_injection": 33,
     "test_cp2_composite_state": 14,
     "test_cp2_commit_oracle": 10,
-    "test_cp2_commit_boundary": 4,
+    "test_cp2_commit_boundary": 5,
     "test_cp2_canonical": 5,
     "test_cp2_offline_replay": 5,
     "test_cp2_recorded_assemble": 3,
-    "test_cp2_feature_gate": 13,
+    "test_cp2_feature_gate": 14,
     "test_cp2_runtime_context": 12,
     "test_cp2_ros1_runtime_parameters": 6,
     "test_cp2_serial_pairing": 6,
-    "test_cp2_serial_runtime_trace": 6,
+    "test_cp2_serial_runtime_trace": 13,
     "test_cp2_updater_msckf_preview_snapshot": 4,
     "test_cp2_shadow_math": 14,
-    "test_cp2_trace_journal": 21,
+    "test_cp2_trace_journal": 22,
     "test_cp2_trace_codec": 8,
 }
 ALL_TESTS = dict(CP1_TESTS)
@@ -163,6 +163,7 @@ EXPECTED_TEST_CASES = {
     "CP2CompositeStateValidation.QuaternionSquaredNormBoundaryIsRoleComplete",
     "CP2CommitBoundary.AcceptedPathHasExactProofCommitClockFillOrder",
     "CP2CommitBoundary.FailedFillRetainsCommittedStatusAndExactEndpoint",
+    "CP2CommitBoundary.InvalidClockEndpointCannotBecomeValidOrCommittedSuccess",
     "CP2CommitBoundary.RejectedProofSuppressesEveryPostproofOperation",
     "CP2CommitBoundary.ThrowingCommitPropagatesBeforeClockAndPreservesOutput",
     "CP2CommitOracle.CheckedIntegerHelpersNeverWrapOrClobberOnFailure",
@@ -194,6 +195,7 @@ EXPECTED_TEST_CASES = {
     "CP2ProductionSchurReducer.StrictNisDecisionBoundaryContract",
     "CP2StateUpdateSemantics.ClonePreviewCompressionAndLiveCommitParity",
     "CP2StateUpdateSemantics.InvalidPreviewInputsAreBitwiseReadOnlyAndNeverRepaired",
+    "CP2UpdaterMSCKFTiming.EmptyInputSamplesEntryFirstAndExactlyOneTerminalEndpoint",
     "CP2UpdaterMSCKFEndToEnd.ActualNullspaceAndSchurModesCommitEquivalentFullStateUpdates",
     "CP2UpdaterMSCKFEndToEnd.SelectedReducersRejectNonfiniteProductionRowsWithoutSilentFallback",
     "CP2UpdaterMSCKFEndToEnd.SharedInvalidPreflightLeavesBothModeStatesBitwiseUnchanged",
@@ -225,6 +227,14 @@ EXPECTED_TEST_CASES = {
     "CP2UpdaterMSCKFTransaction.SinkRejectionAfterCommitLatchesFatalWithoutRollbackOrObserver",
     "CP2UpdaterMSCKFTransaction.ZeroRawDiscardsTentativeWithoutValidationOrPhases",
     "CP2UpdaterMSCKFTransaction.ZeroRawDurationFailureIsArithmeticFatalWithoutPublication",
+    "CP2UpdaterMSCKFTransaction.StartClockFailureIsArithmeticFatalBeforeEstimatorWork",
+    "CP2TimingClock.TickConversionIsExactAndRejectsNegativeEpoch",
+    "CP2TimingClock.DurationRejectsInvalidAndReverseOrderedEndpoints",
+    "CP2TimingClock.LiveSteadyClockSamplesAreValidAndOrdered",
+    "CP2OutputCapability.LevelPopulationsAreClosedAndExact",
+    "CP2OutputCapability.SealRejectsWrongSizeWrongOffsetAndConcurrentGrowth",
+    "CP2SerialRuntimeTrace.TimingWritesCompleteUpdaterPopulationAndExactSteadyEndpoints",
+    "CP2SerialRuntimeTrace.TimingRejectsReverseMismatchedInvalidDuplicateAndIncompleteRows",
     "CP2CanonicalSha256.MatchesPublishedVectorsUnderIncrementalChunking",
     "CP2CanonicalBytes.IntegerBinary64AndUtf8EncodingIsExact",
     "CP2CanonicalBytes.MatrixAndVectorUseLogicalRowMajorBinary64Order",
@@ -245,7 +255,8 @@ EXPECTED_TEST_CASES = {
     "CP2FeatureGate.MarginalIsCopiedFromImmutablePriorInDeclaredLayoutOrder",
     "CP2FeatureGate.InvalidOrOverlappingLayoutCannotFormInnovation",
     "CP2FeatureGate.NonfiniteInnovationPrecedesFactorization",
-    "CP2FeatureGate.NonPositiveDefiniteInnovationFailsDefaultLowerLLT",
+    "CP2FeatureGate.NegativeVarianceIsRejectedBeforeFactorization",
+    "CP2FeatureGate.InvalidVarianceCannotBeMaskedByPositiveStateCovariance",
     "CP2FeatureGate.NonfiniteDotIsSolveOrNISFailure",
     "CP2FeatureGate.EqualityIsAcceptedAndStrictExcessRejected",
     "CP2FeatureGate.NonfiniteThresholdNullsEvidenceButPreservesIEEEComparison",
@@ -338,6 +349,10 @@ EXPECTED_TEST_CASES = {
     "CP2TraceJournalIdentity.DuplicateSkippedAndReorderedIdentityAreSticky",
     "CP2TraceJournalEvents.EveryLegalZeroRawTerminalRoundTrips",
     "CP2TraceJournalEvents.ImpossibleTerminalAndHiddenPhaseSuffixReject",
+    (
+        "CP2TraceJournalEvents."
+        "InvalidReversedAndMismatchedTimingEndpointsRejectBeforeWrite"
+    ),
     "CP2TraceJournalEvents.DuplicateRawFeatureAndInvalidEnumRejectExplicitly",
     (
         "CP2TraceJournalPayloads."
@@ -414,7 +429,12 @@ SOURCE_INPUTS = {
     "docs/cp2_artifact_schema.md",
     "docs/cp2_c_composite_and_readiness_clarification.md",
     "docs/cp2_c_detached_readiness_binding_clarification_proposed.md",
+    "docs/cp2_d_alignment_uniqueness_clarification_proposed.md",
     "docs/cp2_d_evaluator_precision_clarification_proposed.md",
+    "docs/cp2_e_offline_descendant_confinement_clarification_proposed.md",
+    "docs/cp2_e_privileged_feasibility.md",
+    "docs/cp2_e_user_installation_candidate.md",
+    "docs/cp2_e_fixed_clock_and_exact_timing_clarification_proposed.md",
     "docs/cp2_math_implementation_audit.md",
     "docs/cp2_one_pass_contract.md",
     "docs/cp2_predata_incident_log.md",
@@ -438,6 +458,7 @@ SOURCE_INPUTS = {
     "ov_msckf/cmake/ROS1.cmake",
     "ov_msckf/cmake/ROS2.cmake",
     "ov_msckf/package.xml",
+    "ov_msckf/src/ros1_serial_msckf.cpp",
     "ov_msckf/src/ros/CP2ROS1RuntimeParameters.cpp",
     "ov_msckf/src/ros/CP2ROS1RuntimeParameters.h",
     "ov_msckf/src/core/VioManagerOptions.h",
@@ -459,6 +480,8 @@ SOURCE_INPUTS = {
     "ov_msckf/src/update/CP2OfflineReplay.cpp",
     "ov_msckf/src/update/CP2OfflineReplay.h",
     "ov_msckf/src/update/CP2OfflineReplayInternal.inc",
+    "ov_msckf/src/update/CP2OutputCapability.cpp",
+    "ov_msckf/src/update/CP2OutputCapability.h",
     "ov_msckf/src/update/CP2RecordedAssemble.cpp",
     "ov_msckf/src/update/CP2RuntimeContext.cpp",
     "ov_msckf/src/update/CP2RuntimeContext.h",
@@ -466,6 +489,8 @@ SOURCE_INPUTS = {
     "ov_msckf/src/update/CP2SerialPairing.h",
     "ov_msckf/src/update/CP2SerialRuntimeTrace.cpp",
     "ov_msckf/src/update/CP2SerialRuntimeTrace.h",
+    "ov_msckf/src/update/CP2TimingClock.h",
+    "ov_msckf/src/update/CP2TimingClock.cpp",
     "ov_msckf/src/update/CP2ShadowMath.cpp",
     "ov_msckf/src/update/CP2ShadowMath.h",
     "ov_msckf/src/update/CP2StateTraceCodec.cpp",
@@ -514,9 +539,17 @@ SOURCE_INPUTS = {
     "project/cp1_gate.yaml",
     "project/cp2_c_clarification_approval.json",
     "project/cp2_c_detached_readiness_binding_approval.json",
+    "project/cp2_completion_authorization_binding.json",
+    "project/cp2_completion_chained_authorization.txt",
+    "project/cp2_d_completion_authorization_addendum.txt",
+    "project/cp2_e_completion_authorization_addendum.txt",
+    "project/cp2_capsule_source_lock.json",
+    "project/cp2_capsule_expected_identity.json",
+    "project/cp2_capsule_unit_import.json",
     "project/cp2_predata_incident_disposition_approval.json",
     "project/cp2_gate.yaml",
     "project/cp2_serial.launch",
+    "packaging/cp2e/schurvio-cp2e.sudoers",
     "scripts/cp0/bootstrap_ceres_1_14.sh",
     "scripts/cp1/make_report.py",
     "scripts/cp1/run_cp1.sh",
@@ -527,14 +560,35 @@ SOURCE_INPUTS = {
     "scripts/cp2/cp2_readiness.py",
     "scripts/cp2/cp2_recorded_campaign.py",
     "scripts/cp2/cp2_capsule.py",
+    "scripts/cp2/cp2_capsule_builder.py",
+    "scripts/cp2/cp2_capsule_unit_import.py",
+    "scripts/cp2/cp2_capsule_launcher.c",
+    "scripts/cp2/cp2_capsule_sandbox.c",
     "scripts/cp2/cp2_direct_kat.py",
+    "scripts/cp2/cp2_direct_kat_builder.py",
+    "scripts/cp2/cp2_equivalent_evaluator.py",
+    "scripts/cp2/cp2_evaluator_result.py",
     "scripts/cp2/cp2_evo_result.py",
     "scripts/cp2/cp2_f64_codec.py",
+    "scripts/cp2/cp2_fp_control.c",
+    "scripts/cp2/cp2_fp_control.py",
+    "scripts/cp2/cp2_fp_control_module.c",
     "scripts/cp2/cp2_schema.py",
     "scripts/cp2/cp2_sequence_actual.py",
+    "scripts/cp2/cp2_sequence_math_codec.py",
     "scripts/cp2/cp2_sequence_math.py",
+    "scripts/cp2/cp2_sequence_math_worker.py",
     "scripts/cp2/cp2_sequence_runner.py",
+    "scripts/cp2/cp2_timing_artifact.py",
+    "scripts/cp2/cp2_timing_controls.py",
     "scripts/cp2/cp2_timing_math.py",
+    "scripts/cp2/cp2_timing_privileged_backend.py",
+    "scripts/cp2/cp2_timing_privileged_helper.py",
+    "scripts/cp2/cp2_timing_production_identity.py",
+    "scripts/cp2/cp2_timing_profile.py",
+    "scripts/cp2/cp2_timing_publication.py",
+    "scripts/cp2/cp2_timing_reversibility_client.py",
+    "scripts/cp2/cp2_timing_root_launcher.c",
     "scripts/cp2/run_recorded_parity.py",
     "scripts/cp2/run_sequence_pair.py",
     "scripts/cp2/run_timing_pair.py",
@@ -543,14 +597,28 @@ SOURCE_INPUTS = {
     "scripts/cp2/tests/test_cp2_readiness.py",
     "scripts/cp2/tests/test_cp2_recorded_campaign.py",
     "scripts/cp2/tests/test_cp2_capsule.py",
+    "scripts/cp2/tests/test_cp2_capsule_builder.py",
+    "scripts/cp2/tests/test_cp2_capsule_launcher.py",
+    "scripts/cp2/tests/test_cp2_capsule_unit_import.py",
     "scripts/cp2/tests/test_cp2_direct_kat.py",
+    "scripts/cp2/tests/test_cp2_detached_sequence_verifier.py",
+    "scripts/cp2/tests/test_cp2_equivalent_evaluator.py",
+    "scripts/cp2/tests/test_cp2_evaluator_result.py",
     "scripts/cp2/tests/test_cp2_evo_result.py",
     "scripts/cp2/tests/test_cp2_f64_codec.py",
     "scripts/cp2/tests/test_cp2_schema.py",
     "scripts/cp2/tests/test_cp2_sequence_actual.py",
     "scripts/cp2/tests/test_cp2_sequence_math.py",
+    "scripts/cp2/tests/test_cp2_sequence_math_worker.py",
     "scripts/cp2/tests/test_cp2_sequence_runner.py",
+    "scripts/cp2/tests/test_cp2_timing_evidence.py",
+    "scripts/cp2/tests/test_cp2_timing_controls.py",
     "scripts/cp2/tests/test_cp2_timing_math.py",
+    "scripts/cp2/tests/test_cp2_timing_orchestration.py",
+    "scripts/cp2/tests/test_cp2_timing_privileged_backend.py",
+    "scripts/cp2/tests/test_cp2_timing_privileged_helper.py",
+    "scripts/cp2/tests/test_cp2_timing_root_launcher.py",
+    "scripts/cp2/tests/test_cp2_verify_report_pair_witness.py",
     "scripts/cp2/verify_report.py",
 }
 
@@ -558,6 +626,10 @@ CONTRACT_INPUTS = {
     "docs/cp2_artifact_schema.md",
     "docs/cp2_c_composite_and_readiness_clarification.md",
     "docs/cp2_c_detached_readiness_binding_clarification_proposed.md",
+    "docs/cp2_d_alignment_uniqueness_clarification_proposed.md",
+    "docs/cp2_d_evaluator_precision_clarification_proposed.md",
+    "docs/cp2_e_offline_descendant_confinement_clarification_proposed.md",
+    "docs/cp2_e_fixed_clock_and_exact_timing_clarification_proposed.md",
     "docs/cp2_one_pass_contract.md",
     "docs/cp2_predata_incident_log.md",
     "docs/cp2_recorded_evidence_contract.md",
@@ -565,6 +637,10 @@ CONTRACT_INPUTS = {
     "project/cp1_gate.yaml",
     "project/cp2_c_clarification_approval.json",
     "project/cp2_c_detached_readiness_binding_approval.json",
+    "project/cp2_completion_authorization_binding.json",
+    "project/cp2_completion_chained_authorization.txt",
+    "project/cp2_d_completion_authorization_addendum.txt",
+    "project/cp2_e_completion_authorization_addendum.txt",
     "project/cp2_predata_incident_disposition_approval.json",
     "project/cp2_gate.yaml",
 }
@@ -689,6 +765,61 @@ FROZEN_CP2_C_APPROVAL_RECORDS = {
         "exceptions": [],
     },
 }
+FROZEN_CP2_COMPLETION_AUTHORIZATION_BINDING = {
+    "project/cp2_completion_chained_authorization.txt": {
+        "git_blob": "7a9fe092abf28c6548ce26cacdd9b134594b5ad5",
+        "sha256": "385193b010462c75622d0ff777310df1d96f773036eb7d93885200810e8f021e",
+    },
+    "project/cp2_d_completion_authorization_addendum.txt": {
+        "git_blob": "91ebdc2ebe81765ab8b96c5d05d422b6e415998a",
+        "sha256": "1193feb1dd2f0d440f9b9f1390baf716eada7d1d9ac705520b7be0cfd31d1429",
+    },
+    "project/cp2_e_completion_authorization_addendum.txt": {
+        "git_blob": "3f9ea1f33f25a66f8cf715bfcd88cdc823a4878e",
+        "sha256": "96b758e8ed8346720ab9fa1006c6c8c3cb68b31448fe54b676a71ee2e14149eb",
+    },
+    "project/cp2_completion_authorization_binding.json": {
+        "git_blob": "a28242c45889a469ebe0217ccf1f609c9dec2a08",
+        "sha256": "5285bf33f4bcbe854b4fcc508376a7d83d7d4c5f9bb103744916781cbf1e6935",
+    },
+}
+FROZEN_CP2_COMPLETION_AUTHORIZATION_RECORD = {
+    "schema_version": 1,
+    "record_type": "cp2_completion_authorization_binding",
+    "reviewer": "Moksh Trehan",
+    "recorded_date": "2026-08-04",
+    "starting_branch": "schurvio-lite/cp2-one-pass",
+    "starting_commit": "1218d3fb73066760f099f87c621fe607f9de8b63",
+    "base_authorization": {
+        "user_supplied_byte_count": 8606,
+        "user_supplied_sha256": "8e07b1e1d5418b65b5d1993e791e9dab5340d7e77f9ea687e6d064e3bc803cca",
+        "tracked_path": "project/cp2_completion_chained_authorization.txt",
+        "tracked_canonicalization": "user_bytes_plus_one_terminal_lf",
+        "tracked_byte_count": 8607,
+        "tracked_sha256": "385193b010462c75622d0ff777310df1d96f773036eb7d93885200810e8f021e",
+        "tracked_git_blob": "7a9fe092abf28c6548ce26cacdd9b134594b5ad5",
+    },
+    "cp2_d_addendum": {
+        "tracked_path": "project/cp2_d_completion_authorization_addendum.txt",
+        "tracked_canonicalization": "one_semantic_copy_with_terminal_lf",
+        "conversation_receipt_repetitions": 2,
+        "tracked_byte_count": 4206,
+        "tracked_sha256": "1193feb1dd2f0d440f9b9f1390baf716eada7d1d9ac705520b7be0cfd31d1429",
+        "tracked_git_blob": "91ebdc2ebe81765ab8b96c5d05d422b6e415998a",
+    },
+    "cp2_e_addendum": {
+        "tracked_path": "project/cp2_e_completion_authorization_addendum.txt",
+        "tracked_canonicalization": "one_semantic_copy_with_terminal_lf",
+        "conversation_receipt_repetitions": 1,
+        "tracked_byte_count": 2913,
+        "tracked_sha256": "96b758e8ed8346720ab9fa1006c6c8c3cb68b31448fe54b676a71ee2e14149eb",
+        "tracked_git_blob": "3f9ea1f33f25a66f8cf715bfcd88cdc823a4878e",
+    },
+    "human_acceptance_timing": "deferred_until_final_cp2_review_package",
+    "cp3_authorized": False,
+    "jetson_deferred_beyond_cp2": True,
+    "exceptions": [],
+}
 FROZEN_CP2_C_HISTORICAL_BINDING = {
     "docs/cp2_c_composite_and_readiness_clarification.md": {
         "commit": "b37eff6e5baa035175e1dde3cae52ee496ca9e2d",
@@ -730,9 +861,11 @@ RUNTIME_LIBRARY_SOURCES = (
     "ov_msckf/src/update/CP2CompositeState.cpp",
     "ov_msckf/src/update/CP2FeatureGate.cpp",
     "ov_msckf/src/update/CP2OfflineReplay.cpp",
+    "ov_msckf/src/update/CP2OutputCapability.cpp",
     "ov_msckf/src/update/CP2RuntimeContext.cpp",
     "ov_msckf/src/update/CP2SerialPairing.cpp",
     "ov_msckf/src/update/CP2SerialRuntimeTrace.cpp",
+    "ov_msckf/src/update/CP2TimingClock.cpp",
     "ov_msckf/src/update/CP2ShadowMath.cpp",
     "ov_msckf/src/update/CP2StateTraceCodec.cpp",
     "ov_msckf/src/update/CP2TraceCodec.cpp",
@@ -756,9 +889,11 @@ STRICT_PRODUCTION_SOURCES = (
     "ov_msckf/src/update/CP2CompositeState.cpp",
     "ov_msckf/src/update/CP2FeatureGate.cpp",
     "ov_msckf/src/update/CP2OfflineReplay.cpp",
+    "ov_msckf/src/update/CP2OutputCapability.cpp",
     "ov_msckf/src/update/CP2RuntimeContext.cpp",
     "ov_msckf/src/update/CP2SerialPairing.cpp",
     "ov_msckf/src/update/CP2SerialRuntimeTrace.cpp",
+    "ov_msckf/src/update/CP2TimingClock.cpp",
     "ov_msckf/src/update/CP2ShadowMath.cpp",
     "ov_msckf/src/update/CP2StateTraceCodec.cpp",
     "ov_msckf/src/update/CP2TraceCodec.cpp",
@@ -769,6 +904,9 @@ STRICT_PRODUCTION_SOURCES = (
     "ov_msckf/src/state/StateHelper.cpp",
     "ov_msckf/src/ros/CP2ROS1RuntimeParameters.cpp",
 )
+STRICT_RUNTIME_EXECUTABLE_SOURCES = {
+    "ov_msckf/src/ros1_serial_msckf.cpp": "ros1_serial_msckf",
+}
 STRICT_REQUIRED_FLAGS = ("-fno-fast-math", "-ffp-contract=off", "-fsigned-zeros")
 STRICT_REQUIRED_MACRO_DEFINITIONS = {
     "EIGEN_DONT_VECTORIZE": (
@@ -932,6 +1070,31 @@ def validate_cp2_c_approval_records(contents, errors):
             continue
         if parsed != expected:
             errors.append("CP2-C semantic approval record differs: " + relative)
+
+
+def validate_cp2_completion_authorization_binding(input_hashes, git_blobs, errors):
+    """Bind the one-pass completion authority and both scoped addenda."""
+
+    for relative, expected in FROZEN_CP2_COMPLETION_AUTHORIZATION_BINDING.items():
+        if input_hashes.get(relative) != expected["sha256"]:
+            errors.append("CP2 completion authorization SHA-256 mismatch: " + relative)
+        if git_blobs.get(relative) != expected["git_blob"]:
+            errors.append("CP2 completion authorization Git blob mismatch: " + relative)
+
+
+def validate_cp2_completion_authorization_record(contents, errors):
+    relative = "project/cp2_completion_authorization_binding.json"
+    content = contents.get(relative) if isinstance(contents, dict) else None
+    if not isinstance(content, bytes):
+        errors.append("CP2 completion authorization record is missing")
+        return
+    try:
+        parsed = strict_json_bytes(content, relative)
+    except ValueError as exc:
+        errors.append("CP2 completion authorization record is invalid: " + str(exc))
+        return
+    if parsed != FROZEN_CP2_COMPLETION_AUTHORIZATION_RECORD:
+        errors.append("CP2 completion authorization record differs")
 
 
 def validate_cp2_c_historical_observations(observations, errors):
@@ -2026,6 +2189,9 @@ def analyze_compile_commands(
             "production_translation_units": {
                 source: [] for source in STRICT_PRODUCTION_SOURCES
             },
+            "runtime_executable_translation_units": {
+                source: [] for source in STRICT_RUNTIME_EXECUTABLE_SOURCES
+            },
             "required_flags": list(STRICT_REQUIRED_FLAGS),
             "required_macro_definitions": {
                 macro: list(accepted_definitions)
@@ -2045,6 +2211,9 @@ def analyze_compile_commands(
         entries = []
     production = {source: [] for source in STRICT_PRODUCTION_SOURCES}
     fault_injection = {source: [] for source in STRICT_PRODUCTION_SOURCES}
+    runtime_executable = {
+        source: [] for source in STRICT_RUNTIME_EXECUTABLE_SOURCES
+    }
     runtime_records = {
         target: {source: [] for source in RUNTIME_LIBRARY_SOURCES}
         for target in ("ov_msckf_lib", FAULT_LIBRARY_TARGET)
@@ -2152,6 +2321,11 @@ def analyze_compile_commands(
             production[source].append(record)
         if source in fault_injection and target == FAULT_LIBRARY_TARGET:
             fault_injection[source].append(record)
+        if (
+            source in runtime_executable
+            and target == STRICT_RUNTIME_EXECUTABLE_SOURCES[source]
+        ):
+            runtime_executable[source].append(record)
         if target in runtime_records:
             runtime_actual_sources[target].append(source)
             if source in runtime_records[target]:
@@ -2174,6 +2348,14 @@ def analyze_compile_commands(
             errors.append(
                 source + " fault-library compile command is not strict-FP/macro-isolated"
             )
+    for source, records in runtime_executable.items():
+        if len(records) != 1:
+            errors.append(
+                "strict-FP evidence requires exactly one runtime-executable command for "
+                + source
+            )
+        elif not records[0]["passed"]:
+            errors.append(source + " runtime-executable compile command is not strict-FP")
     runtime_inventory = {}
     expected_runtime_sources = set(RUNTIME_LIBRARY_SOURCES)
     for target, source_records in runtime_records.items():
@@ -2249,6 +2431,10 @@ def analyze_compile_commands(
             for records in fault_injection.values()
         )
         and all(
+            len(records) == 1 and records[0].get("passed") is True
+            for records in runtime_executable.values()
+        )
+        and all(
             record["source_inventory_passed"]
             and record["macro_isolation_passed"]
             for record in runtime_inventory.values()
@@ -2271,6 +2457,7 @@ def analyze_compile_commands(
             for macro, accepted_definitions
             in STRICT_REQUIRED_MACRO_DEFINITIONS.items()
         },
+        "runtime_executable_translation_units": runtime_executable,
         "runtime_source_inventory": runtime_inventory,
         "unit_test_targets": targets,
     }
@@ -2975,6 +3162,11 @@ def expected_artifact_files():
         "verifier_self_test.json",
         "verifier_self_test.log",
         WORKSPACE_RECORD_NAME,
+        "capsule_import_receipt.json",
+        "capsules/direct_math.cp2cap",
+        "capsules/direct_math.profile.json",
+        "capsules/evaluator.cp2cap",
+        "capsules/evaluator.profile.json",
         "THIRD_PARTY_NOTICES/Ceres-LICENSE",
         "THIRD_PARTY_NOTICES/GoogleTest-LICENSE",
     }
@@ -4286,8 +4478,15 @@ def collect_prevalidated_source_metadata(
         path: entries.get(path, {}).get("git_blob")
         for path in FROZEN_CP2_C_APPROVAL_BINDING
     }
+    completion_authorization_blobs = {
+        path: entries.get(path, {}).get("git_blob")
+        for path in FROZEN_CP2_COMPLETION_AUTHORIZATION_BINDING
+    }
     if not allow_synthetic:
         validate_cp2_c_approval_binding(input_hashes, approval_blobs, errors)
+        validate_cp2_completion_authorization_binding(
+            input_hashes, completion_authorization_blobs, errors
+        )
     contract_hashes = {name: input_hashes.get(name) for name in sorted(CONTRACT_INPUTS)}
 
     archive_path = artifact_dir / SOURCE_ARCHIVE_NAME
@@ -4297,6 +4496,12 @@ def collect_prevalidated_source_metadata(
             archive_path, FROZEN_CP2_C_APPROVAL_RECORDS, errors
         )
         validate_cp2_c_approval_records(approval_contents, errors)
+        completion_contents = read_exact_source_archive_members(
+            archive_path,
+            {"project/cp2_completion_authorization_binding.json": None},
+            errors,
+        )
+        validate_cp2_completion_authorization_record(completion_contents, errors)
     archived_inputs = {name: archived_hashes.get(name) for name in sorted(SOURCE_INPUTS)}
     archive_sha = sha256_file(archive_path) if archive_path.is_file() else None
     archive_size = archive_path.stat().st_size if archive_path.is_file() else None
@@ -4434,6 +4639,7 @@ def collect_source_metadata(artifact_dir, repo_root, errors, allow_synthetic=Fal
     input_hashes = {}
     input_bytes = {}
     approval_binding_git_blobs = {}
+    completion_authorization_git_blobs = {}
     if commit:
         for relative in sorted(SOURCE_INPUTS):
             try:
@@ -4443,6 +4649,11 @@ def collect_source_metadata(artifact_dir, repo_root, errors, allow_synthetic=Fal
                 if relative in FROZEN_CP2_C_APPROVAL_BINDING:
                     git_header = b"blob " + str(len(committed_bytes)).encode("ascii") + b"\0"
                     approval_binding_git_blobs[relative] = hashlib.sha1(
+                        git_header + committed_bytes
+                    ).hexdigest()
+                if relative in FROZEN_CP2_COMPLETION_AUTHORIZATION_BINDING:
+                    git_header = b"blob " + str(len(committed_bytes)).encode("ascii") + b"\0"
+                    completion_authorization_git_blobs[relative] = hashlib.sha1(
                         git_header + committed_bytes
                     ).hexdigest()
             except subprocess.CalledProcessError as exc:
@@ -4456,6 +4667,10 @@ def collect_source_metadata(artifact_dir, repo_root, errors, allow_synthetic=Fal
             input_hashes, approval_binding_git_blobs, errors
         )
         validate_cp2_c_approval_records(input_bytes, errors)
+        validate_cp2_completion_authorization_binding(
+            input_hashes, completion_authorization_git_blobs, errors
+        )
+        validate_cp2_completion_authorization_record(input_bytes, errors)
         validate_cp2_c_historical_binding(repo_root, errors)
     contract_hashes = {name: input_hashes.get(name) for name in sorted(CONTRACT_INPUTS)}
     archive_path = artifact_dir / SOURCE_ARCHIVE_NAME
@@ -4894,6 +5109,403 @@ def expected_pre_report_files():
     return files
 
 
+UNIT_CAPSULE_IMPORT_RECEIPT = "capsule_import_receipt.json"
+UNIT_CAPSULE_IMPORT_LOCATOR = "project/cp2_capsule_unit_import.json"
+UNIT_CAPSULE_EXPECTED_IDENTITY = "project/cp2_capsule_expected_identity.json"
+UNIT_CAPSULE_SOURCE_LOCK = "project/cp2_capsule_source_lock.json"
+UNIT_CAPSULE_PATHS = {
+    "direct_math": (
+        "capsules/direct_math.cp2cap",
+        "capsules/direct_math.profile.json",
+    ),
+    "evaluator": (
+        "capsules/evaluator.cp2cap",
+        "capsules/evaluator.profile.json",
+    ),
+}
+
+
+def _unit_capsule_exact(value, keys, label, errors):
+    if not isinstance(value, dict) or set(value) != set(keys):
+        errors.append(label + " field inventory is not exact")
+        return {}
+    return value
+
+
+def _unit_capsule_u64(value, label, errors):
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < (1 << 64):
+        errors.append(label + " is not u64")
+        return None
+    return value
+
+
+def _unit_capsule_inode_record(value, label, errors):
+    record = _unit_capsule_exact(
+        value,
+        (
+            "device", "inode", "mode", "link_count", "uid", "gid",
+            "size_bytes", "mtime_ns", "ctime_ns",
+        ),
+        label,
+        errors,
+    )
+    for key in record:
+        _unit_capsule_u64(record[key], label + " " + key, errors)
+    return record
+
+
+def collect_unit_capsule_import(artifact_dir, errors):
+    """Validate the exact source-frozen capsule import retained by the unit gate."""
+
+    receipt_path = artifact_dir / UNIT_CAPSULE_IMPORT_RECEIPT
+    try:
+        receipt_bytes = receipt_path.read_bytes()
+        receipt = strict_json_bytes(receipt_bytes, UNIT_CAPSULE_IMPORT_RECEIPT)
+    except (OSError, ValueError) as exc:
+        errors.append("cannot read strict capsule import receipt: " + str(exc))
+        return {}
+    if not isinstance(receipt, dict) or (
+        json.dumps(
+            receipt, allow_nan=False, ensure_ascii=True,
+            separators=(",", ":"), sort_keys=True,
+        ) + "\n"
+    ).encode("ascii") != receipt_bytes:
+        errors.append("capsule import receipt is not canonical JSON")
+    receipt = _unit_capsule_exact(
+        receipt,
+        (
+            "schema_version", "record_type", "checkpoint", "data_free",
+            "recorded_input_accessed", "expected_identity", "source_lock",
+            "source_locator", "unit_artifact_members", "passed",
+        ),
+        "capsule import receipt",
+        errors,
+    )
+    if (
+        not _schema_version_one(receipt.get("schema_version"))
+        or receipt.get("record_type") != "cp2_d_unit_capsule_import_receipt"
+        or receipt.get("checkpoint") != "CP2-D"
+        or receipt.get("data_free") is not True
+        or receipt.get("recorded_input_accessed") is not False
+        or receipt.get("passed") is not True
+    ):
+        errors.append("capsule import receipt header/outcome differs")
+
+    source_relatives = (
+        UNIT_CAPSULE_IMPORT_LOCATOR,
+        UNIT_CAPSULE_EXPECTED_IDENTITY,
+        UNIT_CAPSULE_SOURCE_LOCK,
+        "docs/cp2_d_alignment_uniqueness_clarification_proposed.md",
+        "docs/cp2_d_evaluator_precision_clarification_proposed.md",
+        "project/cp2_completion_authorization_binding.json",
+        "project/cp2_d_completion_authorization_addendum.txt",
+    )
+    source_errors = []
+    source_members = read_exact_source_archive_members(
+        artifact_dir / SOURCE_ARCHIVE_NAME, source_relatives, source_errors
+    )
+    if source_errors:
+        errors.extend("capsule import source: " + item for item in source_errors)
+        return {
+            "path": UNIT_CAPSULE_IMPORT_RECEIPT,
+            "sha256": sha256_bytes(receipt_bytes),
+            "receipt": receipt,
+        }
+
+    try:
+        locator = strict_json_bytes(
+            source_members[UNIT_CAPSULE_IMPORT_LOCATOR],
+            UNIT_CAPSULE_IMPORT_LOCATOR,
+        )
+        expected_identity = strict_json_bytes(
+            source_members[UNIT_CAPSULE_EXPECTED_IDENTITY],
+            UNIT_CAPSULE_EXPECTED_IDENTITY,
+        )
+        strict_json_bytes(
+            source_members[UNIT_CAPSULE_SOURCE_LOCK], UNIT_CAPSULE_SOURCE_LOCK
+        )
+    except ValueError as exc:
+        errors.append("capsule source identity document is invalid: " + str(exc))
+        locator = {}
+        expected_identity = {}
+    locator = _unit_capsule_exact(
+        locator,
+        (
+            "schema_version", "record_type", "checkpoint",
+            "formal_execution_permitted_by_this_record", "source_directory",
+            "expected_identity_path", "expected_identity_sha256",
+        ),
+        "capsule import locator",
+        errors,
+    )
+    if (
+        not _schema_version_one(locator.get("schema_version"))
+        or locator.get("record_type") != "cp2_d_capsule_unit_import_locator"
+        or locator.get("checkpoint") != "CP2-D"
+        or locator.get("formal_execution_permitted_by_this_record") is not False
+        or locator.get("expected_identity_path") != UNIT_CAPSULE_EXPECTED_IDENTITY
+        or not isinstance(locator.get("source_directory"), str)
+        or not os.path.isabs(str(locator.get("source_directory", "")))
+        or os.path.normpath(str(locator.get("source_directory", "")))
+        != locator.get("source_directory")
+        or locator.get("expected_identity_sha256")
+        != sha256_bytes(source_members[UNIT_CAPSULE_EXPECTED_IDENTITY])
+    ):
+        errors.append("capsule import locator/source identity differs")
+
+    expected_identity = _unit_capsule_exact(
+        expected_identity,
+        (
+            "schema_version", "record_type", "checkpoint",
+            "formal_execution_permitted_by_this_record", "embedded_source_lock",
+            "unit_artifact_members",
+        ),
+        "expected capsule identity",
+        errors,
+    )
+    if (
+        not _schema_version_one(expected_identity.get("schema_version"))
+        or expected_identity.get("record_type") != "cp2_d_expected_capsule_identity"
+        or expected_identity.get("checkpoint") != "CP2-D"
+        or expected_identity.get("formal_execution_permitted_by_this_record") is not False
+    ):
+        errors.append("expected capsule identity header differs")
+    expected_lock = _unit_capsule_exact(
+        expected_identity.get("embedded_source_lock"),
+        ("path", "size_bytes", "sha256"),
+        "expected capsule source lock",
+        errors,
+    )
+    actual_source_lock = source_members[UNIT_CAPSULE_SOURCE_LOCK]
+    if expected_lock != {
+        "path": UNIT_CAPSULE_SOURCE_LOCK,
+        "size_bytes": len(actual_source_lock),
+        "sha256": sha256_bytes(actual_source_lock),
+    }:
+        errors.append("expected capsule source-lock identity differs")
+
+    receipt_identity = _unit_capsule_exact(
+        receipt.get("expected_identity"),
+        ("path", "size_bytes", "sha256"),
+        "capsule receipt expected identity",
+        errors,
+    )
+    if receipt_identity != {
+        "path": UNIT_CAPSULE_EXPECTED_IDENTITY,
+        "size_bytes": len(source_members[UNIT_CAPSULE_EXPECTED_IDENTITY]),
+        "sha256": sha256_bytes(source_members[UNIT_CAPSULE_EXPECTED_IDENTITY]),
+    }:
+        errors.append("capsule receipt expected-identity join differs")
+    receipt_lock = _unit_capsule_exact(
+        receipt.get("source_lock"),
+        ("path", "size_bytes", "sha256"),
+        "capsule receipt source lock",
+        errors,
+    )
+    if receipt_lock != expected_lock:
+        errors.append("capsule receipt source-lock join differs")
+    receipt_locator = _unit_capsule_exact(
+        receipt.get("source_locator"),
+        ("path", "sha256", "source_directory", "source_directory_identity"),
+        "capsule receipt source locator",
+        errors,
+    )
+    _unit_capsule_inode_record(
+        receipt_locator.get("source_directory_identity"),
+        "capsule source directory identity",
+        errors,
+    )
+    if (
+        receipt_locator.get("path") != UNIT_CAPSULE_IMPORT_LOCATOR
+        or receipt_locator.get("sha256")
+        != sha256_bytes(source_members[UNIT_CAPSULE_IMPORT_LOCATOR])
+        or receipt_locator.get("source_directory") != locator.get("source_directory")
+    ):
+        errors.append("capsule receipt source-locator join differs")
+
+    expected_pairs = _unit_capsule_exact(
+        expected_identity.get("unit_artifact_members"),
+        tuple(sorted(UNIT_CAPSULE_PATHS)),
+        "expected capsule member kinds",
+        errors,
+    )
+    receipt_pairs = _unit_capsule_exact(
+        receipt.get("unit_artifact_members"),
+        tuple(sorted(UNIT_CAPSULE_PATHS)),
+        "capsule receipt member kinds",
+        errors,
+    )
+    contract_bindings = [
+        {
+            "path": relative,
+            "size": len(source_members[relative]),
+            "sha256": sha256_bytes(source_members[relative]),
+        }
+        for relative in source_relatives[3:]
+    ]
+    for kind in ("direct_math", "evaluator"):
+        paths = UNIT_CAPSULE_PATHS[kind]
+        expected_pair = _unit_capsule_exact(
+            expected_pairs.get(kind), ("archive", "profile"),
+            kind + " expected capsule pair", errors,
+        )
+        kind_receipt = _unit_capsule_exact(
+            receipt_pairs.get(kind),
+            (
+                "archive", "profile", "profile_id", "inventory_sha256",
+                "environment_sha256", "native_consumers_sha256",
+                "native_edges_sha256", "numerical_runtime_sha256",
+                "version_probe", "synthetic_preflight",
+                "relocation_rehearsals",
+            ),
+            kind + " capsule receipt",
+            errors,
+        )
+        for index, label in enumerate(("archive", "profile")):
+            expected_file = _unit_capsule_exact(
+                expected_pair.get(label), ("path", "size_bytes", "sha256"),
+                kind + " expected " + label, errors,
+            )
+            if expected_file.get("path") != paths[index]:
+                errors.append(kind + " expected capsule path differs")
+            receipt_file = _unit_capsule_exact(
+                kind_receipt.get(label),
+                ("path", "size_bytes", "sha256", "source_identity", "unit_identity"),
+                kind + " receipt " + label,
+                errors,
+            )
+            source_identity = _unit_capsule_inode_record(
+                receipt_file.get("source_identity"),
+                kind + " source " + label + " identity",
+                errors,
+            )
+            unit_identity = _unit_capsule_inode_record(
+                receipt_file.get("unit_identity"),
+                kind + " unit " + label + " identity",
+                errors,
+            )
+            artifact_path = artifact_dir / paths[index]
+            try:
+                artifact_status = artifact_path.lstat()
+                artifact_digest = sha256_file(artifact_path)
+            except OSError as exc:
+                errors.append("cannot read imported capsule file: " + str(exc))
+                continue
+            if (
+                receipt_file.get("path") != paths[index]
+                or receipt_file.get("size_bytes") != artifact_status.st_size
+                or receipt_file.get("sha256") != artifact_digest
+                or receipt_file.get("path") != expected_file.get("path")
+                or receipt_file.get("size_bytes") != expected_file.get("size_bytes")
+                or receipt_file.get("sha256") != expected_file.get("sha256")
+                or not stat.S_ISREG(artifact_status.st_mode)
+                or artifact_status.st_nlink != 1
+                or unit_identity.get("device") != artifact_status.st_dev
+                or unit_identity.get("inode") != artifact_status.st_ino
+                or unit_identity.get("mode") != artifact_status.st_mode
+                or unit_identity.get("link_count") != artifact_status.st_nlink
+                or unit_identity.get("uid") != artifact_status.st_uid
+                or unit_identity.get("gid") != artifact_status.st_gid
+                or unit_identity.get("size_bytes") != artifact_status.st_size
+                or source_identity.get("size_bytes") != artifact_status.st_size
+            ):
+                errors.append(kind + " imported " + label + " identity differs")
+
+        profile_path = artifact_dir / paths[1]
+        try:
+            profile_bytes = profile_path.read_bytes()
+            profile = strict_json_bytes(profile_bytes, kind + " capsule profile")
+        except (OSError, ValueError) as exc:
+            errors.append(kind + " capsule profile is invalid: " + str(exc))
+            continue
+        if not isinstance(profile, dict) or (
+            json.dumps(
+                profile, allow_nan=False, ensure_ascii=True,
+                separators=(",", ":"), sort_keys=True,
+            ) + "\n"
+        ).encode("ascii") != profile_bytes:
+            errors.append(kind + " capsule profile is not canonical JSON")
+            continue
+        profile = _unit_capsule_exact(
+            profile,
+            (
+                "schema_version", "record_type", "checkpoint", "contract_bindings",
+                "profile_id", "capsule_kind", "target", "source_lock", "archive",
+                "inventory", "inventory_sha256", "entry_point", "distributions",
+                "native_closure", "environment", "execution", "floating_point",
+                "numerical_runtime", "version_probe", "synthetic_preflight",
+            ),
+            kind + " capsule profile",
+            errors,
+        )
+        if (
+            profile.get("schema_version") != 2
+            or profile.get("record_type") != "cp2_d_capsule_profile"
+            or profile.get("checkpoint") != "CP2-D"
+            or profile.get("capsule_kind") != kind
+            or profile.get("contract_bindings") != contract_bindings
+            or profile.get("source_lock") != {
+                "path": "notices/cp2-capsule-source-lock.json",
+                "size": len(actual_source_lock),
+                "sha256": sha256_bytes(actual_source_lock),
+            }
+            or profile.get("archive") != {
+                "size": expected_pair.get("archive", {}).get("size_bytes"),
+                "sha256": expected_pair.get("archive", {}).get("sha256"),
+            }
+            or sha256_bytes(profile_bytes)
+            != expected_pair.get("profile", {}).get("sha256")
+            or kind_receipt.get("profile_id") != profile.get("profile_id")
+            or kind_receipt.get("inventory_sha256") != profile.get("inventory_sha256")
+            or kind_receipt.get("environment_sha256")
+            != profile.get("environment", {}).get("sha256")
+            or kind_receipt.get("native_consumers_sha256")
+            != profile.get("native_closure", {}).get("consumers_sha256")
+            or kind_receipt.get("native_edges_sha256")
+            != profile.get("native_closure", {}).get("edges_sha256")
+            or kind_receipt.get("numerical_runtime_sha256")
+            != profile.get("numerical_runtime", {}).get("sha256")
+            or kind_receipt.get("version_probe") != profile.get("version_probe")
+            or kind_receipt.get("synthetic_preflight")
+            != profile.get("synthetic_preflight")
+        ):
+            errors.append(kind + " capsule profile/receipt/source joins differ")
+        rehearsals = kind_receipt.get("relocation_rehearsals")
+        if not isinstance(rehearsals, list) or len(rehearsals) != 2:
+            errors.append(kind + " capsule must retain two relocation rehearsals")
+            continue
+        for stage_index, rehearsal in enumerate(rehearsals, 1):
+            rehearsal = _unit_capsule_exact(
+                rehearsal,
+                (
+                    "stage_index", "capsule_kind", "profile_id", "profile_sha256",
+                    "archive_sha256", "inventory_sha256", "environment_sha256",
+                    "version_probe", "synthetic_preflight",
+                ),
+                kind + " relocation rehearsal",
+                errors,
+            )
+            expected_rehearsal = {
+                "stage_index": stage_index,
+                "capsule_kind": kind,
+                "profile_id": profile.get("profile_id"),
+                "profile_sha256": sha256_bytes(profile_bytes),
+                "archive_sha256": profile.get("archive", {}).get("sha256"),
+                "inventory_sha256": profile.get("inventory_sha256"),
+                "environment_sha256": profile.get("environment", {}).get("sha256"),
+                "version_probe": profile.get("version_probe"),
+                "synthetic_preflight": profile.get("synthetic_preflight"),
+            }
+            if rehearsal != expected_rehearsal:
+                errors.append(kind + " relocation rehearsal differs")
+
+    return {
+        "path": UNIT_CAPSULE_IMPORT_RECEIPT,
+        "sha256": sha256_bytes(receipt_bytes),
+        "receipt": receipt,
+    }
+
+
 def collect_verifier_self_test(artifact_dir, repo_root, errors, verifier_path=None):
     record = read_json(artifact_dir / "verifier_self_test.json", errors, "verifier_self_test.json")
     required_fields = {
@@ -4937,7 +5549,7 @@ def collect_verifier_self_test(artifact_dir, repo_root, errors, verifier_path=No
     if "Synthetic corruptions rejected:" not in log_text:
         errors.append("verifier self-test log lacks negative-corruption results")
     if re.search(
-        r"^CP2_READINESS_ENGINE_PROTECTING_TESTS count=43 passed=true "
+        r"^CP2_READINESS_ENGINE_PROTECTING_TESTS count=45 passed=true "
         r"module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$",
         log_text,
         flags=re.MULTILINE,
@@ -4946,7 +5558,7 @@ def collect_verifier_self_test(artifact_dir, repo_root, errors, verifier_path=No
             "verifier self-test log lacks the exact readiness protecting-test result"
         )
     if re.search(
-        r"^CP2_D_DATA_FREE_PROTECTING_TESTS count=78 passed=true "
+        r"^CP2_D_DATA_FREE_PROTECTING_TESTS count=256 passed=true "
         r"module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$",
         log_text,
         flags=re.MULTILINE,
@@ -4955,7 +5567,7 @@ def collect_verifier_self_test(artifact_dir, repo_root, errors, verifier_path=No
             "verifier self-test log lacks the exact CP2-D data-free protecting-test result"
         )
     if re.search(
-        r"^CP2_E_DATA_FREE_PROTECTING_TESTS count=37 passed=true "
+        r"^CP2_E_DATA_FREE_PROTECTING_TESTS count=188 passed=true "
         r"module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$",
         log_text,
         flags=re.MULTILINE,
@@ -5065,6 +5677,7 @@ def assemble_unit_report(artifact_dir, repo_root, allow_synthetic=False):
     third_party_sources_and_notices = collect_third_party_sources_and_notices(
         artifact_dir, repo_root, workspace, errors, allow_synthetic=allow_synthetic
     )
+    capsule_import = collect_unit_capsule_import(artifact_dir, errors)
     build_records = collect_build_records(
         artifact_dir, repo_root, workspace, source.get("commit", ""), errors
     )
@@ -5111,6 +5724,7 @@ def assemble_unit_report(artifact_dir, repo_root, allow_synthetic=False):
         },
         "checkpoint": "CP2-A/B/C2-unit",
         "checkpoint_status": expected_checkpoint_status(passed),
+        "capsule_import": capsule_import,
         "dependency_eigen_abi": dependency_eigen_abi,
         "dependency_inventory": dependency_inventory,
         "eligible_for_cp2_seal": False,
@@ -5152,6 +5766,7 @@ def require_report_fields(report, errors):
         "artifact_policy",
         "binary_sha256",
         "build",
+        "capsule_import",
         "checkpoint",
         "checkpoint_status",
         "dependency_eigen_abi",
@@ -5270,6 +5885,10 @@ def verify_unit_report(
         errors.append("reported frozen configuration hashes are wrong")
     if set(source.get("contract_sha256", {})) != CONTRACT_INPUTS:
         errors.append("contract hash inventory differs from the CP2 contract")
+
+    independent_capsule_import = collect_unit_capsule_import(artifact_dir, errors)
+    if report.get("capsule_import") != independent_capsule_import:
+        errors.append("reported capsule import differs from unit/source evidence")
 
     independent_workspace = collect_workspace_record(
         artifact_dir, repo_root, independent_source, errors,
@@ -5852,6 +6471,7 @@ TEST_CASES_BY_BINARY = {
         "CP2Configuration.RuntimeInvalidSigmaNeverInvokesRepairOrSilentFallback",
     ],
     "test_cp2_updater_msckf_end_to_end": [
+        "CP2UpdaterMSCKFTiming.EmptyInputSamplesEntryFirstAndExactlyOneTerminalEndpoint",
         "CP2UpdaterMSCKFEndToEnd.ActualNullspaceAndSchurModesCommitEquivalentFullStateUpdates",
         "CP2UpdaterMSCKFEndToEnd.SelectedReducersRejectNonfiniteProductionRowsWithoutSilentFallback",
         "CP2UpdaterMSCKFEndToEnd.SharedInvalidPreflightLeavesBothModeStatesBitwiseUnchanged",
@@ -5870,6 +6490,7 @@ TEST_CASES_BY_BINARY = {
         "CP2UpdaterMSCKFTransaction.InvocationContextIsOneShotContiguousAndSettersFailClosed",
     ],
     "test_cp2_updater_msckf_fault_injection": [
+        "CP2UpdaterMSCKFTiming.EmptyInputSamplesEntryFirstAndExactlyOneTerminalEndpoint",
         "CP2UpdaterMSCKFEndToEnd.ActualNullspaceAndSchurModesCommitEquivalentFullStateUpdates",
         "CP2UpdaterMSCKFEndToEnd.SelectedReducersRejectNonfiniteProductionRowsWithoutSilentFallback",
         "CP2UpdaterMSCKFEndToEnd.SharedInvalidPreflightLeavesBothModeStatesBitwiseUnchanged",
@@ -5892,6 +6513,7 @@ TEST_CASES_BY_BINARY = {
         "CP2UpdaterMSCKFTransaction.PostcommitPointerTokenFailureIsFatalAfterCommitWithoutPublication",
         "CP2UpdaterMSCKFTransaction.CompletePhase3ValueMismatchRemainsCountedFailedEvidence",
         "CP2UpdaterMSCKFTransaction.CompleteNonfinitePhase3RemainsCountedFailedEvidence",
+        "CP2UpdaterMSCKFTransaction.StartClockFailureIsArithmeticFatalBeforeEstimatorWork",
         "CP2UpdaterMSCKFTransaction.ZeroRawDurationFailureIsArithmeticFatalWithoutPublication",
         "CP2UpdaterMSCKFTransaction.PhasePairDurationFailureIsArithmeticFatalWithoutPublicationOrWrite",
         "CP2UpdaterMSCKFTransaction.CommittedDurationFailureIsArithmeticFatalWithoutPublicationOrRollback",
@@ -5950,6 +6572,7 @@ TEST_CASES_BY_BINARY = {
         "CP2CommitBoundary.RejectedProofSuppressesEveryPostproofOperation",
         "CP2CommitBoundary.ThrowingCommitPropagatesBeforeClockAndPreservesOutput",
         "CP2CommitBoundary.FailedFillRetainsCommittedStatusAndExactEndpoint",
+        "CP2CommitBoundary.InvalidClockEndpointCannotBecomeValidOrCommittedSuccess",
     ],
     "test_cp2_canonical": [
         "CP2CanonicalSha256.MatchesPublishedVectorsUnderIncrementalChunking",
@@ -5978,7 +6601,8 @@ TEST_CASES_BY_BINARY = {
         "CP2FeatureGate.MarginalIsCopiedFromImmutablePriorInDeclaredLayoutOrder",
         "CP2FeatureGate.InvalidOrOverlappingLayoutCannotFormInnovation",
         "CP2FeatureGate.NonfiniteInnovationPrecedesFactorization",
-        "CP2FeatureGate.NonPositiveDefiniteInnovationFailsDefaultLowerLLT",
+        "CP2FeatureGate.NegativeVarianceIsRejectedBeforeFactorization",
+        "CP2FeatureGate.InvalidVarianceCannotBeMaskedByPositiveStateCovariance",
         "CP2FeatureGate.NonfiniteDotIsSolveOrNISFailure",
         "CP2FeatureGate.EqualityIsAcceptedAndStrictExcessRejected",
         "CP2FeatureGate.NonfiniteThresholdNullsEvidenceButPreservesIEEEComparison",
@@ -6040,6 +6664,22 @@ TEST_CASES_BY_BINARY = {
         ),
         "CP2SerialRuntimeTrace.InitialPairPopulationRejectsBoundaryAndGaps",
         "CP2SerialRuntimeTrace.OutputCreationRejectsOverwriteAndSymlink",
+        (
+            "CP2SerialRuntimeTrace."
+            "TimingWritesCompleteUpdaterPopulationAndExactSteadyEndpoints"
+        ),
+        (
+            "CP2SerialRuntimeTrace."
+            "TimingRejectsReverseMismatchedInvalidDuplicateAndIncompleteRows"
+        ),
+        "CP2TimingClock.TickConversionIsExactAndRejectsNegativeEpoch",
+        "CP2TimingClock.DurationRejectsInvalidAndReverseOrderedEndpoints",
+        "CP2TimingClock.LiveSteadyClockSamplesAreValidAndOrdered",
+        "CP2OutputCapability.LevelPopulationsAreClosedAndExact",
+        (
+            "CP2OutputCapability."
+            "SealRejectsWrongSizeWrongOffsetAndConcurrentGrowth"
+        ),
     ],
     "test_cp2_updater_msckf_preview_snapshot": [
         "CP2PreviewSnapshot.ExactAdapterParityAndInputImmutability",
@@ -6077,6 +6717,10 @@ TEST_CASES_BY_BINARY = {
         "CP2TraceJournalIdentity.DuplicateSkippedAndReorderedIdentityAreSticky",
         "CP2TraceJournalEvents.EveryLegalZeroRawTerminalRoundTrips",
         "CP2TraceJournalEvents.ImpossibleTerminalAndHiddenPhaseSuffixReject",
+        (
+            "CP2TraceJournalEvents."
+            "InvalidReversedAndMismatchedTimingEndpointsRejectBeforeWrite"
+        ),
         "CP2TraceJournalEvents.DuplicateRawFeatureAndInvalidEnumRejectExplicitly",
         (
             "CP2TraceJournalPayloads."
@@ -6203,6 +6847,273 @@ def synthetic_source_snapshot(repo_root, recorded_utc):
     }
 
 
+def _synthetic_canonical_json_bytes(value):
+    return (
+        json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("ascii")
+
+
+def _synthetic_unit_capsule_payloads(repo_root):
+    """Build the tiny identity-complete capsule pair used only by self-test.
+
+    These are deliberately not executable capsules.  The unit verifier
+    self-test exercises the source/archive/receipt/inode join, while capsule
+    parsing and execution are covered by the isolated capsule and detached
+    verifier protecting suites.
+    """
+
+    source_lock_path = repo_root / UNIT_CAPSULE_SOURCE_LOCK
+    source_lock = source_lock_path.read_bytes()
+    contract_paths = (
+        "docs/cp2_d_alignment_uniqueness_clarification_proposed.md",
+        "docs/cp2_d_evaluator_precision_clarification_proposed.md",
+        "project/cp2_completion_authorization_binding.json",
+        "project/cp2_d_completion_authorization_addendum.txt",
+    )
+    contract_bindings = [
+        {
+            "path": relative,
+            "size": (repo_root / relative).stat().st_size,
+            "sha256": sha256_file(repo_root / relative),
+        }
+        for relative in contract_paths
+    ]
+    payloads = {}
+    for kind in ("direct_math", "evaluator"):
+        archive = (
+            "SchurVIO CP2-D verifier self-test {} capsule\n".format(kind)
+        ).encode("ascii")
+        archive_sha = sha256_bytes(archive)
+        inventory_sha = sha256_bytes(
+            b"synthetic-inventory\0" + kind.encode("ascii") + b"\0" + archive
+        )
+        environment_sha = sha256_bytes(
+            b"synthetic-environment\0" + kind.encode("ascii")
+        )
+        native_consumers_sha = sha256_bytes(
+            b"synthetic-native-consumers\0" + kind.encode("ascii")
+        )
+        native_edges_sha = sha256_bytes(
+            b"synthetic-native-edges\0" + kind.encode("ascii")
+        )
+        numerical_sha = sha256_bytes(
+            b"synthetic-numerical-runtime\0" + kind.encode("ascii")
+        )
+        version_probe = {
+            "argv": ["${CAPSULE_ROOT}/bin/launcher", "--version"],
+            "synthetic_self_test_only": True,
+        }
+        synthetic_preflight = {
+            "argv": ["${CAPSULE_ROOT}/bin/launcher", "--synthetic-preflight"],
+            "synthetic_self_test_only": True,
+        }
+        profile = {
+            "schema_version": 2,
+            "record_type": "cp2_d_capsule_profile",
+            "checkpoint": "CP2-D",
+            "contract_bindings": contract_bindings,
+            "profile_id": "synthetic-unit-receipt-" + kind,
+            "capsule_kind": kind,
+            "target": {"synthetic_self_test_only": True},
+            "source_lock": {
+                "path": "notices/cp2-capsule-source-lock.json",
+                "size": len(source_lock),
+                "sha256": sha256_bytes(source_lock),
+            },
+            "archive": {"size": len(archive), "sha256": archive_sha},
+            "inventory": [],
+            "inventory_sha256": inventory_sha,
+            "entry_point": {"synthetic_self_test_only": True},
+            "distributions": [],
+            "native_closure": {
+                "consumers_sha256": native_consumers_sha,
+                "edges_sha256": native_edges_sha,
+            },
+            "environment": {
+                "variables": {},
+                "sha256": environment_sha,
+            },
+            "execution": {"synthetic_self_test_only": True},
+            "floating_point": {"synthetic_self_test_only": True},
+            "numerical_runtime": {
+                "synthetic_self_test_only": True,
+                "sha256": numerical_sha,
+            },
+            "version_probe": version_probe,
+            "synthetic_preflight": synthetic_preflight,
+        }
+        profile_bytes = _synthetic_canonical_json_bytes(profile)
+        payloads[kind] = {
+            "archive": archive,
+            "profile": profile_bytes,
+            "profile_record": profile,
+        }
+    return payloads
+
+
+def _write_synthetic_unit_capsule_source_identity(repo_root):
+    source_lock = _synthetic_canonical_json_bytes(
+        {
+            "schema_version": 2,
+            "record_type": "cp2_d_minimal_two_capsule_source_lock",
+            "checkpoint": "CP2-D",
+            "formal_execution_permitted_by_this_record": False,
+            "synthetic_self_test_only": True,
+        }
+    )
+    (repo_root / UNIT_CAPSULE_SOURCE_LOCK).write_bytes(source_lock)
+    payloads = _synthetic_unit_capsule_payloads(repo_root)
+    members = {}
+    for kind in ("direct_math", "evaluator"):
+        archive = payloads[kind]["archive"]
+        profile = payloads[kind]["profile"]
+        members[kind] = {
+            "archive": {
+                "path": UNIT_CAPSULE_PATHS[kind][0],
+                "size_bytes": len(archive),
+                "sha256": sha256_bytes(archive),
+            },
+            "profile": {
+                "path": UNIT_CAPSULE_PATHS[kind][1],
+                "size_bytes": len(profile),
+                "sha256": sha256_bytes(profile),
+            },
+        }
+    expected = _synthetic_canonical_json_bytes(
+        {
+            "schema_version": 1,
+            "record_type": "cp2_d_expected_capsule_identity",
+            "checkpoint": "CP2-D",
+            "formal_execution_permitted_by_this_record": False,
+            "embedded_source_lock": {
+                "path": UNIT_CAPSULE_SOURCE_LOCK,
+                "size_bytes": len(source_lock),
+                "sha256": sha256_bytes(source_lock),
+            },
+            "unit_artifact_members": members,
+        }
+    )
+    (repo_root / UNIT_CAPSULE_EXPECTED_IDENTITY).write_bytes(expected)
+    locator = _synthetic_canonical_json_bytes(
+        {
+            "schema_version": 1,
+            "record_type": "cp2_d_capsule_unit_import_locator",
+            "checkpoint": "CP2-D",
+            "formal_execution_permitted_by_this_record": False,
+            "source_directory": "/tmp/cp2-verifier-self-test-external-capsules",
+            "expected_identity_path": UNIT_CAPSULE_EXPECTED_IDENTITY,
+            "expected_identity_sha256": sha256_bytes(expected),
+        }
+    )
+    (repo_root / UNIT_CAPSULE_IMPORT_LOCATOR).write_bytes(locator)
+
+
+def _synthetic_inode_record(status_value):
+    return {
+        "device": status_value.st_dev,
+        "inode": status_value.st_ino,
+        "mode": status_value.st_mode,
+        "link_count": status_value.st_nlink,
+        "uid": status_value.st_uid,
+        "gid": status_value.st_gid,
+        "size_bytes": status_value.st_size,
+        "mtime_ns": status_value.st_mtime_ns,
+        "ctime_ns": status_value.st_ctime_ns,
+    }
+
+
+def _create_synthetic_unit_capsule_import(artifact_dir, repo_root):
+    payloads = _synthetic_unit_capsule_payloads(repo_root)
+    expected_bytes = (repo_root / UNIT_CAPSULE_EXPECTED_IDENTITY).read_bytes()
+    expected = strict_json_bytes(expected_bytes, "synthetic expected capsule identity")
+    source_lock = (repo_root / UNIT_CAPSULE_SOURCE_LOCK).read_bytes()
+    locator_bytes = (repo_root / UNIT_CAPSULE_IMPORT_LOCATOR).read_bytes()
+    locator = strict_json_bytes(locator_bytes, "synthetic capsule locator")
+    capsules_dir = artifact_dir / "capsules"
+    capsules_dir.mkdir(mode=0o700)
+    retained = {}
+    source_directory_status = repo_root.lstat()
+    for kind in ("direct_math", "evaluator"):
+        retained[kind] = {}
+        for label, index in (("archive", 0), ("profile", 1)):
+            relative = UNIT_CAPSULE_PATHS[kind][index]
+            payload_key = "archive" if label == "archive" else "profile"
+            payload = payloads[kind][payload_key]
+            path = artifact_dir / relative
+            path.write_bytes(payload)
+            path.chmod(0o444)
+            status_value = path.lstat()
+            retained[kind][label] = {
+                "path": relative,
+                "size_bytes": len(payload),
+                "sha256": sha256_bytes(payload),
+                "source_identity": _synthetic_inode_record(status_value),
+                "unit_identity": _synthetic_inode_record(status_value),
+            }
+        profile = payloads[kind]["profile_record"]
+        rehearsals = []
+        for stage_index in (1, 2):
+            rehearsals.append(
+                {
+                    "stage_index": stage_index,
+                    "capsule_kind": kind,
+                    "profile_id": profile["profile_id"],
+                    "profile_sha256": sha256_bytes(payloads[kind]["profile"]),
+                    "archive_sha256": profile["archive"]["sha256"],
+                    "inventory_sha256": profile["inventory_sha256"],
+                    "environment_sha256": profile["environment"]["sha256"],
+                    "version_probe": profile["version_probe"],
+                    "synthetic_preflight": profile["synthetic_preflight"],
+                }
+            )
+        retained[kind].update(
+            {
+                "profile_id": profile["profile_id"],
+                "inventory_sha256": profile["inventory_sha256"],
+                "environment_sha256": profile["environment"]["sha256"],
+                "native_consumers_sha256": profile["native_closure"]["consumers_sha256"],
+                "native_edges_sha256": profile["native_closure"]["edges_sha256"],
+                "numerical_runtime_sha256": profile["numerical_runtime"]["sha256"],
+                "version_probe": profile["version_probe"],
+                "synthetic_preflight": profile["synthetic_preflight"],
+                "relocation_rehearsals": rehearsals,
+            }
+        )
+    receipt = {
+        "schema_version": 1,
+        "record_type": "cp2_d_unit_capsule_import_receipt",
+        "checkpoint": "CP2-D",
+        "data_free": True,
+        "recorded_input_accessed": False,
+        "expected_identity": {
+            "path": UNIT_CAPSULE_EXPECTED_IDENTITY,
+            "size_bytes": len(expected_bytes),
+            "sha256": sha256_bytes(expected_bytes),
+        },
+        "source_lock": expected["embedded_source_lock"],
+        "source_locator": {
+            "path": UNIT_CAPSULE_IMPORT_LOCATOR,
+            "sha256": sha256_bytes(locator_bytes),
+            "source_directory": locator["source_directory"],
+            "source_directory_identity": _synthetic_inode_record(
+                source_directory_status
+            ),
+        },
+        "unit_artifact_members": retained,
+        "passed": True,
+    }
+    receipt_path = artifact_dir / UNIT_CAPSULE_IMPORT_RECEIPT
+    receipt_path.write_bytes(_synthetic_canonical_json_bytes(receipt))
+    receipt_path.chmod(0o444)
+
+
 def create_synthetic_repo(repo_root):
     actual_repo = Path(__file__).resolve().parents[2]
     (repo_root / ".gitignore").write_text("/build/\n/results/\n", encoding="utf-8")
@@ -6213,6 +7124,7 @@ def create_synthetic_repo(repo_root):
         if (
             relative in CONFIG_INPUTS
             or relative in FROZEN_CP2_C_APPROVAL_BINDING
+            or relative in FROZEN_CP2_COMPLETION_AUTHORIZATION_BINDING
             or relative in {"LICENSE", *READINESS_ENTRYPOINTS}
         ):
             if not actual.is_file():
@@ -6221,6 +7133,7 @@ def create_synthetic_repo(repo_root):
             destination.chmod(0o755 if actual.stat().st_mode & stat.S_IXUSR else 0o644)
         else:
             destination.write_text("synthetic source: " + relative + "\n", encoding="utf-8")
+    _write_synthetic_unit_capsule_source_identity(repo_root)
     registry = repo_root / PREAUTHORIZATION_REGISTRY_PATH
     registry.parent.mkdir(parents=True, exist_ok=True)
     registry.write_bytes(b"DO_NOT_PARSE_SYNTHETIC_REGISTRY:\xff:\x00\n")
@@ -6291,6 +7204,8 @@ def create_synthetic_compile_commands(path, source_root, workspace_build_root):
     for source in RUNTIME_LIBRARY_SOURCES:
         add(source, "ov_msckf_lib")
         add(source, FAULT_LIBRARY_TARGET, cp2_testing=True)
+    for source, target in STRICT_RUNTIME_EXECUTABLE_SOURCES.items():
+        add(source, target)
     for target in CP1_TESTS:
         add("ov_msckf/test/cp1/gtest_main.cpp", target)
         add(TEST_SOURCE_BY_BINARY[target], target)
@@ -6679,11 +7594,11 @@ def create_synthetic_artifact(artifact_dir, repo_root):
     (artifact_dir / "verifier_self_test.log").write_text(
         "CP2 verifier self-test passed using only: /tmp/synthetic\n"
         "Synthetic corruptions rejected: synthetic-bootstrap\n"
-        "CP2_READINESS_ENGINE_PROTECTING_TESTS count=43 passed=true "
+        "CP2_READINESS_ENGINE_PROTECTING_TESTS count=45 passed=true "
         "module_sha256={} output_sha256={}\n"
-        "CP2_D_DATA_FREE_PROTECTING_TESTS count=78 passed=true "
+        "CP2_D_DATA_FREE_PROTECTING_TESTS count=256 passed=true "
         "module_sha256={} output_sha256={}\n"
-        "CP2_E_DATA_FREE_PROTECTING_TESTS count=37 passed=true "
+        "CP2_E_DATA_FREE_PROTECTING_TESTS count=188 passed=true "
         "module_sha256={} output_sha256={}\n".format(
             "0" * 64, "1" * 64, "2" * 64, "3" * 64,
             "4" * 64, "5" * 64,
@@ -6901,6 +7816,9 @@ def create_synthetic_artifact(artifact_dir, repo_root):
     for path in artifact_dir.rglob("*"):
         if path.is_file():
             path.chmod(0o555 if path.parent == artifact_dir / "binaries" else 0o600)
+    # Mirror the real runner: the source-bound importer is the final
+    # pre-report producer and its capsule pair/receipt remain immutable.
+    _create_synthetic_unit_capsule_import(artifact_dir, repo_root)
 
 
 def reseal_synthetic(artifact_dir):
@@ -6946,6 +7864,16 @@ ACTUAL_PROCESS_GROUP_POLL_SECONDS = 0.01
 ACTUAL_EXACT_BINARY64_INTEGER_MAX = (1 << 53) - 1
 ACTUAL_SEQUENCE_IDS = ("MH_01_easy", "MH_03_medium", "V1_01_easy")
 ACTUAL_SEQUENCE_OFFSETS_SECONDS = (40.0, 5.0, 0.0)
+ACTUAL_SEQUENCE_BAG_SHA256 = (
+    "57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9",
+    "c51b0064681dfb287b6653f5fd54e6c56af5d9151c866e17574fdbc527db2311",
+    "6dc6192fac63dd0a05ba745548b41fe8cae14724168a98865a81d37e681bbc81",
+)
+ACTUAL_SEQUENCE_GROUND_TRUTH_SHA256 = (
+    "ab1579de35a047d241e2d0d1a4f4306b4fa51d99c6f11bcdebf336ab2b784df9",
+    "8c7c9873f5cb102eda2b68d665134f144eed9d5778f0dbdc82bbf8e8fdbd558e",
+    "6d2f961334ff3069105be0aacf118d3c7e82bf3ab0e238acd5f40f1d897573d1",
+)
 ACTUAL_PARAMETER_DIFF_KEYS = (
     "/cp2_vio/up_msckf_landmark_elimination",
     "/cp2_vio/filepath_est",
@@ -6953,6 +7881,14 @@ ACTUAL_PARAMETER_DIFF_KEYS = (
     "/cp2_vio/record_timing_filepath",
     "/cp2_vio/cp2_trace_directory",
     "/cp2_vio/cp2_context_path",
+) + tuple(
+    "/cp2_vio/cp2_{}_sink_capability".format(field)
+    for field in (
+        "serial_trace", "callback_trace", "trajectory_trace", "updater_trace",
+        "state_payload", "proposal_payload", "raw_system_payload", "timing_trace",
+        "runtime_parameters", "loader_map_before", "loader_map_after",
+        "legacy_state", "legacy_deviation", "legacy_timing",
+    )
 )
 ACTUAL_PROVENANCE_KEYS = (
     "schema_version", "record_type", "checkpoint", "evidence_class",
@@ -6996,6 +7932,7 @@ ACTUAL_COMMAND_PHASES = frozenset((
 ACTUAL_INVENTORY_ROLES = frozenset((
     "report", "provenance", "command", "trace", "payload", "source", "build",
     "configuration", "readiness", "log", "trajectory", "evaluator",
+    "direct_math",
 ))
 ACTUAL_HOST_KEYS = (
     "hostname", "os_release", "kernel_release", "architecture", "cpu_model",
@@ -7015,6 +7952,7 @@ ACTUAL_RUNTIME_CONTEXT_KEYS = (
     "legacy_timing_path",
 )
 ACTUAL_STRICT_FP_SOURCE_TARGETS = {
+    "ov_msckf/src/ros1_serial_msckf.cpp": "ros1_serial_msckf",
     "ov_msckf/src/ros/CP2ROS1RuntimeParameters.cpp": "ov_msckf_lib",
     "ov_msckf/src/state/StateHelper.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2Canonical.cpp": "ov_msckf_lib",
@@ -7023,12 +7961,14 @@ ACTUAL_STRICT_FP_SOURCE_TARGETS = {
     "ov_msckf/src/update/CP2CompositeState.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2FeatureGate.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2OfflineReplay.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2OutputCapability.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2RecordedAssemble.cpp": "cp2_recorded_assemble",
     "ov_msckf/src/update/CP2RuntimeContext.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2SerialPairing.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2SerialRuntimeTrace.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2ShadowMath.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2StateTraceCodec.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2TimingClock.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2TraceCodec.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2TraceJournal.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/SchurUpdate.cpp": "ov_msckf_lib",
@@ -7037,8 +7977,10 @@ ACTUAL_STRICT_FP_SOURCE_TARGETS = {
     "ov_msckf/src/update/UpdaterMSCKFPreview.cpp": "ov_msckf_lib",
 }
 _ACTUAL_LOCAL_MODULE_PATHS = {
+    "cp2_capsule": "scripts/cp2/cp2_capsule.py",
+    "cp2_evaluator_result": "scripts/cp2/cp2_evaluator_result.py",
     "cp2_schema": "scripts/cp2/cp2_schema.py",
-    "cp2_sequence_math": "scripts/cp2/cp2_sequence_math.py",
+    "cp2_sequence_math_codec": "scripts/cp2/cp2_sequence_math_codec.py",
 }
 _ACTUAL_MODULE_CACHE = {}
 _ACTUAL_MODULE_SOURCE_BINDING = None
@@ -7314,10 +8256,29 @@ def _actual_load_module(name):
     if spec is None or spec.loader is None:
         _actual_fail("cannot construct loader for " + name)
     module = importlib.util.module_from_spec(spec)
+    injected_name = None
+    injected_module = None
+    if name == "cp2_capsule":
+        # cp2_capsule has exactly one project-local import.  Resolve it only
+        # to the already source-context-bound module: ordinary import lookup
+        # could otherwise accept an ambient or preloaded cp2_schema object.
+        if "cp2_schema" in sys.modules:
+            _actual_fail("cp2_capsule dependency alias is already populated")
+        injected_name = "cp2_schema"
+        injected_module = _actual_load_module("cp2_schema")
+        sys.modules[injected_name] = injected_module
     sys.modules[spec.name] = module
     try:
-        code = compile(source, display_path, "exec", dont_inherit=True)
-        exec(code, module.__dict__)
+        try:
+            code = compile(source, display_path, "exec", dont_inherit=True)
+            exec(code, module.__dict__)
+        finally:
+            if injected_name is not None:
+                observed_dependency = sys.modules.pop(injected_name, None)
+                if observed_dependency is not injected_module:
+                    _actual_fail(
+                        "cp2_capsule changed its source-bound dependency alias"
+                    )
     except BaseException:
         sys.modules.pop(spec.name, None)
         raise
@@ -8441,6 +9402,10 @@ def _actual_validate_source_unit_approval_binding(
         relative: context_entries[relative]["git_blob"]
         for relative in FROZEN_CP2_C_APPROVAL_BINDING
     }
+    completion_git_blobs = {
+        relative: context_entries[relative]["git_blob"]
+        for relative in FROZEN_CP2_COMPLETION_AUTHORIZATION_BINDING
+    }
     approval_errors = []
     validate_cp2_c_approval_binding(input_hashes, git_blobs, approval_errors)
     approval_contents = read_exact_source_archive_members(
@@ -8449,8 +9414,19 @@ def _actual_validate_source_unit_approval_binding(
         approval_errors,
     )
     validate_cp2_c_approval_records(approval_contents, approval_errors)
+    validate_cp2_completion_authorization_binding(
+        input_hashes, completion_git_blobs, approval_errors
+    )
+    completion_contents = read_exact_source_archive_members(
+        artifact / source_archive,
+        {"project/cp2_completion_authorization_binding.json": None},
+        approval_errors,
+    )
+    validate_cp2_completion_authorization_record(
+        completion_contents, approval_errors
+    )
     if approval_errors:
-        _actual_fail("actual CP2-C approval binding is invalid: " + "; ".join(approval_errors))
+        _actual_fail("actual CP2 approval binding is invalid: " + "; ".join(approval_errors))
     expected_contracts = [
         {"path": relative, "sha256": input_hashes[relative]}
         for relative in sorted(CONTRACT_INPUTS, key=lambda value: value.encode("utf-8"))
@@ -9041,7 +10017,7 @@ def _actual_validate_provenance(artifact, manifest, observed, expected_checkpoin
                                 "provenance launch")
     if launch.get("path") != "project/cp2_serial.launch":
         _actual_fail("actual run did not use the frozen launch path")
-    if launch.get("sha256") != "bede519721575d769a1fcef67c5527661cb39ba05ab77faa6c20771b0756c49a":
+    if launch.get("sha256") != "a29c9b74aa6d4f0a5d783d0ba1eadeaca49ad0783f3b8121c5b68c8091023a12":
         _actual_fail("actual run launch SHA-256 differs from the frozen launch")
     _actual_u64(launch.get("size"), "launch size")
     _actual_sha256(configuration.get("static_bundle_sha256"), "static bundle SHA-256")
@@ -9076,6 +10052,9 @@ def _actual_validate_provenance(artifact, manifest, observed, expected_checkpoin
         "environment_classes": classes,
         "readiness": readiness_record,
         "source_context": source_context,
+        "source_archive": artifact / provenance["source_archive"],
+        "unit_anchor": unit_anchor,
+        "unit_artifact": unit_artifact,
         "unit_environment_digest": unit_environment_digest,
         "executable": executable,
         "executable_sha256": executable_digest,
@@ -9131,6 +10110,10 @@ ACTUAL_PAIR_INDEX_ENVIRONMENT = {
     "PYTHONNOUSERSITE": "1",
     "PYTHONPATH": "/opt/ros/noetic/lib/python3/dist-packages",
 }
+ACTUAL_D_PAIR_INDEX_ENVIRONMENT = dict(
+    ACTUAL_PAIR_INDEX_ENVIRONMENT,
+    LD_LIBRARY_PATH="/opt/ros/noetic/lib",
+)
 ACTUAL_UPDATE_KEYS = (
     "schema_version", "record_type", "sequence_index", "sequence_id", "pair_index",
     "camera_timestamp_ns", "invocation_id", "live_mode", "shadow_mode", "shadow_enabled",
@@ -11063,18 +12046,27 @@ ACTUAL_SEQUENCE_REPORT_KEYS = (
     "sequence_id", "offset_seconds", "provenance_sha256", "pair_index_sha256",
     "valid_pair_count", "runs", "normalized_parameter_diff", "shared_timestamp_count",
     "shared_timestamp_sha256", "shared_population_sha256", "baseline_alignment",
+    "direct_math_request_sha256", "direct_math_response_sha256",
     "position_p95_m", "orientation_p95_deg", "ate_nullspace_m", "ate_schur_m",
     "relative_ate_difference", "coverage_passed", "trajectory_passed", "passed",
 )
 ACTUAL_SEQUENCE_RUN_KEYS = (
     "run_index", "mode", "executable_sha256", "loader_map_sha256",
     "resolved_parameters_sha256", "callback_trace_sha256", "trajectory_sha256",
+    "evaluator_result_path", "evaluator_result_sha256",
+    "evaluator_archive_rmse_m", "evaluator_console_rmse",
+    "evaluator_error_count",
     "processed_unique_pairs", "processing_fraction", "first_selected_timestamp_ns",
     "last_selected_timestamp_ns", "first_processed_timestamp_ns",
     "last_processed_timestamp_ns", "selected_duration_ns", "processed_duration_ns",
     "time_coverage", "completed", "exit_code",
 )
 ACTUAL_PAIR_INDEX_KEYS = ACTUAL_PAIR_INDEX_PROJECTION_KEYS
+ACTUAL_FILTERED_WITNESS_KEYS = (
+    "schema_version", "record_type", "sequence_index", "sequence_id",
+    "filtered_index", "kind", "camera_id", "record_time_ns",
+    "header_time_ns",
+)
 ACTUAL_CALLBACK_KEYS = (
     "schema_version", "record_type", "sequence_index", "sequence_id", "mode",
     "callback_index", "pair_index", "anchor_filtered_index", "cam0_filtered_index",
@@ -11090,7 +12082,9 @@ ACTUAL_TRAJECTORY_KEYS = (
 )
 ACTUAL_ALIGNMENT_KEYS = (
     "source", "shared_population_sha256", "rotation_row_major", "translation",
-    "quaternion_xyzw", "source_singular_values", "source_rank_threshold", "determinant",
+    "quaternion_xyzw", "source_singular_values", "source_rank_threshold",
+    "cross_covariance_singular_values", "cross_covariance_rank_threshold",
+    "reflection_correction_applied", "determinant",
     "orthogonality_error_frobenius", "applied_identically_to_both_modes",
 )
 
@@ -11300,6 +12294,57 @@ def _actual_matrix_close(left, right, tolerance=1.0e-10):
     return all(abs(float(lhs) - float(rhs)) <= tolerance for lhs, rhs in zip(left, right))
 
 
+def _actual_hash_bound_regular_file(path, expected_size, label):
+    """Hash one held single-link input and prove path/inode stability."""
+
+    expected_size = _actual_u64(expected_size, label + " expected size")
+    if expected_size == 0:
+        _actual_fail(label + " expected size is zero")
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = -1
+    try:
+        descriptor = os.open(str(path), flags)
+        before = os.fstat(descriptor)
+        by_name = path.lstat()
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_size != expected_size
+            or _actual_file_object_identity(before)
+            != _actual_file_object_identity(by_name)
+        ):
+            _actual_fail(label + " input identity differs")
+        digest = hashlib.sha256()
+        remaining = before.st_size
+        while remaining:
+            block = os.read(descriptor, min(remaining, 1024 * 1024))
+            if not block:
+                _actual_fail(label + " input became short")
+            digest.update(block)
+            remaining -= len(block)
+        if os.read(descriptor, 1):
+            _actual_fail(label + " input grew while being hashed")
+        after = os.fstat(descriptor)
+        by_name_after = path.lstat()
+        if (
+            _actual_file_object_identity(after)
+            != _actual_file_object_identity(before)
+            or _actual_file_object_identity(by_name_after)
+            != _actual_file_object_identity(before)
+        ):
+            _actual_fail(label + " input changed while being hashed")
+        return digest.hexdigest()
+    except OSError as exc:
+        raise ActualVerificationError(
+            "cannot bind {} input: {}".format(label, exc)
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def _actual_validate_sequence_provenance(artifact, common, manifest, report):
     provenance = common["provenance"]
     sequence_index = report["sequence_index"]
@@ -11319,13 +12364,29 @@ def _actual_validate_sequence_provenance(artifact, common, manifest, report):
         or not _actual_same_f64(input_record["offset_seconds"], report["offset_seconds"])
     ):
         _actual_fail("sequence report/input identity differs")
-    _actual_safe_absolute_path(input_record["bag_path"], "sequence bag path")
-    _actual_u64(input_record["bag_size"], "sequence bag size")
+    bag_path = _actual_safe_absolute_path(
+        input_record["bag_path"], "sequence bag path"
+    )
+    bag_size = _actual_u64(input_record["bag_size"], "sequence bag size")
     bag_digest = _actual_sha256(input_record["bag_sha256_before"], "sequence bag SHA-256")
-    if input_record["bag_sha256_after"] != bag_digest:
-        _actual_fail("sequence bag before/after identity differs")
-    _actual_safe_absolute_path(input_record["ground_truth_path"], "sequence ground-truth path")
-    _actual_sha256(input_record["ground_truth_sha256"], "sequence ground-truth SHA-256")
+    ground_truth_digest = _actual_sha256(
+        input_record["ground_truth_sha256"],
+        "sequence ground-truth SHA-256",
+    )
+    if (
+        input_record["bag_sha256_after"] != bag_digest
+        or bag_digest != ACTUAL_SEQUENCE_BAG_SHA256[sequence_index]
+        or ground_truth_digest
+        != ACTUAL_SEQUENCE_GROUND_TRUTH_SHA256[sequence_index]
+    ):
+        _actual_fail("sequence input digest differs from the frozen inventory")
+    if _actual_hash_bound_regular_file(
+        bag_path, bag_size, "sequence bag"
+    ) != bag_digest:
+        _actual_fail("sequence bag bytes differ from provenance")
+    _actual_safe_absolute_path(
+        input_record["ground_truth_path"], "sequence ground-truth path"
+    )
 
     runtime_runs = common["runtime"].get("runs")
     runtime_run_keys = (
@@ -11431,6 +12492,7 @@ def _actual_validate_sequence_provenance(artifact, common, manifest, report):
     if not isinstance(diff, list) or len(diff) != len(ACTUAL_PARAMETER_DIFF_KEYS):
         _actual_fail("sequence normalized-parameter diff population differs")
     path_values = []
+    capability_values = []
     for index, key in enumerate(ACTUAL_PARAMETER_DIFF_KEYS):
         record = diff[index]
         _actual_exact_keys(
@@ -11449,11 +12511,53 @@ def _actual_validate_sequence_provenance(artifact, common, manifest, report):
         if key == ACTUAL_PARAMETER_DIFF_KEYS[0]:
             if full_maps[0][key] != "nullspace" or full_maps[1][key] != "schur":
                 _actual_fail("sequence mode parameter values are invalid")
-        else:
+        elif key in ACTUAL_PARAMETER_DIFF_KEYS[1:6]:
             for value in (full_maps[0][key], full_maps[1][key]):
                 path_values.append(str(_actual_safe_absolute_path(value, "sequence output parameter")))
+        else:
+            field = key.removeprefix("/cp2_vio/cp2_").removesuffix(
+                "_sink_capability"
+            )
+            required = field in {
+                "serial_trace", "callback_trace", "trajectory_trace",
+                "runtime_parameters", "loader_map_before", "loader_map_after",
+                "legacy_state", "legacy_deviation", "legacy_timing",
+            }
+            for value in (full_maps[0][key], full_maps[1][key]):
+                if not isinstance(value, str):
+                    _actual_fail("sequence sink capability is not a string")
+                if not required:
+                    if value != "null":
+                        _actual_fail("inapplicable D sink capability is not null")
+                    continue
+                fields = value.split(":")
+                if len(fields) != 12 or fields[0] != "v1":
+                    _actual_fail("D sink capability grammar differs")
+                numbers = tuple(
+                    _actual_canonical_u64_argument(
+                        item, "D sink capability field"
+                    )
+                    for item in fields[1:]
+                )
+                if (
+                    not 0 < numbers[0] <= (1 << 31) - 1
+                    or numbers[1] > (1 << 31) - 1
+                    or not stat.S_ISREG(numbers[4])
+                    or numbers[5] != 1
+                    or stat.S_IMODE(numbers[4]) != 0o600
+                    or numbers[8] != 0
+                ):
+                    _actual_fail("D sink capability initial identity differs")
+                capability_values.append((field, numbers))
     if len(set(path_values)) != len(path_values):
         _actual_fail("sequence mode output/context paths alias")
+    if (
+        len(capability_values) != 18
+        or len({item[1][0] for item in capability_values}) != 1
+        or len({(item[1][2], item[1][3]) for item in capability_values}) != 18
+        or len({(item[1][0], item[1][1]) for item in capability_values}) != 18
+    ):
+        _actual_fail("D sink capabilities alias or use different parent processes")
     return {
         "bag_sha256": bag_digest,
         "canonical_hashes": canonical_hashes,
@@ -11463,8 +12567,434 @@ def _actual_validate_sequence_provenance(artifact, common, manifest, report):
     }
 
 
+def _actual_validate_sequence_pair_index_command(
+    artifact, common, manifest, report, pair_rows
+):
+    """Bind D's held-witness extractor command to both retained JSONL surfaces.
+
+    This is deliberately separate from CP2-C's three-command ``pair_index_v1``
+    contract.  D has one sequence-local command and a caller-created held
+    source/bag/parent/witness capabilities, recorded as
+    ``pair_index_witness_v4``.
+    """
+
+    commands = [
+        record for record in common["commands"] if record["phase"] == "pair_index"
+    ]
+    if len(commands) != 1:
+        _actual_fail("CP2-D must retain exactly one pair-index/witness command")
+    record = commands[0]
+    sequence_index = report["sequence_index"]
+    sequence_id = report["sequence_id"]
+    command_id = _actual_u64(record["command_id"], "D pair-index command ID")
+    if (
+        record["sequence_index"] != sequence_index
+        or record["pair_index"] is not None
+        or record["run_index"] is not None
+        or record["exit_code"] != 0
+        or record["timed_out"] is not False
+    ):
+        _actual_fail("D pair-index command identity/success differs")
+    later_runtime = [
+        candidate
+        for candidate in common["commands"]
+        if candidate["phase"] in ("runtime_preflight", "ros_run", "evaluation")
+        and candidate["sequence_index"] == sequence_index
+    ]
+    if not later_runtime or any(
+        _actual_u64(candidate["command_id"], "D runtime command ID") <= command_id
+        for candidate in later_runtime
+    ):
+        _actual_fail("D pair-index/witness command does not precede runtime/evaluation")
+
+    matching_classes = [
+        item
+        for item in common["provenance"]["environment"]["classes"]
+        if item["canonical_sha256"] == record["environment_sha256"]
+    ]
+    if (
+        len(matching_classes) != 1
+        or matching_classes[0]["environment_id"] != "pair_index_witness_v4"
+        or common["environment_classes"].get(record["environment_sha256"])
+        != ACTUAL_D_PAIR_INDEX_ENVIRONMENT
+    ):
+        _actual_fail(
+            "D pair-index command environment is not exact pair_index_witness_v4"
+        )
+
+    expected_flags = (
+        "--sequence-index",
+        "--sequence-id",
+        "--bag-path",
+        "--parent-bag-fd",
+        "--bag-identity",
+        "--parent-process-id",
+        "--parent-helper-fd",
+        "--helper-identity",
+        "--helper-sha256",
+        "--witness-output",
+        "--parent-output-fd",
+        "--output-parent-identity",
+        "--parent-witness-fd",
+        "--witness-identity",
+    )
+    argv = record["argv"]
+    if (
+        len(argv) != 32
+        or argv[:3] != ["/usr/bin/python3", "-I", "-B"]
+        or tuple(argv[4::2]) != expected_flags
+    ):
+        _actual_fail("D pair-index command differs from the held-witness CLI")
+    arguments = dict(zip(argv[4::2], argv[5::2]))
+    parent_pid = _actual_canonical_u64_argument(
+        arguments["--parent-process-id"], "D pair-index parent process ID"
+    )
+    if not 0 < parent_pid <= (1 << 31) - 1:
+        _actual_fail("D pair-index parent process ID exceeds the supported range")
+    input_record = common["provenance"]["inputs"][0]
+    witness_output = _actual_safe_absolute_path(
+        arguments["--witness-output"], "D pair-index witness output"
+    )
+    if (
+        arguments["--sequence-index"] != str(sequence_index)
+        or arguments["--sequence-id"] != sequence_id
+        or arguments["--bag-path"] != input_record["bag_path"]
+        or witness_output.name != "pair_selection_witness.jsonl"
+    ):
+        _actual_fail("D pair-index command does not join its input/witness identity")
+
+    descriptors = []
+    for flag, label in (
+        ("--parent-bag-fd", "bag"),
+        ("--parent-helper-fd", "helper"),
+        ("--parent-output-fd", "output parent"),
+        ("--parent-witness-fd", "witness"),
+    ):
+        descriptor = _actual_canonical_u64_argument(
+            arguments[flag], "D pair-index " + label + " descriptor"
+        )
+        if descriptor > (1 << 31) - 1:
+            _actual_fail("D pair-index descriptor exceeds the supported range")
+        descriptors.append(descriptor)
+    if len(set(descriptors)) != 4:
+        _actual_fail("D pair-index held descriptors alias")
+
+    bag_descriptor, helper_descriptor, _parent_descriptor, _witness_descriptor = descriptors
+    expected_helper_capability = "/proc/{}/fd/{}".format(
+        parent_pid, helper_descriptor
+    )
+    if argv[3] != expected_helper_capability:
+        _actual_fail("D pair-index executable is not its held helper capability")
+
+    identities = {}
+    for flag, label in (
+        ("--bag-identity", "bag"),
+        ("--helper-identity", "helper"),
+        ("--output-parent-identity", "output parent"),
+        ("--witness-identity", "witness"),
+    ):
+        fields = arguments[flag].split(":")
+        if len(fields) != 9:
+            _actual_fail("D pair-index " + label + " identity field count differs")
+        identities[label] = tuple(
+            _actual_canonical_u64_argument(
+                value, "D pair-index " + label + " identity"
+            )
+            for value in fields
+        )
+    bag_identity = identities["bag"]
+    helper_identity = identities["helper"]
+    parent_identity = identities["output parent"]
+    witness_identity = identities["witness"]
+    if (
+        not stat.S_ISREG(bag_identity[2])
+        or bag_identity[3] != 1
+        or bag_identity[6] != input_record["bag_size"]
+        or not stat.S_ISREG(helper_identity[2])
+        or helper_identity[3] != 1
+        or not stat.S_ISDIR(parent_identity[2])
+        or stat.S_IMODE(parent_identity[2]) != 0o700
+        or not stat.S_ISREG(witness_identity[2])
+        or stat.S_IMODE(witness_identity[2]) != 0o600
+        or witness_identity[3] != 1
+        or witness_identity[6] != 0
+        or parent_identity[0] != witness_identity[0]
+        or parent_identity[4:6] != witness_identity[4:6]
+    ):
+        _actual_fail("D pair-index held bag/parent/witness identities differ")
+
+    helper_contracts = [
+        item
+        for item in common["provenance"]["contracts"]
+        if item.get("path") == "scripts/cp2/cp2_pair_index_extract.py"
+    ]
+    if (
+        len(helper_contracts) != 1
+        or arguments["--helper-sha256"] != helper_contracts[0].get("sha256")
+        or re.fullmatch(r"[0-9a-f]{64}", arguments["--helper-sha256"] or "")
+        is None
+    ):
+        _actual_fail("D pair-index held helper SHA-256 differs from provenance")
+
+    runtime_capability = "/proc/{}/fd/{}".format(parent_pid, bag_descriptor)
+    required_sink_fields = {
+        "serial_trace", "callback_trace", "trajectory_trace",
+        "runtime_parameters", "loader_map_before", "loader_map_after",
+        "legacy_state", "legacy_deviation", "legacy_timing",
+    }
+    observed_sink_capabilities = []
+    for run_index in range(2):
+        run_sink_arguments = None
+        run_capability_numbers = {}
+        for phase in ("runtime_preflight", "ros_run"):
+            matches = [
+                candidate
+                for candidate in common["commands"]
+                if candidate["phase"] == phase
+                and candidate["sequence_index"] == sequence_index
+                and candidate["run_index"] == run_index
+            ]
+            if len(matches) != 1:
+                _actual_fail("D held-bag runtime command population differs")
+            candidate = matches[0]
+            bag_arguments = [
+                value for value in candidate["argv"] if value.startswith("bag:=")
+            ]
+            if (
+                len(bag_arguments) != 1
+                or bag_arguments[0] != "bag:=" + runtime_capability
+                or _actual_u64(candidate["command_id"], "D runtime command ID")
+                <= command_id
+            ):
+                _actual_fail("D runtime command does not consume the held bag capability")
+            sink_arguments = {}
+            for field in (
+                "serial_trace", "callback_trace", "trajectory_trace", "updater_trace",
+                "state_payload", "proposal_payload", "raw_system_payload", "timing_trace",
+                "runtime_parameters", "loader_map_before", "loader_map_after",
+                "legacy_state", "legacy_deviation", "legacy_timing",
+            ):
+                prefix = "cp2_{}_sink_capability:=".format(field)
+                values = [
+                    item[len(prefix):]
+                    for item in candidate["argv"]
+                    if item.startswith(prefix)
+                ]
+                if len(values) != 1:
+                    _actual_fail("D runtime sink capability argv population differs")
+                sink_arguments[field] = values[0]
+            if run_sink_arguments is None:
+                run_sink_arguments = sink_arguments
+            elif run_sink_arguments != sink_arguments:
+                _actual_fail("D preflight/runtime sink capabilities differ")
+        for field, value in run_sink_arguments.items():
+            if field not in required_sink_fields:
+                if value != "null":
+                    _actual_fail("D runtime has a nonnull inapplicable sink capability")
+                continue
+            fields = value.split(":")
+            if len(fields) != 12 or fields[0] != "v1":
+                _actual_fail("D runtime sink capability grammar differs")
+            numbers = tuple(
+                _actual_canonical_u64_argument(item, "D runtime sink capability")
+                for item in fields[1:]
+            )
+            if (
+                numbers[0] != parent_pid
+                or numbers[1] > (1 << 31) - 1
+                or not stat.S_ISREG(numbers[4])
+                or stat.S_IMODE(numbers[4]) != 0o600
+                or numbers[5] != 1
+                or numbers[8] != 0
+            ):
+                _actual_fail("D runtime sink capability initial identity differs")
+            observed_sink_capabilities.append((field, numbers))
+            run_capability_numbers[field] = numbers
+        for field, launch_name in (
+            ("legacy_state", "path_state:="),
+            ("legacy_deviation", "path_std:="),
+            ("legacy_timing", "path_time:="),
+        ):
+            numbers = run_capability_numbers[field]
+            expected = launch_name + "/proc/{}/fd/{}".format(
+                parent_pid, numbers[1]
+            )
+            for phase in ("runtime_preflight", "ros_run"):
+                command = next(
+                    item for item in common["commands"]
+                    if item["phase"] == phase
+                    and item["sequence_index"] == sequence_index
+                    and item["run_index"] == run_index
+                )
+                if command["argv"].count(expected) != 1:
+                    _actual_fail("D legacy writer does not consume its held sink capability")
+    if (
+        len(observed_sink_capabilities) != 18
+        or len({(item[1][2], item[1][3]) for item in observed_sink_capabilities}) != 18
+        or len({(item[1][0], item[1][1]) for item in observed_sink_capabilities}) != 18
+    ):
+        _actual_fail("D runtime sink capabilities alias")
+
+    streams = {}
+    for stream_name in ("stdout", "stderr"):
+        relative = _actual_relpath(
+            record[stream_name], "D pair-index command " + stream_name
+        )
+        payload = _actual_read_bytes(
+            artifact / relative,
+            "D pair-index command " + stream_name,
+            ACTUAL_MAX_JSONL_BYTES,
+        )
+        if (
+            manifest.get(relative) != record[stream_name + "_sha256"]
+            or hashlib.sha256(payload).hexdigest() != manifest.get(relative)
+        ):
+            _actual_fail("D pair-index command stream identity differs")
+        streams[stream_name] = payload
+    pair_payload = _actual_read_bytes(
+        artifact / "pair_index.jsonl", "pair_index.jsonl", ACTUAL_MAX_JSONL_BYTES
+    )
+    witness_payload = _actual_read_bytes(
+        artifact / "pair_selection_witness.jsonl",
+        "pair_selection_witness.jsonl",
+        ACTUAL_MAX_JSONL_BYTES,
+    )
+    if (
+        streams["stderr"] != b""
+        or streams["stdout"] != pair_payload
+        or _actual_canonical_jsonl_bytes(pair_rows, "D pair-index command stdout")
+        != pair_payload
+        or hashlib.sha256(witness_payload).hexdigest()
+        != manifest.get("pair_selection_witness.jsonl")
+    ):
+        _actual_fail("D pair-index stdout/witness retained join differs")
+
+
+def _actual_replay_pair_selection_witness(
+    artifact, report, pair_rows, pair_payload
+):
+    """Independently reconstruct the exact first-forward pair population.
+
+    Both retained JSONL surfaces are canonical, and the replay is compared as
+    bytes rather than only as decoded objects.  This prevents harmless-looking
+    lexical drift from weakening the frozen byte-exact witness contract.
+    """
+
+    if (
+        _actual_canonical_jsonl_bytes(pair_rows, "pair_index.jsonl")
+        != pair_payload
+    ):
+        _actual_fail("pair_index.jsonl is not canonical JSONL")
+
+    rows, witness_payload = _actual_jsonl(
+        artifact / "pair_selection_witness.jsonl",
+        "pair_selection_witness.jsonl",
+    )
+    if not rows:
+        _actual_fail("pair-selection witness is empty")
+    if (
+        _actual_canonical_jsonl_bytes(
+            rows, "pair_selection_witness.jsonl"
+        )
+        != witness_payload
+    ):
+        _actual_fail("pair_selection_witness.jsonl is not canonical JSONL")
+    normalized = []
+    previous_record_time = None
+    for expected_index, row in enumerate(rows):
+        _actual_exact_keys(
+            row, ACTUAL_FILTERED_WITNESS_KEYS, "filtered-message witness row"
+        )
+        if (
+            not _schema_version_one(row["schema_version"])
+            or row["record_type"] != "filtered_message"
+            or row["sequence_index"] != report["sequence_index"]
+            or row["sequence_id"] != report["sequence_id"]
+            or row["filtered_index"] != expected_index
+        ):
+            _actual_fail("filtered-message witness identity/order differs")
+        _actual_u64(row["sequence_index"], "witness sequence index")
+        _actual_u64(row["filtered_index"], "witness filtered index")
+        kind = row["kind"]
+        if kind not in ("imu", "cam0", "cam1"):
+            _actual_fail("filtered-message witness kind is invalid")
+        expected_camera = None if kind == "imu" else (0 if kind == "cam0" else 1)
+        if row["camera_id"] != expected_camera:
+            _actual_fail("filtered-message witness camera identity differs")
+        if row["camera_id"] is not None:
+            _actual_u64(row["camera_id"], "witness camera ID")
+        record_time = _actual_u64(
+            row["record_time_ns"], "witness record time"
+        )
+        header_time = _actual_u64(
+            row["header_time_ns"], "witness header time"
+        )
+        if previous_record_time is not None and record_time < previous_record_time:
+            _actual_fail("filtered-message witness record times reverse")
+        if kind == "imu" and header_time != 0:
+            _actual_fail("filtered-message witness IMU header time is not zero")
+        previous_record_time = record_time
+        normalized.append((kind, record_time, header_time))
+
+    replayed = []
+    used = set()
+    for anchor, (kind, record_time, _header_time) in enumerate(normalized):
+        if kind not in ("cam0", "cam1") or anchor in used:
+            continue
+        opposite = "cam1" if kind == "cam0" else "cam0"
+        candidate = next(
+            (
+                index
+                for index in range(anchor + 1, len(normalized))
+                if normalized[index][0] == opposite
+            ),
+            None,
+        )
+        # The first later opposite-camera row is authoritative.  A used or
+        # ineligible first row skips this anchor; searching farther is forbidden.
+        if candidate is None or candidate in used:
+            continue
+        candidate_record_time = normalized[candidate][1]
+        delta = abs(candidate_record_time - record_time)
+        if delta >= 20_000_000:
+            continue
+        cam0_index, cam1_index = (
+            (anchor, candidate) if kind == "cam0" else (candidate, anchor)
+        )
+        cam0 = normalized[cam0_index]
+        cam1 = normalized[cam1_index]
+        replayed.append(
+            {
+                "schema_version": 1,
+                "record_type": "pair_index",
+                "sequence_index": report["sequence_index"],
+                "sequence_id": report["sequence_id"],
+                "pair_index": len(replayed),
+                "anchor_filtered_index": anchor,
+                "anchor_camera_id": 0 if kind == "cam0" else 1,
+                "cam0_filtered_index": cam0_index,
+                "cam1_filtered_index": cam1_index,
+                "cam0_record_time_ns": cam0[1],
+                "cam1_record_time_ns": cam1[1],
+                "cam0_header_time_ns": cam0[2],
+                "cam1_header_time_ns": cam1[2],
+                "absolute_record_delta_ns": delta,
+            }
+        )
+        used.update((anchor, candidate))
+    replayed_payload = _actual_canonical_jsonl_bytes(
+        replayed, "replayed pair index"
+    )
+    if replayed_payload != pair_payload or replayed != pair_rows:
+        _actual_fail(
+            "pair index differs from exact strict first-forward/no-search-past/no-reuse replay"
+        )
+
+
 def _actual_validate_sequence_traces(artifact, manifest, report, provenance_details):
-    pair_rows, _ = _actual_jsonl(artifact / "pair_index.jsonl", "pair_index.jsonl")
+    pair_rows, pair_payload = _actual_jsonl(
+        artifact / "pair_index.jsonl", "pair_index.jsonl"
+    )
     if not pair_rows:
         _actual_fail("sequence pair-index population is empty")
     pair_by_index = {}
@@ -11522,6 +13052,9 @@ def _actual_validate_sequence_traces(artifact, manifest, report, provenance_deta
         pair_by_index[row_index] = row
     if report["valid_pair_count"] != len(pair_rows):
         _actual_fail("sequence valid-pair count differs from pair-index rows")
+    _actual_replay_pair_selection_witness(
+        artifact, report, pair_rows, pair_payload
+    )
 
     runs = report["runs"]
     if not isinstance(runs, list) or len(runs) != 2:
@@ -11535,7 +13068,7 @@ def _actual_validate_sequence_traces(artifact, manifest, report, provenance_deta
         "processed", "not_queued", "queued_unprocessed", "process_terminated",
         "trace_failure",
     }
-    sequence_math = _actual_load_module("cp2_sequence_math")
+    math_codec = _actual_load_module("cp2_sequence_math_codec")
     for run_index, mode in enumerate(("nullspace", "schur")):
         run = runs[run_index]
         _actual_exact_keys(run, ACTUAL_SEQUENCE_RUN_KEYS, "sequence run")
@@ -11567,6 +13100,28 @@ def _actual_validate_sequence_traces(artifact, manifest, report, provenance_deta
             _actual_fail("sequence callback trace hash differs")
         if run["trajectory_sha256"] != manifest[trajectory_name]:
             _actual_fail("sequence trajectory trace hash differs")
+        evaluator_result_name = "evaluation/{}_evaluator_result.zip".format(mode)
+        if (
+            run["evaluator_result_path"] != evaluator_result_name
+            or evaluator_result_name not in manifest
+            or run["evaluator_result_sha256"] != manifest[evaluator_result_name]
+        ):
+            _actual_fail("sequence evaluator-result path/hash differs")
+        _actual_f64(
+            run["evaluator_archive_rmse_m"],
+            "sequence evaluator archive RMSE",
+            nonnegative=True,
+        )
+        if (
+            not isinstance(run["evaluator_console_rmse"], str)
+            or re.fullmatch(r"(?:0|[1-9][0-9]*)\.[0-9]{6}", run["evaluator_console_rmse"])
+            is None
+        ):
+            _actual_fail("sequence evaluator console RMSE token is not canonical")
+        if _actual_u64(
+            run["evaluator_error_count"], "sequence evaluator error count"
+        ) == 0:
+            _actual_fail("sequence evaluator error population is empty")
         callbacks, _ = _actual_jsonl(artifact / callback_name, callback_name)
         if len(callbacks) != len(pair_rows):
             _actual_fail("sequence callback population is not one-to-one with pair index")
@@ -11681,9 +13236,13 @@ def _actual_validate_sequence_traces(artifact, manifest, report, provenance_deta
             trajectory["quaternion_ItoG_xyzw"] = _actual_f64_vector(
                 trajectory["quaternion_ItoG_xyzw"], 4, "trajectory quaternion"
             )
-            sequence_math.jpl_stored_xyzw_to_hamilton_inverse_rotation(
-                trajectory["quaternion_ItoG_xyzw"]
-            )
+            try:
+                math_codec.validate_stored_quaternion(
+                    trajectory["quaternion_ItoG_xyzw"],
+                    "trajectory quaternion",
+                )
+            except math_codec.SequenceMathCodecError as exc:
+                raise ActualVerificationError(str(exc)) from exc
             trajectory_by_index[trajectory_index] = trajectory
         emitted = [callback for callback in callbacks if callback["state_row_emitted"]]
         if len(emitted) != len(trajectories) or set(seen_callback_indices) != {
@@ -11744,219 +13303,1322 @@ def _actual_validate_sequence_traces(artifact, manifest, report, provenance_deta
     return pair_rows, mode_details
 
 
+def _actual_file_object_identity(status_value):
+    return (
+        status_value.st_dev,
+        status_value.st_ino,
+        status_value.st_mode,
+        status_value.st_nlink,
+        status_value.st_uid,
+        status_value.st_gid,
+        status_value.st_size,
+        status_value.st_mtime_ns,
+        status_value.st_ctime_ns,
+    )
+
+
+def _actual_directory_object_identity(status_value):
+    """Return replacement-sensitive directory identity, excluding contents metadata."""
+
+    return (
+        status_value.st_dev,
+        status_value.st_ino,
+        status_value.st_mode,
+        status_value.st_nlink,
+        status_value.st_uid,
+        status_value.st_gid,
+    )
+
+
+def _actual_directory_cleanup_identity(status_value):
+    """Pin a private root across expected child creation for safe cleanup."""
+
+    return (
+        status_value.st_dev,
+        status_value.st_ino,
+        status_value.st_mode,
+        status_value.st_uid,
+        status_value.st_gid,
+    )
+
+
+def _actual_sandbox_environment(profile):
+    """Resolve only the frozen capsule environment inside the isolated root."""
+
+    environment = {}
+    prefix = "${PRIVATE_ROOT}/"
+    for name, value in profile.environment:
+        if value.startswith(prefix):
+            suffix = value[len(prefix):]
+            if not suffix or "/" in suffix or suffix in (".", ".."):
+                _actual_fail("capsule sandbox private environment suffix differs")
+            environment[name] = "/private/" + suffix
+        else:
+            environment[name] = value
+    if profile.execution.cwd != "${PRIVATE_ROOT}/work":
+        _actual_fail("capsule sandbox execution cwd template differs")
+    return environment
+
+
+def _actual_expand_sandbox_template(value, label):
+    if not isinstance(value, str) or not value or "\0" in value:
+        _actual_fail(label + " template is invalid")
+    for marker, root in (
+        ("${CAPSULE_ROOT}", "/capsule"),
+        ("${PRIVATE_ROOT}", "/private"),
+    ):
+        if value == marker:
+            return root
+        prefix = marker + "/"
+        if value.startswith(prefix):
+            suffix = value[len(prefix):]
+            if not suffix or any(
+                part in ("", ".", "..") for part in PurePosixPath(suffix).parts
+            ):
+                _actual_fail(label + " path template suffix differs")
+            return root + "/" + suffix
+    if "${" in value:
+        _actual_fail(label + " contains an unknown template marker")
+    return value
+
+
+def _actual_stream_memfd(label):
+    if not hasattr(os, "memfd_create") or not hasattr(os, "MFD_ALLOW_SEALING"):
+        _actual_fail(label + " anonymous stream transport is unavailable")
+    descriptor = os.memfd_create(
+        "schurvio-cp2-stream", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
+    )
+    os.fchmod(descriptor, 0o600)
+    return descriptor
+
+
+def _actual_seal_stream(descriptor, label, maximum):
+    import fcntl
+
+    seals = (
+        fcntl.F_SEAL_WRITE
+        | fcntl.F_SEAL_GROW
+        | fcntl.F_SEAL_SHRINK
+        | fcntl.F_SEAL_SEAL
+    )
+    before = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_uid != os.geteuid()
+        or before.st_nlink != 0
+        or stat.S_IMODE(before.st_mode) != 0o600
+        or before.st_size > maximum
+        or fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) != 0
+    ):
+        _actual_fail(label + " anonymous stream identity differs")
+    os.fchmod(descriptor, 0o444)
+    try:
+        fcntl.fcntl(descriptor, fcntl.F_ADD_SEALS, seals)
+    except OSError as exc:
+        raise ActualVerificationError(
+            label + " retains a writable stream descriptor"
+        ) from exc
+    if fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) != seals:
+        _actual_fail(label + " anonymous stream seal set differs")
+    payload = bytearray()
+    offset = 0
+    while offset < before.st_size:
+        block = os.pread(
+            descriptor, min(1 << 20, before.st_size - offset), offset
+        )
+        if not block:
+            _actual_fail(label + " anonymous stream became short")
+        payload.extend(block)
+        offset += len(block)
+    after = os.fstat(descriptor)
+    if (
+        after.st_dev != before.st_dev
+        or after.st_ino != before.st_ino
+        or after.st_nlink != before.st_nlink
+        or after.st_uid != before.st_uid
+        or after.st_gid != before.st_gid
+        or after.st_size != before.st_size
+        or after.st_mtime_ns != before.st_mtime_ns
+        or stat.S_IMODE(after.st_mode) != 0o444
+    ):
+        _actual_fail(label + " anonymous stream changed while sealing")
+    return bytes(payload)
+
+
+def _actual_run_sealed_capsule(
+    sandbox,
+    command,
+    environment,
+    timeout_seconds,
+    label,
+    *,
+    read_only_inputs=None,
+    output_destination=None,
+    output_maximum=None,
+    expected_streams=None,
+):
+    """Run one capsule command from sealed FDs and return streams/output."""
+
+    capsule = _actual_load_module("cp2_capsule")
+    stdout_fd = _actual_stream_memfd(label + " stdout")
+    stderr_fd = _actual_stream_memfd(label + " stderr")
+    process = None
+    group_closed = False
+    try:
+        with sandbox.invocation(
+            tuple(command),
+            read_only_inputs={} if read_only_inputs is None else read_only_inputs,
+            writable_outputs={}
+            if output_destination is None
+            else {output_destination: output_maximum},
+        ) as invocation:
+            process = subprocess.Popen(
+                invocation.argv,
+                executable=invocation.executable,
+                cwd="/tmp",
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_fd,
+                stderr=stderr_fd,
+                start_new_session=True,
+                close_fds=True,
+                pass_fds=invocation.pass_fds,
+            )
+            return_code, timed_out, surviving_descendants = (
+                _actual_wait_owned_process_group(process, timeout_seconds, label)
+            )
+            group_closed = True
+            stdout = _actual_seal_stream(
+                stdout_fd, label + " stdout", ACTUAL_MAX_JSON_BYTES
+            )
+            stderr = _actual_seal_stream(
+                stderr_fd, label + " stderr", ACTUAL_MAX_JSON_BYTES
+            )
+            if timed_out:
+                _actual_fail(label + " timed out")
+            if surviving_descendants:
+                _actual_fail(label + " retained a process-group descendant")
+            if return_code != 0:
+                _actual_fail(label + " returned nonzero")
+            if expected_streams is not None:
+                if (
+                    len(stdout) != expected_streams.stdout_size
+                    or hashlib.sha256(stdout).hexdigest()
+                    != expected_streams.stdout_sha256
+                    or len(stderr) != expected_streams.stderr_size
+                    or hashlib.sha256(stderr).hexdigest()
+                    != expected_streams.stderr_sha256
+                ):
+                    _actual_fail(label + " retained stream identity differs")
+            output = (
+                None
+                if output_destination is None
+                else invocation.seal_output(
+                    output_destination, output_maximum
+                )
+            )
+            return stdout, stderr, output
+    except capsule.CapsuleError as exc:
+        raise ActualVerificationError(label + " failed closed: " + str(exc)) from exc
+    finally:
+        if process is not None and not group_closed:
+            _actual_terminate_reap_and_wait_for_group_absence(process, label)
+        os.close(stdout_fd)
+        os.close(stderr_fd)
+
+
+def _actual_validate_unit_capsule_identity(common, unit_manifest):
+    """Bind both unit capsules to the exact source-frozen external identity."""
+
+    capsule = _actual_load_module("cp2_capsule")
+    identity_relative = "project/cp2_capsule_expected_identity.json"
+    source_lock_relative = "project/cp2_capsule_source_lock.json"
+    context_entries = {
+        record["path"]: record for record in common["source_context"]["entries"]
+    }
+    for relative in (identity_relative, source_lock_relative):
+        if relative not in context_entries:
+            _actual_fail("source context omits capsule identity input: " + relative)
+    archive_errors = []
+    held = read_exact_source_archive_members(
+        common["source_archive"],
+        (identity_relative, source_lock_relative),
+        archive_errors,
+    )
+    if archive_errors:
+        _actual_fail(
+            "cannot read source-frozen capsule identity: "
+            + "; ".join(archive_errors)
+        )
+    for relative, payload in held.items():
+        entry = context_entries[relative]
+        if (
+            len(payload) != entry["size"]
+            or hashlib.sha256(payload).hexdigest() != entry["sha256"]
+        ):
+            _actual_fail("source-frozen capsule identity bytes differ: " + relative)
+    source_lock_bytes = held[source_lock_relative]
+    try:
+        capsule.validate_embedded_source_lock(source_lock_bytes)
+        identity_record = strict_json_bytes(
+            held[identity_relative], "expected capsule identity"
+        )
+        identity_record = capsule.validate_expected_capsule_identity(identity_record)
+        if (
+            capsule.expected_capsule_identity_bytes(identity_record)
+            != held[identity_relative]
+        ):
+            _actual_fail("expected capsule identity is not canonical JSON")
+    except capsule.CapsuleError as exc:
+        raise ActualVerificationError(
+            "source-frozen capsule identity is invalid: " + str(exc)
+        ) from exc
+    lock_record = identity_record["embedded_source_lock"]
+    if (
+        lock_record["size_bytes"] != len(source_lock_bytes)
+        or lock_record["sha256"]
+        != hashlib.sha256(source_lock_bytes).hexdigest()
+    ):
+        _actual_fail("expected capsule identity does not bind its source lock")
+
+    result = {}
+    for kind in ("direct_math", "evaluator"):
+        pair = identity_record["unit_artifact_members"][kind]
+        archive_record = pair["archive"]
+        profile_record = pair["profile"]
+        archive_relative = archive_record["path"]
+        profile_relative = profile_record["path"]
+        if archive_relative not in unit_manifest or profile_relative not in unit_manifest:
+            _actual_fail("unit anchor omits the expected " + kind + " capsule")
+        archive_path = common["unit_artifact"] / archive_relative
+        profile_path = common["unit_artifact"] / profile_relative
+        archive_status = archive_path.lstat()
+        profile_status = profile_path.lstat()
+        if (
+            not stat.S_ISREG(archive_status.st_mode)
+            or not stat.S_ISREG(profile_status.st_mode)
+            or archive_status.st_nlink != 1
+            or profile_status.st_nlink != 1
+            or archive_status.st_size != archive_record["size_bytes"]
+            or profile_status.st_size != profile_record["size_bytes"]
+            or unit_manifest[archive_relative] != archive_record["sha256"]
+            or unit_manifest[profile_relative] != profile_record["sha256"]
+        ):
+            _actual_fail(kind + " unit capsule differs from the external identity")
+        profile_bytes = _actual_read_bytes(
+            profile_path, kind + " capsule profile", ACTUAL_MAX_JSON_BYTES
+        )
+        if hashlib.sha256(profile_bytes).hexdigest() != profile_record["sha256"]:
+            _actual_fail(kind + " capsule profile digest differs")
+        try:
+            parsed_profile = capsule.validate_capsule_profile(
+                strict_json_bytes(profile_bytes, kind + " capsule profile")
+            )
+        except capsule.CapsuleError as exc:
+            raise ActualVerificationError(
+                kind + " capsule profile failed validation: " + str(exc)
+            ) from exc
+        expected_contracts = tuple(
+            (
+                relative,
+                context_entries[relative]["size"],
+                context_entries[relative]["sha256"],
+            )
+            for relative in capsule.CONTRACT_BINDING_PATHS
+            if relative in context_entries
+        )
+        retained_contracts = tuple(
+            (binding.path, binding.size, binding.sha256)
+            for binding in parsed_profile.contract_bindings
+        )
+        if (
+            len(expected_contracts) != len(capsule.CONTRACT_BINDING_PATHS)
+            or retained_contracts != expected_contracts
+            or parsed_profile.capsule_kind != kind
+            or parsed_profile.canonical_bytes != profile_bytes
+            or parsed_profile.archive_size != archive_status.st_size
+            or parsed_profile.archive_sha256 != archive_record["sha256"]
+            or parsed_profile.profile_sha256 != profile_record["sha256"]
+            or parsed_profile.source_lock_size != len(source_lock_bytes)
+            or parsed_profile.source_lock_sha256
+            != hashlib.sha256(source_lock_bytes).hexdigest()
+        ):
+            _actual_fail(kind + " profile/source/contract identity differs")
+        result[kind] = {
+            "archive_path": archive_path,
+            "profile_path": profile_path,
+            "profile_bytes": profile_bytes,
+            "profile": parsed_profile,
+        }
+    return result
+
+
+def _actual_replay_direct_capsule(common, request_bytes):
+    """Re-execute the unit-anchored direct stack from sealed anonymous FDs."""
+
+    capsule = _actual_load_module("cp2_capsule")
+    if (
+        type(request_bytes) is not bytes
+        or not request_bytes
+        or len(request_bytes) > (256 << 20)
+    ):
+        _actual_fail("detached direct-math request exceeds its frozen bound")
+    unit_artifact = common["unit_artifact"]
+    unit_anchor = common["unit_anchor"]
+    unit_manifest, _, _ = _actual_scan_and_verify_manifest(
+        unit_artifact, unit_anchor["manifest_sha256"]
+    )
+    capsules = _actual_validate_unit_capsule_identity(common, unit_manifest)
+    direct = capsules["direct_math"]
+    archive_relative = "capsules/direct_math.cp2cap"
+    profile_relative = "capsules/direct_math.profile.json"
+    archive_path = direct["archive_path"]
+    profile_path = direct["profile_path"]
+    profile_bytes = direct["profile_bytes"]
+    profile = direct["profile"]
+    profile_record = strict_json_bytes(profile_bytes, "direct-math capsule profile")
+    if (
+        profile.capsule_kind != "direct_math"
+        or profile.canonical_bytes != profile_bytes
+        or profile.archive_size != archive_path.lstat().st_size
+        or profile.archive_sha256 != unit_manifest[archive_relative]
+        or profile.profile_sha256 != unit_manifest[profile_relative]
+        or profile.execution.argv_template
+        != (
+            "${CAPSULE_ROOT}/bin/launcher",
+            "--input",
+            "{ABS_REQUEST}",
+            "--output",
+            "{ABS_RESPONSE}",
+        )
+        or profile.execution.stdin_policy != "devnull"
+    ):
+        _actual_fail("direct-math unit capsule identity/execution template differs")
+
+    unit_root_identity = _actual_directory_object_identity(unit_artifact.lstat())
+    archive_identity = _actual_file_object_identity(archive_path.lstat())
+    profile_identity = _actual_file_object_identity(profile_path.lstat())
+    temporary = Path(
+        tempfile.mkdtemp(prefix="schurvio-cp2-d-detached-capsule-", dir="/tmp")
+    )
+    os.chmod(str(temporary), 0o700)
+    temporary_identity = _actual_directory_cleanup_identity(temporary.lstat())
+    stage_parent = temporary / "stage"
+    stage_parent.mkdir(mode=0o700)
+    staged = None
+    staged_identity = None
+    response_bytes = None
+    environment = _actual_sandbox_environment(profile)
+    try:
+        try:
+            staged = capsule.stage_capsule(
+                archive_path, profile_record, stage_parent / "direct_math"
+            )
+            staged_identity = _actual_directory_object_identity(staged.root.lstat())
+            with capsule.SealedCapsuleSandbox(staged) as sandbox:
+                version_command = tuple(
+                    _actual_expand_sandbox_template(
+                        value, "detached direct-math version argv"
+                    )
+                    for value in profile.version_probe.argv
+                )
+                if version_command != ("/capsule/bin/launcher", "--version"):
+                    _actual_fail("detached direct-math version argv differs")
+                _actual_run_sealed_capsule(
+                    sandbox,
+                    version_command,
+                    environment,
+                    profile.version_probe.timeout_seconds,
+                    "detached direct-math version probe",
+                    expected_streams=profile.version_probe,
+                )
+
+                preflight_command = tuple(
+                    _actual_expand_sandbox_template(
+                        value, "detached direct-math preflight argv"
+                    )
+                    for value in profile.synthetic_preflight.command.argv
+                )
+                if (
+                    len(preflight_command) != 7
+                    or preflight_command[0] != "/capsule/bin/launcher"
+                    or preflight_command[1] != "--input"
+                    or preflight_command[3] != "--known-answers"
+                    or preflight_command[5] != "--output"
+                    or preflight_command[6] != "/private/preflight/response.json"
+                ):
+                    _actual_fail("detached direct-math preflight argv differs")
+                _, _, preflight_bytes = _actual_run_sealed_capsule(
+                    sandbox,
+                    preflight_command,
+                    environment,
+                    profile.synthetic_preflight.command.timeout_seconds,
+                    "detached direct-math known-answer preflight",
+                    output_destination="/private/preflight/response.json",
+                    output_maximum=profile.synthetic_preflight.output_size,
+                    expected_streams=profile.synthetic_preflight.command,
+                )
+                if (
+                    type(preflight_bytes) is not bytes
+                    or len(preflight_bytes) != profile.synthetic_preflight.output_size
+                    or hashlib.sha256(preflight_bytes).hexdigest()
+                    != profile.synthetic_preflight.output_sha256
+                ):
+                    _actual_fail("detached direct-math known-answer response differs")
+
+                command = (
+                    "/capsule/bin/launcher",
+                    "--input",
+                    "/private/work/request.json",
+                    "--output",
+                    "/private/work/response.json",
+                )
+                stdout, stderr, response_bytes = _actual_run_sealed_capsule(
+                    sandbox,
+                    command,
+                    environment,
+                    profile.execution.timeout_seconds,
+                    "detached direct-math capsule",
+                    read_only_inputs={
+                        "/private/work/request.json": request_bytes,
+                    },
+                    output_destination="/private/work/response.json",
+                    output_maximum=256 << 20,
+                )
+                if stdout or stderr:
+                    _actual_fail("detached direct-math capsule emitted a stream")
+        finally:
+            if staged is not None:
+                capsule.revalidate_staged_capsule(staged.root, staged.entries)
+                if (
+                    _actual_directory_object_identity(staged.root.lstat())
+                    != staged_identity
+                ):
+                    _actual_fail("staged direct-math capsule was replaced")
+            if (
+                _actual_directory_object_identity(unit_artifact.lstat())
+                != unit_root_identity
+                or _actual_file_object_identity(archive_path.lstat())
+                != archive_identity
+                or _actual_file_object_identity(profile_path.lstat())
+                != profile_identity
+                or sha256_file(archive_path) != unit_manifest[archive_relative]
+                or sha256_file(profile_path) != unit_manifest[profile_relative]
+            ):
+                _actual_fail("unit direct-math capsule/profile changed during replay")
+    except (OSError, capsule.CapsuleError) as exc:
+        raise ActualVerificationError(
+            "detached direct-math capsule failed closed: " + str(exc)
+        ) from exc
+    finally:
+        if (
+            os.path.lexists(temporary)
+            and _actual_directory_cleanup_identity(temporary.lstat())
+            == temporary_identity
+        ):
+            shutil.rmtree(str(temporary))
+        if os.path.lexists(temporary):
+            _actual_fail("detached direct-math capsule temporary root remains")
+    if type(response_bytes) is not bytes:
+        _actual_fail("detached direct-math capsule produced no response")
+    return (
+        response_bytes,
+        profile.environment_sha256,
+        capsules["evaluator"]["profile"].environment_sha256,
+    )
+
+
+def _actual_replay_evaluator_capsule_preflight(common):
+    """Repeat evaluator version/KAT through the sealed capsule boundary."""
+
+    capsule = _actual_load_module("cp2_capsule")
+    evaluator_result = _actual_load_module("cp2_evaluator_result")
+    unit_artifact = common["unit_artifact"]
+    unit_anchor = common["unit_anchor"]
+    unit_manifest, _, _ = _actual_scan_and_verify_manifest(
+        unit_artifact, unit_anchor["manifest_sha256"]
+    )
+    capsules = _actual_validate_unit_capsule_identity(common, unit_manifest)
+    evaluator = capsules["evaluator"]
+    archive_relative = "capsules/evaluator.cp2cap"
+    profile_relative = "capsules/evaluator.profile.json"
+    archive_path = evaluator["archive_path"]
+    profile_path = evaluator["profile_path"]
+    profile_bytes = evaluator["profile_bytes"]
+    profile = evaluator["profile"]
+    profile_record = strict_json_bytes(profile_bytes, "evaluator capsule profile")
+    if (
+        profile.capsule_kind != "evaluator"
+        or profile.canonical_bytes != profile_bytes
+        or profile.archive_size != archive_path.lstat().st_size
+        or profile.archive_sha256 != unit_manifest[archive_relative]
+        or profile.profile_sha256 != unit_manifest[profile_relative]
+        or profile.execution.argv_template
+        != (
+            "${CAPSULE_ROOT}/bin/launcher",
+            "tum",
+            "{GT_SHARED}",
+            "{MODE_SHARED_ALIGNED}",
+            "-r",
+            "trans_part",
+            "--t_max_diff",
+            "0.01",
+            "--save_results",
+            "{ABS_RESULT_ZIP}",
+            "--no_warnings",
+        )
+        or profile.execution.stdin_policy != "devnull"
+    ):
+        _actual_fail("evaluator unit capsule identity/execution template differs")
+
+    unit_root_identity = _actual_directory_object_identity(unit_artifact.lstat())
+    archive_identity = _actual_file_object_identity(archive_path.lstat())
+    profile_identity = _actual_file_object_identity(profile_path.lstat())
+    temporary = Path(
+        tempfile.mkdtemp(prefix="schurvio-cp2-d-detached-evaluator-", dir="/tmp")
+    )
+    os.chmod(str(temporary), 0o700)
+    temporary_identity = _actual_directory_cleanup_identity(temporary.lstat())
+    stage_parent = temporary / "stage"
+    stage_parent.mkdir(mode=0o700)
+    staged = None
+    staged_identity = None
+    environment = _actual_sandbox_environment(profile)
+    try:
+        try:
+            staged = capsule.stage_capsule(
+                archive_path, profile_record, stage_parent / "evaluator"
+            )
+            staged_identity = _actual_directory_object_identity(staged.root.lstat())
+            with capsule.SealedCapsuleSandbox(staged) as sandbox:
+                version_command = tuple(
+                    _actual_expand_sandbox_template(
+                        value, "detached evaluator version argv"
+                    )
+                    for value in profile.version_probe.argv
+                )
+                if version_command != ("/capsule/bin/launcher", "--version"):
+                    _actual_fail("detached evaluator version argv differs")
+                _actual_run_sealed_capsule(
+                    sandbox,
+                    version_command,
+                    environment,
+                    profile.version_probe.timeout_seconds,
+                    "detached evaluator version probe",
+                    expected_streams=profile.version_probe,
+                )
+
+                preflight_command = tuple(
+                    _actual_expand_sandbox_template(
+                        value, "detached evaluator preflight argv"
+                    )
+                    for value in profile.synthetic_preflight.command.argv
+                )
+                expected_command = (
+                    "/capsule/bin/launcher",
+                    "tum",
+                    "/capsule/fixtures/ground-truth.tum",
+                    "/capsule/fixtures/estimate.tum",
+                    "-r",
+                    "trans_part",
+                    "--t_max_diff",
+                    "0.01",
+                    "--save_results",
+                    "/private/preflight/results.zip",
+                    "--no_warnings",
+                )
+                if preflight_command != expected_command:
+                    _actual_fail("detached evaluator preflight argv differs")
+                _, _, result_bytes = _actual_run_sealed_capsule(
+                    sandbox,
+                    preflight_command,
+                    environment,
+                    profile.synthetic_preflight.command.timeout_seconds,
+                    "detached evaluator known-answer preflight",
+                    output_destination="/private/preflight/results.zip",
+                    output_maximum=profile.synthetic_preflight.output_size,
+                    expected_streams=profile.synthetic_preflight.command,
+                )
+                if (
+                    type(result_bytes) is not bytes
+                    or len(result_bytes) != profile.synthetic_preflight.output_size
+                    or hashlib.sha256(result_bytes).hexdigest()
+                    != profile.synthetic_preflight.output_sha256
+                ):
+                    _actual_fail("detached evaluator known-answer result differs")
+                known_bytes = sandbox.read_member(
+                    "fixtures/expected-result-bits.json", ACTUAL_MAX_JSON_BYTES
+                )
+                known = strict_json_bytes(
+                    known_bytes, "detached evaluator known-answer bits"
+                )
+                _actual_exact_keys(
+                    known,
+                    ("archive_sha256", "error_bits", "rmse_bits"),
+                    "detached evaluator known-answer bits",
+                )
+                if (
+                    hashlib.sha256(known_bytes).hexdigest()
+                    != profile.synthetic_preflight.known_answer_bits_sha256
+                    or known["archive_sha256"]
+                    != hashlib.sha256(result_bytes).hexdigest()
+                ):
+                    _actual_fail("detached evaluator known-answer identity differs")
+                try:
+                    parsed = evaluator_result.parse_evaluator_result_archive(
+                        result_bytes
+                    )
+                except evaluator_result.EvaluatorResultError as exc:
+                    raise ActualVerificationError(
+                        "detached evaluator known-answer archive is invalid: "
+                        + str(exc)
+                    ) from exc
+                if (
+                    known["error_bits"] != list(parsed.error_bits)
+                    or known["rmse_bits"]
+                    != struct.pack(">d", parsed.statistics.rmse).hex()
+                ):
+                    _actual_fail("detached evaluator known-answer values differ")
+        finally:
+            if staged is not None:
+                capsule.revalidate_staged_capsule(staged.root, staged.entries)
+                if (
+                    _actual_directory_object_identity(staged.root.lstat())
+                    != staged_identity
+                ):
+                    _actual_fail("staged evaluator capsule was replaced")
+            if (
+                _actual_directory_object_identity(unit_artifact.lstat())
+                != unit_root_identity
+                or _actual_file_object_identity(archive_path.lstat())
+                != archive_identity
+                or _actual_file_object_identity(profile_path.lstat())
+                != profile_identity
+                or sha256_file(archive_path) != unit_manifest[archive_relative]
+                or sha256_file(profile_path) != unit_manifest[profile_relative]
+            ):
+                _actual_fail("unit evaluator capsule/profile changed during preflight")
+    except (OSError, capsule.CapsuleError) as exc:
+        raise ActualVerificationError(
+            "detached evaluator capsule failed closed: " + str(exc)
+        ) from exc
+    finally:
+        if (
+            os.path.lexists(temporary)
+            and _actual_directory_cleanup_identity(temporary.lstat())
+            == temporary_identity
+        ):
+            shutil.rmtree(str(temporary))
+        if os.path.lexists(temporary):
+            _actual_fail("detached evaluator capsule temporary root remains")
+    return profile.environment_sha256
+
+
+def _actual_native_f64_bits(value, label):
+    return struct.pack(">d", _actual_f64(value, label)).hex()
+
+
+def _actual_rows_as_f64_bits(rows, field, width, label):
+    result = []
+    for row_index, row in enumerate(rows):
+        values = row[field]
+        if not isinstance(values, list) or len(values) != width:
+            _actual_fail(label + " row shape differs")
+        for column_index, value in enumerate(values):
+            result.append(
+                _actual_native_f64_bits(
+                    value,
+                    "{} row {} column {}".format(
+                        label, row_index, column_index
+                    ),
+                )
+            )
+    return tuple(result)
+
+
+def _actual_decode_f64_rows(array, width, label):
+    if len(array.shape) != 2 or array.shape[1] != width:
+        _actual_fail(label + " direct-math array shape differs")
+    values = array.values
+    return tuple(
+        tuple(values[index * width : (index + 1) * width])
+        for index in range(array.shape[0])
+    )
+
+
+def _actual_read_ground_truth_source(common):
+    """Read and parse the exact provenance-bound D ground-truth source."""
+
+    input_record = common["provenance"]["inputs"][0]
+    path = _actual_safe_absolute_path(
+        input_record["ground_truth_path"], "sequence ground-truth path"
+    )
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = -1
+    try:
+        descriptor = os.open(str(path), flags)
+        before = os.fstat(descriptor)
+        by_name = path.lstat()
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or _actual_file_object_identity(before)
+            != _actual_file_object_identity(by_name)
+            or before.st_size == 0
+            or before.st_size > 512 * 1024 * 1024
+        ):
+            _actual_fail("sequence ground-truth source identity differs")
+        digest = hashlib.sha256()
+        chunks = []
+        remaining = before.st_size
+        while remaining:
+            block = os.read(descriptor, min(remaining, 1024 * 1024))
+            if not block:
+                _actual_fail("sequence ground-truth source became short")
+            chunks.append(block)
+            digest.update(block)
+            remaining -= len(block)
+        if os.read(descriptor, 1):
+            _actual_fail("sequence ground-truth source grew during replay")
+        after = os.fstat(descriptor)
+        if _actual_file_object_identity(after) != _actual_file_object_identity(before):
+            _actual_fail("sequence ground-truth source changed during replay")
+    except OSError as exc:
+        raise ActualVerificationError(
+            "cannot bind sequence ground-truth source: " + str(exc)
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    payload = b"".join(chunks)
+    if digest.hexdigest() != input_record["ground_truth_sha256"]:
+        _actual_fail("sequence ground-truth source digest differs from provenance")
+    if (
+        not payload.endswith(b"\n")
+        or any(byte != 0x0A and not 0x20 <= byte <= 0x7E for byte in payload)
+    ):
+        _actual_fail("sequence ground-truth source is not printable ASCII/LF")
+    timestamp_pattern = re.compile(rb"(?:0|[1-9][0-9]*)(?:\.[0-9]{1,9})?")
+    number_pattern = re.compile(
+        rb"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?"
+        rb"(?:[eE][+-]?(?:0|[1-9][0-9]*))?"
+    )
+    schema = _actual_load_module("cp2_schema")
+    codec = _actual_load_module("cp2_sequence_math_codec")
+    rows = []
+    previous_timestamp = None
+    for row_index, raw in enumerate(payload.splitlines(), 1):
+        if not raw or raw.startswith(b"#"):
+            continue
+        fields = [field for field in raw.split(b" ") if field]
+        if (
+            len(fields) != 8
+            or timestamp_pattern.fullmatch(fields[0]) is None
+            or any(number_pattern.fullmatch(field) is None for field in fields[1:])
+        ):
+            _actual_fail(
+                "sequence ground-truth row {} syntax differs".format(row_index)
+            )
+        try:
+            timestamp = schema.decimal_seconds_to_ns(
+                fields[0].decode("ascii"),
+                "sequence ground-truth timestamp",
+            )
+            values = [float(field.decode("ascii")) for field in fields[1:]]
+        except (ValueError, OverflowError, schema.SchemaError) as exc:
+            raise ActualVerificationError(
+                "sequence ground-truth row is not exact finite TUM"
+            ) from exc
+        if not all(math.isfinite(value) for value in values):
+            _actual_fail("sequence ground-truth row contains a nonfinite value")
+        if previous_timestamp is not None and timestamp < previous_timestamp:
+            _actual_fail("sequence ground-truth timestamps reverse")
+        previous_timestamp = timestamp
+        try:
+            codec.validate_stored_quaternion(
+                values[3:7], "sequence ground-truth quaternion"
+            )
+        except codec.SequenceMathCodecError as exc:
+            raise ActualVerificationError(str(exc)) from exc
+        rows.append(
+            {
+                "timestamp_ns": timestamp,
+                "position": values[0:3],
+                "quaternion": values[3:7],
+            }
+        )
+    if not rows:
+        _actual_fail("sequence ground-truth source has no poses")
+    return rows
+
+
 def _actual_sequence_shared_math(artifact, manifest, report, mode_details, common):
-    sequence_math = _actual_load_module("cp2_sequence_math")
+    """Replay D math through the source/unit-bound capsule and join every surface."""
+
+    codec = _actual_load_module("cp2_sequence_math_codec")
+    request_relative = "direct_math/request.json"
+    response_relative = "direct_math/response.json"
+    request_bytes = _actual_read_bytes(
+        artifact / request_relative,
+        request_relative,
+        codec.MAX_DOCUMENT_BYTES,
+    )
+    response_bytes = _actual_read_bytes(
+        artifact / response_relative,
+        response_relative,
+        codec.MAX_DOCUMENT_BYTES,
+    )
+    request_digest = hashlib.sha256(request_bytes).hexdigest()
+    response_digest = hashlib.sha256(response_bytes).hexdigest()
+    if (
+        manifest.get(request_relative) != request_digest
+        or manifest.get(response_relative) != response_digest
+        or report["direct_math_request_sha256"] != request_digest
+        or report["direct_math_response_sha256"] != response_digest
+    ):
+        _actual_fail("direct-math request/response digest binding differs")
+    (
+        reproduced_response,
+        direct_environment_sha256,
+        evaluator_environment_sha256,
+    ) = _actual_replay_direct_capsule(common, request_bytes)
+    detached_evaluator_environment_sha256 = (
+        _actual_replay_evaluator_capsule_preflight(common)
+    )
+    if detached_evaluator_environment_sha256 != evaluator_environment_sha256:
+        _actual_fail("detached evaluator/direct capsule environment identity differs")
+    if reproduced_response != response_bytes:
+        _actual_fail(
+            "source/unit-bound direct-math replay is not byte-identical"
+        )
+    try:
+        request = codec.decode_sequence_request(request_bytes)
+        direct = codec.decode_sequence_response(response_bytes, request_bytes)
+    except codec.SequenceMathCodecError as exc:
+        raise ActualVerificationError("direct-math transport: " + str(exc)) from exc
+    if (
+        request.sequence_index != report["sequence_index"]
+        or request.sequence_id != report["sequence_id"]
+        or direct.sequence_index != report["sequence_index"]
+        or direct.sequence_id != report["sequence_id"]
+        or direct.request_sha256 != request_digest
+        or direct.sha256 != response_digest
+    ):
+        _actual_fail("direct-math sequence/request identity differs")
+
+    trajectory_request_fields = {
+        "nullspace": (
+            request.nullspace_timestamps_ns,
+            request.nullspace_positions,
+            request.nullspace_quaternions_xyzw,
+        ),
+        "schur": (
+            request.schur_timestamps_ns,
+            request.schur_positions,
+            request.schur_quaternions_xyzw,
+        ),
+    }
+    for mode in ("nullspace", "schur"):
+        trajectory = mode_details[mode]["trajectories"]
+        timestamps, positions, quaternions = trajectory_request_fields[mode]
+        if timestamps != tuple(
+            row["camera_timestamp_ns"] for row in trajectory
+        ):
+            _actual_fail(mode + " direct request timestamps differ from trace")
+        if positions.bits != _actual_rows_as_f64_bits(
+            trajectory, "position_G", 3, mode + " direct request positions"
+        ):
+            _actual_fail(mode + " direct request positions differ from trace")
+        if quaternions.bits != _actual_rows_as_f64_bits(
+            trajectory,
+            "quaternion_ItoG_xyzw",
+            4,
+            mode + " direct request quaternions",
+        ):
+            _actual_fail(mode + " direct request quaternions differ from trace")
+
+    source_ground_truth = _actual_read_ground_truth_source(common)
+    if request.ground_truth_timestamps_ns != tuple(
+        row["timestamp_ns"] for row in source_ground_truth
+    ):
+        _actual_fail("direct request ground-truth timestamps differ from source")
+    if request.ground_truth_positions.bits != _actual_rows_as_f64_bits(
+        source_ground_truth,
+        "position",
+        3,
+        "direct request ground-truth positions",
+    ):
+        _actual_fail("direct request ground-truth positions differ from source")
+    if request.ground_truth_quaternions_xyzw.bits != _actual_rows_as_f64_bits(
+        source_ground_truth,
+        "quaternion",
+        4,
+        "direct request ground-truth quaternions",
+    ):
+        _actual_fail("direct request ground-truth quaternions differ from source")
+
     shared_timestamp_bytes = _actual_read_bytes(
-        artifact / "shared_timestamps.bin", "shared_timestamps.bin",
+        artifact / "shared_timestamps.bin",
+        "shared_timestamps.bin",
         ACTUAL_MAX_BINARY_BYTES,
     )
     shared_population_bytes = _actual_read_bytes(
-        artifact / "shared_population.bin", "shared_population.bin",
+        artifact / "shared_population.bin",
+        "shared_population.bin",
         ACTUAL_MAX_BINARY_BYTES,
     )
-    if hashlib.sha256(shared_timestamp_bytes).hexdigest() != report["shared_timestamp_sha256"]:
-        _actual_fail("shared timestamp payload hash differs from report")
-    if hashlib.sha256(shared_population_bytes).hexdigest() != report["shared_population_sha256"]:
-        _actual_fail("shared population payload hash differs from report")
+    if (
+        hashlib.sha256(shared_timestamp_bytes).hexdigest()
+        != report["shared_timestamp_sha256"]
+        or hashlib.sha256(shared_population_bytes).hexdigest()
+        != report["shared_population_sha256"]
+    ):
+        _actual_fail("shared payload hash differs from report")
     shared_timestamps = _actual_parse_shared_timestamps(shared_timestamp_bytes)
     shared_rows = _actual_parse_shared_population(shared_population_bytes)
     if (
         len(shared_timestamps) != len(shared_rows)
         or report["shared_timestamp_count"] != len(shared_rows)
         or len(shared_rows) < 3
+        or tuple(shared_timestamps) != direct.shared_timestamps_ns
+        or [row["timestamp_ns"] for row in shared_rows] != shared_timestamps
     ):
-        _actual_fail("shared trajectory population/count is invalid")
-    if [row["timestamp_ns"] for row in shared_rows] != shared_timestamps:
-        _actual_fail("shared timestamp and population payloads differ")
-    nullspace_trajectory = mode_details["nullspace"]["trajectories"]
-    schur_trajectory = mode_details["schur"]["trajectories"]
-    expected_intersection = sequence_math.shared_timestamp_intersection(
-        [row["camera_timestamp_ns"] for row in nullspace_trajectory],
-        [row["camera_timestamp_ns"] for row in schur_trajectory],
-    )
-    sequence_math.validate_shared_timestamp_intersection(
-        [row["camera_timestamp_ns"] for row in nullspace_trajectory],
-        [row["camera_timestamp_ns"] for row in schur_trajectory],
-        shared_timestamps,
-    )
-    if tuple(shared_timestamps) != expected_intersection:
-        _actual_fail("shared population is not the exact mode intersection")
-    nullspace_by_timestamp = {
-        row["camera_timestamp_ns"]: row for row in nullspace_trajectory
-    }
-    schur_by_timestamp = {row["camera_timestamp_ns"]: row for row in schur_trajectory}
-    for shared in shared_rows:
-        nullspace = nullspace_by_timestamp[shared["timestamp_ns"]]
-        schur = schur_by_timestamp[shared["timestamp_ns"]]
-        for retained_name, trajectory, source_name in (
-            ("nullspace_position", nullspace, "position_G"),
-            ("nullspace_quaternion", nullspace, "quaternion_ItoG_xyzw"),
-            ("schur_position", schur, "position_G"),
-            ("schur_quaternion", schur, "quaternion_ItoG_xyzw"),
-        ):
-            if len(shared[retained_name]) != len(trajectory[source_name]) or any(
-                not _actual_same_f64(left, right)
-                for left, right in zip(shared[retained_name], trajectory[source_name])
-            ):
-                _actual_fail("shared population pose differs from trajectory: " + retained_name)
+        _actual_fail("shared trajectory population/count/direct join differs")
 
-    ground_truth_bytes = _actual_read_bytes(
-        artifact / "ground_truth_shared.tum", "ground_truth_shared.tum",
-        ACTUAL_MAX_JSONL_BYTES,
-    )
+    trajectories_by_timestamp = {
+        mode: {
+            row["camera_timestamp_ns"]: row
+            for row in mode_details[mode]["trajectories"]
+        }
+        for mode in ("nullspace", "schur")
+    }
+    associated_ground_truth_bits = direct.arrays[
+        "ground_truth_associated_positions"
+    ].bits
+    for index, (shared, association) in enumerate(
+        zip(shared_rows, direct.associations)
+    ):
+        if (
+            association["estimator_index"] != index
+            or association["estimator_timestamp_ns"] != shared["timestamp_ns"]
+            or association["ground_truth_timestamp_ns"]
+            != shared["ground_truth_timestamp_ns"]
+        ):
+            _actual_fail("shared population/direct association differs")
+        ground_truth = source_ground_truth[association["ground_truth_index"]]
+        if ground_truth["timestamp_ns"] != shared["ground_truth_timestamp_ns"]:
+            _actual_fail("shared population ground-truth timestamp differs")
+        for mode in ("nullspace", "schur"):
+            trajectory = trajectories_by_timestamp[mode].get(
+                shared["timestamp_ns"]
+            )
+            if trajectory is None:
+                _actual_fail("shared timestamp is absent from a mode trajectory")
+            for retained_field, source_field in (
+                (mode + "_position", "position_G"),
+                (mode + "_quaternion", "quaternion_ItoG_xyzw"),
+            ):
+                if any(
+                    not _actual_same_f64(left, right)
+                    for left, right in zip(
+                        shared[retained_field], trajectory[source_field]
+                    )
+                ):
+                    _actual_fail(
+                        "shared population differs from trace: " + retained_field
+                    )
+        for retained_field, source_field in (
+            ("ground_truth_position", "position"),
+            ("ground_truth_quaternion", "quaternion"),
+        ):
+            if any(
+                not _actual_same_f64(left, right)
+                for left, right in zip(
+                    shared[retained_field], ground_truth[source_field]
+                )
+            ):
+                _actual_fail("shared ground-truth pose differs from exact source")
+        expected_gt_bits = tuple(
+            _actual_native_f64_bits(
+                value, "associated ground-truth position"
+            )
+            for value in shared["ground_truth_position"]
+        )
+        if (
+            associated_ground_truth_bits[index * 3 : (index + 1) * 3]
+            != expected_gt_bits
+        ):
+            _actual_fail("direct response associated ground truth differs")
+
     ground_truth_tum = _actual_parse_tum(
-        ground_truth_bytes, "ground_truth_shared.tum", estimator=False
+        _actual_read_bytes(
+            artifact / "ground_truth_shared.tum",
+            "ground_truth_shared.tum",
+            ACTUAL_MAX_JSONL_BYTES,
+        ),
+        "ground_truth_shared.tum",
+        estimator=False,
     )
     if len(ground_truth_tum) != len(shared_rows):
         _actual_fail("ground-truth shared TUM population differs")
     for retained, tum in zip(shared_rows, ground_truth_tum):
-        if retained["ground_truth_timestamp_ns"] != tum["timestamp_ns"]:
-            _actual_fail("shared ground-truth timestamp differs from retained TUM")
+        if retained["timestamp_ns"] != tum["timestamp_ns"]:
+            _actual_fail("ground-truth evaluator transport timestamp differs")
         for retained_values, tum_values in (
             (retained["ground_truth_position"], tum["position"]),
             (retained["ground_truth_quaternion"], tum["quaternion"]),
         ):
-            if any(not _actual_same_f64(left, right) for left, right in zip(retained_values, tum_values)):
-                _actual_fail("shared ground-truth pose differs from retained TUM")
+            if any(
+                not _actual_same_f64(left, right)
+                for left, right in zip(retained_values, tum_values)
+            ):
+                _actual_fail("ground-truth shared TUM pose differs")
 
-    nullspace_positions = [row["nullspace_position"] for row in shared_rows]
-    nullspace_quaternions = [row["nullspace_quaternion"] for row in shared_rows]
-    schur_positions = [row["schur_position"] for row in shared_rows]
-    schur_quaternions = [row["schur_quaternion"] for row in shared_rows]
-    ground_truth_positions = [row["ground_truth_position"] for row in shared_rows]
-    alignment = sequence_math.baseline_kabsch_alignment(
-        nullspace_positions, ground_truth_positions
-    )
     retained_alignment = report["baseline_alignment"]
-    _actual_exact_keys(retained_alignment, ACTUAL_ALIGNMENT_KEYS, "baseline alignment")
+    _actual_exact_keys(
+        retained_alignment, ACTUAL_ALIGNMENT_KEYS, "baseline alignment"
+    )
     if (
         retained_alignment["source"] != "nullspace_to_ground_truth"
-        or retained_alignment["shared_population_sha256"] != report["shared_population_sha256"]
+        or retained_alignment["shared_population_sha256"]
+        != report["shared_population_sha256"]
         or retained_alignment["applied_identically_to_both_modes"] is not True
+        or retained_alignment["reflection_correction_applied"]
+        is not direct.reflection_correction_applied
     ):
         _actual_fail("baseline alignment identity/common-application flags differ")
-    rotation_values = _actual_f64_vector(
-        retained_alignment["rotation_row_major"], 9, "baseline alignment rotation"
+    alignment_arrays = (
+        ("rotation_row_major", "rotation", 9),
+        ("translation", "translation", 3),
+        ("quaternion_xyzw", "quaternion_xyzw", 4),
+        ("source_singular_values", "source_singular_values", 3),
+        (
+            "cross_covariance_singular_values",
+            "cross_covariance_singular_values",
+            3,
+        ),
     )
-    translation_values = _actual_f64_vector(
-        retained_alignment["translation"], 3, "baseline alignment translation"
-    )
-    quaternion_values = _actual_f64_vector(
-        retained_alignment["quaternion_xyzw"], 4, "baseline alignment quaternion"
-    )
-    singular_values = _actual_f64_vector(
-        retained_alignment["source_singular_values"], 3,
-        "baseline source singular values",
-    )
-    computed_rotation = alignment.rotation.reshape(9).tolist()
-    if any(not _actual_same_f64(left, right) for left, right in zip(rotation_values, computed_rotation)):
-        _actual_fail("retained baseline rotation differs from independent Kabsch result")
-    if any(not _actual_same_f64(left, right) for left, right in zip(translation_values, alignment.translation.tolist())):
-        _actual_fail("retained baseline translation differs from independent Kabsch result")
-    if any(not _actual_same_f64(left, right) for left, right in zip(singular_values, alignment.source_singular_values.tolist())):
-        _actual_fail("retained source singular values differ")
-    for field, expected in (
-        ("source_rank_threshold", alignment.source_rank_threshold),
-        ("determinant", alignment.determinant),
-        ("orthogonality_error_frobenius", alignment.orthogonality_error_frobenius),
+    for report_field, response_field, length in alignment_arrays:
+        retained = _actual_f64_vector(
+            retained_alignment[report_field],
+            length,
+            "baseline alignment " + report_field,
+        )
+        direct_values = direct.alignment_arrays[response_field].values
+        if any(
+            not _actual_same_f64(left, right)
+            for left, right in zip(retained, direct_values)
+        ):
+            _actual_fail("baseline alignment differs from direct response: " + report_field)
+    for report_field, response_field in (
+        ("source_rank_threshold", "source_rank_threshold_bits"),
+        (
+            "cross_covariance_rank_threshold",
+            "cross_covariance_rank_threshold_bits",
+        ),
+        ("determinant", "determinant_bits"),
+        (
+            "orthogonality_error_frobenius",
+            "orthogonality_error_frobenius_bits",
+        ),
     ):
-        if not _actual_same_f64(retained_alignment[field], expected):
-            _actual_fail("retained baseline alignment {} differs".format(field))
-    quaternion_rotation = sequence_math.jpl_stored_xyzw_to_hamilton_inverse_rotation(
-        quaternion_values
-    ).reshape(9).tolist()
-    if not _actual_matrix_close(quaternion_rotation, rotation_values, tolerance=1.0e-10):
-        _actual_fail("baseline alignment quaternion does not encode its rotation")
+        direct_value = codec.bits_to_f64(
+            direct.alignment_scalars[response_field],
+            "direct alignment " + response_field,
+        )
+        if not _actual_same_f64(retained_alignment[report_field], direct_value):
+            _actual_fail("baseline alignment scalar differs: " + report_field)
 
-    aligned = sequence_math.apply_common_alignment(
-        alignment, nullspace_positions, nullspace_quaternions,
-        schur_positions, schur_quaternions,
+    metric_fields = (
+        ("position_p95_m", "position_p95_m_bits"),
+        ("orientation_p95_deg", "orientation_p95_deg_bits"),
+        ("ate_nullspace_m", "ate_nullspace_m_bits"),
+        ("ate_schur_m", "ate_schur_m_bits"),
+        ("relative_ate_difference", "relative_ate_difference_bits"),
     )
-    position_differences = sequence_math.position_differences_m(
-        aligned.nullspace_positions, aligned.schur_positions
-    )
-    orientation_differences = sequence_math.orientation_differences_deg(
-        aligned.nullspace_inverse_rotations, aligned.schur_inverse_rotations
-    )
-    position_p95 = sequence_math.linear_p95(position_differences)
-    orientation_p95 = sequence_math.linear_p95(orientation_differences)
-    ate_nullspace = sequence_math.translation_rmse_m(
-        aligned.nullspace_positions, ground_truth_positions
-    )
-    ate_schur = sequence_math.translation_rmse_m(
-        aligned.schur_positions, ground_truth_positions
-    )
-    relative_ate = sequence_math.relative_ate_difference(ate_nullspace, ate_schur)
-    sequence_math.validate_metric_limits(position_p95, orientation_p95, relative_ate)
-    for field, expected in (
-        ("position_p95_m", position_p95),
-        ("orientation_p95_deg", orientation_p95),
-        ("ate_nullspace_m", ate_nullspace),
-        ("ate_schur_m", ate_schur),
-        ("relative_ate_difference", relative_ate),
-    ):
-        if not _actual_same_f64(report[field], expected):
-            _actual_fail("sequence trajectory metric {} differs".format(field))
+    direct_metrics = {}
+    for report_field, response_field in metric_fields:
+        value = direct.metric(response_field)
+        direct_metrics[report_field] = value
+        if not _actual_same_f64(report[report_field], value):
+            _actual_fail("sequence metric differs from direct replay: " + report_field)
 
-    for mode, positions, rotations in (
-        ("nullspace", aligned.nullspace_positions, aligned.nullspace_inverse_rotations),
-        ("schur", aligned.schur_positions, aligned.schur_inverse_rotations),
-    ):
+    for mode in ("nullspace", "schur"):
+        positions = _actual_decode_f64_rows(
+            direct.arrays[mode + "_aligned_positions"],
+            3,
+            mode + " aligned positions",
+        )
+        quaternions = _actual_decode_f64_rows(
+            direct.arrays[mode + "_aligned_quaternions_xyzw"],
+            4,
+            mode + " aligned quaternions",
+        )
         name = mode + "_shared_aligned.tum"
         rows = _actual_parse_tum(
             _actual_read_bytes(artifact / name, name, ACTUAL_MAX_JSONL_BYTES),
-            name, estimator=True,
+            name,
+            estimator=True,
         )
         if len(rows) != len(shared_rows):
             _actual_fail(mode + " aligned TUM population differs")
         for index, row in enumerate(rows):
             if row["timestamp_ns"] != shared_timestamps[index]:
                 _actual_fail(mode + " aligned TUM timestamp differs")
-            if any(
-                not _actual_same_f64(left, right)
-                for left, right in zip(row["position"], positions[index].tolist())
+            for label, retained, expected in (
+                ("position", row["position"], positions[index]),
+                ("quaternion", row["quaternion"], quaternions[index]),
             ):
-                _actual_fail(mode + " aligned TUM position differs")
-            tum_rotation = sequence_math.jpl_stored_xyzw_to_hamilton_inverse_rotation(
-                row["quaternion"]
-            ).reshape(9).tolist()
-            if not _actual_matrix_close(
-                tum_rotation, rotations[index].reshape(9).tolist(), tolerance=1.0e-10
-            ):
-                _actual_fail(mode + " aligned TUM orientation differs")
+                if any(
+                    not _actual_same_f64(left, right)
+                    for left, right in zip(retained, expected)
+                ):
+                    _actual_fail(mode + " aligned TUM " + label + " differs")
 
-    evaluator = [record for record in common["commands"] if record["phase"] == "evaluation"]
-    ape_commands = [record for record in evaluator if Path(record["argv"][0]).name == "evo_ape"]
-    if len(ape_commands) != 2:
-        _actual_fail("sequence artifact lacks exactly two evo_ape evaluations")
-    for record, mode, expected_ate in zip(
-        ape_commands, ("nullspace", "schur"), (ate_nullspace, ate_schur)
+    evaluation_commands = [
+        record
+        for record in common["commands"]
+        if record["phase"] == "evaluation"
+    ]
+    direct_commands = [
+        record for record in evaluation_commands if len(record["argv"]) == 5
+    ]
+    evaluator_commands = [
+        record for record in evaluation_commands if len(record["argv"]) == 11
+    ]
+    if (
+        len(evaluation_commands) != 3
+        or len(direct_commands) != 1
+        or len(evaluator_commands) != 2
+    ):
+        _actual_fail("sequence evaluation command population differs")
+    direct_command = direct_commands[0]
+    direct_argv = direct_command["argv"]
+    if (
+        not os.path.isabs(direct_argv[0])
+        or direct_argv[1] != "--input"
+        or direct_argv[3] != "--output"
+        or not os.path.isabs(direct_argv[2])
+        or not os.path.isabs(direct_argv[4])
+        or os.path.basename(direct_argv[2]) != "request.json"
+        or os.path.basename(direct_argv[4]) != "response.json"
+        or os.path.dirname(direct_argv[2]) != direct_command["cwd"]
+        or os.path.dirname(direct_argv[4]) != direct_command["cwd"]
+        or direct_command["environment_sha256"] != direct_environment_sha256
+        or direct_command["sequence_index"] != report["sequence_index"]
+        or direct_command["pair_index"] is not None
+        or direct_command["run_index"] is not None
+        or direct_command["exit_code"] != 0
+        or direct_command["timed_out"] is not False
+    ):
+        _actual_fail("retained direct-math command identity differs")
+    for stream in ("stdout", "stderr"):
+        if _actual_read_bytes(
+            artifact / direct_command[stream],
+            "retained direct-math " + stream,
+            ACTUAL_MAX_JSON_BYTES,
+        ):
+            _actual_fail("retained direct-math command emitted a stream")
+
+    evaluator_result = _actual_load_module("cp2_evaluator_result")
+    for record, mode, expected_ate, run in zip(
+        evaluator_commands,
+        ("nullspace", "schur"),
+        (
+            direct_metrics["ate_nullspace_m"],
+            direct_metrics["ate_schur_m"],
+        ),
+        report["runs"],
     ):
         argv = record["argv"]
+        result_name = "evaluation/{}_evaluator_result.zip".format(mode)
         if (
-            len(argv) != 8 or argv[1] != "tum"
-            or Path(argv[2]).name != "ground_truth_shared.tum"
-            or Path(argv[3]).name != mode + "_shared_aligned.tum"
-            or argv[4:] != ["-r", "trans_part", "--t_max_diff", "0.01"]
-            or record["exit_code"] != 0 or record["timed_out"] is not False
+            argv[1:9]
+            != [
+                "tum",
+                "ground_truth_shared.tum",
+                mode + "_shared_aligned.tum",
+                "-r",
+                "trans_part",
+                "--t_max_diff",
+                "0.01",
+                "--save_results",
+            ]
+            or not os.path.isabs(argv[0])
+            or not os.path.isabs(argv[9])
+            or os.path.basename(argv[9]) != os.path.basename(result_name)
+            or argv[10] != "--no_warnings"
+            or record["environment_sha256"] != evaluator_environment_sha256
+            or record["sequence_index"] != report["sequence_index"]
+            or record["pair_index"] is not None
+            or record["run_index"] != run["run_index"]
+            or record["exit_code"] != 0
+            or record["timed_out"] is not False
+            or run["evaluator_result_path"] != result_name
+            or run["evaluator_result_sha256"] != manifest.get(result_name)
         ):
-            _actual_fail("sequence evaluator command differs from frozen evo_ape invocation")
+            _actual_fail(
+                "sequence command/report differs from the frozen evaluator invocation"
+            )
+        archive_bytes = _actual_read_bytes(
+            artifact / result_name, result_name, ACTUAL_MAX_BINARY_BYTES
+        )
+        if hashlib.sha256(archive_bytes).hexdigest() != manifest.get(result_name):
+            _actual_fail("sequence evaluator-result archive hash differs")
+        try:
+            archive = evaluator_result.parse_evaluator_result_archive(archive_bytes)
+            evaluator_result.require_archive_direct_rmse_agreement(
+                archive.statistics.rmse, expected_ate
+            )
+        except evaluator_result.EvaluatorResultError as exc:
+            raise ActualVerificationError(
+                mode + " evaluator-result archive: " + str(exc)
+            ) from exc
+        if (
+            archive.error_count != len(shared_rows)
+            or run["evaluator_error_count"] != archive.error_count
+            or not _actual_same_f64(
+                run["evaluator_archive_rmse_m"], archive.statistics.rmse
+            )
+        ):
+            _actual_fail("sequence evaluator archive/report/population differs")
+        if _actual_read_bytes(
+            artifact / record["stderr"],
+            "equivalent-evaluator stderr",
+            ACTUAL_MAX_JSON_BYTES,
+        ):
+            _actual_fail("equivalent evaluator emitted stderr")
         stdout = _actual_read_bytes(
-            artifact / record["stdout"], "evo_ape stdout", ACTUAL_MAX_JSON_BYTES
+            artifact / record["stdout"],
+            "equivalent-evaluator stdout",
+            ACTUAL_MAX_JSON_BYTES,
         )
         try:
             text_value = stdout.decode("utf-8", "strict")
         except UnicodeDecodeError as exc:
-            raise ActualVerificationError("evo_ape stdout is not UTF-8") from exc
+            raise ActualVerificationError(
+                "equivalent-evaluator stdout is not UTF-8"
+            ) from exc
         matches = re.findall(
-            r"(?m)^\s*rmse\s+([-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)\s*$",
+            r"(?m)^[ \t]*rmse[ \t]+((?:0|[1-9][0-9]*)\.[0-9]{6})[ \t]*$",
             text_value,
         )
         if len(matches) != 1:
-            _actual_fail("evo_ape stdout does not contain exactly one parsed RMSE")
-        parsed = _actual_f64(float(matches[0]), "evo_ape parsed RMSE", nonnegative=True)
-        if abs(parsed - float(expected_ate)) > 1.0e-12 + 1.0e-10 * abs(float(expected_ate)):
-            _actual_fail("evo_ape parsed RMSE differs from independent ATE")
+            _actual_fail(
+                "equivalent-evaluator stdout lacks one canonical RMSE token"
+            )
+        try:
+            expected_console = evaluator_result.require_console_rmse_match(
+                matches[0], archive.statistics.rmse
+            )
+        except evaluator_result.EvaluatorResultError as exc:
+            raise ActualVerificationError(
+                mode + " evaluator console/archive agreement: " + str(exc)
+            ) from exc
+        if run["evaluator_console_rmse"] != expected_console:
+            _actual_fail("sequence evaluator console token differs from report")
     if report["coverage_passed"] is not True or report["trajectory_passed"] is not True:
         _actual_fail("sequence coverage/trajectory conjunction did not pass")
 
@@ -11967,17 +14629,18 @@ def verify_sequence_artifact(artifact, manifest_sha256, quiet=False):
         _actual_fail("sequence artifact path must be normalized and absolute")
     _actual_sha256(manifest_sha256, "sequence manifest anchor")
     _actual_fail(
-        "CP2-D actual verification is blocked before artifact access: the evaluator "
-        "precision/provenance and direct numerical-stack replacement contract is "
-        "pending explicit approval"
+        "CP2-D actual verification is blocked before artifact access: the final "
+        "evaluator/direct-math capsule and detached provenance bindings are not "
+        "source-frozen, and the proposed alignment-uniqueness boundary is not approved"
     )
 
-    # Unreachable until an approval-bound replacement deliberately removes the
-    # pre-access block above; retained implementation remains reviewable.
+    # Unreachable until the final source-freeze transition deliberately removes
+    # the pre-access block above; retained implementation remains reviewable.
     artifact = Path(artifact)
     manifest, observed, _ = _actual_scan_and_verify_manifest(artifact, manifest_sha256)
     required = {
         "cp2_report.json", "provenance.json", "commands.jsonl", "pair_index.jsonl",
+        "pair_selection_witness.jsonl",
         "nullspace_callbacks.jsonl", "schur_callbacks.jsonl",
         "nullspace_trajectory.jsonl", "schur_trajectory.jsonl",
         "parameters/nullspace_prelaunch_raw.yaml", "parameters/nullspace_runtime_raw.yaml",
@@ -11989,6 +14652,9 @@ def verify_sequence_artifact(artifact, manifest_sha256, quiet=False):
         "nullspace_raw.tum", "schur_raw.tum", "ground_truth_shared.tum",
         "nullspace_shared_aligned.tum", "schur_shared_aligned.tum",
         "shared_population.bin", "shared_timestamps.bin",
+        "direct_math/request.json", "direct_math/response.json",
+        "evaluation/nullspace_evaluator_result.zip",
+        "evaluation/schur_evaluator_result.zip",
     }
     if not required.issubset(manifest):
         _actual_fail("CP2-D artifact lacks a fixed core file")
@@ -12032,6 +14698,9 @@ def verify_sequence_artifact(artifact, manifest_sha256, quiet=False):
     )
     pair_rows, mode_details = _actual_validate_sequence_traces(
         artifact, manifest, report, provenance_details
+    )
+    _actual_validate_sequence_pair_index_command(
+        artifact, common, manifest, report, pair_rows
     )
     del pair_rows
     _actual_sequence_shared_math(artifact, manifest, report, mode_details, common)
@@ -13079,7 +15748,7 @@ def run_readiness_self_test():
 
 
 READINESS_ENGINE_PROTECTING_TESTS = (
-    ("test_cp2_readiness.py", 31),
+    ("test_cp2_readiness.py", 33),
     ("test_cp2_actual_readiness_binding.py", 12),
 )
 READINESS_ENGINE_PROTECTING_TEST_COUNT = sum(
@@ -13165,19 +15834,65 @@ def run_readiness_engine_protecting_tests():
 
 CP2_D_DATA_FREE_PROTECTING_MODULES = (
     "cp2_capsule.py",
+    "cp2_capsule_builder.py",
+    "cp2_capsule_launcher.c",
+    "cp2_capsule_sandbox.c",
+    "cp2_capsule_unit_import.py",
     "cp2_direct_kat.py",
+    "cp2_direct_kat_builder.py",
+    "cp2_equivalent_evaluator.py",
+    "cp2_evaluator_result.py",
     "cp2_evo_result.py",
     "cp2_f64_codec.py",
+    "cp2_fp_control.c",
+    "cp2_fp_control.py",
+    "cp2_fp_control_module.c",
+    "cp2_pair_index_extract.py",
+    "cp2_postauth_registry.py",
+    "cp2_recorded_campaign.py",
+    "cp2_schema.py",
+    "cp2_sequence_actual.py",
+    "cp2_sequence_math.py",
+    "cp2_sequence_math_codec.py",
+    "cp2_sequence_math_worker.py",
+    "cp2_sequence_runner.py",
+    "run_sequence_pair.py",
+    "run_unit_gate.sh",
+    "verify_report.py",
     "tests/test_cp2_capsule.py",
+    "tests/test_cp2_capsule_builder.py",
+    "tests/test_cp2_capsule_launcher.py",
+    "tests/test_cp2_capsule_unit_import.py",
+    "tests/test_cp2_detached_sequence_verifier.py",
     "tests/test_cp2_direct_kat.py",
+    "tests/test_cp2_equivalent_evaluator.py",
+    "tests/test_cp2_evaluator_result.py",
     "tests/test_cp2_evo_result.py",
     "tests/test_cp2_f64_codec.py",
+    "tests/test_cp2_recorded_campaign.py",
+    "tests/test_cp2_sequence_actual.py",
+    "tests/test_cp2_sequence_math.py",
+    "tests/test_cp2_sequence_math_worker.py",
+    "tests/test_cp2_sequence_runner.py",
+    "tests/test_cp2_verify_report_pair_witness.py",
 )
 CP2_D_DATA_FREE_PROTECTING_TESTS = (
-    ("test_cp2_capsule.py", 26),
-    ("test_cp2_direct_kat.py", 11),
-    ("test_cp2_evo_result.py", 29),
+    ("test_cp2_capsule.py", 36),
+    ("test_cp2_capsule_builder.py", 3),
+    ("test_cp2_capsule_launcher.py", 7),
+    ("test_cp2_capsule_unit_import.py", 4),
+    ("test_cp2_detached_sequence_verifier.py", 16),
+    ("test_cp2_direct_kat.py", 13),
+    ("test_cp2_equivalent_evaluator.py", 3),
+    ("test_cp2_evaluator_result.py", 33),
+    ("test_cp2_evo_result.py", 33),
     ("test_cp2_f64_codec.py", 12),
+    ("test_cp2_recorded_campaign.py", 13),
+    ("test_cp2_sequence_actual.py", 16),
+    ("test_cp2_sequence_math.py", 25),
+    ("test_cp2_sequence_math_worker.py", 11),
+    ("test_cp2_sequence_runner.py", 27),
+    ("test_cp2_verify_report_pair_witness.py", 4),
 )
 CP2_D_DATA_FREE_PROTECTING_TEST_COUNT = sum(
     count for _, count in CP2_D_DATA_FREE_PROTECTING_TESTS
@@ -13274,17 +15989,41 @@ def run_cp2_d_data_free_protecting_tests():
 
 
 CP2_E_DATA_FREE_PROTECTING_MODULES = (
+    "cp2_timing_artifact.py",
+    "cp2_timing_controls.py",
     "cp2_timing_math.py",
+    "cp2_timing_privileged_backend.py",
+    "cp2_timing_privileged_helper.py",
+    "cp2_timing_production_identity.py",
+    "cp2_timing_profile.py",
+    "cp2_timing_publication.py",
+    "cp2_timing_reversibility_client.py",
+    "cp2_timing_root_launcher.c",
+    "run_timing_pair.py",
+    "tests/test_cp2_timing_controls.py",
+    "tests/test_cp2_timing_evidence.py",
     "tests/test_cp2_timing_math.py",
+    "tests/test_cp2_timing_orchestration.py",
+    "tests/test_cp2_timing_privileged_backend.py",
+    "tests/test_cp2_timing_privileged_helper.py",
+    "tests/test_cp2_timing_root_launcher.py",
 )
-CP2_E_DATA_FREE_PROTECTING_TESTS = (("test_cp2_timing_math.py", 37),)
+CP2_E_DATA_FREE_PROTECTING_TESTS = (
+    ("test_cp2_timing_controls.py", 19),
+    ("test_cp2_timing_evidence.py", 39),
+    ("test_cp2_timing_math.py", 42),
+    ("test_cp2_timing_orchestration.py", 24),
+    ("test_cp2_timing_privileged_backend.py", 12),
+    ("test_cp2_timing_privileged_helper.py", 48),
+    ("test_cp2_timing_root_launcher.py", 4),
+)
 CP2_E_DATA_FREE_PROTECTING_TEST_COUNT = sum(
     count for _, count in CP2_E_DATA_FREE_PROTECTING_TESTS
 )
 
 
 def run_cp2_e_data_free_protecting_tests():
-    """Run the proposed exact CP2-E timing-math suite in isolation."""
+    """Run the complete data-free CP2-E production/evidence suite."""
 
     environment = {
         "PATH": "/usr/bin:/bin",
@@ -13376,17 +16115,17 @@ def run_unit_self_test():
     global rename_name_noreplace
 
     required_cp2_c2_counts = {
-        "test_cp2_updater_msckf_end_to_end": 16,
-        "test_cp2_updater_msckf_fault_injection": 31,
+        "test_cp2_updater_msckf_end_to_end": 17,
+        "test_cp2_updater_msckf_fault_injection": 33,
         "test_cp2_commit_oracle": 10,
-        "test_cp2_commit_boundary": 4,
+        "test_cp2_commit_boundary": 5,
     }
     if any(CP2_TESTS.get(name) != count for name, count in required_cp2_c2_counts.items()):
         raise RuntimeError("CP2-C2 executable test-count contract is inconsistent")
-    if len(CP2_TESTS) != 21 or sum(ALL_TESTS.values()) != 203:
+    if len(CP2_TESTS) != 21 or sum(ALL_TESTS.values()) != 216:
         raise RuntimeError("CP2 exact executable/total testcase inventory is inconsistent")
-    if len(RUNTIME_LIBRARY_SOURCES) != 29:
-        raise RuntimeError("CP2-C3 exact production/fault runtime source inventory is not 29")
+    if len(RUNTIME_LIBRARY_SOURCES) != 31:
+        raise RuntimeError("CP2-C3 exact production/fault runtime source inventory is not 31")
     if any(
         len(TEST_CASES_BY_BINARY.get(name, ())) != count
         for name, count in required_cp2_c2_counts.items()
@@ -13398,10 +16137,10 @@ def run_unit_self_test():
         for case in cases
     }
     if (
-        sum(len(cases) for cases in TEST_CASES_BY_BINARY.values()) != 203
+        sum(len(cases) for cases in TEST_CASES_BY_BINARY.values()) != 216
         or mapped_testcase_names != EXPECTED_TEST_CASES
     ):
-        raise RuntimeError("CP1 plus CP2 exact testcase execution inventory is not 203")
+        raise RuntimeError("CP1 plus CP2 exact testcase execution inventory is not 213")
     if set(TEST_CASES_BY_BINARY) != set(ALL_TESTS):
         raise RuntimeError("testcase ownership does not cover the exact executable inventory")
     if set(SUMMARIES_BY_BINARY) != set(ALL_TESTS):
@@ -13528,6 +16267,64 @@ def run_unit_self_test():
     validate_cp2_c_approval_records(semantic_contents, binding_errors)
     if binding_errors:
         raise RuntimeError("valid semantic CP2-C approvals were rejected")
+
+    completion_sha256 = {
+        relative: expected["sha256"]
+        for relative, expected in FROZEN_CP2_COMPLETION_AUTHORIZATION_BINDING.items()
+    }
+    completion_git_blobs = {
+        relative: expected["git_blob"]
+        for relative, expected in FROZEN_CP2_COMPLETION_AUTHORIZATION_BINDING.items()
+    }
+    binding_errors = []
+    validate_cp2_completion_authorization_binding(
+        completion_sha256, completion_git_blobs, binding_errors
+    )
+    if binding_errors:
+        raise RuntimeError("valid CP2 completion authorization binding was rejected")
+    d_addendum_path = "project/cp2_d_completion_authorization_addendum.txt"
+    wrong_completion_sha256 = dict(completion_sha256)
+    wrong_completion_sha256[d_addendum_path] = "0" * 64
+    binding_errors = []
+    validate_cp2_completion_authorization_binding(
+        wrong_completion_sha256, completion_git_blobs, binding_errors
+    )
+    if binding_errors != [
+        "CP2 completion authorization SHA-256 mismatch: " + d_addendum_path
+    ]:
+        raise RuntimeError("wrong CP2-D addendum digest was not rejected exactly")
+    completion_record_bytes = json.dumps(
+        FROZEN_CP2_COMPLETION_AUTHORIZATION_RECORD,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    binding_errors = []
+    validate_cp2_completion_authorization_record(
+        {"project/cp2_completion_authorization_binding.json": completion_record_bytes},
+        binding_errors,
+    )
+    if binding_errors:
+        raise RuntimeError("valid CP2 completion authorization record was rejected")
+    changed_completion_record = dict(FROZEN_CP2_COMPLETION_AUTHORIZATION_RECORD)
+    changed_completion_record["cp3_authorized"] = True
+    binding_errors = []
+    validate_cp2_completion_authorization_record(
+        {
+            "project/cp2_completion_authorization_binding.json": json.dumps(
+                changed_completion_record,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        },
+        binding_errors,
+    )
+    if binding_errors != ["CP2 completion authorization record differs"]:
+        raise RuntimeError("CP3 authorization mutation was not rejected exactly")
+
     wrong_semantic = dict(semantic_contents)
     changed_approval = dict(
         FROZEN_CP2_C_APPROVAL_RECORDS[detached_approval_path]
@@ -14233,6 +17030,34 @@ def run_unit_self_test():
             path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
 
         corruption("strict-fp", remove_fp_flag)
+
+        def remove_runtime_executable_fp_flag(root):
+            path = root / "compile_commands.json"
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            matching = [
+                entry for entry in entries
+                if "CMakeFiles/ros1_serial_msckf.dir/" in str(entry.get("output", ""))
+                and str(entry.get("file", "")).endswith(
+                    "/ov_msckf/src/ros1_serial_msckf.cpp"
+                )
+            ]
+            if len(matching) != 1:
+                raise RuntimeError(
+                    "synthetic fixture lost the ROS1 runtime-executable command"
+                )
+            matching[0]["command"] = matching[0]["command"].replace(
+                " -fsigned-zeros", "", 1
+            )
+            write_json_fixture(path, entries)
+
+        corruption(
+            "runtime-executable-strict-fp",
+            remove_runtime_executable_fp_flag,
+            expected_error=(
+                "ov_msckf/src/ros1_serial_msckf.cpp runtime-executable compile "
+                "command is not strict-FP"
+            ),
+        )
 
         def remove_preview_fp_flag(root):
             path = root / "compile_commands.json"

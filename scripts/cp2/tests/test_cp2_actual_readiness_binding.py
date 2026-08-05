@@ -177,6 +177,7 @@ class ActualReadinessFixture:
             "scripts/cp2/cp2_sequence_math.py",
             "scripts/cp2/verify_report.py",
         })
+        source_paths.update(verify_report._ACTUAL_LOCAL_MODULE_PATHS.values())
         self.source_contents = {
             path: (CP2_DIRECTORY / Path(path).name).read_bytes()
             for path in source_paths
@@ -187,6 +188,9 @@ class ActualReadinessFixture:
         self.source_contents[self.APPROVAL_PATH] = (
             b"synthetic approval anchor; no recorded-data authority\n"
         )
+        repository_root = CP2_DIRECTORY.parents[1]
+        for path in verify_report.FROZEN_CP2_COMPLETION_AUTHORIZATION_BINDING:
+            self.source_contents[path] = (repository_root / path).read_bytes()
         entries = []
         for path in sorted(self.source_contents, key=lambda value: value.encode("utf-8")):
             content = self.source_contents[path]
@@ -231,7 +235,10 @@ class ActualReadinessFixture:
             }
         }
         self.source_inputs = frozenset(self.source_contents)
-        self.contract_inputs = frozenset((self.APPROVAL_PATH,))
+        self.contract_inputs = frozenset((
+            self.APPROVAL_PATH,
+            *verify_report.FROZEN_CP2_COMPLETION_AUTHORIZATION_BINDING,
+        ))
 
     def _write_source_archive(self):
         archive_path = self.artifact / self.SOURCE_ARCHIVE
@@ -600,13 +607,15 @@ class ActualReadinessFixture:
             "passed": True,
         }
         self._commit_barrier()
-        contracts = [{
-            "path": self.APPROVAL_PATH,
-            "sha256": next(
-                entry["sha256"] for entry in self.context["entries"]
-                if entry["path"] == self.APPROVAL_PATH
-            ),
-        }]
+        entry_by_path = {
+            entry["path"]: entry for entry in self.context["entries"]
+        }
+        contracts = [
+            {"path": relative, "sha256": entry_by_path[relative]["sha256"]}
+            for relative in sorted(
+                self.contract_inputs, key=lambda value: value.encode("utf-8")
+            )
+        ]
         self.provenance = {
             "source_commit": self.commit,
             "source_tree": self.tree,
@@ -688,6 +697,16 @@ class ActualReadinessFixture:
                  verify_report,
                  "FROZEN_CP2_C_APPROVAL_RECORDS",
                  {},
+             ), \
+             mock.patch.object(
+                 verify_report,
+                 "FROZEN_CP2_COMPLETION_AUTHORIZATION_BINDING",
+                 verify_report.FROZEN_CP2_COMPLETION_AUTHORIZATION_BINDING,
+             ), \
+             mock.patch.object(
+                 verify_report,
+                 "FROZEN_CP2_COMPLETION_AUTHORIZATION_RECORD",
+                 verify_report.FROZEN_CP2_COMPLETION_AUTHORIZATION_RECORD,
              ), \
              mock.patch.object(
                  verify_report,
@@ -1067,10 +1086,15 @@ class ActualReadinessBindingTests(unittest.TestCase):
             source_directory = root / "scripts/cp2"
             source_directory.mkdir(parents=True)
             schema_path = source_directory / "cp2_schema.py"
+            capsule_path = source_directory / "cp2_capsule.py"
             campaign_path = source_directory / "cp2_recorded_campaign.py"
             schema_path.write_bytes(b"TOKEN = 'held-schema'\n")
+            capsule_path.write_bytes(
+                b"import cp2_schema\nTOKEN = cp2_schema.TOKEN + '-capsule'\n"
+            )
             campaign_path.write_bytes(
-                b"import cp2_schema\nTOKEN = cp2_schema.TOKEN + '-campaign'\n"
+                b"import cp2_schema\nimport cp2_capsule\n"
+                b"TOKEN = cp2_capsule.TOKEN + '-campaign'\n"
             )
             authorization = SyntheticAuthorization(root)
             modules = run_recorded._HeldPostauthorizationModules(
@@ -1078,7 +1102,9 @@ class ActualReadinessBindingTests(unittest.TestCase):
             )
             descriptors = tuple(authorization.descriptors)
             try:
-                self.assertEqual(modules.campaign.TOKEN, "held-schema-campaign")
+                self.assertEqual(
+                    modules.campaign.TOKEN, "held-schema-capsule-campaign"
+                )
                 modules.revalidate()
                 with schema_path.open("ab") as stream:
                     stream.write(b"MUTATION = True\n")
@@ -1087,12 +1113,16 @@ class ActualReadinessBindingTests(unittest.TestCase):
             finally:
                 modules.close()
             self.assertNotIn("cp2_schema", sys.modules)
+            self.assertNotIn("cp2_capsule", sys.modules)
             self.assertNotIn("cp2_recorded_campaign", sys.modules)
             for descriptor in descriptors:
                 with self.assertRaises(OSError):
                     os.fstat(descriptor)
 
             schema_path.write_bytes(b"TOKEN = 'held-schema'\n")
+            capsule_path.write_bytes(
+                b"import cp2_schema\nTOKEN = cp2_schema.TOKEN + '-capsule'\n"
+            )
             campaign_path.write_bytes(b"")
             failed_authorization = SyntheticAuthorization(root)
             with self.assertRaisesRegex(
@@ -1103,6 +1133,7 @@ class ActualReadinessBindingTests(unittest.TestCase):
                     root, failed_authorization
                 )
             self.assertNotIn("cp2_schema", sys.modules)
+            self.assertNotIn("cp2_capsule", sys.modules)
             self.assertNotIn("cp2_recorded_campaign", sys.modules)
             for descriptor in failed_authorization.descriptors:
                 with self.assertRaises(OSError):
@@ -1115,6 +1146,7 @@ class ActualReadinessBindingTests(unittest.TestCase):
                         root, SyntheticAuthorization(root)
                     )
                 self.assertIs(sys.modules["cp2_schema"], sentinel)
+                self.assertNotIn("cp2_capsule", sys.modules)
                 self.assertNotIn("cp2_recorded_campaign", sys.modules)
 
         # Exercise the exact production module bytes as one dependency-closed
@@ -1134,6 +1166,7 @@ class ActualReadinessBindingTests(unittest.TestCase):
         finally:
             production_modules.close()
         self.assertNotIn("cp2_schema", sys.modules)
+        self.assertNotIn("cp2_capsule", sys.modules)
         self.assertNotIn("cp2_recorded_campaign", sys.modules)
 
         # Once the authorization reports its exact held inode at the durable

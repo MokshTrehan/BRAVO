@@ -15,6 +15,20 @@
     <arg name="landmark_elimination" />
     <arg name="cp2_shadow_enabled" />
     <arg name="cp2_trace_level" />
+    <arg name="cp2_serial_trace_sink_capability" />
+    <arg name="cp2_callback_trace_sink_capability" />
+    <arg name="cp2_trajectory_trace_sink_capability" />
+    <arg name="cp2_updater_trace_sink_capability" />
+    <arg name="cp2_state_payload_sink_capability" />
+    <arg name="cp2_proposal_payload_sink_capability" />
+    <arg name="cp2_raw_system_payload_sink_capability" />
+    <arg name="cp2_timing_trace_sink_capability" />
+    <arg name="cp2_runtime_parameters_sink_capability" />
+    <arg name="cp2_loader_map_before_sink_capability" />
+    <arg name="cp2_loader_map_after_sink_capability" />
+    <arg name="cp2_legacy_state_sink_capability" />
+    <arg name="cp2_legacy_deviation_sink_capability" />
+    <arg name="cp2_legacy_timing_sink_capability" />
     <arg name="verbosity" default="INFO" />
     <node name="cp2_vio" pkg="ov_msckf" type="ros1_serial_msckf"
           output="screen" clear_params="true" required="true">
@@ -46,5 +60,19 @@
         <param name="cp2_sequence_index" type="int" value="$(arg cp2_sequence_index)" />
         <param name="cp2_shadow_enabled" type="bool" value="$(arg cp2_shadow_enabled)" />
         <param name="cp2_trace_level" type="str" value="$(arg cp2_trace_level)" />
+        <param name="cp2_serial_trace_sink_capability" type="str" value="$(arg cp2_serial_trace_sink_capability)" />
+        <param name="cp2_callback_trace_sink_capability" type="str" value="$(arg cp2_callback_trace_sink_capability)" />
+        <param name="cp2_trajectory_trace_sink_capability" type="str" value="$(arg cp2_trajectory_trace_sink_capability)" />
+        <param name="cp2_updater_trace_sink_capability" type="str" value="$(arg cp2_updater_trace_sink_capability)" />
+        <param name="cp2_state_payload_sink_capability" type="str" value="$(arg cp2_state_payload_sink_capability)" />
+        <param name="cp2_proposal_payload_sink_capability" type="str" value="$(arg cp2_proposal_payload_sink_capability)" />
+        <param name="cp2_raw_system_payload_sink_capability" type="str" value="$(arg cp2_raw_system_payload_sink_capability)" />
+        <param name="cp2_timing_trace_sink_capability" type="str" value="$(arg cp2_timing_trace_sink_capability)" />
+        <param name="cp2_runtime_parameters_sink_capability" type="str" value="$(arg cp2_runtime_parameters_sink_capability)" />
+        <param name="cp2_loader_map_before_sink_capability" type="str" value="$(arg cp2_loader_map_before_sink_capability)" />
+        <param name="cp2_loader_map_after_sink_capability" type="str" value="$(arg cp2_loader_map_after_sink_capability)" />
+        <param name="cp2_legacy_state_sink_capability" type="str" value="$(arg cp2_legacy_state_sink_capability)" />
+        <param name="cp2_legacy_deviation_sink_capability" type="str" value="$(arg cp2_legacy_deviation_sink_capability)" />
+        <param name="cp2_legacy_timing_sink_capability" type="str" value="$(arg cp2_legacy_timing_sink_capability)" />
     </node>
 </launch>

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import ctypes
 import datetime as dt
 import errno
+import fcntl
 import hashlib
 import json
 import math
@@ -38,6 +39,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping,
 
 import yaml
 
+import cp2_capsule as capsule
 import cp2_schema as schema
 
 
@@ -99,7 +101,7 @@ STATIC_SHA256 = (
     "b706f0082106e49e20c3292147d238b7e225b0df414106b9d4ac009bbb123f3b",
     "408ea8b60b5f9e7c8251e6d302f04c0675bfefdd31229bb1afd139bc8f4a0287",
     "b9e11b7bcda102f7c8c384c97318d67f3916b58942f9073722f83c22bd7073f7",
-    "bede519721575d769a1fcef67c5527661cb39ba05ab77faa6c20771b0756c49a",
+    "a29c9b74aa6d4f0a5d783d0ba1eadeaca49ad0783f3b8121c5b68c8091023a12",
 )
 STATIC_BUNDLE_DOMAIN = b"SchurVIO-CP2-static-config-v1\0"
 CP1_AUTHORIZATION_COMMIT = "8d80f483752411d34a3bc4c1ff6330b3a5c0fef3"
@@ -117,6 +119,42 @@ MAX_ELF_BYTES = 1024 * 1024 * 1024
 MAX_ISOLATED_WORKER_MESSAGE_BYTES = 256 * 1024
 MAX_FAILURE_MESSAGE_BYTES = 8192
 MAX_CLEANUP_FAILURES = 16
+MAX_CAPSULE_PROFILE_BYTES = 16 * 1024 * 1024
+MAX_RUNTIME_TRACE_BYTES = 4 * 1024 * 1024 * 1024
+UNIT_CAPSULE_PATHS = capsule.EXPECTED_CAPSULE_UNIT_PATHS
+
+SINK_CAPABILITY_FIELDS = (
+    "serial_trace",
+    "callback_trace",
+    "trajectory_trace",
+    "updater_trace",
+    "state_payload",
+    "proposal_payload",
+    "raw_system_payload",
+    "timing_trace",
+    "runtime_parameters",
+    "loader_map_before",
+    "loader_map_after",
+    "legacy_state",
+    "legacy_deviation",
+    "legacy_timing",
+)
+C_SINK_NAMES = {
+    "serial_trace": "serial.jsonl",
+    "callback_trace": None,
+    "trajectory_trace": None,
+    "updater_trace": "updater.journal",
+    "state_payload": None,
+    "proposal_payload": None,
+    "raw_system_payload": None,
+    "timing_trace": None,
+    "runtime_parameters": "runtime_parameters.yaml",
+    "loader_map_before": "loader_before.txt",
+    "loader_map_after": "loader_after.txt",
+    "legacy_state": None,
+    "legacy_deviation": None,
+    "legacy_timing": None,
+}
 
 # Linux x86_64 namespace/mount constants.  The recorded worker runs as PID 1
 # in a fresh PID namespace and sees the host tree recursively read-only except
@@ -153,6 +191,10 @@ CONTRACT_INPUTS = (
     "docs/cp2_artifact_schema.md",
     "docs/cp2_c_composite_and_readiness_clarification.md",
     "docs/cp2_c_detached_readiness_binding_clarification_proposed.md",
+    "docs/cp2_d_alignment_uniqueness_clarification_proposed.md",
+    "docs/cp2_d_evaluator_precision_clarification_proposed.md",
+    "docs/cp2_e_offline_descendant_confinement_clarification_proposed.md",
+    "docs/cp2_e_fixed_clock_and_exact_timing_clarification_proposed.md",
     "docs/cp2_one_pass_contract.md",
     "docs/cp2_predata_incident_log.md",
     "docs/cp2_recorded_evidence_contract.md",
@@ -160,10 +202,15 @@ CONTRACT_INPUTS = (
     "project/cp1_gate.yaml",
     "project/cp2_c_clarification_approval.json",
     "project/cp2_c_detached_readiness_binding_approval.json",
+    "project/cp2_completion_authorization_binding.json",
+    "project/cp2_completion_chained_authorization.txt",
+    "project/cp2_d_completion_authorization_addendum.txt",
+    "project/cp2_e_completion_authorization_addendum.txt",
     "project/cp2_predata_incident_disposition_approval.json",
     "project/cp2_gate.yaml",
 )
 STRICT_FP_SOURCE_TARGETS = {
+    "ov_msckf/src/ros1_serial_msckf.cpp": "ros1_serial_msckf",
     "ov_msckf/src/ros/CP2ROS1RuntimeParameters.cpp": "ov_msckf_lib",
     "ov_msckf/src/state/StateHelper.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2Canonical.cpp": "ov_msckf_lib",
@@ -172,10 +219,12 @@ STRICT_FP_SOURCE_TARGETS = {
     "ov_msckf/src/update/CP2CompositeState.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2FeatureGate.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2OfflineReplay.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2OutputCapability.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2RecordedAssemble.cpp": "cp2_recorded_assemble",
     "ov_msckf/src/update/CP2RuntimeContext.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2SerialPairing.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2SerialRuntimeTrace.cpp": "ov_msckf_lib",
+    "ov_msckf/src/update/CP2TimingClock.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2ShadowMath.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2StateTraceCodec.cpp": "ov_msckf_lib",
     "ov_msckf/src/update/CP2TraceCodec.cpp": "ov_msckf_lib",
@@ -451,6 +500,302 @@ def _stat_tuple(value: os.stat_result) -> Tuple[int, ...]:
             "st_size", "st_mtime_ns", "st_ctime_ns",
         )
     )
+
+
+def _require_read_only_descriptor(descriptor: int, label: str) -> None:
+    try:
+        flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
+    except OSError as exc:
+        raise CampaignError(label + " access mode cannot be read") from exc
+    if flags & os.O_ACCMODE != os.O_RDONLY:
+        _fail(label + " capability is writable")
+
+
+class _HeldRuntimeOutputs:
+    """Parent-created, read-only held capabilities for one CP2-C trace.
+
+    The estimator receives only ``/proc/<runner>/fd/<n>``-derived
+    capabilities for the exact empty inodes created here.  The trusted parent
+    keeps a read-only descriptor to every inode, accepts each producer fill
+    exactly once, and revalidates identity and bytes around every later child
+    command.  The parent directory is held as well, so a path replacement
+    cannot silently redirect either production or later verification.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path).absolute()
+        self.directory_fd = os.open(
+            str(self.path),
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
+        _require_read_only_descriptor(
+            self.directory_fd, "runtime trace directory"
+        )
+        self._directory_identity = os.fstat(self.directory_fd)
+        self._files: Dict[
+            str, Tuple[int, os.stat_result, os.stat_result, Optional[bytes]]
+        ] = {}
+        self._revalidate_directory()
+
+    def _revalidate_directory(self) -> None:
+        if self.directory_fd < 0:
+            _fail("runtime trace directory capability is closed")
+        current = os.fstat(self.directory_fd)
+        by_path = self.path.lstat()
+        expected = self._directory_identity
+        for observed in (current, by_path):
+            if (
+                (observed.st_dev, observed.st_ino)
+                != (expected.st_dev, expected.st_ino)
+                or not stat.S_ISDIR(observed.st_mode)
+                or observed.st_uid != os.geteuid()
+                or stat.S_IMODE(observed.st_mode) != 0o700
+            ):
+                _fail("runtime trace directory capability changed")
+
+    def precreate(self, names: Sequence[str]) -> None:
+        """Create every declared member once and retain a read-only FD."""
+
+        self._revalidate_directory()
+        ordered = tuple(names)
+        if len(set(ordered)) != len(ordered) or os.listdir(self.directory_fd):
+            _fail("runtime trace precreation inventory differs")
+        try:
+            for name in ordered:
+                if not name or "/" in name or name in (".", ".."):
+                    _fail("runtime trace member name is invalid")
+                creator = -1
+                held = -1
+                try:
+                    creator = os.open(
+                        name,
+                        os.O_RDWR
+                        | os.O_CREAT
+                        | os.O_EXCL
+                        | os.O_NOFOLLOW
+                        | os.O_CLOEXEC,
+                        0o600,
+                        dir_fd=self.directory_fd,
+                    )
+                    initial = os.fstat(creator)
+                    if (
+                        not stat.S_ISREG(initial.st_mode)
+                        or initial.st_nlink != 1
+                        or initial.st_uid != os.geteuid()
+                        or stat.S_IMODE(initial.st_mode) != 0o600
+                        or initial.st_size != 0
+                    ):
+                        _fail("new runtime sink identity differs: " + name)
+                    held = os.open(
+                        "/proc/self/fd/{}".format(creator),
+                        os.O_RDONLY | os.O_CLOEXEC,
+                    )
+                    _require_read_only_descriptor(
+                        held, "runtime trace " + name
+                    )
+                    held_status = os.fstat(held)
+                    by_name = os.stat(
+                        name,
+                        dir_fd=self.directory_fd,
+                        follow_symlinks=False,
+                    )
+                    if (
+                        _stat_tuple(held_status) != _stat_tuple(initial)
+                        or _stat_tuple(by_name) != _stat_tuple(initial)
+                    ):
+                        _fail(
+                            "new runtime sink held/name binding differs: "
+                            + name
+                        )
+                    self._files[name] = (held, initial, initial, None)
+                    held = -1
+                finally:
+                    if creator >= 0:
+                        os.close(creator)
+                    if held >= 0:
+                        os.close(held)
+            os.fsync(self.directory_fd)
+            self.revalidate()
+        except BaseException:
+            self.close()
+            raise
+
+    def _member(
+        self, name: str
+    ) -> Tuple[int, os.stat_result, os.stat_result, Optional[bytes]]:
+        if name not in self._files:
+            _fail("runtime trace member is not held: " + name)
+        return self._files[name]
+
+    def proc_path(self, name: str) -> Path:
+        descriptor, _initial, _current, _payload = self._member(name)
+        capability = Path(
+            "/proc/{}/fd/{}".format(os.getpid(), descriptor)
+        )
+        if _stat_tuple(os.stat(str(capability))) != _stat_tuple(
+            os.fstat(descriptor)
+        ):
+            _fail("runtime sink /proc capability differs: " + name)
+        return capability
+
+    def capability(self, name: str) -> str:
+        descriptor, initial, _current, payload = self._member(name)
+        if payload is not None:
+            _fail("runtime sink capability was requested after fill: " + name)
+        return "v1:{}:{}:{}".format(
+            os.getpid(), descriptor, _bag_identity_argument(initial)
+        )
+
+    def _revalidate_file(self, name: str) -> None:
+        descriptor, _initial, expected, payload = self._member(name)
+        _require_read_only_descriptor(descriptor, "runtime trace " + name)
+        current = os.fstat(descriptor)
+        by_name = os.stat(
+            name, dir_fd=self.directory_fd, follow_symlinks=False
+        )
+        if (
+            _stat_tuple(current) != _stat_tuple(expected)
+            or _stat_tuple(by_name) != _stat_tuple(expected)
+        ):
+            _fail("held runtime trace member changed: " + name)
+        if payload is not None and _read_fd_all(
+            descriptor,
+            MAX_RUNTIME_TRACE_BYTES,
+            "held runtime trace " + name,
+        ) != payload:
+            _fail("held runtime trace bytes changed: " + name)
+
+    def revalidate(self) -> None:
+        self._revalidate_directory()
+        if set(os.listdir(self.directory_fd)) != set(self._files):
+            _fail("runtime trace directory name inventory changed")
+        for name in sorted(self._files, key=os.fsencode):
+            self._revalidate_file(name)
+
+    def fill_parent(self, name: str, payload: bytes) -> None:
+        """Fill one trusted-parent member through the exact held inode."""
+
+        _descriptor, initial, _current, prior = self._member(name)
+        if prior is not None or not isinstance(payload, bytes) or not payload:
+            _fail("parent runtime sink fill is invalid: " + name)
+        self._revalidate_file(name)
+        writer = -1
+        try:
+            writer = os.open(
+                str(self.proc_path(name)), os.O_WRONLY | os.O_CLOEXEC
+            )
+            if _stat_tuple(os.fstat(writer)) != _stat_tuple(initial):
+                _fail("parent runtime sink writer differs: " + name)
+            view = memoryview(payload)
+            while view:
+                try:
+                    count = os.write(writer, view)
+                except InterruptedError:
+                    continue
+                if count <= 0:
+                    _fail(
+                        "parent runtime sink write made no progress: " + name
+                    )
+                view = view[count:]
+            os.fchmod(writer, 0o444)
+            os.fsync(writer)
+        finally:
+            if writer >= 0:
+                os.close(writer)
+        os.fsync(self.directory_fd)
+        self._accept_completed(name, payload)
+
+    def _accept_completed(
+        self, name: str, expected_payload: Optional[bytes]
+    ) -> bytes:
+        descriptor, initial, _current, prior = self._member(name)
+        if prior is not None:
+            _fail("runtime sink was completed twice: " + name)
+        current = os.fstat(descriptor)
+        by_name = os.stat(
+            name, dir_fd=self.directory_fd, follow_symlinks=False
+        )
+        if (
+            (current.st_dev, current.st_ino)
+            != (initial.st_dev, initial.st_ino)
+            or _stat_tuple(current) != _stat_tuple(by_name)
+            or not stat.S_ISREG(current.st_mode)
+            or current.st_nlink != 1
+            or current.st_uid != os.geteuid()
+            or current.st_size <= 0
+            or current.st_size > MAX_RUNTIME_TRACE_BYTES
+        ):
+            _fail("completed runtime sink identity differs: " + name)
+        if stat.S_IMODE(current.st_mode) != 0o444:
+            os.fchmod(descriptor, 0o444)
+            os.fsync(descriptor)
+            current = os.fstat(descriptor)
+            by_name = os.stat(
+                name, dir_fd=self.directory_fd, follow_symlinks=False
+            )
+        payload = _read_fd_all(
+            descriptor,
+            MAX_RUNTIME_TRACE_BYTES,
+            "held runtime trace " + name,
+        )
+        if (
+            _stat_tuple(os.fstat(descriptor)) != _stat_tuple(current)
+            or _stat_tuple(by_name) != _stat_tuple(current)
+            or stat.S_IMODE(current.st_mode) != 0o444
+            or (expected_payload is not None and payload != expected_payload)
+        ):
+            _fail("completed runtime sink bytes/path differ: " + name)
+        self._files[name] = (descriptor, initial, current, payload)
+        return payload
+
+    def accept_external(self, names: Sequence[str]) -> None:
+        """Accept only the exact declared inodes filled by the estimator."""
+
+        self._revalidate_directory()
+        if set(os.listdir(self.directory_fd)) != set(self._files):
+            _fail("runtime trace directory contains undeclared outputs")
+        ordered = tuple(names)
+        if len(set(ordered)) != len(ordered):
+            _fail("runtime sink completion population contains duplicates")
+        for name in ordered:
+            self._accept_completed(name, None)
+        self.revalidate()
+
+    def payload(self, name: str) -> bytes:
+        self._revalidate_file(name)
+        payload = self._member(name)[3]
+        if payload is None:
+            _fail("runtime trace member is not complete: " + name)
+        return payload
+
+    def unlink_exact(self, names: Sequence[str]) -> None:
+        self.revalidate()
+        ordered = tuple(names)
+        if len(set(ordered)) != len(ordered):
+            _fail("runtime trace unlink population contains duplicates")
+        for name in ordered:
+            self._revalidate_file(name)
+            descriptor = self._member(name)[0]
+            os.unlink(name, dir_fd=self.directory_fd)
+            if os.fstat(descriptor).st_nlink != 0:
+                _fail("runtime trace unlink did not remove held name: " + name)
+            os.close(descriptor)
+            del self._files[name]
+        os.fsync(self.directory_fd)
+        self.revalidate()
+
+    def close(self) -> None:
+        for descriptor, _initial, _current, _payload in self._files.values():
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        self._files.clear()
+        if getattr(self, "directory_fd", -1) >= 0:
+            try:
+                os.close(self.directory_fd)
+            finally:
+                self.directory_fd = -1
 
 
 def _same_stat_without_ctime(
@@ -1431,6 +1776,213 @@ def _bind_regular_file(path: Path) -> BoundRegularFile:
         os.close(parent)
 
 
+@dataclass(frozen=True)
+class RuntimeCapsule:
+    """One unit-anchored capsule staged for an actual CP2-D process."""
+
+    kind: str
+    unit_archive_path: Path
+    unit_profile_path: Path
+    profile_bytes: bytes
+    profile_sha256: str
+    staged: capsule.StagedCapsule
+    staged_root_identity: Tuple[int, ...]
+    staged_entry_identities: Tuple[Tuple[Path, Tuple[int, ...]], ...]
+    private_root: Path
+    work_root: Path
+    environment_pairs: Tuple[Tuple[str, str], ...]
+    private_directory_identities: Tuple[Tuple[Path, Tuple[int, ...]], ...]
+
+    @property
+    def launcher(self) -> Path:
+        return self.staged.root / self.profile.launcher_path
+
+    @property
+    def profile(self) -> capsule.CapsuleProfile:
+        profile_record = schema.strict_json_loads(self.profile_bytes)
+        try:
+            return capsule.validate_capsule_profile(profile_record)
+        except capsule.CapsuleError as exc:
+            raise CampaignError("runtime capsule profile failed validation") from exc
+
+    @property
+    def environment(self) -> Dict[str, str]:
+        return dict(self.environment_pairs)
+
+    @property
+    def evidence_environment(self) -> Dict[str, str]:
+        """Return the exact logical profile variables bound by evidence."""
+
+        return dict(self.profile.environment)
+
+    @property
+    def sandbox_environment(self) -> Dict[str, str]:
+        """Resolve the frozen logical environment inside the private root."""
+
+        result: Dict[str, str] = {}
+        prefix = "${PRIVATE_ROOT}/"
+        for name, value in self.profile.environment:
+            if value.startswith(prefix):
+                suffix = value[len(prefix) :]
+                if not suffix or "/" in suffix or suffix in (".", ".."):
+                    _fail("capsule sandbox environment suffix differs")
+                result[name] = "/private/" + suffix
+            else:
+                result[name] = value
+        if self.profile.execution.cwd != "${PRIVATE_ROOT}/work":
+            _fail("capsule sandbox working-directory template differs")
+        return result
+
+    def revalidate(self) -> None:
+        try:
+            staged_status = os.stat(self.staged.root, follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(staged_status.st_mode)
+                or stat.S_IMODE(staged_status.st_mode) != 0o700
+                or _directory_object_identity(staged_status)
+                != self.staged_root_identity
+            ):
+                _fail("runtime capsule staged-root identity differs")
+            for path, expected in self.staged_entry_identities:
+                observed = os.stat(path, follow_symlinks=False)
+                if _stat_tuple(observed) != expected:
+                    _fail("runtime capsule staged-member identity differs")
+            profile_record = schema.strict_json_loads(self.profile_bytes)
+            profile = capsule.validate_capsule_profile(profile_record)
+            if (
+                profile.capsule_kind != self.kind
+                or profile.profile_sha256 != self.profile_sha256
+                or profile.profile_sha256 != self.staged.profile_sha256
+                or profile.profile_id != self.staged.profile_id
+                or profile.archive_sha256 != self.staged.archive_sha256
+                or profile.inventory_sha256 != self.staged.inventory_sha256
+                or profile.environment_sha256 != self.staged.environment_sha256
+                or hashlib.sha256(self.profile_bytes).hexdigest()
+                != self.profile_sha256
+            ):
+                _fail("runtime capsule/profile identity differs")
+            capsule.revalidate_staged_capsule(self.staged.root, self.staged.entries)
+        except (capsule.CapsuleError, schema.SchemaError, OSError) as exc:
+            raise CampaignError("runtime capsule failed complete revalidation") from exc
+        for path, expected in self.private_directory_identities:
+            try:
+                observed = os.stat(path, follow_symlinks=False)
+            except OSError as exc:
+                raise CampaignError("runtime capsule private directory is absent") from exc
+            if (
+                not stat.S_ISDIR(observed.st_mode)
+                or observed.st_uid != os.geteuid()
+                or stat.S_IMODE(observed.st_mode) != 0o700
+                or _directory_object_identity(observed) != expected
+            ):
+                _fail("runtime capsule private directory identity differs")
+
+
+def _capsule_private_environment(
+    profile: capsule.CapsuleProfile,
+    private_root: Path,
+) -> Tuple[Tuple[Tuple[str, str], ...], Path, Tuple[Tuple[Path, Tuple[int, ...]], ...]]:
+    private_root.mkdir(mode=0o700, exist_ok=False)
+    environment: Dict[str, str] = {}
+    directories = [private_root]
+    prefix = "${PRIVATE_ROOT}/"
+    for name, value in profile.environment:
+        if value.startswith(prefix):
+            suffix = value[len(prefix) :]
+            if "/" in suffix or not suffix:
+                _fail("capsule private environment suffix differs")
+            target = private_root / suffix
+            target.mkdir(mode=0o700, exist_ok=False)
+            directories.append(target)
+            environment[name] = str(target)
+        else:
+            environment[name] = value
+    work_root = private_root / "work"
+    work_root.mkdir(mode=0o700, exist_ok=False)
+    directories.append(work_root)
+    if profile.execution.cwd != "${PRIVATE_ROOT}/work":
+        _fail("capsule execution working-directory template differs")
+    identities = tuple(
+        (path, _directory_object_identity(os.stat(path, follow_symlinks=False)))
+        for path in directories
+    )
+    return tuple(sorted(environment.items())), work_root, identities
+
+
+def _stage_unit_capsule(
+    unit_artifact: Path,
+    kind: str,
+    stage_parent: Path,
+    private_parent: Path,
+) -> RuntimeCapsule:
+    if kind not in UNIT_CAPSULE_PATHS:
+        _fail("unit capsule kind differs")
+    archive_relative, profile_relative = UNIT_CAPSULE_PATHS[kind]
+    archive_path = Path(unit_artifact).absolute() / archive_relative
+    profile_path = Path(unit_artifact).absolute() / profile_relative
+    try:
+        with _bind_regular_file(profile_path) as bound_profile, _bind_regular_file(
+            archive_path
+        ) as bound_archive:
+            for label, bound in (
+                ("profile", bound_profile),
+                ("archive", bound_archive),
+            ):
+                if (
+                    bound.identity.st_uid != os.geteuid()
+                    or stat.S_IMODE(bound.identity.st_mode) != 0o444
+                ):
+                    _fail("unit capsule {} is not immutable and caller-owned".format(label))
+            profile_bytes = _read_fd_all(
+                bound_profile.descriptor,
+                MAX_CAPSULE_PROFILE_BYTES,
+                kind + " capsule profile",
+            )
+            profile_record = schema.strict_json_loads(profile_bytes)
+            profile = capsule.validate_capsule_profile(profile_record)
+            if profile.capsule_kind != kind:
+                _fail("unit capsule profile kind differs")
+            destination = stage_parent / kind
+            staged = capsule.stage_capsule(archive_path, profile_record, destination)
+            bound_profile.revalidate()
+            bound_archive.revalidate()
+    except (capsule.CapsuleError, schema.SchemaError) as exc:
+        raise CampaignError("unit capsule staging failed closed: " + kind) from exc
+    environment_pairs, work_root, directory_identities = _capsule_private_environment(
+        profile,
+        private_parent / kind,
+    )
+    runtime = RuntimeCapsule(
+        kind=kind,
+        unit_archive_path=archive_path,
+        unit_profile_path=profile_path,
+        profile_bytes=profile_bytes,
+        profile_sha256=profile.profile_sha256,
+        staged=staged,
+        staged_root_identity=_directory_object_identity(
+            os.stat(staged.root, follow_symlinks=False)
+        ),
+        staged_entry_identities=tuple(
+            (
+                staged.root.joinpath(*entry.path.split("/")),
+                _stat_tuple(
+                    os.stat(
+                        staged.root.joinpath(*entry.path.split("/")),
+                        follow_symlinks=False,
+                    )
+                ),
+            )
+            for entry in staged.entries
+        ),
+        private_root=private_parent / kind,
+        work_root=work_root,
+        environment_pairs=environment_pairs,
+        private_directory_identities=directory_identities,
+    )
+    runtime.revalidate()
+    return runtime
+
+
 class _UniqueKeyLoader(yaml.SafeLoader):
     pass
 
@@ -1788,7 +2340,13 @@ class CommandRecorder:
             sequence_index: Optional[int] = None,
             pair_index: Optional[int] = None,
             run_index: Optional[int] = None,
-            timeout: float = MAX_COMMAND_SECONDS) -> Dict[str, Any]:
+            timeout: float = MAX_COMMAND_SECONDS,
+            *,
+            process_argv: Optional[Sequence[str]] = None,
+            process_executable: Optional[str] = None,
+            process_pass_fds: Sequence[int] = (),
+            evidence_variables: Optional[Mapping[str, str]] = None,
+            evidence_cwd: Optional[Path] = None) -> Dict[str, Any]:
         if not argv or any(not isinstance(item, str) or not item or "\0" in item
                            for item in argv):
             _fail("command argv is empty or invalid")
@@ -1798,8 +2356,30 @@ class CommandRecorder:
             "trajectory", "evaluation", "verification",
         }:
             _fail("command phase is outside the frozen enum")
+        executed_argv = tuple(argv if process_argv is None else process_argv)
+        if (
+            not executed_argv
+            or any(
+                not isinstance(item, str) or not item or "\0" in item
+                for item in executed_argv
+            )
+            or (
+                process_executable is not None
+                and (
+                    not isinstance(process_executable, str)
+                    or not process_executable.startswith("/proc/")
+                    or "\0" in process_executable
+                )
+            )
+            or any(type(item) is not int or item < 3 for item in process_pass_fds)
+            or len(set(process_pass_fds)) != len(tuple(process_pass_fds))
+        ):
+            _fail("prepared command execution surface differs")
         self.revalidate_lifetimes()
-        environment_sha = self.add_environment(environment_id, variables)
+        environment_sha = self.add_environment(
+            environment_id,
+            variables if evidence_variables is None else evidence_variables,
+        )
         command_id = len(self.records)
         stdout_rel = "logs/{:03d}_{}.stdout".format(command_id, phase)
         stderr_rel = "logs/{:03d}_{}.stderr".format(command_id, phase)
@@ -1826,7 +2406,10 @@ class CommandRecorder:
             timed_out = False
             self.revalidate_lifetimes()
             process = subprocess.Popen(
-                list(argv), cwd=str(cwd), env=dict(variables), stdin=subprocess.DEVNULL,
+                list(executed_argv),
+                executable=process_executable,
+                pass_fds=tuple(process_pass_fds),
+                cwd=str(cwd), env=dict(variables), stdin=subprocess.DEVNULL,
                 stdout=stdout_fd, stderr=stderr_fd, start_new_session=True,
                 close_fds=True,
             )
@@ -1856,7 +2439,8 @@ class CommandRecorder:
             "schema_version": 1, "record_type": "command",
             "command_id": command_id, "phase": phase,
             "sequence_index": sequence_index, "pair_index": pair_index,
-            "run_index": run_index, "argv": list(argv), "cwd": str(cwd),
+            "run_index": run_index, "argv": list(argv),
+            "cwd": str(cwd if evidence_cwd is None else evidence_cwd),
             "environment_sha256": environment_sha,
             "started_utc": started, "finished_utc": finished,
             "exit_code": int(exit_code), "timed_out": timed_out,
@@ -2352,6 +2936,16 @@ def _loader_dso_records(path: Path, executable: Path) -> List[Dict[str, Any]]:
         raw = _read_fd_all(bound.descriptor, 16 * 1024 * 1024,
                            "runtime loader map")
         bound.revalidate()
+    return _loader_dso_records_bytes(raw, executable)
+
+
+def _loader_dso_records_bytes(
+    raw: bytes, executable: Path
+) -> List[Dict[str, Any]]:
+    """Parse loader-map bytes already consumed from an exact held inode."""
+
+    if not isinstance(raw, bytes) or len(raw) > 16 * 1024 * 1024:
+        _fail("runtime loader map bytes are invalid or exceed their bound")
     try:
         text_value = raw.decode("utf-8", "strict")
     except UnicodeDecodeError as exc:
@@ -2399,6 +2993,24 @@ def _build_runtime_in_workspace(
     workspace: Path,
 ) -> Dict[str, Any]:
     workspace = Path(workspace).absolute()
+    capsule_stage_parent = workspace / "capsules"
+    capsule_private_parent = workspace / "capsule-private"
+    capsule_stage_parent.mkdir(mode=0o700)
+    capsule_private_parent.mkdir(mode=0o700)
+    direct_math_capsule = _stage_unit_capsule(
+        unit_artifact,
+        "direct_math",
+        capsule_stage_parent,
+        capsule_private_parent,
+    )
+    evaluator_capsule = _stage_unit_capsule(
+        unit_artifact,
+        "evaluator",
+        capsule_stage_parent,
+        capsule_private_parent,
+    )
+    direct_math_capsule.revalidate()
+    evaluator_capsule.revalidate()
     source_space = workspace / "src"
     source_space.mkdir(mode=0o700)
     archive = workspace / "source_snapshot.tar"
@@ -2508,12 +3120,20 @@ def _build_runtime_in_workspace(
         compile_commands, source_space, catkin_build, workspace)
     _copy_new(compile_commands, partial / "compile_commands.json")
     _copy_new(cmake_cache, partial / "CMakeCache.txt")
+    direct_math_capsule.revalidate()
+    evaluator_capsule.revalidate()
     return {
         "workspace": workspace, "source_space": source_space,
         "executable": executable, "assembler": assembler,
         "compile_commands": partial / "compile_commands.json",
         "cmake_cache": partial / "CMakeCache.txt", "build_env": build_env,
         "source_archive": partial / "source_snapshot.tar",
+        "direct_math_capsule": direct_math_capsule,
+        "evaluator_capsule": evaluator_capsule,
+        "direct_math_launcher": direct_math_capsule.launcher,
+        "evaluator_launcher": evaluator_capsule.launcher,
+        "direct_math_environment": direct_math_capsule.environment,
+        "evaluator_environment": evaluator_capsule.environment,
     }
 
 
@@ -2634,9 +3254,18 @@ def _context(run_id: str, sequence_index: int, source_commit: str,
     }
 
 
-def _launch_arguments(build: Mapping[str, Any], bag: Path, offset: float,
-                      trace: Path, context_path: Path, sequence_index: int) -> List[str]:
-    return [
+def _launch_arguments(
+    build: Mapping[str, Any],
+    bag: Path,
+    offset: float,
+    trace: Path,
+    context_path: Path,
+    sequence_index: int,
+    sink_capabilities: Mapping[str, str],
+) -> List[str]:
+    if set(sink_capabilities) != set(SINK_CAPABILITY_FIELDS):
+        _fail("CP2-C sink capability field population differs")
+    arguments = [
         str(Path(build["source_space"]) / "project/cp2_serial.launch"),
         "bag:=" + str(bag), "bag_start:=" + format(offset, ".1f"),
         "config_path:=" + str(Path(build["source_space"]) /
@@ -2652,6 +3281,13 @@ def _launch_arguments(build: Mapping[str, Any], bag: Path, offset: float,
         "landmark_elimination:=nullspace", "cp2_shadow_enabled:=true",
         "cp2_trace_level:=recorded_full", "verbosity:=INFO",
     ]
+    arguments.extend(
+        "cp2_{}_sink_capability:={}".format(
+            field, sink_capabilities[field]
+        )
+        for field in SINK_CAPABILITY_FIELDS
+    )
+    return arguments
 
 
 def _copy_readiness(partial: Path, authorization: Any) -> None:
@@ -2944,80 +3580,160 @@ def _run_sequences(repo_root: Path, partial: Path, build: Mapping[str, Any],
             bound_bag=bound, sequence_index=sequence_index)
         trace = partial / "runtime/{:02d}_{}".format(sequence_index, SEQUENCES[sequence_index])
         trace.mkdir(mode=0o700, parents=True, exist_ok=False)
-        context_path = trace / "context.json"
-        launch_args = _launch_arguments(build, bound.path, offset, trace,
-                                        context_path, sequence_index)
-        port = 14381 + sequence_index
-        environment = _runtime_environment(
-            build, Path(build["workspace"]) /
-            "runtime-environment-{:02d}".format(sequence_index), port)
-        dump_argv = ["/opt/ros/noetic/bin/roslaunch", "--dump-params"] + launch_args
-        dump = recorder.run("runtime_preflight", dump_argv, repo_root,
-                            "ros_run_{:02d}".format(sequence_index), environment,
-                            sequence_index=sequence_index, run_index=sequence_index)
-        if dump["exit_code"] != 0 or dump["timed_out"]:
-            _fail("roslaunch preflight failed")
-        raw_prelaunch = (partial / dump["stdout"]).read_bytes()
-        parameters = _flatten_dump(raw_prelaunch)
-        canonical = schema.encode_resolved_parameters(parameters)
-        resolved_sha = hashlib.sha256(canonical).hexdigest()
-        _write_new(trace / "prelaunch_parameters.yaml", raw_prelaunch)
-        _write_new(trace / "parameters_canonical.bin", canonical)
-        run_id = "cp2c-g{}-s{}-{}".format(
-            source_commit[:12], sequence_index,
-            hashlib.sha256(str(partial).encode("utf-8")).hexdigest()[:12])
-        context = _context(run_id, sequence_index, source_commit, config_sha,
-                           expected_hash, resolved_sha, trace)
-        _write_new(context_path, _json_bytes(context))
-        launch_argv = ["/opt/ros/noetic/bin/roslaunch", "-p", str(port)] + launch_args
-        run = recorder.run("ros_run", launch_argv, repo_root,
-                           "ros_run_{:02d}".format(sequence_index), environment,
-                           sequence_index=sequence_index, run_index=sequence_index)
-        if run["exit_code"] != 0 or run["timed_out"]:
-            _fail("recorded ROS run failed: " + SEQUENCES[sequence_index])
-        _fsync_directory(trace)
-        bound.revalidate()
-        if bound.sha256() != expected_hash:
-            _fail("bag SHA-256 differs after run: " + SEQUENCES[sequence_index])
-        required = ("serial.jsonl", "updater.journal", "runtime_parameters.yaml",
-                    "loader_before.txt", "loader_after.txt")
-        for name in required:
-            path = trace / name
-            if not path.is_file() or path.is_symlink() or path.stat().st_nlink != 1:
-                _fail("runtime sink missing or unsafe: " + str(path))
-        runtime_raw = (trace / "runtime_parameters.yaml").read_bytes()
-        runtime_map = schema.strict_json_loads(runtime_raw)
-        if not isinstance(runtime_map, Mapping):
-            _fail("runtime parameter capture is not a map")
-        if schema.encode_resolved_parameters(runtime_map) != canonical:
-            _fail("runtime parameter bytes differ from prelaunch canonical map")
-        dso_before = _loader_dso_records(trace / "loader_before.txt",
-                                         Path(build["executable"]))
-        dso_after = _loader_dso_records(trace / "loader_after.txt",
-                                        Path(build["executable"]))
-        if dso_before != dso_after:
-            _fail("runtime DSO identity set changed during sequence run")
-        serial_bytes = (trace / "serial.jsonl").read_bytes()
-        projected_pair_index = _project_serial_pairs_to_pair_index_bytes(
-            serial_bytes, sequence_index, SEQUENCES[sequence_index])
-        if projected_pair_index != independent_pair_index:
-            _fail("runtime serial selection differs from independent pair-index replay: " +
-                  SEQUENCES[sequence_index])
-        serial_parts.append(serial_bytes)
-        run_records.append({
-            "run_id": run_id, "sequence_index": sequence_index,
-            "sequence_id": SEQUENCES[sequence_index], "mode": "nullspace",
-            "trace": trace, "context": context_path,
-            "journal": trace / "updater.journal", "resolved_sha256": resolved_sha,
-            "prelaunch_raw": trace / "prelaunch_parameters.yaml",
-            "runtime_raw": trace / "runtime_parameters.yaml",
-            "canonical": trace / "parameters_canonical.bin",
-            "loader_before": trace / "loader_before.txt",
-            "loader_after": trace / "loader_after.txt",
-            "dso_records_before": dso_before,
-            "dso_records_after": dso_after,
-            "bag_size": bound.identity.st_size,
-        })
+        held_outputs: Optional[_HeldRuntimeOutputs] = None
+        try:
+            held_outputs = _HeldRuntimeOutputs(trace)
+            context_path = trace / "context.json"
+            prelaunch_path = trace / "prelaunch_parameters.yaml"
+            canonical_path = trace / "parameters_canonical.bin"
+            required = tuple(
+                name for name in C_SINK_NAMES.values() if name is not None
+            )
+            held_outputs.precreate(
+                required
+                + (
+                    context_path.name,
+                    prelaunch_path.name,
+                    canonical_path.name,
+                )
+            )
+            sink_capabilities = {
+                field: (
+                    "null"
+                    if C_SINK_NAMES[field] is None
+                    else held_outputs.capability(C_SINK_NAMES[field])
+                )
+                for field in SINK_CAPABILITY_FIELDS
+            }
+            launch_args = _launch_arguments(
+                build,
+                bound.path,
+                offset,
+                trace,
+                context_path,
+                sequence_index,
+                sink_capabilities,
+            )
+            port = 14381 + sequence_index
+            environment = _runtime_environment(
+                build,
+                Path(build["workspace"])
+                / "runtime-environment-{:02d}".format(sequence_index),
+                port,
+            )
+            dump_argv = [
+                "/opt/ros/noetic/bin/roslaunch",
+                "--dump-params",
+            ] + launch_args
+            dump = recorder.run(
+                "runtime_preflight",
+                dump_argv,
+                repo_root,
+                "ros_run_{:02d}".format(sequence_index),
+                environment,
+                sequence_index=sequence_index,
+                run_index=sequence_index,
+            )
+            if dump["exit_code"] != 0 or dump["timed_out"]:
+                _fail("roslaunch preflight failed")
+            raw_prelaunch = (partial / dump["stdout"]).read_bytes()
+            parameters = _flatten_dump(raw_prelaunch)
+            canonical = schema.encode_resolved_parameters(parameters)
+            resolved_sha = hashlib.sha256(canonical).hexdigest()
+            held_outputs.fill_parent(prelaunch_path.name, raw_prelaunch)
+            held_outputs.fill_parent(canonical_path.name, canonical)
+            run_id = "cp2c-g{}-s{}-{}".format(
+                source_commit[:12],
+                sequence_index,
+                hashlib.sha256(str(partial).encode("utf-8")).hexdigest()[:12],
+            )
+            context = _context(
+                run_id,
+                sequence_index,
+                source_commit,
+                config_sha,
+                expected_hash,
+                resolved_sha,
+                trace,
+            )
+            held_outputs.fill_parent(context_path.name, _json_bytes(context))
+            held_outputs.revalidate()
+            launch_argv = [
+                "/opt/ros/noetic/bin/roslaunch",
+                "-p",
+                str(port),
+            ] + launch_args
+            run = recorder.run(
+                "ros_run",
+                launch_argv,
+                repo_root,
+                "ros_run_{:02d}".format(sequence_index),
+                environment,
+                sequence_index=sequence_index,
+                run_index=sequence_index,
+            )
+            if run["exit_code"] != 0 or run["timed_out"]:
+                _fail("recorded ROS run failed: " + SEQUENCES[sequence_index])
+            _fsync_directory(trace)
+            held_outputs.accept_external(required)
+            recorder.add_lifetime_guard(held_outputs.revalidate)
+            bound.revalidate()
+            if bound.sha256() != expected_hash:
+                _fail(
+                    "bag SHA-256 differs after run: "
+                    + SEQUENCES[sequence_index]
+                )
+            runtime_raw = held_outputs.payload("runtime_parameters.yaml")
+            runtime_map = schema.strict_json_loads(runtime_raw)
+            if not isinstance(runtime_map, Mapping):
+                _fail("runtime parameter capture is not a map")
+            if schema.encode_resolved_parameters(runtime_map) != canonical:
+                _fail(
+                    "runtime parameter bytes differ from prelaunch canonical map"
+                )
+            loader_before_bytes = held_outputs.payload("loader_before.txt")
+            loader_after_bytes = held_outputs.payload("loader_after.txt")
+            dso_before = _loader_dso_records_bytes(
+                loader_before_bytes, Path(build["executable"])
+            )
+            dso_after = _loader_dso_records_bytes(
+                loader_after_bytes, Path(build["executable"])
+            )
+            if dso_before != dso_after:
+                _fail("runtime DSO identity set changed during sequence run")
+            serial_bytes = held_outputs.payload("serial.jsonl")
+            projected_pair_index = _project_serial_pairs_to_pair_index_bytes(
+                serial_bytes, sequence_index, SEQUENCES[sequence_index]
+            )
+            if projected_pair_index != independent_pair_index:
+                _fail(
+                    "runtime serial selection differs from independent pair-index replay: "
+                    + SEQUENCES[sequence_index]
+                )
+            serial_parts.append(serial_bytes)
+            run_records.append({
+                "run_id": run_id,
+                "sequence_index": sequence_index,
+                "sequence_id": SEQUENCES[sequence_index],
+                "mode": "nullspace",
+                "trace": trace,
+                "context": context_path,
+                "journal": trace / "updater.journal",
+                "resolved_sha256": resolved_sha,
+                "prelaunch_raw": prelaunch_path,
+                "runtime_raw": trace / "runtime_parameters.yaml",
+                "canonical": canonical_path,
+                "loader_before": trace / "loader_before.txt",
+                "loader_after": trace / "loader_after.txt",
+                "dso_records_before": dso_before,
+                "dso_records_after": dso_after,
+                "bag_size": bound.identity.st_size,
+                "held_outputs": held_outputs,
+            })
+            held_outputs = None
+        finally:
+            if held_outputs is not None:
+                held_outputs.close()
     serial = b"".join(serial_parts)
     _write_new(partial / "serial_pairs.jsonl", serial)
     return run_records, hashlib.sha256(serial).hexdigest()
@@ -4043,6 +4759,7 @@ def _execute_recorded_campaign_worker(
     failure: Optional[BaseException] = None
     completed_manifest: Optional[str] = None
     bound_bags: List[BoundRegularFile] = []
+    runs: List[Dict[str, Any]] = []
     try:
         workspace_owner.revalidate()
         authorization.revalidate()
@@ -4132,8 +4849,10 @@ def _execute_recorded_campaign_worker(
         # the fixed final rows/payloads, so retaining them would create orphan
         # evidence outside the closed inventory.
         for row in runs:
-            Path(row["journal"]).unlink()
-            (Path(row["trace"]) / "serial.jsonl").unlink()
+            held_outputs = row.get("held_outputs")
+            if not isinstance(held_outputs, _HeldRuntimeOutputs):
+                _fail("runtime output capability owner is unavailable")
+            held_outputs.unlink_exact(("updater.journal", "serial.jsonl"))
             for unexpected in ("state.staging.bin", "proposal.staging.bin",
                                "raw.staging.bin"):
                 if os.path.lexists(str(Path(row["trace"]) / unexpected)):
@@ -4161,6 +4880,13 @@ def _execute_recorded_campaign_worker(
         failure = exc
     finally:
         cleanup_errors: List[BaseException] = []
+        for row in runs:
+            held_outputs = row.get("held_outputs")
+            if isinstance(held_outputs, _HeldRuntimeOutputs):
+                try:
+                    held_outputs.close()
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
         for bound in bound_bags:
             try:
                 bound.close()

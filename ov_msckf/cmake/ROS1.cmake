@@ -91,9 +91,11 @@ list(APPEND LIBRARY_SOURCES
         src/update/CP2CompositeState.cpp
         src/update/CP2FeatureGate.cpp
         src/update/CP2OfflineReplay.cpp
+        src/update/CP2OutputCapability.cpp
         src/update/CP2RuntimeContext.cpp
         src/update/CP2SerialPairing.cpp
         src/update/CP2SerialRuntimeTrace.cpp
+        src/update/CP2TimingClock.cpp
         src/update/CP2ShadowMath.cpp
         src/update/CP2StateTraceCodec.cpp
         src/update/CP2TraceCodec.cpp
@@ -111,6 +113,7 @@ list(APPEND LIBRARY_SOURCES
 # production translation unit that owns contracted arithmetic, including the
 # actual Givens/compression and EKF implementations called by strict wrappers.
 set_source_files_properties(
+        src/ros1_serial_msckf.cpp
         src/state/StateHelper.cpp
         src/ros/CP2ROS1RuntimeParameters.cpp
         src/update/CP2Canonical.cpp
@@ -119,10 +122,12 @@ set_source_files_properties(
         src/update/CP2CompositeState.cpp
         src/update/CP2FeatureGate.cpp
         src/update/CP2OfflineReplay.cpp
+        src/update/CP2OutputCapability.cpp
         src/update/CP2RecordedAssemble.cpp
         src/update/CP2RuntimeContext.cpp
         src/update/CP2SerialPairing.cpp
         src/update/CP2SerialRuntimeTrace.cpp
+        src/update/CP2TimingClock.cpp
         src/update/CP2ShadowMath.cpp
         src/update/CP2StateTraceCodec.cpp
         src/update/CP2TraceCodec.cpp

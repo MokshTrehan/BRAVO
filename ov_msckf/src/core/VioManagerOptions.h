@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "state/StateOptions.h"
+#include "update/CP2OutputCapability.h"
 #include "update/UpdaterOptions.h"
 #include "utils/NoiseManager.h"
 
@@ -103,6 +104,17 @@ struct VioManagerOptions {
 
   /// The path to the file we will record the timing information into
   std::string record_timing_filepath = "ov_msckf_timing.txt";
+
+  /// Internal-only CP2 switch; never populated by YAML or ROS parameters.
+  bool cp2_preopened_output_mode = false;
+
+  /// Internal exact identities for the three CP2-D legacy output inodes.
+  CP2OutputCapability cp2_legacy_state_capability;
+  CP2OutputCapability cp2_legacy_deviation_capability;
+  CP2OutputCapability cp2_legacy_timing_capability;
+  std::string cp2_legacy_state_canonical_path;
+  std::string cp2_legacy_deviation_canonical_path;
+  std::string cp2_legacy_timing_canonical_path;
 
   /**
    * @brief This function will load print out all estimator settings loaded.

@@ -8,15 +8,16 @@ import contextlib
 from dataclasses import replace
 import hashlib
 import io
+import json
+import os
 from pathlib import Path
 import stat
+import struct
 import sys
 import tempfile
 import unittest
 from unittest import mock
-
-import numpy as np
-
+import zlib
 
 SCRIPT_DIRECTORY = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = SCRIPT_DIRECTORY.parents[1]
@@ -24,13 +25,98 @@ if str(SCRIPT_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIRECTORY))
 
 import cp2_schema as schema  # noqa: E402
-import cp2_sequence_math as sequence_math  # noqa: E402
+import cp2_evaluator_result as evaluator_result  # noqa: E402
+import cp2_sequence_actual as sequence_actual  # noqa: E402
+import cp2_sequence_math_codec as math_codec  # noqa: E402
+import cp2_sequence_math_worker as math_worker  # noqa: E402
 import cp2_sequence_runner as runner  # noqa: E402
 import run_sequence_pair as entrypoint  # noqa: E402
 
 
 def digest(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def evaluator_stats_zip(rmse: float, count: int = 4) -> bytes:
+    """One deterministic population-bearing Unix classic-ZIP fixture."""
+
+    error_bits = tuple(struct.pack(">d", rmse).hex() for _ in range(count))
+    stats = json.dumps(
+        evaluator_result._statistics_from_error_bits(error_bits).as_mapping(),
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+    info = evaluator_result.EXPECTED_INFO_JSON
+    header = repr(
+        {"descr": "<f8", "fortran_order": False, "shape": (count,)}
+    ).encode("latin1")
+    header += b" " * ((-((10 + len(header) + 1) % 64)) % 64) + b"\n"
+    error_array = (
+        b"\x93NUMPY"
+        + bytes((1, 0))
+        + struct.pack("<H", len(header))
+        + header
+        + b"".join(struct.pack("<d", rmse) for _ in range(count))
+    )
+    local_chunks = []
+    central_chunks = []
+    offset = 0
+    for name, payload in (
+        (b"info.json", info),
+        (b"stats.json", stats),
+        (b"error_array.npy", error_array),
+    ):
+        crc = zlib.crc32(payload) & 0xFFFFFFFF
+        local = struct.pack(
+            "<I5H3I2H",
+            evaluator_result.LOCAL_SIGNATURE,
+            20,
+            0,
+            evaluator_result.STORE,
+            0,
+            0,
+            crc,
+            len(payload),
+            len(payload),
+            len(name),
+            0,
+        ) + name + payload
+        central = struct.pack(
+            "<I6H3I5H2I",
+            evaluator_result.CENTRAL_SIGNATURE,
+            (3 << 8) | 20,
+            20,
+            0,
+            evaluator_result.STORE,
+            0,
+            0,
+            crc,
+            len(payload),
+            len(payload),
+            len(name),
+            0,
+            0,
+            0,
+            0,
+            (stat.S_IFREG | 0o600) << 16,
+            offset,
+        ) + name
+        local_chunks.append(local)
+        central_chunks.append(central)
+        offset += len(local)
+    central = b"".join(central_chunks)
+    eocd = struct.pack(
+        "<I4H2IH",
+        evaluator_result.EOCD_SIGNATURE,
+        0,
+        0,
+        3,
+        3,
+        len(central),
+        offset,
+        0,
+    )
+    return b"".join(local_chunks) + central + eocd
 
 
 class SyntheticEvidence:
@@ -54,28 +140,37 @@ class SyntheticEvidence:
             runner.GroundTruthPose(timestamp, position, (0.0, 0.0, 0.0, 1.0))
             for timestamp, position in zip(timestamps, ground_truth_positions)
         )
-        alignment = sequence_math.baseline_kabsch_alignment(
-            np.asarray(common_positions, dtype=np.float64),
-            np.asarray(ground_truth_positions, dtype=np.float64),
-        )
-        aligned = sequence_math.apply_common_alignment(
-            alignment,
-            np.asarray(common_positions, dtype=np.float64),
-            np.asarray([(0.0, 0.0, 0.0, 1.0)] * 4, dtype=np.float64),
-            np.asarray(common_positions, dtype=np.float64),
-            np.asarray([(0.0, 0.0, 0.0, 1.0)] * 4, dtype=np.float64),
-        )
-        self.ate = float(
-            sequence_math.translation_rmse_m(
-                aligned.nullspace_positions,
-                np.asarray(ground_truth_positions, dtype=np.float64),
-            )
-        )
-
         pair_rows = []
+        witness_rows = []
         callback_rows = {mode: [] for mode in runner.MODES}
         trajectory_rows = {mode: [] for mode in runner.MODES}
         for index, (timestamp, position) in enumerate(zip(timestamps, common_positions)):
+            witness_rows.extend(
+                (
+                    {
+                        "schema_version": 1,
+                        "record_type": "filtered_message",
+                        "sequence_index": 0,
+                        "sequence_id": "MH_01_easy",
+                        "filtered_index": 2 * index,
+                        "kind": "cam0",
+                        "camera_id": 0,
+                        "record_time_ns": (index + 1) * 1_000_000_000,
+                        "header_time_ns": timestamp,
+                    },
+                    {
+                        "schema_version": 1,
+                        "record_type": "filtered_message",
+                        "sequence_index": 0,
+                        "sequence_id": "MH_01_easy",
+                        "filtered_index": 2 * index + 1,
+                        "kind": "cam1",
+                        "camera_id": 1,
+                        "record_time_ns": (index + 1) * 1_000_000_000 + 1_000_000,
+                        "header_time_ns": timestamp + 1000,
+                    },
+                )
+            )
             pair = {
                 "schema_version": 1,
                 "record_type": "pair_index",
@@ -137,14 +232,72 @@ class SyntheticEvidence:
                     }
                 )
         self.pair_bytes = schema.jsonl_bytes(pair_rows)
+        self.witness_bytes = schema.jsonl_bytes(witness_rows)
+        self.direct_request = math_codec.encode_sequence_request(
+            sequence_index=0,
+            sequence_id="MH_01_easy",
+            nullspace_timestamps_ns=timestamps,
+            nullspace_positions=common_positions,
+            nullspace_quaternions_xyzw=((0.0, 0.0, 0.0, 1.0),) * 4,
+            schur_timestamps_ns=timestamps,
+            schur_positions=common_positions,
+            schur_quaternions_xyzw=((0.0, 0.0, 0.0, 1.0),) * 4,
+            ground_truth_timestamps_ns=timestamps,
+            ground_truth_positions=ground_truth_positions,
+            ground_truth_quaternions_xyzw=((0.0, 0.0, 0.0, 1.0),) * 4,
+        )
+        self.direct_response = math_worker.evaluate_sequence_request(self.direct_request)
+        direct = math_codec.decode_sequence_response(
+            self.direct_response, self.direct_request
+        )
+        self.ate = direct.metric("ate_nullspace_m_bits")
 
         evaluator_logs = {}
-        command_rows = []
+        direct_stdout_path = "direct_math/worker.stdout"
+        direct_stderr_path = "direct_math/worker.stderr"
+        direct_stdout = b""
+        direct_stderr = b""
         command_environment_sha = schema.command_environment_sha256({"LANG": "C"})
+        command_rows = [
+            {
+                "schema_version": 1,
+                "record_type": "command",
+                "command_id": 0,
+                "phase": "evaluation",
+                "sequence_index": 0,
+                "pair_index": None,
+                "run_index": None,
+                "argv": [
+                    "/tmp/synthetic-direct-capsule/bin/launcher",
+                    "--input",
+                    "/tmp/synthetic-direct/request.json",
+                    "--output",
+                    "/tmp/synthetic-direct/response.json",
+                ],
+                "cwd": "/tmp/synthetic-direct",
+                "environment_sha256": command_environment_sha,
+                "started_utc": "2026-08-02T00:00:00.000000Z",
+                "finished_utc": "2026-08-02T00:00:01.000000Z",
+                "exit_code": 0,
+                "timed_out": False,
+                "stdout": direct_stdout_path,
+                "stdout_sha256": digest(direct_stdout),
+                "stderr": direct_stderr_path,
+                "stderr_sha256": digest(direct_stderr),
+            }
+        ]
+        evaluator_logs[direct_stdout_path] = runner.SupportFile(
+            direct_stdout, "direct_math"
+        )
+        evaluator_logs[direct_stderr_path] = runner.SupportFile(
+            direct_stderr, "direct_math"
+        )
         for index, mode in enumerate(runner.MODES):
             stdout_path = "evaluation/{}_evo.stdout".format(mode)
             stderr_path = "evaluation/{}_evo.stderr".format(mode)
-            stdout = ("rmse {:.17g}\n".format(self.ate)).encode("ascii")
+            result_path = "evaluation/{}_evaluator_result.zip".format(mode)
+            result_argument = "/tmp/synthetic-cp2-d/" + result_path
+            stdout = ("rmse {:.6f}\n".format(self.ate)).encode("ascii")
             stderr = b""
             evaluator_logs[stdout_path] = runner.SupportFile(stdout, "evaluator")
             evaluator_logs[stderr_path] = runner.SupportFile(stderr, "evaluator")
@@ -152,13 +305,13 @@ class SyntheticEvidence:
                 {
                     "schema_version": 1,
                     "record_type": "command",
-                    "command_id": index,
+                    "command_id": index + 1,
                     "phase": "evaluation",
                     "sequence_index": 0,
                     "pair_index": None,
                     "run_index": index,
                     "argv": [
-                        "evo_ape",
+                        "/tmp/synthetic-capsule/bin/evaluator-launcher",
                         "tum",
                         "ground_truth_shared.tum",
                         mode + "_shared_aligned.tum",
@@ -166,6 +319,9 @@ class SyntheticEvidence:
                         "trans_part",
                         "--t_max_diff",
                         "0.01",
+                        "--save_results",
+                        result_argument,
+                        "--no_warnings",
                     ],
                     "cwd": "/tmp/synthetic-cp2-d",
                     "environment_sha256": command_environment_sha,
@@ -208,6 +364,12 @@ class SyntheticEvidence:
                 "/cp2_vio/common_integer": 7,
                 "/cp2_vio/up_msckf_landmark_elimination": mode,
                 **{key: str(path) for key, path in paths.items()},
+                **{
+                    key: "v1:synthetic:{}:{}".format(mode, ordinal)
+                    for ordinal, key in enumerate(
+                        runner.SINK_CAPABILITY_PARAMETER_KEYS
+                    )
+                },
             }
             stdout_path = "evaluation/{}_evo.stdout".format(mode)
             stderr_path = "evaluation/{}_evo.stderr".format(mode)
@@ -231,6 +393,10 @@ class SyntheticEvidence:
                     evaluator_stdout_bytes=evaluator_logs[stdout_path].payload,
                     evaluator_stderr_path=stderr_path,
                     evaluator_stderr_bytes=evaluator_logs[stderr_path].payload,
+                    evaluator_launcher_path="/tmp/synthetic-capsule/bin/evaluator-launcher",
+                    evaluator_result_argument="/tmp/synthetic-cp2-d/evaluation/{}_evaluator_result.zip".format(mode),
+                    evaluator_result_path="evaluation/{}_evaluator_result.zip".format(mode),
+                    evaluator_result_bytes=evaluator_stats_zip(self.ate),
                     evaluator_ate_m=self.ate,
                 )
             )
@@ -451,7 +617,17 @@ class SyntheticEvidence:
             offset_seconds=40.0,
             run_id="synthetic-run",
             modes=self.modes,
+            pair_witness_bytes=self.witness_bytes,
             ground_truth=self.ground_truth,
+            direct_math_launcher_path="/tmp/synthetic-direct-capsule/bin/launcher",
+            direct_math_request_argument="/tmp/synthetic-direct/request.json",
+            direct_math_response_argument="/tmp/synthetic-direct/response.json",
+            direct_math_request_bytes=self.direct_request,
+            direct_math_response_bytes=self.direct_response,
+            direct_math_stdout_path="direct_math/worker.stdout",
+            direct_math_stdout_bytes=b"",
+            direct_math_stderr_path="direct_math/worker.stderr",
+            direct_math_stderr_bytes=b"",
             provenance_without_inventory=self.provenance(),
             commands_bytes=self.commands,
             support_files=self.support,
@@ -459,6 +635,91 @@ class SyntheticEvidence:
 
 
 class SequenceAssemblyTests(unittest.TestCase):
+    def test_complete_witness_replays_boundaries_interleaving_and_exhaustion(self):
+        messages = (
+            sequence_actual.FilteredMessage("cam0", 0, 10),
+            # The exact boundary is ineligible; replay must not search past it
+            # while handling anchor 0.
+            sequence_actual.FilteredMessage("cam1", 20_000_000, 11),
+            sequence_actual.FilteredMessage("cam0", 21_000_000, 12),
+            # Equal record times are legal and order is the filtered index.
+            sequence_actual.FilteredMessage("imu", 21_000_000, 0),
+            sequence_actual.FilteredMessage("cam0", 30_000_000, 13),
+            sequence_actual.FilteredMessage("cam1", 30_000_000, 14),
+            # Exhausted camera anchor with no later opposite-camera row.
+            sequence_actual.FilteredMessage("cam0", 31_000_000, 15),
+        )
+        evidence = sequence_actual.select_pair_evidence(0, "MH_01_easy", messages)
+        rows = runner.validate_pair_selection_witness(
+            evidence.witness_bytes,
+            evidence.pair_index_bytes,
+            0,
+            "MH_01_easy",
+        )
+        self.assertEqual(len(rows), len(messages))
+        pairs = schema.strict_jsonl_loads(evidence.pair_index_bytes)
+        self.assertEqual(
+            [(row["anchor_filtered_index"], row["cam0_filtered_index"], row["cam1_filtered_index"])
+             for row in pairs],
+            [(1, 2, 1), (4, 4, 5)],
+        )
+
+    def test_coordinated_later_candidate_substitution_rejects(self):
+        messages = tuple(
+            sequence_actual.FilteredMessage(kind, time_ns, 100 + index)
+            for index, (kind, time_ns) in enumerate(
+                (("cam0", 0), ("cam1", 1), ("cam1", 2),
+                 ("cam0", 3), ("cam1", 4), ("cam0", 5))
+            )
+        )
+        selected = sequence_actual.select_pair_evidence(0, "MH_01_easy", messages)
+        pairs = list(schema.strict_jsonl_loads(selected.pair_index_bytes))
+        # The coordinated mutation is locally plausible and reassigns the
+        # skipped earlier cam1 into the following pair, so it has no reuse and
+        # all deltas remain valid.  It must still fail exact first-forward replay.
+        pairs[0] = dict(
+            pairs[0],
+            cam1_filtered_index=2,
+            cam1_record_time_ns=2,
+            cam1_header_time_ns=102,
+            absolute_record_delta_ns=2,
+        )
+        pairs[1] = dict(
+            pairs[1],
+            anchor_filtered_index=1,
+            cam1_filtered_index=1,
+            cam1_record_time_ns=1,
+            cam1_header_time_ns=101,
+            absolute_record_delta_ns=2,
+        )
+        corrupted = schema.jsonl_bytes(pairs)
+        # Local pair checks alone accept this population, demonstrating why the
+        # complete witness is material.
+        runner._validate_pairs(corrupted, 0, "MH_01_easy")
+        with self.assertRaisesRegex(runner.SequenceRunnerError, "exact strict first-forward"):
+            runner.validate_pair_selection_witness(
+                selected.witness_bytes, corrupted, 0, "MH_01_easy"
+            )
+
+    def test_used_first_candidate_is_not_searched_past_in_witness_replay(self):
+        messages = (
+            sequence_actual.FilteredMessage("cam0", 100, 1000),
+            sequence_actual.FilteredMessage("cam0", 101, 1001),
+            sequence_actual.FilteredMessage("cam1", 102, 1002),
+            sequence_actual.FilteredMessage("cam1", 103, 1003),
+            sequence_actual.FilteredMessage("cam0", 104, 1004),
+        )
+        evidence = sequence_actual.select_pair_evidence(0, "MH_01_easy", messages)
+        pairs = schema.strict_jsonl_loads(evidence.pair_index_bytes)
+        self.assertEqual(
+            [(row["anchor_filtered_index"], row["cam0_filtered_index"], row["cam1_filtered_index"])
+             for row in pairs],
+            [(0, 0, 2), (3, 4, 3)],
+        )
+        runner.validate_pair_selection_witness(
+            evidence.witness_bytes, evidence.pair_index_bytes, 0, "MH_01_easy"
+        )
+
     def test_valid_fixture_assembles_exact_math_and_manifest(self):
         with tempfile.TemporaryDirectory(prefix="cp2-d-assembly-", dir="/tmp") as temporary:
             fixture = SyntheticEvidence(temporary)
@@ -468,7 +729,7 @@ class SequenceAssemblyTests(unittest.TestCase):
             self.assertTrue(result.report["passed"])
             self.assertEqual(result.report["sequence_index"], 0)
             self.assertEqual([item["mode"] for item in result.report["runs"]], list(runner.MODES))
-            self.assertEqual(len(result.report["normalized_parameter_diff"]), 6)
+            self.assertEqual(len(result.report["normalized_parameter_diff"]), 20)
             self.assertEqual(result.report["shared_timestamp_count"], 4)
             self.assertGreater(result.report["ate_nullspace_m"], 0.0)
             self.assertEqual(result.report["relative_ate_difference"], 0.0)
@@ -489,6 +750,103 @@ class SequenceAssemblyTests(unittest.TestCase):
             self.assertIn("shared_population.bin", entries)
             self.assertNotIn("SHA256SUMS", entries)
             self.assertEqual(stat.S_IMODE((partial / "pair_index.jsonl").stat().st_mode), 0o444)
+
+    def test_exact_10ms_selected_gt_is_retimestamped_only_for_evaluator_transport(self):
+        with tempfile.TemporaryDirectory(prefix="cp2-d-10ms-transport-", dir="/tmp") as temporary:
+            fixture = SyntheticEvidence(temporary)
+            shifted_gt = tuple(
+                runner.GroundTruthPose(
+                    row.timestamp_ns + 10_000_000,
+                    row.position,
+                    row.quaternion_xyzw,
+                )
+                for row in fixture.ground_truth
+            )
+            positions = tuple(row.position for row in shifted_gt)
+            quaternions = tuple(row.quaternion_xyzw for row in shifted_gt)
+            trajectory = schema.strict_jsonl_loads(fixture.modes[0].trajectory_bytes)
+            timestamps = tuple(row["camera_timestamp_ns"] for row in trajectory)
+            raw_positions = tuple(tuple(row["position_G"]) for row in trajectory)
+            raw_quaternions = tuple(
+                tuple(row["quaternion_ItoG_xyzw"]) for row in trajectory
+            )
+            request = math_codec.encode_sequence_request(
+                sequence_index=0,
+                sequence_id="MH_01_easy",
+                nullspace_timestamps_ns=timestamps,
+                nullspace_positions=raw_positions,
+                nullspace_quaternions_xyzw=raw_quaternions,
+                schur_timestamps_ns=timestamps,
+                schur_positions=raw_positions,
+                schur_quaternions_xyzw=raw_quaternions,
+                ground_truth_timestamps_ns=tuple(row.timestamp_ns for row in shifted_gt),
+                ground_truth_positions=positions,
+                ground_truth_quaternions_xyzw=quaternions,
+            )
+            response = math_worker.evaluate_sequence_request(request)
+            evidence = replace(
+                fixture.evidence(),
+                ground_truth=shifted_gt,
+                direct_math_request_bytes=request,
+                direct_math_response_bytes=response,
+            )
+            partial = Path(temporary) / "partial-10ms"
+            partial.mkdir()
+            result = runner.assemble_sequence_artifact(partial, evidence)
+            self.assertTrue(result.report["passed"])
+            tum_timestamps = [
+                row.split()[0]
+                for row in (partial / "ground_truth_shared.tum")
+                .read_text(encoding="ascii")
+                .splitlines()
+                if row and not row.startswith("#")
+            ]
+            self.assertEqual(
+                tum_timestamps,
+                [runner._timestamp_text(timestamp) for timestamp in timestamps],
+            )
+            shared = (partial / "shared_population.bin").read_bytes()
+            first = len(runner.SHARED_POPULATION_DOMAIN) + 8
+            retained_estimator, retained_original_gt = struct.unpack_from(">QQ", shared, first)
+            self.assertEqual(retained_estimator, timestamps[0])
+            self.assertEqual(retained_original_gt, timestamps[0] + 10_000_000)
+
+    def test_evaluator_error_population_count_must_equal_direct_shared_count(self):
+        with tempfile.TemporaryDirectory(prefix="cp2-d-evaluator-count-", dir="/tmp") as temporary:
+            fixture = SyntheticEvidence(temporary)
+            changed = replace(
+                fixture.modes[0],
+                evaluator_result_bytes=evaluator_stats_zip(fixture.ate, count=3),
+            )
+            partial = Path(temporary) / "wrong-evaluator-count"
+            partial.mkdir()
+            with self.assertRaisesRegex(runner.SequenceRunnerError, "population count"):
+                runner.assemble_sequence_artifact(
+                    partial,
+                    replace(fixture.evidence(), modes=(changed, fixture.modes[1])),
+                )
+
+    def test_coordinated_direct_request_response_substitution_rejects_trace_join(self):
+        with tempfile.TemporaryDirectory(prefix="cp2-d-direct-substitution-", dir="/tmp") as temporary:
+            fixture = SyntheticEvidence(temporary)
+            value = json.loads(fixture.direct_request.decode("ascii"))
+            value["nullspace"]["positions"]["bits"][0] = "3f50624dd2f1a9fc"
+            value["schur"]["positions"]["bits"][0] = "3f50624dd2f1a9fc"
+            changed_request = (
+                json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode("ascii")
+            changed_response = math_worker.evaluate_sequence_request(changed_request)
+            partial = Path(temporary) / "wrong-direct-request"
+            partial.mkdir()
+            with self.assertRaisesRegex(runner.SequenceRunnerError, "exact trace"):
+                runner.assemble_sequence_artifact(
+                    partial,
+                    replace(
+                        fixture.evidence(),
+                        direct_math_request_bytes=changed_request,
+                        direct_math_response_bytes=changed_response,
+                    ),
+                )
 
     def test_prepopulated_support_is_exactly_bound_before_assembly(self):
         with tempfile.TemporaryDirectory(prefix="cp2-d-prepopulated-", dir="/tmp") as temporary:
@@ -601,7 +959,7 @@ class SequenceAssemblyTests(unittest.TestCase):
             with self.assertRaises(runner.SequenceRunnerError):
                 runner.assemble_sequence_artifact(partial, evidence)
 
-    def test_evaluator_value_cannot_be_detached_from_retained_stdout(self):
+    def test_evaluator_value_cannot_be_detached_from_full_precision_archive(self):
         with tempfile.TemporaryDirectory(prefix="cp2-d-evaluator-drift-", dir="/tmp") as temporary:
             fixture = SyntheticEvidence(temporary)
             changed = replace(fixture.modes[1], evaluator_ate_m=fixture.ate + 1.0)
@@ -610,6 +968,41 @@ class SequenceAssemblyTests(unittest.TestCase):
             partial.mkdir()
             with self.assertRaises(runner.SequenceRunnerError):
                 runner.assemble_sequence_artifact(partial, evidence)
+
+    def test_console_is_exact_six_decimal_diagnostic_of_archive(self):
+        with tempfile.TemporaryDirectory(prefix="cp2-d-evaluator-console-", dir="/tmp") as temporary:
+            fixture = SyntheticEvidence(temporary)
+            token = format(fixture.ate, ".6f")
+            replacement = token[:-1] + ("1" if token[-1] != "1" else "2")
+            changed = replace(
+                fixture.modes[0],
+                evaluator_stdout_bytes=("rmse " + replacement + "\n").encode("ascii"),
+            )
+            partial = Path(temporary) / "wrong-console"
+            partial.mkdir()
+            with self.assertRaisesRegex(runner.SequenceRunnerError, "six-decimal rendering"):
+                runner.assemble_sequence_artifact(
+                    partial,
+                    replace(fixture.evidence(), modes=(changed, fixture.modes[1])),
+                )
+
+    def test_archive_rmse_drift_rejects_before_direct_metric_acceptance(self):
+        with tempfile.TemporaryDirectory(prefix="cp2-d-evaluator-archive-", dir="/tmp") as temporary:
+            fixture = SyntheticEvidence(temporary)
+            drifted = fixture.ate + 1.0e-4
+            changed = replace(
+                fixture.modes[0],
+                evaluator_result_bytes=evaluator_stats_zip(drifted),
+                evaluator_stdout_bytes=("rmse {:.6f}\n".format(drifted)).encode("ascii"),
+                evaluator_ate_m=drifted,
+            )
+            partial = Path(temporary) / "wrong-archive"
+            partial.mkdir()
+            with self.assertRaisesRegex(runner.SequenceRunnerError, "direct shared-population"):
+                runner.assemble_sequence_artifact(
+                    partial,
+                    replace(fixture.evidence(), modes=(changed, fixture.modes[1])),
+                )
 
     def test_failed_command_and_nonfrozen_input_hash_are_rejected(self):
         with tempfile.TemporaryDirectory(prefix="cp2-d-command-input-", dir="/tmp") as temporary:
@@ -693,19 +1086,19 @@ class SequenceAssemblyTests(unittest.TestCase):
                 del partial, manifest_sha256
                 return {"passed": True}
 
-            real_fsync_directory = runner._fsync_directory
+            real_fsync = runner._publication_fsync
             call_count = 0
 
-            def fail_postrename(path):
+            def fail_postrename(descriptor):
                 nonlocal call_count
                 call_count += 1
-                if call_count == 2:
+                if call_count == 3:
                     raise OSError("injected post-rename directory fsync failure")
-                return real_fsync_directory(path)
+                return real_fsync(descriptor)
 
             with mock.patch.object(
                 runner,
-                "_fsync_directory",
+                "_publication_fsync",
                 side_effect=fail_postrename,
             ):
                 with self.assertRaisesRegex(
@@ -716,9 +1109,115 @@ class SequenceAssemblyTests(unittest.TestCase):
                     )
             self.assertGreaterEqual(call_count, 3)
             self.assertFalse((staging / "synthetic-run").exists())
+            retained = list(staging.glob(".synthetic-run.partial.*"))
+            self.assertEqual(len(retained), 1)
+            self.assertEqual(stat.S_IMODE(retained[0].stat().st_mode), 0o555)
+
+    @staticmethod
+    def _sealed_empty_directory(parent: Path, name: str) -> Path:
+        path = parent / name
+        path.mkdir(mode=0o700)
+        path.chmod(0o555)
+        return path
+
+    def test_publication_name_collision_preserves_both_exact_inputs(self):
+        with tempfile.TemporaryDirectory(prefix="cp2-d-publish-collision-", dir="/tmp") as temporary:
+            parent = Path(temporary)
+            source = self._sealed_empty_directory(parent, "hidden")
+            destination = self._sealed_empty_directory(parent, "final")
+            source_identity = (source.stat().st_dev, source.stat().st_ino)
+            destination_identity = (destination.stat().st_dev, destination.stat().st_ino)
+            with self.assertRaisesRegex(runner.SequenceRunnerError, "already exists"):
+                runner.publish_sequence_noreplace(source, destination)
+            self.assertEqual((source.stat().st_dev, source.stat().st_ino), source_identity)
             self.assertEqual(
-                list(staging.glob(".synthetic-run.partial.*")), []
+                (destination.stat().st_dev, destination.stat().st_ino), destination_identity
             )
+
+    def test_publication_interruption_after_forward_syscall_rolls_back_exact_inode(self):
+        with tempfile.TemporaryDirectory(prefix="cp2-d-publish-interrupt-", dir="/tmp") as temporary:
+            parent = Path(temporary)
+            source = self._sealed_empty_directory(parent, "hidden")
+            destination = parent / "final"
+            identity = (source.stat().st_dev, source.stat().st_ino)
+            calls = 0
+
+            def interrupt_after_rename(parent_fd, old_name, new_name):
+                nonlocal calls
+                calls += 1
+                runner._renameat2_noreplace(parent_fd, old_name, new_name)
+                if calls == 1:
+                    raise KeyboardInterrupt("injected after completed forward rename")
+
+            with self.assertRaisesRegex(KeyboardInterrupt, "completed forward"):
+                runner.publish_sequence_noreplace(
+                    source, destination, rename_operation=interrupt_after_rename
+                )
+            self.assertEqual(calls, 2)
+            self.assertFalse(destination.exists())
+            self.assertEqual((source.stat().st_dev, source.stat().st_ino), identity)
+
+    def test_publication_rollback_collision_is_explicitly_indeterminate(self):
+        with tempfile.TemporaryDirectory(prefix="cp2-d-publish-rollback-collision-", dir="/tmp") as temporary:
+            parent = Path(temporary)
+            source = self._sealed_empty_directory(parent, "hidden")
+            destination = parent / "final"
+            identity = (source.stat().st_dev, source.stat().st_ino)
+            fsync_calls = 0
+            rename_calls = 0
+
+            def fail_postrename_fsync(descriptor):
+                nonlocal fsync_calls
+                fsync_calls += 1
+                if fsync_calls == 3:
+                    raise OSError("injected postrename fsync")
+                os.fsync(descriptor)
+
+            def collide_on_rollback(parent_fd, old_name, new_name):
+                nonlocal rename_calls
+                rename_calls += 1
+                if rename_calls == 2:
+                    os.mkdir(new_name, 0o700, dir_fd=parent_fd)
+                runner._renameat2_noreplace(parent_fd, old_name, new_name)
+
+            with self.assertRaisesRegex(
+                runner.PublicationIndeterminateError, "indeterminate"
+            ):
+                runner.publish_sequence_noreplace(
+                    source,
+                    destination,
+                    rename_operation=collide_on_rollback,
+                    fsync_operation=fail_postrename_fsync,
+                )
+            self.assertTrue(source.is_dir())
+            self.assertEqual((destination.stat().st_dev, destination.stat().st_ino), identity)
+
+    def test_publication_source_substitution_never_deletes_or_relabels_held_inode(self):
+        with tempfile.TemporaryDirectory(prefix="cp2-d-publish-substitute-", dir="/tmp") as temporary:
+            parent = Path(temporary)
+            source = self._sealed_empty_directory(parent, "hidden")
+            destination = parent / "final"
+            displaced = parent / "held-displaced"
+            identity = (source.stat().st_dev, source.stat().st_ino)
+
+            def substitute_then_rename(parent_fd, old_name, new_name):
+                os.rename(
+                    old_name,
+                    displaced.name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+                os.mkdir(old_name, 0o555, dir_fd=parent_fd)
+                runner._renameat2_noreplace(parent_fd, old_name, new_name)
+
+            with self.assertRaisesRegex(
+                runner.PublicationIndeterminateError, "irreconcilable"
+            ):
+                runner.publish_sequence_noreplace(
+                    source, destination, rename_operation=substitute_then_rename
+                )
+            self.assertEqual((displaced.stat().st_dev, displaced.stat().st_ino), identity)
+            self.assertTrue(destination.is_dir())
 
 
 class BootstrapOrderingTests(unittest.TestCase):

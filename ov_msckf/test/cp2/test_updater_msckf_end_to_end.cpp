@@ -56,12 +56,36 @@ public:
     updater.cp2_next_invocation_id = value;
   }
 
+  static void SetUpdateActive(UpdaterMSCKF &updater, bool value) {
+    updater.cp2_update_active.store(value, std::memory_order_release);
+  }
+
   static std::vector<CP2UpdaterTestStage>
   Stages(const UpdaterMSCKF &updater) {
     return std::vector<CP2UpdaterTestStage>(
         updater.cp2_test_stages.begin(),
         updater.cp2_test_stages.begin() +
             static_cast<std::ptrdiff_t>(updater.cp2_test_stage_count));
+  }
+
+  static std::size_t TimingStartCount(const UpdaterMSCKF &updater) {
+    return updater.cp2_test_timing_start_count;
+  }
+
+  static std::size_t TimingEndCount(const UpdaterMSCKF &updater) {
+    return updater.cp2_test_timing_end_count;
+  }
+
+  static std::size_t NormalExitCount(const UpdaterMSCKF &updater) {
+    return updater.cp2_test_normal_exit_count;
+  }
+
+  static std::size_t VerifiedTimingExitCount(const UpdaterMSCKF &updater) {
+    return updater.cp2_test_verified_timing_exit_count;
+  }
+
+  static bool TimingExitViolation(const UpdaterMSCKF &updater) {
+    return updater.cp2_test_timing_exit_violation;
   }
 };
 
@@ -80,6 +104,26 @@ std::uint64_t binary64_bits(double value) noexcept {
   std::memcpy(&bits, &value, sizeof(bits));
   return bits;
 }
+
+void expect_valid_steady_clock_timing(
+    const ov_msckf::CP2LiveUpdateEvent &event) {
+  EXPECT_TRUE(event.timing_endpoint_valid);
+  EXPECT_LE(event.timing_start_ns, event.timing_end_ns);
+  EXPECT_EQ(event.duration_ns,
+            event.timing_end_ns - event.timing_start_ns);
+}
+
+#if defined(OV_MSCKF_CP2_TESTING)
+void expect_one_verified_timing_exit(const ov_msckf::UpdaterMSCKF &updater) {
+  EXPECT_EQ(ov_msckf::CP2UpdaterTestAccess::TimingStartCount(updater), 1U);
+  EXPECT_EQ(ov_msckf::CP2UpdaterTestAccess::TimingEndCount(updater), 1U);
+  EXPECT_EQ(ov_msckf::CP2UpdaterTestAccess::NormalExitCount(updater), 1U);
+  EXPECT_EQ(
+      ov_msckf::CP2UpdaterTestAccess::VerifiedTimingExitCount(updater), 1U);
+  EXPECT_FALSE(
+      ov_msckf::CP2UpdaterTestAccess::TimingExitViolation(updater));
+}
+#endif
 
 Eigen::Matrix<double, 7, 1> pose_value(const Eigen::Vector4d &quaternion,
                                        const Eigen::Vector3d &position) {
@@ -695,6 +739,41 @@ void compare_all_semantic_blocks(const ProductionFixture &baseline,
   }
 }
 
+TEST(CP2UpdaterMSCKFTiming,
+     EmptyInputSamplesEntryFirstAndExactlyOneTerminalEndpoint) {
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  std::vector<std::shared_ptr<ov_core::Feature>> features;
+  std::size_t callback_count = 0U;
+  ov_msckf::CP2LiveUpdateEvent observed;
+  ASSERT_TRUE(updater->set_cp2_update_callback(
+      [&](const ov_msckf::CP2LiveUpdateEvent &event) {
+        ++callback_count;
+        observed = event;
+      },
+      false));
+
+  EXPECT_NO_THROW(
+      updater->update(std::shared_ptr<ov_msckf::State>(), features));
+
+  ASSERT_EQ(callback_count, 1U);
+  expect_valid_steady_clock_timing(observed);
+  EXPECT_EQ(observed.terminal_status,
+            ov_msckf::CP2UpdateTerminalStatus::kEmptyInput);
+  EXPECT_EQ(observed.terminal_subreason,
+            ov_msckf::CP2UpdateTerminalSubreason::kInputEmpty);
+  EXPECT_EQ(observed.input_feature_count, 0U);
+  EXPECT_FALSE(observed.baseline_commit_occurred);
+#if defined(OV_MSCKF_CP2_TESTING)
+  expect_one_verified_timing_exit(*updater);
+  EXPECT_EQ(
+      ov_msckf::CP2UpdaterTestAccess::Stages(*updater),
+      (std::vector<ov_msckf::CP2UpdaterTestStage>{
+          ov_msckf::CP2UpdaterTestStage::kTimingStartSampled,
+          ov_msckf::CP2UpdaterTestStage::kTimingEndSampled}));
+#endif
+}
+
 TEST(CP2UpdaterMSCKFEndToEnd,
      ActualNullspaceAndSchurModesCommitEquivalentFullStateUpdates) {
   ProductionFixture baseline = make_production_fixture();
@@ -824,6 +903,10 @@ TEST(CP2UpdaterMSCKFEndToEnd,
     EXPECT_TRUE(feature->to_delete);
     expect_exact_state(fixture, before);
     ASSERT_EQ(callback_count, 1U);
+    expect_valid_steady_clock_timing(observed);
+#if defined(OV_MSCKF_CP2_TESTING)
+    expect_one_verified_timing_exit(*updater);
+#endif
     EXPECT_EQ(observed.terminal_status,
               ov_msckf::CP2UpdateTerminalStatus::kAllRejected);
     EXPECT_EQ(observed.terminal_subreason,
@@ -902,6 +985,10 @@ TEST(CP2UpdaterMSCKFEndToEnd,
     EXPECT_TRUE(feature->to_delete);
     expect_exact_state(fixture, before);
     ASSERT_EQ(callback_count, 1U);
+    expect_valid_steady_clock_timing(observed);
+#if defined(OV_MSCKF_CP2_TESTING)
+    expect_one_verified_timing_exit(*updater);
+#endif
     EXPECT_EQ(observed.terminal_status,
               ov_msckf::CP2UpdateTerminalStatus::kPreflightRejected);
     EXPECT_EQ(observed.terminal_subreason,
@@ -969,6 +1056,17 @@ TEST(CP2UpdaterMSCKFEndToEnd,
   updater->update(fixture.state, features);
 
   ASSERT_EQ(callback_count, 1U);
+  expect_valid_steady_clock_timing(observed);
+#if defined(OV_MSCKF_CP2_TESTING)
+  expect_one_verified_timing_exit(*updater);
+  EXPECT_EQ(
+      ov_msckf::CP2UpdaterTestAccess::Stages(*updater),
+      (std::vector<ov_msckf::CP2UpdaterTestStage>{
+          ov_msckf::CP2UpdaterTestStage::kTimingStartSampled,
+          ov_msckf::CP2UpdaterTestStage::kLivePreviewCapture,
+          ov_msckf::CP2UpdaterTestStage::kEKFUpdateEntered,
+          ov_msckf::CP2UpdaterTestStage::kTimingEndSampled}));
+#endif
   EXPECT_TRUE(callback_saw_committed_state);
   EXPECT_EQ(observed.terminal_status,
             ov_msckf::CP2UpdateTerminalStatus::kCommittedCounted);
@@ -1235,6 +1333,25 @@ TEST(CP2UpdaterMSCKFEndToEnd,
   EXPECT_STREQ(ov_msckf::cp2_update_terminal_subreason_name(
                    ov_msckf::CP2UpdateTerminalSubreason::kTraceInvariantFailure),
                "trace_invariant_failure");
+#if defined(OV_MSCKF_CP2_TESTING)
+  auto active_probe =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  std::size_t forbidden_active_callback_count = 0U;
+  ov_msckf::CP2UpdaterTestAccess::SetUpdateActive(*active_probe, true);
+  EXPECT_FALSE(active_probe->set_cp2_update_callback(
+      [&](const ov_msckf::CP2LiveUpdateEvent &) {
+        ++forbidden_active_callback_count;
+      }, false));
+  EXPECT_FALSE(active_probe->set_cp2_recorded_sink(nullptr));
+  ov_msckf::CP2UpdaterTestAccess::SetUpdateActive(*active_probe, false);
+  std::vector<std::shared_ptr<ov_core::Feature>> active_probe_features;
+  active_probe->update(std::shared_ptr<ov_msckf::State>(),
+                       active_probe_features);
+  EXPECT_EQ(forbidden_active_callback_count, 0U);
+  EXPECT_FALSE(active_probe->set_cp2_update_callback(
+      [](const ov_msckf::CP2LiveUpdateEvent &) {}, false));
+  EXPECT_FALSE(active_probe->set_cp2_recorded_sink(nullptr));
+#endif
   auto updater = make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::SCHUR);
   std::size_t retained_callback_count = 0;
   std::size_t rejected_callback_count = 0;
@@ -1423,6 +1540,7 @@ TEST(CP2UpdaterMSCKFTransaction,
             ov_msckf::CP2UpdateTerminalStatus::kAllRejected);
   EXPECT_EQ(sink->record->update.terminal_subreason,
             ov_msckf::CP2UpdateTerminalSubreason::kNoFeaturesAfterCleaning);
+  expect_valid_steady_clock_timing(sink->record->update);
   EXPECT_EQ(sink->record->update.raw_system_count, 0U);
   EXPECT_TRUE(sink->record->raw_system_payloads.empty());
   expect_recorded_phase_population(*sink->record, {});
@@ -1430,6 +1548,7 @@ TEST(CP2UpdaterMSCKFTransaction,
   EXPECT_EQ(sink->record->baseline_mean_commit_count, 0U);
   EXPECT_EQ(sink->record->baseline_covariance_commit_count, 0U);
 #if defined(OV_MSCKF_CP2_TESTING)
+  expect_one_verified_timing_exit(*updater);
   EXPECT_EQ(ov_msckf::CP2UpdaterTestAccess::RawAssemblyCalls(*updater), 0U);
 #endif
   ov_msckf::CP2CompositeStateCapture complete_after_update;
@@ -1465,6 +1584,7 @@ TEST(CP2UpdaterMSCKFTransaction,
   ASSERT_EQ(sink->call_count, 1U);
   ASSERT_TRUE(sink->record);
   const ov_msckf::CP2RecordedUpdateEvent &record = *sink->record;
+  expect_valid_steady_clock_timing(record.update);
   EXPECT_TRUE(record.update.invocation_context_available);
   EXPECT_EQ(record.update.sequence_index, 8U);
   EXPECT_EQ(record.update.pair_index, 23U);
@@ -1513,15 +1633,19 @@ TEST(CP2UpdaterMSCKFTransaction,
   EXPECT_TRUE(record.online_math_evidence_passed);
   EXPECT_FALSE(updater->cp2_trace_fatal_latched());
 #if defined(OV_MSCKF_CP2_TESTING)
+  expect_one_verified_timing_exit(*updater);
   EXPECT_EQ(ov_msckf::CP2UpdaterTestAccess::RawAssemblyCalls(*updater),
             kAcceptedFeatureCount);
   EXPECT_EQ(
       ov_msckf::CP2UpdaterTestAccess::Stages(*updater),
       (std::vector<ov_msckf::CP2UpdaterTestStage>{
+          ov_msckf::CP2UpdaterTestStage::kTimingStartSampled,
           ov_msckf::CP2UpdaterTestStage::kPhase0Capture,
           ov_msckf::CP2UpdaterTestStage::kPhase0Projection,
           ov_msckf::CP2UpdaterTestStage::kPhase2Build,
-          ov_msckf::CP2UpdaterTestStage::kPhase1Capture}));
+          ov_msckf::CP2UpdaterTestStage::kPhase1Capture,
+          ov_msckf::CP2UpdaterTestStage::kEKFUpdateEntered,
+          ov_msckf::CP2UpdaterTestStage::kTimingEndSampled}));
 #endif
 
   ASSERT_TRUE(record.update.shadow_evidence_available);
@@ -1557,6 +1681,7 @@ TEST(CP2UpdaterMSCKFTransaction,
   ASSERT_EQ(sink->call_count, 1U);
   ASSERT_TRUE(sink->record);
   const ov_msckf::CP2RecordedUpdateEvent &record = *sink->record;
+  expect_valid_steady_clock_timing(record.update);
   expect_recorded_phase_population(
       record, {ov_msckf::CP2StatePhase::kPhase0Prior,
                ov_msckf::CP2StatePhase::kPhase1Precommit});
@@ -1578,6 +1703,9 @@ TEST(CP2UpdaterMSCKFTransaction,
   EXPECT_EQ(record.baseline_covariance_commit_count, 0U);
   EXPECT_FALSE(record.update.baseline_commit_occurred);
   EXPECT_FALSE(updater->cp2_trace_fatal_latched());
+#if defined(OV_MSCKF_CP2_TESTING)
+  expect_one_verified_timing_exit(*updater);
+#endif
   expect_exact_state(fixture, before);
 }
 
@@ -1887,12 +2015,15 @@ TEST(CP2UpdaterMSCKFTransaction,
   EXPECT_EQ(record.candidate_feature_write_count, 0U);
   EXPECT_FALSE(record.online_math_evidence_passed);
   EXPECT_FALSE(updater->cp2_trace_fatal_latched());
+  expect_one_verified_timing_exit(*updater);
   EXPECT_EQ(
       ov_msckf::CP2UpdaterTestAccess::Stages(*updater),
       (std::vector<ov_msckf::CP2UpdaterTestStage>{
+          ov_msckf::CP2UpdaterTestStage::kTimingStartSampled,
           ov_msckf::CP2UpdaterTestStage::kPhase0Capture,
           ov_msckf::CP2UpdaterTestStage::kPhase0Projection,
-          ov_msckf::CP2UpdaterTestStage::kPhase1Capture}));
+          ov_msckf::CP2UpdaterTestStage::kPhase1Capture,
+          ov_msckf::CP2UpdaterTestStage::kTimingEndSampled}));
   expect_exact_state(fixture, before);
 }
 
@@ -1943,6 +2074,7 @@ TEST(CP2UpdaterMSCKFTransaction,
                 complete_after.snapshot));
   EXPECT_TRUE(ov_msckf::CP2CompositeStateAdapter::PointerGraphMatches(
       fixture.state, complete_before.pointer_graph));
+  expect_one_verified_timing_exit(*updater);
   expect_exact_state(fixture, before);
 }
 
@@ -1981,6 +2113,7 @@ TEST(CP2UpdaterMSCKFTransaction,
   EXPECT_FALSE(record.baseline_commit_oracle_available);
   EXPECT_FALSE(record.online_math_evidence_passed);
   EXPECT_TRUE(std::isnan(fixture.state->_timestamp));
+  expect_one_verified_timing_exit(*updater);
   expect_exact_state(fixture, before);
 }
 
@@ -2016,6 +2149,7 @@ TEST(CP2UpdaterMSCKFTransaction,
   EXPECT_FALSE(record.baseline_commit_oracle_available);
   EXPECT_FALSE(record.online_math_evidence_passed);
   EXPECT_FALSE(fixture.state->_cam_intrinsics_cameras.at(0));
+  expect_one_verified_timing_exit(*updater);
   expect_exact_state(fixture, before);
 }
 
@@ -2164,6 +2298,44 @@ TEST(CP2UpdaterMSCKFTransaction,
   EXPECT_TRUE(std::isnan(
       record.state_phases[3].snapshot->covariance(0, 0)));
   EXPECT_FALSE(updater->cp2_trace_fatal_latched());
+}
+
+TEST(CP2UpdaterMSCKFTransaction,
+     StartClockFailureIsArithmeticFatalBeforeEstimatorWork) {
+  ProductionFixture fixture = make_production_fixture();
+  const StateSnapshot before = snapshot(fixture);
+  auto features = make_accepted_features(fixture, 0x435032434c4bULL);
+  auto updater =
+      make_updater(ov_msckf::UpdaterOptions::LandmarkElimination::NULLSPACE);
+  ov_msckf::CP2UpdaterTestAccess::SetFault(
+      *updater, ov_msckf::CP2UpdaterTestFault::kStartTimingClockFailure);
+
+  try {
+    updater->update(fixture.state, features);
+    FAIL() << "unavailable steady-clock start endpoint reached estimator work";
+  } catch (const ov_msckf::CP2TraceFatalError &error) {
+    EXPECT_EQ(error.reason(),
+              ov_msckf::CP2TraceFatalReason::kArithmeticInvariant);
+  }
+
+  EXPECT_TRUE(updater->cp2_trace_fatal_latched());
+  EXPECT_EQ(updater->cp2_trace_fatal_reason(),
+            ov_msckf::CP2TraceFatalReason::kArithmeticInvariant);
+  EXPECT_FALSE(updater->set_cp2_update_callback(
+      [](const ov_msckf::CP2LiveUpdateEvent &) {}, false));
+  EXPECT_FALSE(updater->set_cp2_recorded_sink(nullptr));
+  EXPECT_EQ(ov_msckf::CP2UpdaterTestAccess::TimingStartCount(*updater), 1U);
+  EXPECT_EQ(ov_msckf::CP2UpdaterTestAccess::TimingEndCount(*updater), 0U);
+  EXPECT_EQ(ov_msckf::CP2UpdaterTestAccess::NormalExitCount(*updater), 0U);
+  EXPECT_EQ(
+      ov_msckf::CP2UpdaterTestAccess::VerifiedTimingExitCount(*updater), 0U);
+  EXPECT_FALSE(
+      ov_msckf::CP2UpdaterTestAccess::TimingExitViolation(*updater));
+  EXPECT_EQ(
+      ov_msckf::CP2UpdaterTestAccess::Stages(*updater),
+      (std::vector<ov_msckf::CP2UpdaterTestStage>{
+          ov_msckf::CP2UpdaterTestStage::kTimingStartSampled}));
+  expect_exact_state(fixture, before);
 }
 
 TEST(CP2UpdaterMSCKFTransaction,

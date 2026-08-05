@@ -197,7 +197,11 @@ std::shared_ptr<CP2RecordedUpdateEvent> make_zero_event(
   event->update.pair_index = pair_index;
   event->update.camera_timestamp_ns = timestamp_ns;
   event->update.invocation_id = invocation_id;
+  event->update.timing_endpoint_valid = true;
+  event->update.timing_start_ns = 10000U + invocation_id;
   event->update.duration_ns = 1234U + invocation_id;
+  event->update.timing_end_ns =
+      event->update.timing_start_ns + event->update.duration_ns;
   event->update.terminal_status = status;
   event->update.terminal_subreason = subreason;
   event->update.input_feature_count = input_count;
@@ -666,6 +670,27 @@ TEST(CP2TraceJournalEvents, ImpossibleTerminalAndHiddenPhaseSuffixReject) {
                 ov_msckf::CP2StatePhase::kPhase1Precommit, 1.0);
   EXPECT_EQ(suffix_sink.Publish(suffix), CP2RecordedSinkStatus::kRejected);
   EXPECT_EQ(suffix_sink.failure(), CP2TraceJournalFailure::kRecordInvariant);
+}
+
+TEST(CP2TraceJournalEvents,
+     InvalidReversedAndMismatchedTimingEndpointsRejectBeforeWrite) {
+  for (std::size_t mutation = 0U; mutation < 3U; ++mutation) {
+    auto writer = std::make_shared<MemoryWriter>();
+    CP2TraceJournalSink sink(writer);
+    auto event = make_zero_event(0U, 1U, 2U);
+    if (mutation == 0U) {
+      event->update.timing_endpoint_valid = false;
+    } else if (mutation == 1U) {
+      event->update.timing_end_ns = event->update.timing_start_ns - 1U;
+    } else {
+      event->update.duration_ns += 1U;
+    }
+    const std::vector<std::uint8_t> before = writer->bytes;
+    EXPECT_EQ(sink.Publish(event), CP2RecordedSinkStatus::kRejected);
+    EXPECT_EQ(sink.failure(), CP2TraceJournalFailure::kRecordInvariant);
+    EXPECT_EQ(writer->bytes, before);
+    EXPECT_EQ(sink.records_written(), 0U);
+  }
 }
 
 TEST(CP2TraceJournalEvents, DuplicateRawFeatureAndInvalidEnumRejectExplicitly) {

@@ -90,7 +90,7 @@ dataclass evidence is reconstructed and revalidated rather than trusted by
 type alone.
 
 The candidate creates no complete artifact codec or profile and performs no file,
-clock, host-control, registry, bag, build, or result access. Its 37-case
+clock, host-control, registry, bag, build, or result access. Its 42-case
 isolated synthetic suite passed, and a separate audit compared 49,600 cases
 against Python's independent exact `Fraction` oracle with no disagreement.
 The module and test SHA-256 values before integration were respectively
@@ -103,7 +103,7 @@ encoding even though all quantile-derived decisions remained exact. The
 candidate now bounds every retained rational component to u128, rejects a
 ratio-gate cross product wider than u128, and explicitly bounds exact ratio
 ordering to u256. It also provides the unique 32-lowercase-hex-digit scalar
-encoding and strict round-trip decoder required above. The same 37 protecting
+encoding and strict round-trip decoder required above. The same 42 protecting
 tests pass, including valid u64-wide products, u128 rejection boundaries, and
 u256 median ordering. The independent 49,600-case `Fraction` oracle was rerun
 after this correction with no disagreement. This scalar codec is not the

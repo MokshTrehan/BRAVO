@@ -1002,6 +1002,148 @@ os._exit(0)
             finally:
                 outside.chmod(0o600)
 
+    def test_tracked_snapshotted_root_files_are_source_and_root_bound(self):
+        with tempfile.TemporaryDirectory(
+            prefix="cp2-readiness-tracked-roots-", dir="/tmp"
+        ) as temporary:
+            fixture = SyntheticRepository(temporary)
+            tracked = {}
+            ignored = {}
+            for root_name in ("build", "results", "Testing"):
+                root = fixture.root / root_name
+                root.mkdir()
+                root_tracked = {
+                    ".gitattributes": b"",
+                    ".gitignore": b"/untracked-opaque.bin\n",
+                    "tracked-regular.bin": (root_name + "-regular\n").encode("ascii"),
+                    "tracked-executable": (root_name + "-executable\n").encode("ascii"),
+                }
+                for name, content in root_tracked.items():
+                    path = root / name
+                    path.write_bytes(content)
+                    path.chmod(0o755 if name == "tracked-executable" else 0o644)
+                    tracked[root_name + "/" + name] = (
+                        content,
+                        0o100755 if name == "tracked-executable" else 0o100644,
+                    )
+            run_git(fixture.root, "add", "--", "build", "results", "Testing")
+            run_git(
+                fixture.root,
+                "commit",
+                "-q",
+                "-m",
+                "track files beneath snapshotted roots",
+            )
+            for root_name in ("build", "results", "Testing"):
+                content = (root_name + "-untracked-opaque\n").encode("ascii")
+                path = fixture.root / root_name / "untracked-opaque.bin"
+                path.write_bytes(content)
+                path.chmod(0o600)
+                ignored[root_name] = content
+
+            guard_temp = Path(temporary) / "guard"
+            guard_temp.mkdir(mode=0o700)
+            with readiness.OpaqueGitRepository(fixture.root, guard_temp) as repository:
+                context = repository.prevalidated_source_context()
+                context_by_path = {
+                    entry["path"]: entry for entry in context["entries"]
+                }
+                _, source_entries, _ = readiness.parse_source_snapshot(
+                    repository.capture_source()
+                )
+                source_by_path = {entry.path: entry for entry in source_entries}
+
+                for relative, (content, git_mode) in tracked.items():
+                    with self.subTest(relative=relative):
+                        digest = hashlib.sha256(content).hexdigest()
+                        git_blob = hashlib.sha1(
+                            b"blob "
+                            + str(len(content)).encode("ascii")
+                            + b"\0"
+                            + content
+                        ).hexdigest()
+                        self.assertEqual(
+                            context_by_path[relative],
+                            {
+                                "git_blob": git_blob,
+                                "mode": git_mode,
+                                "path": relative,
+                                "sha256": digest,
+                                "size": len(content),
+                            },
+                        )
+                        self.assertEqual(
+                            source_by_path[relative],
+                            readiness.SnapshotEntry(
+                                relative, "f", git_mode, len(content), digest
+                            ),
+                        )
+
+                for root_name, ignored_content in ignored.items():
+                    root_tag = "testing" if root_name == "Testing" else root_name
+                    _, exists, root_entries = readiness.parse_snapshot(
+                        repository.capture_repository_root(root_name, root_tag)
+                    )
+                    self.assertTrue(exists)
+                    root_by_path = {entry.path: entry for entry in root_entries}
+                    for leaf in (
+                        ".gitattributes",
+                        ".gitignore",
+                        "tracked-regular.bin",
+                        "tracked-executable",
+                    ):
+                        relative = root_name + "/" + leaf
+                        content, git_mode = tracked[relative]
+                        self.assertEqual(
+                            root_by_path[leaf],
+                            readiness.SnapshotEntry(
+                                leaf,
+                                "f",
+                                stat.S_IMODE(git_mode),
+                                len(content),
+                                hashlib.sha256(content).hexdigest(),
+                            ),
+                        )
+                    self.assertNotIn(
+                        root_name + "/untracked-opaque.bin", context_by_path
+                    )
+                    self.assertNotIn(
+                        root_name + "/untracked-opaque.bin", source_by_path
+                    )
+                    self.assertEqual(
+                        root_by_path["untracked-opaque.bin"],
+                        readiness.SnapshotEntry(
+                            "untracked-opaque.bin",
+                            "f",
+                            0o600,
+                            len(ignored_content),
+                            hashlib.sha256(ignored_content).hexdigest(),
+                        ),
+                    )
+
+                tracked_path = fixture.root / "results/tracked-regular.bin"
+                replacement = b"RESULTS-regular\n"
+                self.assertEqual(len(replacement), tracked_path.stat().st_size)
+                tracked_path.write_bytes(replacement)
+                with self.assertRaises(readiness.ReadinessError):
+                    repository.revalidate()
+
+    def test_untracked_control_files_beneath_snapshotted_roots_remain_forbidden(self):
+        for root_name in ("build", "results", "Testing"):
+            for control_name in (".gitignore", ".gitattributes"):
+                with self.subTest(root_name=root_name, control_name=control_name):
+                    with tempfile.TemporaryDirectory(
+                        prefix="cp2-readiness-untracked-control-", dir="/tmp"
+                    ) as temporary:
+                        fixture = SyntheticRepository(temporary)
+                        root = fixture.root / root_name
+                        root.mkdir()
+                        (root / control_name).write_bytes(b"")
+                        guard_temp = Path(temporary) / "guard"
+                        guard_temp.mkdir(mode=0o700)
+                        with self.assertRaises(readiness.ReadinessError):
+                            readiness.OpaqueGitRepository(fixture.root, guard_temp)
+
     def test_valid_repository_hashes_registry_only_as_opaque_bytes(self):
         with tempfile.TemporaryDirectory(prefix="cp2-readiness-git-", dir="/tmp") as temporary:
             fixture = SyntheticRepository(temporary)

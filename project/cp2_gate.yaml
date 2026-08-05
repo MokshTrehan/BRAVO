@@ -29,7 +29,7 @@ scope:
   frozen_euroc_yaml_modified_for_mode_key: false
   evidence_mode_selection: dedicated_ros_launch_override
   evidence_launch: project/cp2_serial.launch
-  evidence_launch_sha256: bede519721575d769a1fcef67c5527661cb39ba05ab77faa6c20771b0756c49a
+  evidence_launch_sha256: a29c9b74aa6d4f0a5d783d0ba1eadeaca49ad0783f3b8121c5b68c8091023a12
   landmark_representation: GLOBAL_3D
   landmark_dimension: 3
   startup_validation:

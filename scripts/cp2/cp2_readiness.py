@@ -56,6 +56,12 @@ POSTAUTHORIZATION_SOURCE_PATHS = (
     "docs/cp2_artifact_schema.md",
     "docs/cp2_c_composite_and_readiness_clarification.md",
     "docs/cp2_c_detached_readiness_binding_clarification_proposed.md",
+    "docs/cp2_d_alignment_uniqueness_clarification_proposed.md",
+    "docs/cp2_d_evaluator_precision_clarification_proposed.md",
+    "docs/cp2_e_offline_descendant_confinement_clarification_proposed.md",
+    "docs/cp2_e_privileged_feasibility.md",
+    "docs/cp2_e_user_installation_candidate.md",
+    "docs/cp2_e_fixed_clock_and_exact_timing_clarification_proposed.md",
     "docs/cp2_one_pass_contract.md",
     "docs/cp2_predata_incident_log.md",
     "docs/cp2_recorded_evidence_contract.md",
@@ -63,11 +69,67 @@ POSTAUTHORIZATION_SOURCE_PATHS = (
     "project/cp1_gate.yaml",
     "project/cp2_c_clarification_approval.json",
     "project/cp2_c_detached_readiness_binding_approval.json",
+    "project/cp2_completion_authorization_binding.json",
+    "project/cp2_completion_chained_authorization.txt",
+    "project/cp2_d_completion_authorization_addendum.txt",
+    "project/cp2_e_completion_authorization_addendum.txt",
+    "project/cp2_capsule_source_lock.json",
+    "project/cp2_capsule_expected_identity.json",
+    "project/cp2_capsule_unit_import.json",
     "project/cp2_predata_incident_disposition_approval.json",
     "project/cp2_gate.yaml",
     "project/cp2_serial.launch",
     "scripts/cp2/cp2_recorded_campaign.py",
+    "scripts/cp2/cp2_capsule.py",
+    "scripts/cp2/cp2_capsule_builder.py",
+    "scripts/cp2/cp2_capsule_unit_import.py",
+    "scripts/cp2/cp2_capsule_launcher.c",
+    "scripts/cp2/cp2_capsule_sandbox.c",
+    "scripts/cp2/cp2_direct_kat.py",
+    "scripts/cp2/cp2_direct_kat_builder.py",
+    "scripts/cp2/cp2_equivalent_evaluator.py",
+    "scripts/cp2/cp2_evaluator_result.py",
+    "scripts/cp2/cp2_evo_result.py",
+    "scripts/cp2/cp2_f64_codec.py",
+    "scripts/cp2/cp2_fp_control.c",
+    "scripts/cp2/cp2_fp_control.py",
+    "scripts/cp2/cp2_fp_control_module.c",
+    "scripts/cp2/cp2_pair_index_extract.py",
     "scripts/cp2/cp2_schema.py",
+    "scripts/cp2/cp2_sequence_actual.py",
+    "scripts/cp2/cp2_sequence_math.py",
+    "scripts/cp2/cp2_sequence_math_codec.py",
+    "scripts/cp2/cp2_sequence_math_worker.py",
+    "scripts/cp2/cp2_sequence_runner.py",
+    "scripts/cp2/cp2_timing_artifact.py",
+    "scripts/cp2/cp2_timing_controls.py",
+    "scripts/cp2/cp2_timing_math.py",
+    "scripts/cp2/cp2_timing_privileged_helper.py",
+    "scripts/cp2/cp2_timing_reversibility_client.py",
+    "scripts/cp2/cp2_timing_profile.py",
+    "scripts/cp2/cp2_timing_publication.py",
+    "scripts/cp2/run_sequence_pair.py",
+    "scripts/cp2/run_timing_pair.py",
+    "scripts/cp2/tests/test_cp2_capsule.py",
+    "scripts/cp2/tests/test_cp2_capsule_builder.py",
+    "scripts/cp2/tests/test_cp2_capsule_launcher.py",
+    "scripts/cp2/tests/test_cp2_capsule_unit_import.py",
+    "scripts/cp2/tests/test_cp2_detached_sequence_verifier.py",
+    "scripts/cp2/tests/test_cp2_direct_kat.py",
+    "scripts/cp2/tests/test_cp2_equivalent_evaluator.py",
+    "scripts/cp2/tests/test_cp2_evaluator_result.py",
+    "scripts/cp2/tests/test_cp2_evo_result.py",
+    "scripts/cp2/tests/test_cp2_f64_codec.py",
+    "scripts/cp2/tests/test_cp2_sequence_actual.py",
+    "scripts/cp2/tests/test_cp2_sequence_math.py",
+    "scripts/cp2/tests/test_cp2_sequence_math_worker.py",
+    "scripts/cp2/tests/test_cp2_sequence_runner.py",
+    "scripts/cp2/tests/test_cp2_timing_evidence.py",
+    "scripts/cp2/tests/test_cp2_timing_controls.py",
+    "scripts/cp2/tests/test_cp2_timing_math.py",
+    "scripts/cp2/tests/test_cp2_timing_orchestration.py",
+    "scripts/cp2/tests/test_cp2_timing_privileged_helper.py",
+    "scripts/cp2/tests/test_cp2_verify_report_pair_witness.py",
     "scripts/cp2/verify_report.py",
 )
 PREVALIDATED_SOURCE_RECORD_TYPE = "cp2_prevalidated_unit_source_v1"
@@ -1994,8 +2056,6 @@ class OpaqueGitRepository:
 
     def _prewalk_worktree(self) -> None:
         tracked_by_path = {entry.path: entry for entry in self._tracked}
-        if any(PurePosixPath(path).parts[0] in ALLOWED_OTHER_ROOTS for path in tracked_by_path):
-            _fail("tracked source may not live under separately snapshotted roots")
         prefixes = set()
         for path in tracked_by_path:
             parts = PurePosixPath(path).parts
@@ -2020,7 +2080,11 @@ class OpaqueGitRepository:
                     _fail("untracked source namespace entry is forbidden: " + relative)
                 status_value = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
                 namespace[relative] = _stat_signature(status_value)
-                if name == ".git" or (allowed and name in (".gitignore", ".gitattributes")):
+                if name == ".git" or (
+                    allowed
+                    and not is_tracked
+                    and name in (".gitignore", ".gitattributes")
+                ):
                     _fail("forbidden untracked control path: " + relative)
                 if stat.S_ISDIR(status_value.st_mode):
                     if is_tracked:
@@ -2098,7 +2162,11 @@ class OpaqueGitRepository:
                     )
                     continue
                 result[relative] = _stat_signature(status_value)
-                if name == ".git" or (allowed and name in (".gitignore", ".gitattributes")):
+                if name == ".git" or (
+                    allowed
+                    and not tracked
+                    and name in (".gitignore", ".gitattributes")
+                ):
                     _fail("worktree gained a forbidden control path: " + relative)
                 if stat.S_ISDIR(status_value.st_mode):
                     if tracked:

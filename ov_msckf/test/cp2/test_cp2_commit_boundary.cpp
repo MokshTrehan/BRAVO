@@ -4,6 +4,7 @@
  */
 
 #include "update/CP2CommitBoundary.h"
+#include "update/CP2TimingClock.h"
 
 #include <gtest/gtest.h>
 
@@ -61,10 +62,25 @@ struct SoleCommit {
 };
 
 struct FakeClock {
-  using time_point = std::uint64_t;
+  struct time_point {
+    std::uint64_t ticks = 0U;
+    bool valid = false;
+  };
 
   Trace *trace = nullptr;
-  time_point value = 0U;
+  time_point value{};
+
+  time_point now() noexcept {
+    trace->observe(Observation::kClock);
+    return value;
+  }
+};
+
+struct CP2EndpointClock {
+  using time_point = ov_msckf::CP2SteadyClockEndpoint;
+
+  Trace *trace = nullptr;
+  time_point value{};
 
   time_point now() noexcept {
     trace->observe(Observation::kClock);
@@ -84,6 +100,13 @@ struct PostcommitFill {
 };
 
 using Output = ov_msckf::CP2CommitBoundaryOutput<FakeClock::time_point>;
+using CP2EndpointOutput =
+    ov_msckf::CP2CommitBoundaryOutput<CP2EndpointClock::time_point>;
+
+bool operator==(const FakeClock::time_point &left,
+                const FakeClock::time_point &right) noexcept {
+  return left.ticks == right.ticks && left.valid == right.valid;
+}
 
 static_assert(noexcept(std::declval<FakeClock &>().now()),
               "fake clock must model the postcommit noexcept contract");
@@ -106,7 +129,7 @@ TEST(CP2CommitBoundary, AcceptedPathHasExactProofCommitClockFillOrder) {
   Trace trace;
   FinalProof proof{&trace, true};
   SoleCommit commit{&trace, false};
-  FakeClock clock{&trace, 0x123456789abcdef0ULL};
+  FakeClock clock{&trace, {0x123456789abcdef0ULL, true}};
   PostcommitFill fill{&trace,
                       ov_msckf::CP2PostcommitFillStatus::kSucceeded};
   Output output;
@@ -129,14 +152,14 @@ TEST(CP2CommitBoundary, RejectedProofSuppressesEveryPostproofOperation) {
   Trace trace;
   FinalProof proof{&trace, false};
   SoleCommit commit{&trace, false};
-  FakeClock clock{&trace, 101U};
+  FakeClock clock{&trace, {101U, true}};
   PostcommitFill fill{&trace,
                       ov_msckf::CP2PostcommitFillStatus::kSucceeded};
   Output output;
   output.status =
       ov_msckf::CP2CommitBoundaryStatus::kCommittedFillSucceeded;
   output.endpoint_valid = true;
-  output.endpoint = 77U;
+  output.endpoint = {77U, true};
 
   const ov_msckf::CP2CommitBoundaryStatus status =
       ov_msckf::CP2CommitBoundary::run(proof, commit, clock, fill, output);
@@ -148,20 +171,20 @@ TEST(CP2CommitBoundary, RejectedProofSuppressesEveryPostproofOperation) {
   EXPECT_EQ(status, ov_msckf::CP2CommitBoundaryStatus::kProofRejected);
   EXPECT_EQ(output.status, status);
   EXPECT_FALSE(output.endpoint_valid);
-  EXPECT_EQ(output.endpoint, 77U);
+  EXPECT_EQ(output.endpoint, (FakeClock::time_point{77U, true}));
 }
 
 TEST(CP2CommitBoundary, ThrowingCommitPropagatesBeforeClockAndPreservesOutput) {
   Trace trace;
   FinalProof proof{&trace, true};
   SoleCommit commit{&trace, true};
-  FakeClock clock{&trace, 202U};
+  FakeClock clock{&trace, {202U, true}};
   PostcommitFill fill{&trace,
                       ov_msckf::CP2PostcommitFillStatus::kSucceeded};
   Output output;
   output.status = ov_msckf::CP2CommitBoundaryStatus::kCommittedFillFailed;
   output.endpoint_valid = true;
-  output.endpoint = 88U;
+  output.endpoint = {88U, true};
 
   EXPECT_THROW(
       ov_msckf::CP2CommitBoundary::run(proof, commit, clock, fill, output),
@@ -174,14 +197,14 @@ TEST(CP2CommitBoundary, ThrowingCommitPropagatesBeforeClockAndPreservesOutput) {
   EXPECT_EQ(output.status,
             ov_msckf::CP2CommitBoundaryStatus::kCommittedFillFailed);
   EXPECT_TRUE(output.endpoint_valid);
-  EXPECT_EQ(output.endpoint, 88U);
+  EXPECT_EQ(output.endpoint, (FakeClock::time_point{88U, true}));
 }
 
 TEST(CP2CommitBoundary, FailedFillRetainsCommittedStatusAndExactEndpoint) {
   Trace trace;
   FinalProof proof{&trace, true};
   SoleCommit commit{&trace, false};
-  FakeClock clock{&trace, 303U};
+  FakeClock clock{&trace, {303U, true}};
   PostcommitFill fill{&trace, ov_msckf::CP2PostcommitFillStatus::kFailed};
   Output output;
 
@@ -196,7 +219,36 @@ TEST(CP2CommitBoundary, FailedFillRetainsCommittedStatusAndExactEndpoint) {
             ov_msckf::CP2CommitBoundaryStatus::kCommittedFillFailed);
   EXPECT_EQ(output.status, status);
   EXPECT_TRUE(output.endpoint_valid);
-  EXPECT_EQ(output.endpoint, 303U);
+  EXPECT_EQ(output.endpoint, (FakeClock::time_point{303U, true}));
+}
+
+TEST(CP2CommitBoundary,
+     InvalidClockEndpointCannotBecomeValidOrCommittedSuccess) {
+  Trace trace;
+  FinalProof proof{&trace, true};
+  SoleCommit commit{&trace, false};
+  CP2EndpointClock clock{&trace, {404U, false}};
+  PostcommitFill fill{&trace,
+                      ov_msckf::CP2PostcommitFillStatus::kSucceeded};
+  CP2EndpointOutput output;
+  output.status =
+      ov_msckf::CP2CommitBoundaryStatus::kCommittedFillSucceeded;
+  output.endpoint_valid = true;
+  output.endpoint = {12U, true};
+
+  const ov_msckf::CP2CommitBoundaryStatus status =
+      ov_msckf::CP2CommitBoundary::run(proof, commit, clock, fill, output);
+
+  expect_trace(trace,
+               {{Observation::kProof, Observation::kCommit,
+                 Observation::kClock, Observation::kFill}},
+               4U);
+  EXPECT_EQ(status,
+            ov_msckf::CP2CommitBoundaryStatus::kCommittedEndpointInvalid);
+  EXPECT_EQ(output.status, status);
+  EXPECT_FALSE(output.endpoint_valid);
+  EXPECT_FALSE(output.endpoint.valid);
+  EXPECT_EQ(output.endpoint.nanoseconds, 404U);
 }
 
 } // namespace

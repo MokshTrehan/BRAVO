@@ -10,9 +10,10 @@ authorization and that authorization has performed its sole registry read.
 
 The pure assembly API is also the synthetic-test seam: real runtime plumbing
 must provide completed, byte-retained mode traces and provenance inputs, while
-this module independently validates their referential joins, computes the
-frozen CP2-D shared-population mathematics, writes the exact fixed outputs,
-and supports fsync/read-only/detached-verifier/no-overwrite finalization.
+this module independently validates their referential joins, transports the
+retained poses into the bound direct-math capsule, validates its bit-exact
+response without importing a numerical package, writes the fixed outputs, and
+supports fsync/read-only/detached-verifier/no-overwrite finalization.
 """
 
 from __future__ import annotations
@@ -35,10 +36,9 @@ import subprocess
 import tempfile
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-import numpy as np
-
 import cp2_schema as schema
-import cp2_sequence_math as sequence_math
+import cp2_evaluator_result as evaluator_result
+import cp2_sequence_math_codec as math_codec
 
 
 MODES = ("nullspace", "schur")
@@ -67,15 +67,17 @@ MINIMUM_COVERAGE_DENOMINATOR = 1000
 TUM_HEADER = b"# timestamp tx ty tz qx qy qz qw\n"
 SHARED_POPULATION_DOMAIN = b"SchurVIO-CP2-shared-population-v1\0"
 SHARED_TIMESTAMPS_DOMAIN = b"SchurVIO-CP2-shared-timestamps-v1\0"
+DIRECT_REQUEST_PATH = "direct_math/request.json"
+DIRECT_RESPONSE_PATH = "direct_math/response.json"
 CP1_AUTHORIZATION_COMMIT = "8d80f483752411d34a3bc4c1ff6330b3a5c0fef3"
 FROZEN_STATIC_SHA256 = (
     "b706f0082106e49e20c3292147d238b7e225b0df414106b9d4ac009bbb123f3b",
     "408ea8b60b5f9e7c8251e6d302f04c0675bfefdd31229bb1afd139bc8f4a0287",
     "b9e11b7bcda102f7c8c384c97318d67f3916b58942f9073722f83c22bd7073f7",
 )
-FROZEN_LAUNCH_SHA256 = "bede519721575d769a1fcef67c5527661cb39ba05ab77faa6c20771b0756c49a"
+FROZEN_LAUNCH_SHA256 = "a29c9b74aa6d4f0a5d783d0ba1eadeaca49ad0783f3b8121c5b68c8091023a12"
 UTC_PATTERN = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z$")
-NORMALIZED_KEYS = (
+MODE_OUTPUT_PARAMETER_KEYS = (
     "/cp2_vio/up_msckf_landmark_elimination",
     "/cp2_vio/filepath_est",
     "/cp2_vio/filepath_std",
@@ -83,7 +85,17 @@ NORMALIZED_KEYS = (
     "/cp2_vio/cp2_trace_directory",
     "/cp2_vio/cp2_context_path",
 )
-PATH_PARAMETER_KEYS = NORMALIZED_KEYS[1:]
+SINK_CAPABILITY_PARAMETER_KEYS = tuple(
+    "/cp2_vio/cp2_{}_sink_capability".format(field)
+    for field in (
+        "serial_trace", "callback_trace", "trajectory_trace", "updater_trace",
+        "state_payload", "proposal_payload", "raw_system_payload", "timing_trace",
+        "runtime_parameters", "loader_map_before", "loader_map_after",
+        "legacy_state", "legacy_deviation", "legacy_timing",
+    )
+)
+NORMALIZED_KEYS = MODE_OUTPUT_PARAMETER_KEYS + SINK_CAPABILITY_PARAMETER_KEYS
+PATH_PARAMETER_KEYS = MODE_OUTPUT_PARAMETER_KEYS[1:]
 ALLOWED_ROLES = frozenset(
     {
         "report",
@@ -98,6 +110,7 @@ ALLOWED_ROLES = frozenset(
         "log",
         "trajectory",
         "evaluator",
+        "direct_math",
     }
 )
 PAIR_KEYS = (
@@ -116,6 +129,18 @@ PAIR_KEYS = (
     "cam1_header_time_ns",
     "absolute_record_delta_ns",
 )
+FILTERED_WITNESS_KEYS = (
+    "schema_version",
+    "record_type",
+    "sequence_index",
+    "sequence_id",
+    "filtered_index",
+    "kind",
+    "camera_id",
+    "record_time_ns",
+    "header_time_ns",
+)
+PAIR_WITNESS_PATH = "pair_selection_witness.jsonl"
 CALLBACK_KEYS = (
     "schema_version",
     "record_type",
@@ -162,6 +187,11 @@ RUN_KEYS = (
     "resolved_parameters_sha256",
     "callback_trace_sha256",
     "trajectory_sha256",
+    "evaluator_result_path",
+    "evaluator_result_sha256",
+    "evaluator_archive_rmse_m",
+    "evaluator_console_rmse",
+    "evaluator_error_count",
     "processed_unique_pairs",
     "processing_fraction",
     "first_selected_timestamp_ns",
@@ -190,6 +220,8 @@ REPORT_KEYS = (
     "shared_timestamp_count",
     "shared_timestamp_sha256",
     "shared_population_sha256",
+    "direct_math_request_sha256",
+    "direct_math_response_sha256",
     "baseline_alignment",
     "position_p95_m",
     "orientation_p95_deg",
@@ -269,6 +301,10 @@ class SequenceRunnerError(ValueError):
     """Raised when an authorized CP2-D run cannot be proven exact."""
 
 
+class PublicationIndeterminateError(SequenceRunnerError):
+    """Raised only when the exact held directory cannot be reconciled to one name."""
+
+
 def _fail(message: str) -> None:
     raise SequenceRunnerError(message)
 
@@ -306,6 +342,10 @@ class ModeRunInput:
     evaluator_stdout_bytes: bytes
     evaluator_stderr_path: str
     evaluator_stderr_bytes: bytes
+    evaluator_launcher_path: str
+    evaluator_result_argument: str
+    evaluator_result_path: str
+    evaluator_result_bytes: bytes
     evaluator_ate_m: float
     completed: bool = True
     exit_code: int = 0
@@ -318,7 +358,17 @@ class SequenceAssemblyInput:
     offset_seconds: float
     run_id: str
     modes: Tuple[ModeRunInput, ModeRunInput]
+    pair_witness_bytes: bytes
     ground_truth: Tuple[GroundTruthPose, ...]
+    direct_math_launcher_path: str
+    direct_math_request_argument: str
+    direct_math_response_argument: str
+    direct_math_request_bytes: bytes
+    direct_math_response_bytes: bytes
+    direct_math_stdout_path: str
+    direct_math_stdout_bytes: bytes
+    direct_math_stderr_path: str
+    direct_math_stderr_bytes: bytes
     provenance_without_inventory: Mapping[str, Any]
     commands_bytes: bytes
     support_files: Mapping[str, SupportFile]
@@ -353,6 +403,7 @@ class _ValidatedMode:
     canonical_parameters: bytes
     normalized_parameters: bytes
     normalized_diff: Tuple[Mapping[str, Any], ...]
+    evaluator_population_count: int
 
 
 def _bytes(value: Any, label: str) -> bytes:
@@ -502,6 +553,105 @@ def _validate_pairs(payload: bytes, sequence_index: int, sequence_id: str) -> Tu
         _fail("selected cam0 record times reverse")
     if selected_times[-1] <= selected_times[0]:
         _fail("selected pair population has no positive duration")
+    return rows
+
+
+def validate_pair_selection_witness(
+    witness_payload: bytes,
+    pair_payload: bytes,
+    sequence_index: int,
+    sequence_id: str,
+) -> Tuple[Mapping[str, Any], ...]:
+    """Replay strict first-forward selection from the retained complete view.
+
+    Selection is intentionally reconstructed from witness rows rather than
+    checking only local properties of retained pairs.  In particular, the
+    first later opposite-camera message is authoritative even when it is
+    already used or outside the strict 20 ms bound; the replay never searches
+    past it for a more convenient candidate.
+    """
+
+    pairs = _validate_pairs(pair_payload, sequence_index, sequence_id)
+    rows = _parse_jsonl(witness_payload, "pair-selection witness")
+    if not rows:
+        _fail("pair-selection witness is empty")
+    normalized = []
+    previous_record_time = -1
+    for expected_index, row in enumerate(rows):
+        _exact(row, FILTERED_WITNESS_KEYS, "filtered-message witness row")
+        _identity(row, "filtered_message", sequence_index, sequence_id)
+        if _u64(row["filtered_index"], "filtered witness index") != expected_index:
+            _fail("filtered-message witness indices are not contiguous from zero")
+        kind = row["kind"]
+        if kind not in ("imu", "cam0", "cam1"):
+            _fail("filtered-message witness kind is outside the frozen topics")
+        camera_id = row["camera_id"]
+        expected_camera_id = None if kind == "imu" else (0 if kind == "cam0" else 1)
+        if camera_id != expected_camera_id:
+            _fail("filtered-message witness camera identity differs from its kind")
+        record_time = _u64(row["record_time_ns"], "filtered witness record time")
+        header_time = _u64(row["header_time_ns"], "filtered witness header time")
+        if record_time < previous_record_time:
+            _fail("filtered-message witness record times reverse")
+        if kind == "imu" and header_time != 0:
+            _fail("filtered-message witness IMU row carries a camera header time")
+        previous_record_time = record_time
+        normalized.append((kind, record_time, header_time))
+
+    replayed = []
+    used = set()
+    for anchor, (kind, record_time, _) in enumerate(normalized):
+        if kind not in ("cam0", "cam1") or anchor in used:
+            continue
+        opposite = "cam1" if kind == "cam0" else "cam0"
+        candidate = next(
+            (
+                index
+                for index in range(anchor + 1, len(normalized))
+                if normalized[index][0] == opposite
+            ),
+            None,
+        )
+        # These two tests deliberately precede every possible later search.
+        if candidate is None or candidate in used:
+            continue
+        candidate_kind, candidate_record_time, _ = normalized[candidate]
+        del candidate_kind
+        delta = abs(record_time - candidate_record_time)
+        if delta >= STRICT_PAIR_DELTA_NS:
+            continue
+        cam0_index, cam1_index = (
+            (anchor, candidate) if kind == "cam0" else (candidate, anchor)
+        )
+        cam0 = normalized[cam0_index]
+        cam1 = normalized[cam1_index]
+        replayed.append(
+            {
+                "schema_version": 1,
+                "record_type": "pair_index",
+                "sequence_index": sequence_index,
+                "sequence_id": sequence_id,
+                "pair_index": len(replayed),
+                "anchor_filtered_index": anchor,
+                "anchor_camera_id": 0 if kind == "cam0" else 1,
+                "cam0_filtered_index": cam0_index,
+                "cam1_filtered_index": cam1_index,
+                "cam0_record_time_ns": cam0[1],
+                "cam1_record_time_ns": cam1[1],
+                "cam0_header_time_ns": cam0[2],
+                "cam1_header_time_ns": cam1[2],
+                "absolute_record_delta_ns": delta,
+            }
+        )
+        used.update((anchor, candidate))
+    try:
+        replayed_bytes = schema.jsonl_bytes(replayed)
+    except schema.SchemaError as exc:
+        raise SequenceRunnerError("cannot encode replayed pair selection") from exc
+    if replayed_bytes != pair_payload or tuple(replayed) != tuple(pairs):
+        _fail(
+            "pair index is not the exact strict first-forward/no-search-past/no-reuse replay"
+        )
     return rows
 
 
@@ -657,11 +807,13 @@ def _validate_trajectory(
             _fail(mode + " trajectory timestamps are not strictly increasing and unique")
         previous_timestamp = timestamp
         _pose_vector(row["position_G"], 3, mode + " position")
-        quaternion = _pose_vector(row["quaternion_ItoG_xyzw"], 4, mode + " quaternion")
+        quaternion = _pose_vector(
+            row["quaternion_ItoG_xyzw"], 4, mode + " quaternion"
+        )
         try:
-            sequence_math.jpl_stored_xyzw_to_hamilton_inverse_rotation(quaternion)
-        except sequence_math.SequenceMathError as exc:
-            raise SequenceRunnerError(mode + " trajectory quaternion: " + str(exc)) from exc
+            math_codec.validate_stored_quaternion(quaternion, mode + " quaternion")
+        except math_codec.SequenceMathCodecError as exc:
+            raise SequenceRunnerError(str(exc)) from exc
     if len(rows) != len(emitted) or len(rows) == 0:
         _fail(mode + " trajectory does not join every and only state-emitting callback")
     return rows
@@ -727,24 +879,30 @@ def _validate_parameters(source: ModeRunInput) -> Tuple[bytes, bytes, Tuple[Mapp
     return runtime, normalized_bytes, tuple(differences)
 
 
-def _parse_evaluator_rmse(payload: bytes, label: str) -> float:
+def _parse_evaluator_rmse_token(payload: bytes, label: str) -> str:
     try:
         evaluator_text = _bytes(payload, label + " stdout").decode("utf-8", "strict")
     except UnicodeDecodeError as exc:
         raise SequenceRunnerError(label + " stdout is not UTF-8") from exc
     matches = []
-    number = r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?"
+    number = r"(?:0|[1-9][0-9]*)\.[0-9]{6}"
     expression = re.compile(r"^[ \t]*rmse[ \t]+(" + number + r")[ \t]*$")
     for line in evaluator_text.splitlines():
         match = expression.fullmatch(line)
         if match is not None:
-            matches.append(float(match.group(1)))
-    if len(matches) != 1 or not math.isfinite(matches[0]) or matches[0] < 0.0:
-        _fail(label + " stdout lacks one finite nonnegative rmse row")
+            matches.append(match.group(1))
+    if len(matches) != 1:
+        _fail(label + " stdout lacks one exact six-decimal nonnegative rmse row")
     return matches[0]
 
 
-def _validate_mode(
+def _parse_evaluator_rmse(payload: bytes, label: str) -> float:
+    """Compatibility numeric projection of the presentation-only token."""
+
+    return float(_parse_evaluator_rmse_token(payload, label))
+
+
+def _validate_mode_trace(
     source: ModeRunInput,
     sequence_index: int,
     sequence_id: str,
@@ -766,13 +924,58 @@ def _validate_mode(
     _bytes(source.legacy_state_bytes, source.mode + " legacy state")
     _bytes(source.legacy_deviation_bytes, source.mode + " legacy deviation")
     _bytes(source.legacy_timing_bytes, source.mode + " legacy timing")
+    return _ValidatedMode(
+        source, callbacks, trajectory, coverage, canonical, normalized, difference, 0
+    )
+
+
+def _validate_mode(
+    source: ModeRunInput,
+    sequence_index: int,
+    sequence_id: str,
+    pairs: Sequence[Mapping[str, Any]],
+) -> _ValidatedMode:
+    trace = _validate_mode_trace(source, sequence_index, sequence_id, pairs)
     retained_ate = _f64(source.evaluator_ate_m, source.mode + " retained evaluator ATE")
-    parsed_ate = _parse_evaluator_rmse(
+    console_token = _parse_evaluator_rmse_token(
         source.evaluator_stdout_bytes, source.mode + " evaluator"
     )
-    if struct.pack(">d", parsed_ate) != struct.pack(">d", retained_ate):
-        _fail(source.mode + " retained evaluator ATE differs from its stdout rmse")
-    return _ValidatedMode(source, callbacks, trajectory, coverage, canonical, normalized, difference)
+    try:
+        archive_result = evaluator_result.parse_evaluator_result_archive(
+            _bytes(source.evaluator_result_bytes, source.mode + " evaluator result archive")
+        )
+        statistics = archive_result.statistics
+        evaluator_result.require_console_rmse_match(console_token, statistics.rmse)
+    except evaluator_result.EvaluatorResultError as exc:
+        raise SequenceRunnerError(source.mode + " evaluator archive: " + str(exc)) from exc
+    if struct.pack(">d", statistics.rmse) != struct.pack(">d", retained_ate):
+        _fail(source.mode + " retained evaluator ATE differs from full-precision archive RMSE")
+    launcher = _absolute_normalized(
+        source.evaluator_launcher_path, source.mode + " evaluator launcher"
+    )
+    result_argument = _absolute_normalized(
+        source.evaluator_result_argument, source.mode + " evaluator result argument"
+    )
+    expected_result_path = "evaluation/{}_evaluator_result.zip".format(source.mode)
+    try:
+        schema.validate_relpath(source.evaluator_result_path, source.mode + " evaluator artifact path")
+    except schema.SchemaError as exc:
+        raise SequenceRunnerError(str(exc)) from exc
+    if (
+        source.evaluator_result_path != expected_result_path
+        or os.path.basename(result_argument) != os.path.basename(expected_result_path)
+    ):
+        _fail(source.mode + " evaluator result path differs from the frozen archive role")
+    return _ValidatedMode(
+        source,
+        trace.callbacks,
+        trace.trajectory,
+        trace.coverage,
+        trace.canonical_parameters,
+        trace.normalized_parameters,
+        trace.normalized_diff,
+        archive_result.error_count,
+    )
 
 
 def _ground_truth(value: Sequence[GroundTruthPose]) -> Tuple[GroundTruthPose, ...]:
@@ -795,9 +998,11 @@ def _ground_truth(value: Sequence[GroundTruthPose]) -> Tuple[GroundTruthPose, ..
         position = tuple(_f64(item, "ground-truth position") for item in row.position)
         quaternion = tuple(_f64(item, "ground-truth quaternion") for item in row.quaternion_xyzw)
         try:
-            sequence_math.jpl_stored_xyzw_to_hamilton_inverse_rotation(quaternion)
-        except sequence_math.SequenceMathError as exc:
-            raise SequenceRunnerError("ground-truth quaternion: " + str(exc)) from exc
+            math_codec.validate_stored_quaternion(
+                quaternion, "ground-truth quaternion"
+            )
+        except math_codec.SequenceMathCodecError as exc:
+            raise SequenceRunnerError(str(exc)) from exc
         validated.append(GroundTruthPose(timestamp, position, quaternion))
     return tuple(validated)
 
@@ -828,58 +1033,9 @@ def _tum(rows: Iterable[Tuple[int, Sequence[float], Sequence[float]]]) -> bytes:
     return bytes(output)
 
 
-def _rotation_quaternion_xyzw(rotation: Any) -> Tuple[float, float, float, float]:
-    matrix = np.asarray(rotation, dtype=np.float64)
-    try:
-        sequence_math.validate_proper_rotation(matrix)
-    except sequence_math.SequenceMathError as exc:
-        raise SequenceRunnerError("aligned quaternion rotation: " + str(exc)) from exc
-    trace = float(matrix[0, 0] + matrix[1, 1] + matrix[2, 2])
-    if trace > 0.0:
-        scale = math.sqrt(trace + 1.0) * 2.0
-        w = 0.25 * scale
-        x = (float(matrix[2, 1]) - float(matrix[1, 2])) / scale
-        y = (float(matrix[0, 2]) - float(matrix[2, 0])) / scale
-        z = (float(matrix[1, 0]) - float(matrix[0, 1])) / scale
-    else:
-        diagonal = [float(matrix[index, index]) for index in range(3)]
-        axis = max(range(3), key=lambda index: diagonal[index])
-        if axis == 0:
-            scale = math.sqrt(1.0 + diagonal[0] - diagonal[1] - diagonal[2]) * 2.0
-            x = 0.25 * scale
-            y = (float(matrix[0, 1]) + float(matrix[1, 0])) / scale
-            z = (float(matrix[0, 2]) + float(matrix[2, 0])) / scale
-            w = (float(matrix[2, 1]) - float(matrix[1, 2])) / scale
-        elif axis == 1:
-            scale = math.sqrt(1.0 + diagonal[1] - diagonal[0] - diagonal[2]) * 2.0
-            x = (float(matrix[0, 1]) + float(matrix[1, 0])) / scale
-            y = 0.25 * scale
-            z = (float(matrix[1, 2]) + float(matrix[2, 1])) / scale
-            w = (float(matrix[0, 2]) - float(matrix[2, 0])) / scale
-        else:
-            scale = math.sqrt(1.0 + diagonal[2] - diagonal[0] - diagonal[1]) * 2.0
-            x = (float(matrix[0, 2]) + float(matrix[2, 0])) / scale
-            y = (float(matrix[1, 2]) + float(matrix[2, 1])) / scale
-            z = 0.25 * scale
-            w = (float(matrix[1, 0]) - float(matrix[0, 1])) / scale
-    quaternion = np.asarray((x, y, z, w), dtype=np.float64)
-    norm = float(np.linalg.norm(quaternion))
-    if not math.isfinite(norm) or norm == 0.0:
-        _fail("rotation-to-quaternion conversion is singular")
-    quaternion /= norm
-    # q and -q encode the same rotation.  This sign rule makes the projection
-    # byte-deterministic without changing the represented orientation.
-    for component in (quaternion[3], quaternion[0], quaternion[1], quaternion[2]):
-        if component != 0.0:
-            if component < 0.0:
-                quaternion *= -1.0
-            break
-    return tuple(float(value) for value in quaternion)
-
-
 def _shared_payload(
     timestamps: Sequence[int],
-    associations: Sequence[sequence_math.TimestampAssociation],
+    associations: Sequence[Mapping[str, int]],
     nullspace_rows: Sequence[Mapping[str, Any]],
     schur_rows: Sequence[Mapping[str, Any]],
     ground_truth: Sequence[GroundTruthPose],
@@ -889,7 +1045,7 @@ def _shared_payload(
     population.extend(struct.pack(">Q", len(timestamps)))
     timestamp_payload.extend(struct.pack(">Q", len(timestamps)))
     for timestamp, association, nullspace, schur in zip(timestamps, associations, nullspace_rows, schur_rows):
-        gt = ground_truth[association.ground_truth_index]
+        gt = ground_truth[association["ground_truth_index"]]
         population.extend(struct.pack(">QQ", timestamp, gt.timestamp_ns))
         for row in (nullspace, schur):
             for value in tuple(row["position_G"]) + tuple(row["quaternion_ItoG_xyzw"]):
@@ -900,64 +1056,126 @@ def _shared_payload(
     return bytes(population), bytes(timestamp_payload)
 
 
+def _direct_request_bytes(
+    modes: Sequence[_ValidatedMode],
+    ground_truth: Sequence[GroundTruthPose],
+    sequence_index: int,
+    sequence_id: str,
+) -> bytes:
+    try:
+        return math_codec.encode_sequence_request(
+            sequence_index=sequence_index,
+            sequence_id=sequence_id,
+            nullspace_timestamps_ns=tuple(
+                row["camera_timestamp_ns"] for row in modes[0].trajectory
+            ),
+            nullspace_positions=tuple(
+                tuple(row["position_G"]) for row in modes[0].trajectory
+            ),
+            nullspace_quaternions_xyzw=tuple(
+                tuple(row["quaternion_ItoG_xyzw"]) for row in modes[0].trajectory
+            ),
+            schur_timestamps_ns=tuple(
+                row["camera_timestamp_ns"] for row in modes[1].trajectory
+            ),
+            schur_positions=tuple(
+                tuple(row["position_G"]) for row in modes[1].trajectory
+            ),
+            schur_quaternions_xyzw=tuple(
+                tuple(row["quaternion_ItoG_xyzw"]) for row in modes[1].trajectory
+            ),
+            ground_truth_timestamps_ns=tuple(row.timestamp_ns for row in ground_truth),
+            ground_truth_positions=tuple(row.position for row in ground_truth),
+            ground_truth_quaternions_xyzw=tuple(
+                row.quaternion_xyzw for row in ground_truth
+            ),
+        )
+    except math_codec.SequenceMathCodecError as exc:
+        raise SequenceRunnerError("direct-math request: " + str(exc)) from exc
+
+
+def _array_rows(
+    value: math_codec.F64BitsArray, columns: int, label: str
+) -> Tuple[Tuple[float, ...], ...]:
+    if len(value.shape) != 2 or value.shape[1] != columns:
+        _fail(label + " has the wrong retained shape")
+    flattened = value.values
+    return tuple(
+        tuple(flattened[index * columns : (index + 1) * columns])
+        for index in range(value.shape[0])
+    )
+
+
 def _metric_artifacts(
     modes: Sequence[_ValidatedMode],
     ground_truth: Sequence[GroundTruthPose],
+    sequence_index: int,
+    sequence_id: str,
+    direct_request_bytes: bytes,
+    direct_response_bytes: bytes,
     *,
     verify_evaluator: bool = True,
 ) -> Tuple[Dict[str, bytes], Dict[str, Any]]:
+    expected_request = _direct_request_bytes(
+        modes, ground_truth, sequence_index, sequence_id
+    )
+    if direct_request_bytes != expected_request:
+        _fail("retained direct-math request differs from the exact trace/ground-truth projection")
+    try:
+        direct = math_codec.decode_sequence_response(
+            _bytes(direct_response_bytes, "direct-math response"), expected_request
+        )
+    except math_codec.SequenceMathCodecError as exc:
+        raise SequenceRunnerError("direct-math response: " + str(exc)) from exc
     by_mode = {
         item.source.mode: {row["camera_timestamp_ns"]: row for row in item.trajectory}
         for item in modes
     }
-    timestamps = sequence_math.shared_timestamp_intersection(
-        tuple(by_mode["nullspace"]), tuple(by_mode["schur"])
-    )
-    if len(timestamps) < 3:
-        _fail("shared trajectory population contains fewer than three poses")
-    associations = sequence_math.associate_nearest_ground_truth(
-        timestamps, (row.timestamp_ns for row in ground_truth)
-    )
-    if len(associations) != len(timestamps):
-        _fail("a shared estimator timestamp has no ground-truth row within 10 ms")
+    timestamps = direct.shared_timestamps_ns
+    associations = direct.associations
     nullspace_rows = tuple(by_mode["nullspace"][timestamp] for timestamp in timestamps)
     schur_rows = tuple(by_mode["schur"][timestamp] for timestamp in timestamps)
-    gt_rows = tuple(ground_truth[item.ground_truth_index] for item in associations)
-    nullspace_positions = np.asarray([row["position_G"] for row in nullspace_rows], dtype=np.float64)
-    schur_positions = np.asarray([row["position_G"] for row in schur_rows], dtype=np.float64)
-    nullspace_quaternions = np.asarray(
-        [row["quaternion_ItoG_xyzw"] for row in nullspace_rows], dtype=np.float64
+    gt_rows = tuple(
+        ground_truth[item["ground_truth_index"]] for item in associations
     )
-    schur_quaternions = np.asarray(
-        [row["quaternion_ItoG_xyzw"] for row in schur_rows], dtype=np.float64
+    nullspace_aligned = _array_rows(
+        direct.arrays["nullspace_aligned_positions"], 3, "aligned nullspace positions"
     )
-    gt_positions = np.asarray([row.position for row in gt_rows], dtype=np.float64)
-    alignment = sequence_math.baseline_kabsch_alignment(nullspace_positions, gt_positions)
-    aligned = sequence_math.apply_common_alignment(
-        alignment,
-        nullspace_positions,
-        nullspace_quaternions,
-        schur_positions,
-        schur_quaternions,
+    schur_aligned = _array_rows(
+        direct.arrays["schur_aligned_positions"], 3, "aligned schur positions"
     )
-    position_p95 = sequence_math.linear_p95(
-        sequence_math.position_differences_m(aligned.nullspace_positions, aligned.schur_positions)
+    nullspace_aligned_quaternions = _array_rows(
+        direct.arrays["nullspace_aligned_quaternions_xyzw"],
+        4,
+        "aligned nullspace quaternions",
     )
-    orientation_p95 = sequence_math.linear_p95(
-        sequence_math.orientation_differences_deg(
-            aligned.nullspace_inverse_rotations, aligned.schur_inverse_rotations
-        )
+    schur_aligned_quaternions = _array_rows(
+        direct.arrays["schur_aligned_quaternions_xyzw"],
+        4,
+        "aligned schur quaternions",
     )
-    ate_nullspace = sequence_math.translation_rmse_m(aligned.nullspace_positions, gt_positions)
-    ate_schur = sequence_math.translation_rmse_m(aligned.schur_positions, gt_positions)
-    relative_ate = sequence_math.relative_ate_difference(ate_nullspace, ate_schur)
-    sequence_math.validate_metric_limits(position_p95, orientation_p95, relative_ate)
+    position_p95 = direct.metric("position_p95_m_bits")
+    orientation_p95 = direct.metric("orientation_p95_deg_bits")
+    ate_nullspace = direct.metric("ate_nullspace_m_bits")
+    ate_schur = direct.metric("ate_schur_m_bits")
+    relative_ate = direct.metric("relative_ate_difference_bits")
 
     if verify_evaluator:
-        for mode_index, direct in enumerate((ate_nullspace, ate_schur)):
+        for mode_index, direct_value in enumerate((ate_nullspace, ate_schur)):
             retained = modes[mode_index].source.evaluator_ate_m
-            if abs(float(retained) - float(direct)) > 1.0e-12 + 1.0e-10 * abs(float(direct)):
-                _fail(MODES[mode_index] + " evo RMSE differs from direct shared-population RMSE")
+            if modes[mode_index].evaluator_population_count != len(timestamps):
+                _fail(
+                    MODES[mode_index]
+                    + " evaluator error population count differs from the direct shared population"
+                )
+            try:
+                evaluator_result.require_archive_direct_rmse_agreement(
+                    retained, float(direct_value)
+                )
+            except evaluator_result.EvaluatorResultError as exc:
+                raise SequenceRunnerError(
+                    MODES[mode_index] + " evaluator RMSE differs from direct shared-population RMSE: " + str(exc)
+                ) from exc
 
     shared_population, shared_timestamps = _shared_payload(
         timestamps, associations, nullspace_rows, schur_rows, ground_truth
@@ -974,27 +1192,40 @@ def _metric_artifacts(
             (row["camera_timestamp_ns"], row["position_G"], row["quaternion_ItoG_xyzw"])
             for row in modes[1].trajectory
         ),
+        # Poses are the exact integer-selected GT rows, but their evaluator
+        # transport timestamps are the corresponding shared estimator stamps.
+        # This prevents any evaluator timestamp parser from selecting a second
+        # population at the inclusive 10-ms boundary.
         "ground_truth_shared.tum": _tum(
-            (row.timestamp_ns, row.position, row.quaternion_xyzw) for row in gt_rows
+            (timestamps[index], row.position, row.quaternion_xyzw)
+            for index, row in enumerate(gt_rows)
         ),
         "nullspace_shared_aligned.tum": _tum(
             (
                 timestamps[index],
-                aligned.nullspace_positions[index],
-                _rotation_quaternion_xyzw(aligned.nullspace_inverse_rotations[index]),
+                nullspace_aligned[index],
+                nullspace_aligned_quaternions[index],
             )
             for index in range(len(timestamps))
         ),
         "schur_shared_aligned.tum": _tum(
             (
                 timestamps[index],
-                aligned.schur_positions[index],
-                _rotation_quaternion_xyzw(aligned.schur_inverse_rotations[index]),
+                schur_aligned[index],
+                schur_aligned_quaternions[index],
             )
             for index in range(len(timestamps))
         ),
+        DIRECT_REQUEST_PATH: direct_request_bytes,
+        DIRECT_RESPONSE_PATH: direct_response_bytes,
     }
-    alignment_quaternion = _rotation_quaternion_xyzw(alignment.rotation)
+    rotation = direct.alignment_arrays["rotation"].values
+    translation = direct.alignment_arrays["translation"].values
+    alignment_quaternion = direct.alignment_arrays["quaternion_xyzw"].values
+    singular_values = direct.alignment_arrays["source_singular_values"].values
+    cross_singular_values = direct.alignment_arrays[
+        "cross_covariance_singular_values"
+    ].values
     metrics = {
         "shared_timestamp_count": len(timestamps),
         "shared_timestamp_sha256": _sha(shared_timestamps),
@@ -1002,13 +1233,28 @@ def _metric_artifacts(
         "baseline_alignment": {
             "source": "nullspace_to_ground_truth",
             "shared_population_sha256": shared_population_sha,
-            "rotation_row_major": [float(value) for value in alignment.rotation.reshape(9)],
-            "translation": [float(value) for value in alignment.translation],
+            "rotation_row_major": list(rotation),
+            "translation": list(translation),
             "quaternion_xyzw": list(alignment_quaternion),
-            "source_singular_values": [float(value) for value in alignment.source_singular_values],
-            "source_rank_threshold": float(alignment.source_rank_threshold),
-            "determinant": float(alignment.determinant),
-            "orthogonality_error_frobenius": float(alignment.orthogonality_error_frobenius),
+            "source_singular_values": list(singular_values),
+            "source_rank_threshold": math_codec.bits_to_f64(
+                direct.alignment_scalars["source_rank_threshold_bits"]
+            ),
+            "cross_covariance_singular_values": list(cross_singular_values),
+            "cross_covariance_rank_threshold": math_codec.bits_to_f64(
+                direct.alignment_scalars[
+                    "cross_covariance_rank_threshold_bits"
+                ]
+            ),
+            "reflection_correction_applied": (
+                direct.reflection_correction_applied
+            ),
+            "determinant": math_codec.bits_to_f64(
+                direct.alignment_scalars["determinant_bits"]
+            ),
+            "orthogonality_error_frobenius": math_codec.bits_to_f64(
+                direct.alignment_scalars["orthogonality_error_frobenius_bits"]
+            ),
             "applied_identically_to_both_modes": True,
         },
         "position_p95_m": float(position_p95),
@@ -1116,7 +1362,7 @@ def _role_for_fixed(path: str) -> str:
         return "command"
     if path.startswith("parameters/"):
         return "configuration"
-    if path.endswith("_callbacks.jsonl") or path == "pair_index.jsonl":
+    if path.endswith("_callbacks.jsonl") or path in ("pair_index.jsonl", PAIR_WITNESS_PATH):
         return "trace"
     if path.endswith("_trajectory.jsonl") or path.endswith(".tum") or path.endswith("_state.txt") or path.endswith("_deviation.txt"):
         return "trajectory"
@@ -1124,17 +1370,22 @@ def _role_for_fixed(path: str) -> str:
         return "log"
     if path in ("shared_population.bin", "shared_timestamps.bin"):
         return "payload"
+    if path.endswith("_evaluator_result.zip"):
+        return "evaluator"
+    if path in (DIRECT_REQUEST_PATH, DIRECT_RESPONSE_PATH):
+        return "direct_math"
     _fail("fixed artifact file has no role: " + path)
 
 
 def _validate_commands(
     payload: bytes, support_files: Mapping[str, SupportFile]
-) -> Tuple[Mapping[str, Any], Mapping[str, Any]]:
+) -> Tuple[Tuple[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]]:
     rows = _parse_jsonl(payload, "commands")
     if not rows:
         _fail("commands.jsonl must retain at least one top-level subprocess")
     log_owners = set()
     evaluator_rows = []
+    direct_rows = []
     for expected_id, row in enumerate(rows):
         _exact(row, COMMAND_KEYS, "command row")
         if (
@@ -1177,12 +1428,24 @@ def _validate_commands(
             if _sha(support_files[path].payload) != row[field + "_sha256"]:
                 _fail("command log digest differs: " + path)
         if row["phase"] == "evaluation":
-            evaluator_rows.append(row)
+            if (
+                len(row["argv"]) == 5
+                and row["argv"][1::2] == ["--input", "--output"]
+            ):
+                direct_rows.append(row)
+            elif len(row["argv"]) == 11:
+                evaluator_rows.append(row)
+            else:
+                _fail("evaluation command is neither the direct worker nor the equivalent evaluator")
     if len(evaluator_rows) != 2:
         _fail("commands.jsonl must contain exactly two evaluator commands")
     for run_index, row in enumerate(evaluator_rows):
+        if len(row["argv"]) != 11:
+            _fail("retained evaluator command has the wrong argument population")
         expected = [
-            "evo_ape",
+            # Element zero is checked against the mode's bound absolute capsule
+            # launcher by the caller after mode validation.
+            row["argv"][0],
             "tum",
             "ground_truth_shared.tum",
             MODES[run_index] + "_shared_aligned.tum",
@@ -1190,10 +1453,32 @@ def _validate_commands(
             "trans_part",
             "--t_max_diff",
             "0.01",
+            "--save_results",
+            row["argv"][9],
+            "--no_warnings",
         ]
-        if row["argv"] != expected or row["run_index"] != run_index:
+        if (
+            not os.path.isabs(row["argv"][0])
+            or not os.path.isabs(row["argv"][9])
+            or row["argv"] != expected
+            or row["run_index"] != run_index
+        ):
             _fail("retained evaluator command differs from the frozen CP2-D argv/order")
-    return tuple(evaluator_rows)  # type: ignore[return-value]
+    if len(direct_rows) != 1:
+        _fail("commands.jsonl must contain exactly one direct-math command")
+    direct = direct_rows[0]
+    if (
+        len(direct["argv"]) != 5
+        or direct["argv"][1] != "--input"
+        or direct["argv"][3] != "--output"
+        or not os.path.isabs(direct["argv"][0])
+        or not os.path.isabs(direct["argv"][2])
+        or not os.path.isabs(direct["argv"][4])
+        or direct["pair_index"] is not None
+        or direct["run_index"] is not None
+    ):
+        _fail("retained direct-math command differs from the frozen five-element argv")
+    return tuple(evaluator_rows), direct  # type: ignore[return-value]
 
 
 def _file_records(root: Path, roles: Mapping[str, str]) -> List[Mapping[str, Any]]:
@@ -1817,6 +2102,12 @@ def assemble_sequence_artifact(
     nullspace_pairs = _validate_pairs(
         evidence.modes[0].pair_index_bytes, evidence.sequence_index, evidence.sequence_id
     )
+    validate_pair_selection_witness(
+        evidence.pair_witness_bytes,
+        evidence.modes[0].pair_index_bytes,
+        evidence.sequence_index,
+        evidence.sequence_id,
+    )
     if evidence.modes[1].pair_index_bytes != evidence.modes[0].pair_index_bytes:
         _fail("nullspace and Schur pair-index bytes differ")
     modes = tuple(
@@ -1843,8 +2134,17 @@ def assemble_sequence_artifact(
         )
 
     gt_rows = _ground_truth(evidence.ground_truth)
-    metric_files, metrics = _metric_artifacts(modes, gt_rows)
-    evaluator_commands = _validate_commands(evidence.commands_bytes, evidence.support_files)
+    metric_files, metrics = _metric_artifacts(
+        modes,
+        gt_rows,
+        evidence.sequence_index,
+        evidence.sequence_id,
+        evidence.direct_math_request_bytes,
+        evidence.direct_math_response_bytes,
+    )
+    evaluator_commands, direct_command = _validate_commands(
+        evidence.commands_bytes, evidence.support_files
+    )
     for run_index, (mode, command) in enumerate(zip(modes, evaluator_commands)):
         source = mode.source
         if (
@@ -1855,8 +2155,37 @@ def assemble_sequence_artifact(
             or command["stderr"] != source.evaluator_stderr_path
             or command["stdout_sha256"] != _sha(source.evaluator_stdout_bytes)
             or command["stderr_sha256"] != _sha(source.evaluator_stderr_bytes)
+            or command["argv"][0] != source.evaluator_launcher_path
+            or command["argv"][9] != source.evaluator_result_argument
         ):
             _fail(source.mode + " evaluator evidence does not join its command row")
+    direct_launcher = _absolute_normalized(
+        evidence.direct_math_launcher_path, "direct-math launcher"
+    )
+    direct_request_argument = _absolute_normalized(
+        evidence.direct_math_request_argument, "direct-math request argument"
+    )
+    direct_response_argument = _absolute_normalized(
+        evidence.direct_math_response_argument, "direct-math response argument"
+    )
+    if (
+        direct_command["sequence_index"] != evidence.sequence_index
+        or direct_command["argv"]
+        != [
+            direct_launcher,
+            "--input",
+            direct_request_argument,
+            "--output",
+            direct_response_argument,
+        ]
+        or direct_command["stdout"] != evidence.direct_math_stdout_path
+        or direct_command["stderr"] != evidence.direct_math_stderr_path
+        or direct_command["stdout_sha256"] != _sha(evidence.direct_math_stdout_bytes)
+        or direct_command["stderr_sha256"] != _sha(evidence.direct_math_stderr_bytes)
+        or os.path.basename(direct_request_argument) != "request.json"
+        or os.path.basename(direct_response_argument) != "response.json"
+    ):
+        _fail("direct-math evidence does not join its exact capsule command")
 
     if after_validation is not None:
         after_validation()
@@ -1873,6 +2202,7 @@ def assemble_sequence_artifact(
     fixed: Dict[str, bytes] = {
         "commands.jsonl": evidence.commands_bytes,
         "pair_index.jsonl": evidence.modes[0].pair_index_bytes,
+        PAIR_WITNESS_PATH: evidence.pair_witness_bytes,
     }
     for mode in modes:
         name = mode.source.mode
@@ -1887,6 +2217,7 @@ def assemble_sequence_artifact(
                 name + "_state.txt": mode.source.legacy_state_bytes,
                 name + "_deviation.txt": mode.source.legacy_deviation_bytes,
                 name + "_openvins_timing.csv": mode.source.legacy_timing_bytes,
+                mode.source.evaluator_result_path: mode.source.evaluator_result_bytes,
             }
         )
     fixed.update(metric_files)
@@ -1919,6 +2250,16 @@ def assemble_sequence_artifact(
             else:
                 _write_new(partial, relative, payload)
                 roles[relative] = "evaluator"
+    for relative, payload in (
+        (evidence.direct_math_stdout_path, evidence.direct_math_stdout_bytes),
+        (evidence.direct_math_stderr_path, evidence.direct_math_stderr_bytes),
+    ):
+        if relative in roles:
+            if _safe_path(partial, relative).read_bytes() != payload:
+                _fail("direct-math log bytes differ from retained command log")
+        else:
+            _write_new(partial, relative, payload)
+            roles[relative] = "direct_math"
 
     inventory = _file_records(partial, roles)
     provenance = _validate_provenance_base(evidence.provenance_without_inventory)
@@ -1939,6 +2280,13 @@ def assemble_sequence_artifact(
             "resolved_parameters_sha256": _sha(mode.canonical_parameters),
             "callback_trace_sha256": _sha(mode.source.callback_bytes),
             "trajectory_sha256": _sha(mode.source.trajectory_bytes),
+            "evaluator_result_path": mode.source.evaluator_result_path,
+            "evaluator_result_sha256": _sha(mode.source.evaluator_result_bytes),
+            "evaluator_archive_rmse_m": mode.source.evaluator_ate_m,
+            "evaluator_console_rmse": _parse_evaluator_rmse_token(
+                mode.source.evaluator_stdout_bytes, mode.source.mode + " evaluator"
+            ),
+            "evaluator_error_count": mode.evaluator_population_count,
             "processed_unique_pairs": coverage.processed_unique_pairs,
             "processing_fraction": coverage.processing_fraction,
             "first_selected_timestamp_ns": coverage.first_selected_timestamp_ns,
@@ -1969,6 +2317,8 @@ def assemble_sequence_artifact(
         "shared_timestamp_count": metrics["shared_timestamp_count"],
         "shared_timestamp_sha256": metrics["shared_timestamp_sha256"],
         "shared_population_sha256": metrics["shared_population_sha256"],
+        "direct_math_request_sha256": _sha(evidence.direct_math_request_bytes),
+        "direct_math_response_sha256": _sha(evidence.direct_math_response_bytes),
         "baseline_alignment": metrics["baseline_alignment"],
         "position_p95_m": metrics["position_p95_m"],
         "orientation_p95_deg": metrics["orientation_p95_deg"],
@@ -2047,49 +2397,206 @@ def make_tree_read_only(root: Path) -> None:
         os.close(descriptor)
 
 
-def _rename_noreplace(source: Path, destination: Path) -> None:
-    if source.parent != destination.parent:
-        _fail("final rename is not same-directory/same-filesystem")
+def _renameat2_noreplace(parent_fd: int, source_name: str, destination_name: str) -> None:
     libc = ctypes.CDLL(None, use_errno=True)
     renameat2 = getattr(libc, "renameat2", None)
     if renameat2 is None:
         _fail("renameat2(RENAME_NOREPLACE) is unavailable")
     renameat2.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
     renameat2.restype = ctypes.c_int
-    _fsync_directory(source.parent)
     result = renameat2(
-        -100,
-        os.fsencode(str(source)),
-        -100,
-        os.fsencode(str(destination)),
+        parent_fd,
+        os.fsencode(source_name),
+        parent_fd,
+        os.fsencode(destination_name),
         1,
     )
     if result != 0:
         error = ctypes.get_errno()
         if error == errno.EEXIST:
             _fail("final artifact already exists; overwrite is forbidden")
-        raise OSError(error, os.strerror(error), str(destination))
+        raise OSError(error, os.strerror(error), destination_name)
+
+
+def _directory_object_identity(value: os.stat_result) -> Tuple[int, int]:
+    return value.st_dev, value.st_ino
+
+
+def _stat_name(parent_fd: int, name: str) -> Optional[os.stat_result]:
     try:
-        _fsync_directory(destination.parent)
-    except BaseException as durability_error:
-        rollback = renameat2(
-            -100,
-            os.fsencode(str(destination)),
-            -100,
-            os.fsencode(str(source)),
-            1,
+        return os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def _held_name_state(
+    parent_fd: int,
+    source_name: str,
+    destination_name: str,
+    held_identity: Tuple[int, int],
+) -> Tuple[str, Optional[os.stat_result], Optional[os.stat_result]]:
+    source = _stat_name(parent_fd, source_name)
+    destination = _stat_name(parent_fd, destination_name)
+    source_is_held = source is not None and _directory_object_identity(source) == held_identity
+    destination_is_held = (
+        destination is not None and _directory_object_identity(destination) == held_identity
+    )
+    if source_is_held and destination is None:
+        return "source", source, destination
+    if destination_is_held and source is None:
+        return "destination", source, destination
+    return "indeterminate", source, destination
+
+
+def _publication_fsync(descriptor: int) -> None:
+    os.fsync(descriptor)
+
+
+def publish_sequence_noreplace(
+    source: Path,
+    destination: Path,
+    *,
+    rename_operation: Optional[Callable[[int, str, str], None]] = None,
+    fsync_operation: Optional[Callable[[int], None]] = None,
+) -> None:
+    """Publish one exact held sealed directory or restore its hidden name.
+
+    The source and parent descriptors remain live from pre-rename validation
+    through the durable post-rename check.  Every exception (including an
+    asynchronous exception raised after a completed syscall) is reconciled by
+    inode, then rolled back with no replacement.  If neither name can be proven
+    to be the sole exact held inode, an explicit indeterminate error replaces
+    any unsafe cleanup guess.
+    """
+
+    source = Path(source).absolute()
+    destination = Path(destination).absolute()
+    if rename_operation is None:
+        rename_operation = _renameat2_noreplace
+    if fsync_operation is None:
+        fsync_operation = _publication_fsync
+    if source.parent != destination.parent or source == destination:
+        _fail("final rename is not distinct same-directory/same-filesystem")
+    if not source.name or not destination.name:
+        _fail("publication basename is empty")
+    parent_fd = os.open(
+        str(source.parent),
+        os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+    )
+    source_fd = -1
+    committed = False
+    try:
+        parent_status = os.fstat(parent_fd)
+        parent_path_status = os.stat(str(source.parent), follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(parent_status.st_mode)
+            or _directory_object_identity(parent_status)
+            != _directory_object_identity(parent_path_status)
+            or parent_status.st_uid != os.geteuid()
+            or stat.S_IMODE(parent_status.st_mode) & 0o022
+        ):
+            _fail("sequence publication parent is not one held owner-controlled directory")
+        source_fd = os.open(
+            source.name,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=parent_fd,
         )
-        if rollback == 0:
+        held_status = os.fstat(source_fd)
+        source_status = os.stat(source.name, dir_fd=parent_fd, follow_symlinks=False)
+        held_identity = _directory_object_identity(held_status)
+        if (
+            not stat.S_ISDIR(held_status.st_mode)
+            or held_identity != _directory_object_identity(source_status)
+            or held_status.st_uid != os.geteuid()
+            or stat.S_IMODE(held_status.st_mode) != 0o555
+        ):
+            _fail("only the exact held read-only sequence partial may be published")
+        if _stat_name(parent_fd, destination.name) is not None:
+            _fail("final artifact already exists; overwrite is forbidden")
+        fsync_operation(source_fd)
+        fsync_operation(parent_fd)
+        try:
+            rename_operation(parent_fd, source.name, destination.name)
+            state, _, destination_status = _held_name_state(
+                parent_fd, source.name, destination.name, held_identity
+            )
+            if (
+                state != "destination"
+                or destination_status is None
+                or stat.S_IMODE(destination_status.st_mode) != 0o555
+                or _directory_object_identity(os.fstat(source_fd)) != held_identity
+            ):
+                _fail("sequence rename did not publish the exact held sealed inode")
+            fsync_operation(parent_fd)
+            state, _, destination_status = _held_name_state(
+                parent_fd, source.name, destination.name, held_identity
+            )
+            if (
+                state != "destination"
+                or destination_status is None
+                or stat.S_IMODE(destination_status.st_mode) != 0o555
+                or _directory_object_identity(os.fstat(source_fd)) != held_identity
+            ):
+                _fail("durable sequence destination differs from the exact held inode")
+            committed = True
+        except BaseException as original_error:
+            state, _, _ = _held_name_state(
+                parent_fd, source.name, destination.name, held_identity
+            )
+            if state == "source":
+                try:
+                    fsync_operation(parent_fd)
+                except BaseException as sync_error:
+                    raise PublicationIndeterminateError(
+                        "sequence publication failed and hidden-state durability is indeterminate: "
+                        + type(sync_error).__name__ + ": " + str(sync_error)
+                    ) from original_error
+                raise
+            if state != "destination":
+                raise PublicationIndeterminateError(
+                    "sequence publication failure left an irreconcilable held-inode namespace"
+                ) from original_error
+            rollback_error: Optional[BaseException] = None
             try:
-                _fsync_directory(source.parent)
-            except BaseException:
-                pass
-            raise durability_error
-        rollback_error = ctypes.get_errno()
-        raise SequenceRunnerError(
-            "final rename durability failed and rollback failed with errno {}"
-            .format(rollback_error)
-        ) from durability_error
+                rename_operation(parent_fd, destination.name, source.name)
+                fsync_operation(parent_fd)
+            except BaseException as exc:
+                rollback_error = exc
+            rollback_state, source_after, _ = _held_name_state(
+                parent_fd, source.name, destination.name, held_identity
+            )
+            if (
+                rollback_state != "source"
+                or source_after is None
+                or stat.S_IMODE(source_after.st_mode) != 0o555
+                or _directory_object_identity(os.fstat(source_fd)) != held_identity
+            ):
+                detail = "" if rollback_error is None else (
+                    ": " + type(rollback_error).__name__ + ": " + str(rollback_error)
+                )
+                raise PublicationIndeterminateError(
+                    "sequence publication rollback is indeterminate" + detail
+                ) from original_error
+            if rollback_error is not None:
+                raise PublicationIndeterminateError(
+                    "sequence publication rollback/durability raised after restoring the exact inode: "
+                    + type(rollback_error).__name__ + ": " + str(rollback_error)
+                ) from original_error
+            raise
+    finally:
+        # Descriptor close cannot undo a fully verified durable rename.  Do not
+        # turn a committed artifact into a false failure if a close wrapper is
+        # interrupted after the kernel has dropped the descriptor reference.
+        for descriptor in (source_fd, parent_fd):
+            if descriptor >= 0:
+                try:
+                    os.close(descriptor)
+                except BaseException:
+                    if not committed:
+                        # An active exception or precommit failure already owns
+                        # the authoritative outcome; close diagnostics are not a
+                        # namespace mutation and must not mask it.
+                        pass
 
 
 def _fsync_directory(path: Path) -> None:
@@ -2138,6 +2645,7 @@ def build_verify_seal(
         _fail("final artifact already exists; overwrite is forbidden")
     partial = Path(tempfile.mkdtemp(prefix="." + run_id + ".partial.", dir=str(parent)))
     os.chmod(str(partial), 0o700)
+    publication_started = False
     try:
         result = builder(partial)
         if not isinstance(result, AssemblyResult):
@@ -2150,10 +2658,16 @@ def build_verify_seal(
         after = _snapshot_tree(partial)
         if after != before:
             _fail("artifact bytes or modes changed during detached verification")
-        _rename_noreplace(partial, final)
+        publication_started = True
+        publish_sequence_noreplace(partial, final)
         return final, result
     except BaseException:
-        _cleanup_partial(partial)
+        # Before publication, the private partial is disposable.  Once the
+        # publication transaction starts, retain the authoritative hidden or
+        # indeterminate namespace for trusted failure handling; pathname-only
+        # cleanup must never guess after a rename/interruption boundary.
+        if not publication_started:
+            _cleanup_partial(partial)
         raise
 
 
@@ -2284,6 +2798,7 @@ __all__ = [
     "AssemblyResult",
     "GroundTruthPose",
     "ModeRunInput",
+    "PublicationIndeterminateError",
     "SequenceAssemblyInput",
     "SequenceRunnerError",
     "SupportFile",
@@ -2291,5 +2806,7 @@ __all__ = [
     "build_verify_seal",
     "detached_verifier",
     "make_tree_read_only",
+    "publish_sequence_noreplace",
     "run_authorized_sequence",
+    "validate_pair_selection_witness",
 ]

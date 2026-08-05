@@ -1816,7 +1816,10 @@ bool ov_msckf::CP2TraceJournalSink::ValidateAndEncode(
     const CP2RecordedUpdateEvent &record,
     std::vector<std::uint8_t> &frame) {
   const CP2LiveUpdateEvent &update = record.update;
-  if (!valid_terminal(update)) {
+  if (!valid_terminal(update) || !update.timing_endpoint_valid ||
+      update.timing_end_ns < update.timing_start_ns ||
+      update.duration_ns !=
+          update.timing_end_ns - update.timing_start_ns) {
     Reject(CP2TraceJournalFailure::kRecordInvariant);
     return false;
   }

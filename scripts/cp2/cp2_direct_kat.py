@@ -30,6 +30,7 @@ import cp2_f64_codec as f64_codec
 SCHEMA_VERSION = 1
 CODEC = "cp2_f64_known_answer_bundle_v1"
 EXPECTATION_RECORD_TYPE = "cp2_d_direct_kat_expectation"
+REQUEST_RECORD_TYPE = "cp2_d_direct_kat_request"
 RESPONSE_RECORD_TYPE = "cp2_d_direct_kat_response"
 REPEAT_COUNT = 2
 MAX_DOCUMENT_BYTES = 4 << 20
@@ -127,6 +128,9 @@ OUTPUT_SPECS = (
         ("translation", (3,)),
         ("source_singular_values", (3,)),
         ("source_rank_threshold", ()),
+        ("cross_covariance_singular_values", (3,)),
+        ("cross_covariance_rank_threshold", ()),
+        ("determinant_correction_sign", ()),
         ("determinant", ()),
         ("orthogonality_error_frobenius", ()),
     ),
@@ -135,6 +139,9 @@ OUTPUT_SPECS = (
         ("translation", (3,)),
         ("source_singular_values", (3,)),
         ("source_rank_threshold", ()),
+        ("cross_covariance_singular_values", (3,)),
+        ("cross_covariance_rank_threshold", ()),
+        ("determinant_correction_sign", ()),
         ("determinant", ()),
         ("orthogonality_error_frobenius", ()),
     ),
@@ -152,6 +159,8 @@ OUTPUT_SPECS = (
 )
 
 FROZEN_OUTPUT_BITS = {
+    (0, "determinant_correction_sign"): "3ff0000000000000",
+    (1, "determinant_correction_sign"): "bff0000000000000",
     (3, "translation_rmse"): "419279a74590331c",
     (4, "boundary_p95"): "3fefab9a2960fd9e",
     (4, "unsorted_companion_p95"): "4021333333333333",
@@ -271,6 +280,13 @@ class DirectKatExpectation:
 
 
 @dataclass(frozen=True)
+class DirectKatRequest:
+    cases: Tuple[KatCase, ...]
+    canonical_bytes: bytes
+    sha256: str
+
+
+@dataclass(frozen=True)
 class DirectKatResponse:
     repeats: Tuple[Tuple[KatCase, ...], ...]
     canonical_bytes: bytes
@@ -339,6 +355,108 @@ def _parse_cases(value: Any, label: str) -> Tuple[KatCase, ...]:
         )
         cases.append(KatCase(case_index, expected_name, inputs, outputs))
     return tuple(cases)
+
+
+def _parse_request_cases(value: Any, label: str) -> Tuple[KatCase, ...]:
+    if type(value) is not list or len(value) != len(CASE_ORDER):
+        _fail(label + " must contain the exact five-case population")
+    cases = []
+    for case_index, (item, expected_name, input_specs) in enumerate(
+        zip(value, CASE_ORDER, INPUT_SPECS)
+    ):
+        record = _exact_object(item, ("case_index", "name", "inputs"), label + " case")
+        if _u64(record["case_index"], label + " case index") != case_index:
+            _fail(label + " case indices are not contiguous/in order")
+        if record["name"] != expected_name:
+            _fail(label + " case name/order differs")
+        if type(record["inputs"]) is not list or len(record["inputs"]) != len(input_specs):
+            _fail(label + " case input population differs")
+        inputs = tuple(
+            _parse_array(item_value, spec, "{} case {} input {}".format(label, case_index, index))
+            for index, (item_value, spec) in enumerate(zip(record["inputs"], input_specs))
+        )
+        if tuple(item.bits for item in inputs) != FROZEN_INPUT_BITS[case_index]:
+            _fail(label + " case input bits differ from the frozen request")
+        cases.append(KatCase(case_index, expected_name, inputs, ()))
+    return tuple(cases)
+
+
+def _array_record(value: KatOutput) -> Mapping[str, Any]:
+    return {"name": value.name, "shape": list(value.shape), "bits": list(value.bits)}
+
+
+def encode_request_from_expectation(document: Any) -> bytes:
+    """Derive the unique input-only preflight fixture from reviewed answers."""
+
+    expectation = decode_expectation(document)
+    payload = encode_frozen_request()
+    request = decode_request(payload)
+    if _case_input_bits(request.cases) != _case_input_bits(expectation.cases):
+        _fail("direct-KAT expectation inputs differ from the frozen request")
+    return payload
+
+
+def encode_frozen_request() -> bytes:
+    """Encode the one stack-independent five-case KAT input fixture."""
+
+    record = {
+        "schema_version": SCHEMA_VERSION,
+        "record_type": REQUEST_RECORD_TYPE,
+        "codec": CODEC,
+        "repeat_count": REPEAT_COUNT,
+        "case_order": list(CASE_ORDER),
+        "cases": [
+            {
+                "case_index": case.case_index,
+                "name": case.name,
+                "inputs": [_array_record(item) for item in case.inputs],
+            }
+            for case_index, (name, specs, populations) in enumerate(
+                zip(CASE_ORDER, INPUT_SPECS, FROZEN_INPUT_BITS)
+            )
+            for case in (
+                KatCase(
+                    case_index,
+                    name,
+                    tuple(
+                        KatOutput(input_name, shape, tuple(bits))
+                        for (input_name, shape), bits in zip(specs, populations)
+                    ),
+                    (),
+                ),
+            )
+        ],
+    }
+    payload = _canonical_bytes(record)
+    # Keep the encoder inside exactly the same parser invariants as an external
+    # capsule fixture.
+    decode_request(payload)
+    return payload
+
+
+def decode_request(document: Any) -> DirectKatRequest:
+    """Decode one exact input-only two-repeat direct-math preflight request."""
+
+    record = _parse_document(document, "direct-KAT request")
+    _exact_object(
+        record,
+        (
+            "schema_version", "record_type", "codec", "repeat_count",
+            "case_order", "cases",
+        ),
+        "direct-KAT request",
+    )
+    if type(record["schema_version"]) is not int or record["schema_version"] != SCHEMA_VERSION:
+        _fail("direct-KAT request schema version differs")
+    if record["record_type"] != REQUEST_RECORD_TYPE or record["codec"] != CODEC:
+        _fail("direct-KAT request identity differs")
+    if type(record["repeat_count"]) is not int or record["repeat_count"] != REPEAT_COUNT:
+        _fail("direct-KAT request repeat count must be integer two")
+    if record["case_order"] != list(CASE_ORDER):
+        _fail("direct-KAT request case-order projection differs")
+    cases = _parse_request_cases(record["cases"], "direct-KAT request")
+    canonical = bytes(document)
+    return DirectKatRequest(cases, canonical, hashlib.sha256(canonical).hexdigest())
 
 
 def _output_by_name(case: KatCase, name: str) -> KatOutput:
@@ -472,9 +590,11 @@ __all__ = [
     "CODEC",
     "DirectKatError",
     "DirectKatExpectation",
+    "DirectKatRequest",
     "DirectKatResponse",
     "DirectKatValidation",
     "EXPECTATION_RECORD_TYPE",
+    "REQUEST_RECORD_TYPE",
     "FROZEN_INPUT_BITS",
     "FROZEN_OUTPUT_BITS",
     "INPUT_SPECS",
@@ -482,6 +602,9 @@ __all__ = [
     "REPEAT_COUNT",
     "RESPONSE_RECORD_TYPE",
     "decode_expectation",
+    "decode_request",
     "decode_response",
+    "encode_frozen_request",
+    "encode_request_from_expectation",
     "validate_pair",
 ]

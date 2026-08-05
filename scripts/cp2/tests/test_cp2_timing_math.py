@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import fields, is_dataclass, replace
+import hashlib
 import itertools
 from pathlib import Path
 import sys
@@ -487,6 +488,98 @@ class ExactRatioGateTests(unittest.TestCase):
                 correct.right_cross_product,
                 False,
             )
+
+
+class PairAndCampaignBoundaryTests(unittest.TestCase):
+    @staticmethod
+    def pair(index, candidate_value=100):
+        timestamps = tuple(
+            10_000_000_000 + index * 1_000_000 + offset
+            for offset in (1, 2, 3, 4)
+        )
+        return timing_math.timing_pair_result(
+            index,
+            timestamps,
+            [100, 100, 100, 100],
+            [candidate_value] * 4,
+        )
+
+    def test_common_population_payload_and_hash_bind_pair_count_order_and_timestamps(self):
+        timestamps = (11, 22, 33)
+        payload = timing_math.canonical_common_population_payload(1, timestamps)
+        expected = bytearray(timing_math.TIMING_COMMON_DOMAIN)
+        expected.extend((1).to_bytes(8, "big"))
+        expected.extend((3).to_bytes(8, "big"))
+        for timestamp in timestamps:
+            expected.extend(timestamp.to_bytes(8, "big"))
+        self.assertEqual(payload, bytes(expected))
+        pair = timing_math.timing_pair_result(
+            1, timestamps, [100, 101, 102], [100, 101, 102]
+        )
+        self.assertEqual(
+            pair.common_payload_sha256,
+            int.from_bytes(hashlib.sha256(payload).digest(), "big"),
+        )
+        self.assertNotEqual(
+            payload,
+            timing_math.canonical_common_population_payload(2, timestamps),
+        )
+        with self.assertRaises(timing_math.TimingMathError):
+            timing_math.canonical_common_population_payload(1, (11, 33, 22))
+
+    def test_pair_binds_exact_common_population_quantiles_and_both_gates(self):
+        pair = self.pair(0, 110)
+        self.assertTrue(pair.passed)
+        self.assertTrue(pair.p50_gate.passed)
+        self.assertTrue(pair.p95_gate.passed)
+        self.assertEqual(pair.p50_gate.left_cross_product, pair.p50_gate.right_cross_product)
+        self.assertEqual(
+            pair.baseline_quantiles.p50.rank.sample_count,
+            len(pair.common_timestamps_ns),
+        )
+        with self.assertRaisesRegex(timing_math.TimingMathError, "counts differ"):
+            timing_math.timing_pair_result(
+                0, pair.common_timestamps_ns, [100] * 3, [100] * 4
+            )
+
+    def test_pair_rejects_forged_common_hash_and_nested_gate_decision(self):
+        pair = self.pair(0)
+        with self.assertRaisesRegex(timing_math.TimingMathError, "SHA-256"):
+            replace(pair, common_payload_sha256=pair.common_payload_sha256 ^ 1)
+        object.__setattr__(pair.p95_gate, "passed", False)
+        with self.assertRaisesRegex(timing_math.TimingMathError, "forged|invalid"):
+            timing_math.TimingPairResult(
+                pair.timing_pair_index,
+                pair.common_timestamps_ns,
+                pair.common_payload_sha256,
+                pair.baseline_quantiles,
+                pair.candidate_quantiles,
+                pair.p50_gate,
+                pair.p95_gate,
+                pair.passed,
+            )
+
+    def test_failed_pair_cannot_be_rescued_by_passing_median_summaries(self):
+        pairs = (self.pair(0, 100), self.pair(1, 116), self.pair(2, 100))
+        campaign = timing_math.timing_campaign_result(pairs)
+        self.assertFalse(pairs[1].passed)
+        self.assertEqual(campaign.median_p50.median_ratio, timing_math.ExactRatio(1, 1))
+        self.assertEqual(campaign.median_p95.median_ratio, timing_math.ExactRatio(1, 1))
+        self.assertFalse(campaign.every_pair_passed)
+        self.assertFalse(campaign.passed)
+        with self.assertRaisesRegex(timing_math.TimingMathError, "every-pair"):
+            replace(campaign, passed=True)
+
+    def test_campaign_requires_exact_order_and_revalidates_each_pair(self):
+        pairs = (self.pair(0), self.pair(1), self.pair(2))
+        campaign = timing_math.timing_campaign_result(pairs)
+        self.assertTrue(campaign.every_pair_passed)
+        self.assertTrue(campaign.passed)
+        with self.assertRaisesRegex(timing_math.TimingMathError, "indices"):
+            timing_math.timing_campaign_result((pairs[1], pairs[0], pairs[2]))
+        object.__setattr__(pairs[2], "passed", False)
+        with self.assertRaisesRegex(timing_math.TimingMathError, "forged|invalid"):
+            timing_math.timing_campaign_result(pairs)
 
 
 if __name__ == "__main__":

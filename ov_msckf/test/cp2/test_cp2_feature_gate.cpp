@@ -9,6 +9,7 @@
 
 #include <Eigen/Core>
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -175,15 +176,47 @@ TEST(CP2FeatureGate, NonfiniteInnovationPrecedesFactorization) {
   expect_zero_counters(result);
 }
 
-TEST(CP2FeatureGate, NonPositiveDefiniteInnovationFailsDefaultLowerLLT) {
+TEST(CP2FeatureGate, NegativeVarianceIsRejectedBeforeFactorization) {
   Eigen::VectorXd residual(1);
   residual << 0.0;
   const CP2FeatureGateResult result = evaluate_noise_only(residual, -1.0, 1.0, {{1, 1.0}});
 
-  EXPECT_EQ(result.stage, CP2FeatureGateStage::kFactorizationFailed);
+  EXPECT_EQ(result.stage, CP2FeatureGateStage::kInnovationNonfinite);
   EXPECT_FALSE(result.chi2_available);
   EXPECT_FALSE(result.lifecycle_accept);
   expect_zero_counters(result);
+}
+
+TEST(CP2FeatureGate,
+     InvalidVarianceCannotBeMaskedByPositiveStateCovariance) {
+  Eigen::MatrixXd H(1, 1);
+  H << 1.0;
+  Eigen::VectorXd residual(1);
+  residual << 1.0;
+  const Eigen::MatrixXd prior = Eigen::MatrixXd::Constant(1, 1, 4.0);
+  const std::vector<CP2FeatureGateLayoutBlock> layout{{0, 1, 0}};
+  const std::array<double, 5> invalid_variances{{
+      -1.0,
+      0.0,
+      std::numeric_limits<double>::quiet_NaN(),
+      std::numeric_limits<double>::infinity(),
+      -std::numeric_limits<double>::infinity(),
+  }};
+
+  for (const double sigma_px_sq : invalid_variances) {
+    SCOPED_TRACE(::testing::Message() << "sigma_px_sq=" << sigma_px_sq);
+    const CP2FeatureGateResult result = CP2FeatureGate::Evaluate(
+        CP2FeatureGateInput(H, residual, prior, layout, sigma_px_sq, 1.0),
+        {{1, 100.0}});
+
+    EXPECT_EQ(result.stage, CP2FeatureGateStage::kInnovationNonfinite);
+    EXPECT_FALSE(result.chi2_available);
+    EXPECT_FALSE(result.threshold_available);
+    EXPECT_FALSE(result.evidence_decision_available);
+    EXPECT_FALSE(result.evidence_accept);
+    EXPECT_FALSE(result.lifecycle_accept);
+    expect_zero_counters(result);
+  }
 }
 
 TEST(CP2FeatureGate, NonfiniteDotIsSolveOrNISFailure) {

@@ -498,6 +498,11 @@ PY
         echo "runner static invariant is missing: dependency source/notices" >&2
         self_status=1
     fi
+    if ! grep -F -- 'cp2_capsule_unit_import.py' "${BASH_SOURCE[0]}" >/dev/null ||
+       ! grep -F -- 'capsule_import_receipt.json' "${BASH_SOURCE[0]}" >/dev/null; then
+        echo "runner static invariant is missing: source-frozen capsule import" >&2
+        self_status=1
+    fi
     local cp2_c2_target
     for cp2_c2_target in test_cp2_updater_msckf_fault_injection \
                          test_cp2_commit_oracle test_cp2_commit_boundary; do
@@ -674,19 +679,19 @@ if [[ "${verifier_self_test_status}" -ne 0 ]]; then
     rm -f -- "${verifier_self_test_log}"
     die "independent verifier self-test failed; no evidence directory was created"
 fi
-if ! grep -Eq -- '^CP2_READINESS_ENGINE_PROTECTING_TESTS count=43 passed=true module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$' \
+if ! grep -Eq -- '^CP2_READINESS_ENGINE_PROTECTING_TESTS count=45 passed=true module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$' \
     "${verifier_self_test_log}"; then
     sed -n '1,240p' "${verifier_self_test_log}" >&2
     rm -f -- "${verifier_self_test_log}"
     die "readiness-engine protecting tests are absent from the evidenced verifier gate"
 fi
-if ! grep -Eq -- '^CP2_D_DATA_FREE_PROTECTING_TESTS count=78 passed=true module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$' \
+if ! grep -Eq -- '^CP2_D_DATA_FREE_PROTECTING_TESTS count=256 passed=true module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$' \
     "${verifier_self_test_log}"; then
     sed -n '1,320p' "${verifier_self_test_log}" >&2
     rm -f -- "${verifier_self_test_log}"
     die "CP2-D data-free protecting tests are absent from the evidenced verifier gate"
 fi
-if ! grep -Eq -- '^CP2_E_DATA_FREE_PROTECTING_TESTS count=37 passed=true module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$' \
+if ! grep -Eq -- '^CP2_E_DATA_FREE_PROTECTING_TESTS count=188 passed=true module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$' \
     "${verifier_self_test_log}"; then
     sed -n '1,360p' "${verifier_self_test_log}" >&2
     rm -f -- "${verifier_self_test_log}"
@@ -828,6 +833,14 @@ validate_canonical_nonsymlink_path "${final_dir}"
     die "no-overwrite final staging path already exists: ${final_dir}"
 mkdir -p -- "${run_dir}/binaries"
 mkdir -p -- "${run_dir}/THIRD_PARTY_NOTICES"
+if ! /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC PYTHONHASHSEED=0 \
+    /usr/bin/python3 -I -B "${source_space}/scripts/cp2/cp2_capsule_unit_import.py" \
+    --source-root "${source_space}" --unit-artifact "${run_dir}" >/dev/null; then
+    die "exact source-frozen CP2-D capsule import/preflight failed"
+fi
+[[ -f "${run_dir}/capsule_import_receipt.json" &&
+   ! -L "${run_dir}/capsule_import_receipt.json" ]] ||
+    die "CP2-D capsule import did not retain its exact receipt"
 install -m 0444 -- "${source_archive}" "${run_dir}/source_snapshot.tar"
 install -m 0444 -- "${ceres_archive}" "${run_dir}/ceres_source_snapshot.tar"
 install -m 0444 -- "${googletest_archive}" "${run_dir}/googletest_source_snapshot.tar"

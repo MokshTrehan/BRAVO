@@ -63,6 +63,7 @@ enum class CP2UpdaterTestFault : std::uint8_t {
   kInvalidatePostcommitPointerToken,
   kPhase3ValueMismatch,
   kPhase3Nonfinite,
+  kStartTimingClockFailure,
   kNoncommitDurationArithmeticFailure,
   kCommittedDurationArithmeticFailure,
   kCommitOracleArithmeticOverflow,
@@ -70,11 +71,14 @@ enum class CP2UpdaterTestFault : std::uint8_t {
   kBaselineProvenanceMismatch,
 };
 enum class CP2UpdaterTestStage : std::uint8_t {
+  kTimingStartSampled,
   kPhase0Capture,
   kLivePreviewCapture,
   kPhase0Projection,
   kPhase2Build,
   kPhase1Capture,
+  kEKFUpdateEntered,
+  kTimingEndSampled,
 };
 class CP2UpdaterTestAccess;
 #endif
@@ -139,11 +143,13 @@ struct CP2UpdateInvocationContext {
 /**
  * @brief Value-only terminal event for timing and later trace serialization.
  *
- * duration_ns ends before observer execution. On a committing invocation its
- * endpoint is sampled immediately after StateHelper::EKFUpdate returns. The
- * optional shadow payload was fully formed before that sole live commit. The
- * diagnostic observer receives this value after the timing endpoint. In
- * authoritative mode it is also embedded in the immutable owning record.
+ * timing_start_ns is sampled with std::chrono::steady_clock as the first operation
+ * at update entry. timing_end_ns is sampled immediately after
+ * StateHelper::EKFUpdate returns on a commit, or as the last timed operation
+ * before an early return. duration_ns is the checked exact u64 subtraction of
+ * those endpoints. The diagnostic observer runs only after the endpoint. Any
+ * unavailable, malformed, overflowing, or reverse-ordered clock sample makes
+ * timing_endpoint_valid false and is ineligible for evidence.
  */
 struct CP2LiveUpdateEvent {
   bool invocation_context_available = false;
@@ -151,7 +157,10 @@ struct CP2LiveUpdateEvent {
   std::uint64_t pair_index = 0U;
   std::uint64_t camera_timestamp_ns = 0U;
   std::uint64_t invocation_id = 0U;
-  std::uint64_t duration_ns = 0;
+  bool timing_endpoint_valid = false;
+  std::uint64_t timing_start_ns = 0U;
+  std::uint64_t timing_end_ns = 0U;
+  std::uint64_t duration_ns = 0U;
   CP2UpdateTerminalStatus terminal_status = CP2UpdateTerminalStatus::kInternalFailure;
   CP2UpdateTerminalSubreason terminal_subreason = CP2UpdateTerminalSubreason::kTraceInvariantFailure;
   std::uint64_t input_feature_count = 0;
@@ -405,10 +414,23 @@ private:
       cp2_test_stages[cp2_test_stage_count++] = stage;
     }
   }
+  void cp2_test_note_timing_start() noexcept {
+    ++cp2_test_timing_start_count;
+    cp2_test_note_stage(CP2UpdaterTestStage::kTimingStartSampled);
+  }
+  void cp2_test_note_timing_end() noexcept {
+    ++cp2_test_timing_end_count;
+    cp2_test_note_stage(CP2UpdaterTestStage::kTimingEndSampled);
+  }
   CP2UpdaterTestFault cp2_test_fault = CP2UpdaterTestFault::kNone;
   std::uint64_t cp2_test_raw_assembly_calls = 0U;
-  std::array<CP2UpdaterTestStage, 8U> cp2_test_stages{};
+  std::array<CP2UpdaterTestStage, 16U> cp2_test_stages{};
   std::size_t cp2_test_stage_count = 0U;
+  std::size_t cp2_test_timing_start_count = 0U;
+  std::size_t cp2_test_timing_end_count = 0U;
+  std::size_t cp2_test_normal_exit_count = 0U;
+  std::size_t cp2_test_verified_timing_exit_count = 0U;
+  bool cp2_test_timing_exit_violation = false;
 #endif
 };
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Synthetic protecting tests for the strict CP2-D evo-result transport."""
+"""Synthetic protection for the strict CP2-D equivalent-result transport."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import zlib
 CP2_DIRECTORY = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CP2_DIRECTORY))
 
-import cp2_evo_result as evo_result  # noqa: E402
+import cp2_evaluator_result as evo_result  # noqa: E402
 
 
 def stats_document(**changes):
@@ -126,6 +126,66 @@ def next_up(value):
     return struct.unpack(">d", struct.pack(">Q", bits + 1))[0]
 
 
+def npy_f64(values):
+    header = repr(
+        {"descr": "<f8", "fortran_order": False, "shape": (len(values),)}
+    ).encode("latin1")
+    padding = (-((10 + len(header) + 1) % 64)) % 64
+    header += b" " * padding + b"\n"
+    return (
+        b"\x93NUMPY"
+        + bytes((1, 0))
+        + struct.pack("<H", len(header))
+        + header
+        + b"".join(struct.pack("<d", value) for value in values)
+    )
+
+
+def exact_statistics(errors):
+    errors = tuple(errors)
+    total = 0.0
+    for value in errors:
+        total = total + value
+    mean = total / float(len(errors))
+    sse = 0.0
+    for value in errors:
+        sse = sse + value * value
+    variance_sum = 0.0
+    for value in errors:
+        variance_sum = variance_sum + (value - mean) * (value - mean)
+    ordered = sorted(errors)
+    if len(ordered) & 1:
+        median = ordered[len(ordered) // 2]
+    else:
+        median = (ordered[len(ordered) // 2 - 1] + ordered[len(ordered) // 2]) / 2.0
+    return {
+        "max": ordered[-1],
+        "mean": mean,
+        "median": median,
+        "min": ordered[0],
+        "rmse": math.sqrt(sse / float(len(errors))),
+        "sse": sse,
+        "std": math.sqrt(variance_sum / float(len(errors))),
+    }
+
+
+def full_result_archive(errors=(0.0, 0.1, 0.2, 0.3)):
+    info = evo_result.EXPECTED_INFO_JSON
+    archive, _ = build_zip(
+        [
+            ("info.json", info),
+            (
+                "stats.json",
+                json.dumps(
+                    exact_statistics(errors), separators=(",", ":"), sort_keys=True
+                ).encode("utf-8"),
+            ),
+            ("error_array.npy", npy_f64(errors)),
+        ]
+    )
+    return archive
+
+
 class ValidArchiveTests(unittest.TestCase):
     def test_store_archive_returns_exact_seven_statistics(self):
         archive, _ = build_zip([("stats.json", stats_document())])
@@ -151,6 +211,113 @@ class ValidArchiveTests(unittest.TestCase):
             ]
         )
         self.assertEqual(evo_result.parse_evo_result_zip(archive).max, 0.5)
+
+    def test_full_archive_retains_exact_error_population_count_and_bits(self):
+        result = evo_result.parse_evo_result_archive(
+            full_result_archive((0.0, 0.125, 0.25, 0.5))
+        )
+        self.assertEqual(result.error_count, 4)
+        self.assertEqual(result.error_bits[1], struct.pack(">d", 0.125).hex())
+        self.assertEqual(
+            result.member_names, ("error_array.npy", "info.json", "stats.json")
+        )
+
+    def test_full_archive_rejects_missing_extra_or_malformed_error_population(self):
+        valid = full_result_archive()
+        info = evo_result.EXPECTED_INFO_JSON
+        missing, _ = build_zip([("info.json", info), ("stats.json", stats_document())])
+        extra, _ = build_zip(
+            [
+                ("info.json", info),
+                ("stats.json", stats_document()),
+                ("error_array.npy", npy_f64((0.0,))),
+                ("extra.txt", b"x"),
+            ]
+        )
+        bad_npy, _ = build_zip(
+            [
+                ("info.json", info),
+                ("stats.json", stats_document()),
+                ("error_array.npy", npy_f64((0.0,))[:-1]),
+            ]
+        )
+        for archive in (missing, extra, bad_npy):
+            with self.subTest(size=len(archive)), self.assertRaises(evo_result.EvoResultError):
+                evo_result.parse_evo_result_archive(archive)
+        self.assertEqual(evo_result.parse_evo_result_archive(valid).error_count, 4)
+
+    def test_full_archive_rejects_stat_or_error_population_substitution(self):
+        errors = (0.0, 0.125, 0.25, 0.5)
+        info = evo_result.EXPECTED_INFO_JSON
+        statistics = exact_statistics(errors)
+        changed_statistics = dict(statistics)
+        changed_statistics["rmse"] = next_up(statistics["rmse"])
+        changed_stats_archive, _ = build_zip(
+            [
+                ("info.json", info),
+                (
+                    "stats.json",
+                    json.dumps(changed_statistics, separators=(",", ":"), sort_keys=True).encode(
+                        "utf-8"
+                    ),
+                ),
+                ("error_array.npy", npy_f64(errors)),
+            ]
+        )
+        changed_errors_archive, _ = build_zip(
+            [
+                ("info.json", info),
+                (
+                    "stats.json",
+                    json.dumps(statistics, separators=(",", ":"), sort_keys=True).encode(
+                        "utf-8"
+                    ),
+                ),
+                ("error_array.npy", npy_f64((0.0, 0.125, 0.25, next_up(0.5)))),
+            ]
+        )
+        for archive in (changed_stats_archive, changed_errors_archive):
+            with self.assertRaisesRegex(
+                evo_result.EvoResultError, "differs from the retained error population"
+            ):
+                evo_result.parse_evo_result_archive(archive)
+
+    def test_full_archive_rejects_every_info_identity_or_encoding_substitution(self):
+        errors = (0.0, 0.125, 0.25, 0.5)
+        statistics = json.dumps(
+            exact_statistics(errors), separators=(",", ":"), sort_keys=True
+        ).encode("ascii")
+        mutations = (
+            evo_result.EXPECTED_INFO_JSON.replace(
+                b"ape_translation_rmse", b"ape_translation_rmse_changed"
+            ),
+            evo_result.EXPECTED_INFO_JSON.replace(
+                b"ground-truth common aligned population", b"different reference"
+            ),
+            b" " + evo_result.EXPECTED_INFO_JSON,
+            evo_result.EXPECTED_INFO_JSON + b"\n",
+            json.dumps(
+                {
+                    "label": "ape_translation_rmse",
+                    "est_name": "estimate common aligned population",
+                    "ref_name": "ground-truth common aligned population",
+                    "title": "APE w.r.t. translation part (m)",
+                },
+                separators=(",", ":"),
+            ).encode("ascii"),
+        )
+        for info in mutations:
+            archive, _ = build_zip(
+                [
+                    ("error_array.npy", npy_f64(errors)),
+                    ("info.json", info),
+                    ("stats.json", statistics),
+                ]
+            )
+            with self.subTest(info=info), self.assertRaisesRegex(
+                evo_result.EvaluatorResultError, "equivalent-evaluator identity"
+            ):
+                evo_result.parse_evaluator_result_archive(archive)
 
 
 class ContainerBoundaryTests(unittest.TestCase):
@@ -396,9 +563,6 @@ class StatsPayloadTests(unittest.TestCase):
     def test_impossible_statistic_orderings_are_rejected(self):
         impossible = (
             stats_document(min=0.4, median=0.2),
-            stats_document(mean=0.75),
-            stats_document(rmse=0.75),
-            stats_document(mean=0.25, rmse=next_up(0.0)),
             stats_document(max=0.0, mean=0.0, median=0.0, min=0.0, rmse=0.0, sse=1.0, std=0.0),
         )
         for payload in impossible:
@@ -423,10 +587,31 @@ class StatsPayloadTests(unittest.TestCase):
         inverted, _ = build_zip(
             [("stats.json", stats_document(mean=mean, median=mean, rmse=one_ulp_below))]
         )
-        with self.assertRaisesRegex(
-            evo_result.EvoResultError, "RMSE is below the arithmetic mean"
+        self.assertEqual(
+            evo_result.parse_evo_result_zip(inverted).rmse,
+            one_ulp_below,
+        )
+
+        # Ordered binary64 arithmetic can invert real-arithmetic inequalities
+        # by one ULP.  Exact reconstruction from the retained error population,
+        # not an unsafe precheck, is normative for both counterexamples.
+        for value_text in (
+            "0x1.bd2ed76b7c2a4p-71",
+            "0x1.bf21b409131d2p-58",
         ):
-            evo_result.parse_evo_result_zip(inverted)
+            value = float.fromhex(value_text)
+            result = evo_result.parse_evo_result_archive(
+                full_result_archive((value, value, value))
+            )
+            reconstructed = evo_result._statistics_from_error_bits(
+                (struct.pack(">d", value).hex(),) * 3
+            )
+            for key in evo_result.STAT_KEYS:
+                self.assertEqual(
+                    struct.pack(">d", getattr(result.statistics, key)),
+                    struct.pack(">d", getattr(reconstructed, key)),
+                    (value_text, key),
+                )
 
 
 class NumericJoinTests(unittest.TestCase):

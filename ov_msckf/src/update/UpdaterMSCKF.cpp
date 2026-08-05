@@ -27,6 +27,7 @@
 #include "CP2CompositeState.h"
 #include "CP2FeatureGate.h"
 #include "CP2StateTraceCodec.h"
+#include "CP2TimingClock.h"
 #include "CP2TraceCodec.h"
 #include "SchurUpdate.h"
 #include "UpdaterHelper.h"
@@ -46,16 +47,13 @@
 
 #include <Eigen/Cholesky>
 
-#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <limits>
-#include <ratio>
 #include <stdexcept>
-#include <type_traits>
 #include <utility>
 
 using namespace ov_core;
@@ -64,48 +62,14 @@ using namespace ov_msckf;
 
 namespace {
 
-static_assert(std::ratio_equal<std::chrono::steady_clock::period, std::nano>::value,
-              "CP2 requires a nanosecond steady clock");
-static_assert(std::numeric_limits<std::chrono::steady_clock::duration::rep>::is_signed,
-              "CP2 steady-clock tick count must be signed");
-static_assert(std::numeric_limits<std::chrono::steady_clock::duration::rep>::is_integer,
-              "CP2 steady-clock tick count must be integral");
-static_assert(std::numeric_limits<std::chrono::steady_clock::duration::rep>::digits <=
-                  std::numeric_limits<std::uint64_t>::digits,
-              "CP2 steady-clock tick count must fit u64");
-
-template <typename SignedRep>
-std::uint64_t cp2_negative_tick_magnitude(SignedRep value) noexcept {
-  static_assert(std::numeric_limits<SignedRep>::is_signed,
-                "CP2 tick magnitude requires a signed representation");
-  // -(min + 1) is representable; adding one after conversion avoids signed
-  // overflow at the most-negative tick value.
-  return static_cast<std::uint64_t>(-(value + SignedRep{1})) + UINT64_C(1);
-}
-
-bool capture_cp2_duration_ns(const std::chrono::steady_clock::time_point &start,
-                             const std::chrono::steady_clock::time_point &end,
-                             std::uint64_t &duration_ns) noexcept {
-  using TickRep = std::chrono::steady_clock::duration::rep;
-  const TickRep start_ticks = start.time_since_epoch().count();
-  const TickRep end_ticks = end.time_since_epoch().count();
-  if (end_ticks < start_ticks) {
-    duration_ns = 0;
-    return false;
-  }
-  if (start_ticks >= TickRep{0}) {
-    duration_ns = static_cast<std::uint64_t>(end_ticks) -
-                  static_cast<std::uint64_t>(start_ticks);
-    return true;
-  }
-  if (end_ticks < TickRep{0}) {
-    duration_ns = cp2_negative_tick_magnitude(start_ticks) -
-                  cp2_negative_tick_magnitude(end_ticks);
-    return true;
-  }
-  return cp2_checked_add_u64(cp2_negative_tick_magnitude(start_ticks),
-                             static_cast<std::uint64_t>(end_ticks),
-                             duration_ns);
+bool capture_cp2_duration_ns(const CP2SteadyClockEndpoint &start,
+                             const CP2SteadyClockEndpoint &end,
+                             CP2LiveUpdateEvent &event) noexcept {
+  event.timing_start_ns = start.nanoseconds;
+  event.timing_end_ns = end.nanoseconds;
+  event.timing_endpoint_valid = cp2_steady_clock_duration(
+      start, end, event.duration_ns);
+  return event.timing_endpoint_valid;
 }
 
 bool cp2_size_to_u64(std::size_t value, std::uint64_t &output) noexcept {
@@ -284,12 +248,6 @@ cp2_proposal_payload(const MSCKFUpdatePreviewResult &proposal) {
   return payload;
 }
 
-class CP2SteadyClock final {
-public:
-  using time_point = std::chrono::steady_clock::time_point;
-  time_point now() noexcept { return std::chrono::steady_clock::now(); }
-};
-
 class CP2UpdateActivityGuard {
 public:
   explicit CP2UpdateActivityGuard(std::atomic<bool> &active) noexcept : active_(active) {}
@@ -301,6 +259,49 @@ public:
 private:
   std::atomic<bool> &active_;
 };
+
+#if defined(OV_MSCKF_CP2_TESTING)
+// Executable protecting invariant: every nonexceptional updater exit after a
+// valid start sample must have sampled exactly one terminal endpoint. The
+// endpoint itself is noted at each clock boundary; this destructor observes
+// only the already-completed invocation and never enters the timed interval.
+class CP2UpdaterTimingExitAudit final {
+public:
+  CP2UpdaterTimingExitAudit(
+      const std::size_t &timing_end_count,
+      std::size_t &normal_exit_count,
+      std::size_t &verified_timing_exit_count,
+      bool &timing_exit_violation) noexcept
+      : timing_end_count_(timing_end_count),
+        initial_timing_end_count_(timing_end_count),
+        normal_exit_count_(normal_exit_count),
+        verified_timing_exit_count_(verified_timing_exit_count),
+        timing_exit_violation_(timing_exit_violation) {}
+
+  ~CP2UpdaterTimingExitAudit() noexcept {
+    if (std::uncaught_exception()) {
+      return;
+    }
+    ++normal_exit_count_;
+    if (timing_end_count_ == initial_timing_end_count_ + 1U) {
+      ++verified_timing_exit_count_;
+      return;
+    }
+    timing_exit_violation_ = true;
+  }
+
+  CP2UpdaterTimingExitAudit(const CP2UpdaterTimingExitAudit &) = delete;
+  CP2UpdaterTimingExitAudit &
+  operator=(const CP2UpdaterTimingExitAudit &) = delete;
+
+private:
+  const std::size_t &timing_end_count_;
+  const std::size_t initial_timing_end_count_;
+  std::size_t &normal_exit_count_;
+  std::size_t &verified_timing_exit_count_;
+  bool &timing_exit_violation_;
+};
+#endif
 
 std::vector<CP2FeatureGateLayoutBlock>
 capture_cp2_feature_layout(const std::vector<std::shared_ptr<Type>> &order) {
@@ -482,7 +483,8 @@ bool UpdaterMSCKF::set_cp2_update_callback(CP2UpdateCallback callback, bool enab
     installed_callback = std::make_shared<const CP2UpdateCallback>(std::move(callback));
   }
   const std::lock_guard<std::mutex> lock(cp2_callback_mutex);
-  if (cp2_callback_configuration_frozen) {
+  if (cp2_callback_configuration_frozen ||
+      cp2_update_active.load(std::memory_order_acquire)) {
     return false;
   }
   cp2_update_callback = std::move(installed_callback);
@@ -497,7 +499,8 @@ bool UpdaterMSCKF::set_cp2_recorded_sink(
     return false;
   }
   const std::lock_guard<std::mutex> lock(cp2_callback_mutex);
-  if (cp2_callback_configuration_frozen) {
+  if (cp2_callback_configuration_frozen ||
+      cp2_update_active.load(std::memory_order_acquire)) {
     return false;
   }
   cp2_recorded_sink = std::move(sink);
@@ -536,7 +539,32 @@ CP2TraceFatalReason UpdaterMSCKF::cp2_trace_fatal_reason() const noexcept {
 
 void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_ptr<Feature>> &feature_vec) {
 
-  const std::chrono::steady_clock::time_point cp2_update_start = std::chrono::steady_clock::now();
+  // This must remain the first operation at updater entry. The endpoint is a
+  // value-only, checked std::chrono::steady_clock nanosecond sample.
+  CP2SteadyClockEndpoint cp2_update_start =
+      cp2_steady_clock_now();
+#if defined(OV_MSCKF_CP2_TESTING)
+  cp2_test_note_timing_start();
+  const CP2UpdaterTimingExitAudit cp2_timing_exit_audit(
+      cp2_test_timing_end_count, cp2_test_normal_exit_count,
+      cp2_test_verified_timing_exit_count,
+      cp2_test_timing_exit_violation);
+  if (cp2_test_fault == CP2UpdaterTestFault::kStartTimingClockFailure) {
+    cp2_update_start.valid = false;
+  }
+#endif
+  // Freeze the callback/sink configuration immediately after the mandatory
+  // first clock sample. This first-attempt freeze is permanent even when the
+  // endpoint or a pre-existing fatal latch makes this invocation throw before
+  // it can claim the active updater state.
+  {
+    const std::lock_guard<std::mutex> lock(cp2_callback_mutex);
+    cp2_callback_configuration_frozen = true;
+  }
+  if (!cp2_update_start.valid) {
+    latch_cp2_trace_fatal(CP2TraceFatalReason::kArithmeticInvariant,
+                          "CP2 steady-clock start endpoint is unavailable");
+  }
   const CP2TraceFatalReason preexisting_fatal = cp2_trace_fatal_reason();
   if (preexisting_fatal != CP2TraceFatalReason::kNone) {
     throw CP2TraceFatalError(preexisting_fatal,
@@ -557,7 +585,6 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   std::uint64_t invocation_id = 0U;
   {
     const std::lock_guard<std::mutex> lock(cp2_callback_mutex);
-    cp2_callback_configuration_frozen = true;
     update_callback = cp2_update_callback;
     recorded_sink = cp2_recorded_sink;
     shadow_requested = cp2_shadow_enabled;
@@ -660,12 +687,17 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
                     immutable_record->update.baseline_commit_occurred);
   };
 
-  const auto finish_update = [&notify_observer, &update_event,
+  const auto finish_update = [this, &notify_observer, &update_event,
                               &cp2_update_start](CP2UpdateTerminalStatus status,
                                                  CP2UpdateTerminalSubreason terminal_subreason) {
-    const std::chrono::steady_clock::time_point cp2_update_end = std::chrono::steady_clock::now();
+    const CP2SteadyClockEndpoint cp2_update_end =
+        cp2_steady_clock_now();
+#if defined(OV_MSCKF_CP2_TESTING)
+    cp2_test_note_timing_end();
+#endif
     const bool duration_valid =
-        capture_cp2_duration_ns(cp2_update_start, cp2_update_end, update_event.duration_ns);
+        capture_cp2_duration_ns(cp2_update_start, cp2_update_end,
+                                update_event);
     update_event.terminal_status = duration_valid ? status : CP2UpdateTerminalStatus::kInternalFailure;
     update_event.terminal_subreason =
         duration_valid ? terminal_subreason : CP2UpdateTerminalSubreason::kTraceInvariantFailure;
@@ -676,17 +708,20 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
       [this, &update_event, &recorded_event, &cp2_update_start,
        &publish_record](CP2UpdateTerminalStatus status,
                         CP2UpdateTerminalSubreason terminal_subreason) {
+        const CP2SteadyClockEndpoint cp2_update_end =
+            cp2_steady_clock_now();
+#if defined(OV_MSCKF_CP2_TESTING)
+        cp2_test_note_timing_end();
+#endif
         update_event.terminal_status = status;
         update_event.terminal_subreason = terminal_subreason;
-        const std::chrono::steady_clock::time_point cp2_update_end =
-            std::chrono::steady_clock::now();
         const bool duration_valid =
 #if defined(OV_MSCKF_CP2_TESTING)
             cp2_test_fault !=
                 CP2UpdaterTestFault::kNoncommitDurationArithmeticFailure &&
 #endif
             capture_cp2_duration_ns(cp2_update_start, cp2_update_end,
-                                    update_event.duration_ns);
+                                    update_event);
         if (!duration_valid) {
           latch_cp2_trace_fatal(CP2TraceFatalReason::kArithmeticInvariant,
                                 "CP2 noncommit duration is not representable");
@@ -1023,15 +1058,18 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
             recorded_baseline_provenance_equal;
 
         // The endpoint is the last timed estimator operation for a noncommit.
-        const std::chrono::steady_clock::time_point cp2_update_end =
-            std::chrono::steady_clock::now();
+        const CP2SteadyClockEndpoint cp2_update_end =
+            cp2_steady_clock_now();
+#if defined(OV_MSCKF_CP2_TESTING)
+        cp2_test_note_timing_end();
+#endif
         const bool duration_valid =
 #if defined(OV_MSCKF_CP2_TESTING)
             cp2_test_fault !=
                 CP2UpdaterTestFault::kNoncommitDurationArithmeticFailure &&
 #endif
             capture_cp2_duration_ns(cp2_update_start, cp2_update_end,
-                                    update_event.duration_ns);
+                                    update_event);
         if (!duration_valid) {
           latch_cp2_trace_fatal(CP2TraceFatalReason::kArithmeticInvariant,
                                 "CP2 noncommit duration is not representable");
@@ -1608,11 +1646,17 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     // Ordinary OpenVINS/diagnostic mode retains the single direct commit and
     // carries no composite or authoritative-sink overhead.
     live_commit_started = true;
+#if defined(OV_MSCKF_CP2_TESTING)
+    cp2_test_note_stage(CP2UpdaterTestStage::kEKFUpdateEntered);
+#endif
     StateHelper::EKFUpdate(state, Hx_order_big, Hx_big, res_big, R_big);
-    const std::chrono::steady_clock::time_point cp2_update_end =
-        std::chrono::steady_clock::now();
+    const CP2SteadyClockEndpoint cp2_update_end =
+        cp2_steady_clock_now();
+#if defined(OV_MSCKF_CP2_TESTING)
+    cp2_test_note_timing_end();
+#endif
     const bool duration_valid = capture_cp2_duration_ns(
-        cp2_update_start, cp2_update_end, update_event.duration_ns);
+        cp2_update_start, cp2_update_end, update_event);
     update_event.terminal_status =
         duration_valid ? CP2UpdateTerminalStatus::kCommittedCounted
                        : CP2UpdateTerminalStatus::kInternalFailure;
@@ -1797,8 +1841,11 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     return CP2CompositeStateAdapter::PointerGraphMatches(
         state, phase0_capture.pointer_graph);
   };
-  auto sole_live_commit = [&state, &Hx_order_big, &Hx_big, &res_big,
+  auto sole_live_commit = [this, &state, &Hx_order_big, &Hx_big, &res_big,
                            &R_big]() {
+#if defined(OV_MSCKF_CP2_TESTING)
+    cp2_test_note_stage(CP2UpdaterTestStage::kEKFUpdateEntered);
+#endif
     StateHelper::EKFUpdate(state, Hx_order_big, Hx_big, res_big, R_big);
   };
   CP2SteadyClock commit_clock;
@@ -1818,7 +1865,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
                ? CP2PostcommitFillStatus::kSucceeded
                : CP2PostcommitFillStatus::kFailed;
   };
-  CP2CommitBoundaryOutput<std::chrono::steady_clock::time_point>
+  CP2CommitBoundaryOutput<CP2SteadyClockEndpoint>
       commit_boundary_output;
 
   // Set only the exception-classification guard before entering the frozen
@@ -1829,6 +1876,11 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
       CP2CommitBoundary::run(final_pointer_proof, sole_live_commit,
                              commit_clock, postcommit_fill_and_handoff,
                              commit_boundary_output);
+#if defined(OV_MSCKF_CP2_TESTING)
+  if (commit_boundary_status != CP2CommitBoundaryStatus::kProofRejected) {
+    cp2_test_note_timing_end();
+  }
+#endif
 
   if (commit_boundary_status == CP2CommitBoundaryStatus::kProofRejected) {
     live_commit_started = false;
@@ -1878,7 +1930,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
 #endif
       capture_cp2_duration_ns(cp2_update_start,
                               commit_boundary_output.endpoint,
-                              update_event.duration_ns);
+                              update_event);
   if (!committed_duration_valid) {
     latch_cp2_trace_fatal(CP2TraceFatalReason::kArithmeticInvariant,
                           "CP2 committed duration is not representable");

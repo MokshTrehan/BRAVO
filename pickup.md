@@ -2,262 +2,195 @@
 
 Last updated: 2026-08-04 (America/Toronto)
 
-## Exact resume state
+## Outcome at this handoff
+
+CP2 is **not complete** and no CP2-C, CP2-D, or CP2-E formal/recorded result
+has been claimed.  The branch now contains a substantially complete,
+data-free CP2-C/D implementation candidate and a fail-closed CP2-E evidence
+candidate.  The mathematical and synthetic diagnostics described below are
+green.  CP2-E still has source/runtime and host-feasibility blockers, so the
+final source freeze, the one authorized formal unit gate, and the serialized
+C -> D -> E recorded chain were deliberately not started.
 
 - Repository: `/home/moksh/newSlam variant`
 - Branch: `schurvio-lite/cp2-one-pass`
-- Approval-bound source-freeze commit:
-  `c0dfecfd61e3ac067c4020bb61ab6421df926500`
-- Approval-bound source-freeze tree:
-  `bd5372514f62cae4e7505e8008ba01b76e9b8520`
-- The worktree was clean at source freeze, formal unit-gate invocation, and the
-  single authorized CP2-C process invocation. Any later handoff-only commit is
-  not the tested source identity and cannot reuse this unit artifact.
-- Readiness-failure handoff commit:
-  `99cb8ebcca0513d18898d4ffe5854cacc04b01c4`, tree
-  `958040dcc4bc808eb03bbb4bf91474c01d5248e2`. It was pushed, and local and
-  remote branch tips matched at that identity before this pickup-only update.
+- Starting authorization commit: `1218d3fb73066760f099f87c621fe607f9de8b63`
 - Pinned OpenVINS upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
-- CP2-A and CP2-B are passed. CP2-C, CP2-D, and CP2-E are not passed.
-- The complete CP2-C detached-readiness replacement in
-  `docs/cp2_c_detached_readiness_binding_clarification_proposed.md` was
-  approved as reviewed at commit
-  `0d71fee98499a10df4e92176709c1afe14077f90`, with no exceptions.
-- `project/cp2_c_detached_readiness_binding_approval.json` records that human
-  approval and is source-bound with all executable bindings at `c0dfecfd...`.
-- Moksh exactly acknowledged and accepted the expanded, quarantined incident
-  disposition reviewed at commit
-  `46b3010ad5e77ea61f9a571ccb7842ea2e0f1979`, with no exceptions and with the
-  prohibition on every exposed or incident-derived influence preserved.
-- Exact acknowledged incident-log identity at `46b3010...`: Git blob
-  `644f35ba9e371ae27efc2827e146f8b69dab70fe`, SHA-256
-  `5d1f8aa1728bedd6141a55c756ef9dc3bfd2d52e7480208c27a94324b321af56`.
-  `project/cp2_predata_incident_disposition_approval.json` records the exact
-  statement with Git blob `c6c1a1b29324b31152cf038d6375fc216ca6f57c` and
-  SHA-256 `80d227032c77a060d4bae5b48c869cc207c999ab7e2f2259bc884767ca11412e`.
-  The record and its governing bindings are source-bound at `c0dfecfd...`.
-- The sanitized exact-HEAD unit gate was invoked exactly once at `c0dfecfd...`
-  and exited `0`. It published the immutable unit-only staging artifact
-  `/home/moksh/newSlam variant/results/staging/cp2/unit/cp2_unit_20260804T115532208174128Z-gc0dfecfd61e3-1b7s3Qlz`
-  with external `SHA256SUMS` anchor
-  `8676cb804692230a639b9f212f979955d2ef7da48187467ef4863ee8766950c7`.
-- One supplemental post-cleanup invocation used the ordinary positional unit
-  verifier and failed its dependency source checks because that mode requires
-  the intentionally deleted live unit workspace. Contract and code audits
-  confirmed that this was a non-protocol diagnostic, not the required detached
-  readiness check. The gate was not rerun, and the hidden prevalidated verifier
-  was not invoked manually.
-- The single authorized CP2-C process was then invoked once at the same clean
-  source identity. It exited `78` during the pre-data readiness barrier with
-  `tracked source may not live under separately snapshotted roots`.
-- Exact cause: `HEAD` tracks 75 historical CP0/CP1 evidence files under
-  `results/immutable/{baseline,cp1}`, while `cp2_readiness.py` unconditionally
-  rejects every tracked path whose first component is `build`, `results`, or
-  `Testing`. The unit artifact's `source_snapshot.tar` contains all 75 tracked
-  files, so this is a readiness source-topology/invariant defect, not missing
-  frozen source evidence. The rejection also contradicts the approved
-  replacement rule that the canonical context contains every stage-0 tracked
-  file; this is an implementation-conformance defect, not a new math contract.
-- Readiness failed before its self-tests, data lock, detached unit-anchor check,
-  registry open, bag resolution, or campaign. No recorded input was accessed;
-  no CP2-C recorded result was created; no retry or tuning was attempted.
-- Moksh intends to provide his own chained authorization later for the CP2-C
-  repair and conditional fresh execution, because the intended human review
-  target is the final CP2-C evidence rather than an intermediate repair
-  candidate. This scheduling statement is not itself that authorization; do not
-  begin the repair or infer any execution authority until Moksh supplies the
-  exact chained statement.
-- The frozen, data-free CP2-C source has clean pairing/producer
-  math and post-fix campaign-publication audits. Nonformal protecting runs pass
-  campaign `11/11`, approval-bound actual runner `12/12`, opaque repository
-  `12/12`, sequence actual `15/15`, sequence runner `15/15`, and strict C++
-  pairing `6/6`. After exact acknowledgment binding, readiness passes `31/31`,
-  the approval-bound actual runner passes `12/12`, and the aggregated verifier
-  self-test passes all `43` readiness-engine cases. These are protecting
-  results, not current formal evidence.
-- Unit-artifact publication performs anchored frozen
-  verification before its no-replace rename, exact-inode rollback after a
-  post-rename failure, and caller reconciliation after interruption. Its
-  synthetic fault-injection corpus passes and the independent post-fix audit is
-  clean at the frozen source identity.
-- Moksh selected desktop `x86_64` for CP2-D and retained the frozen fixed-clock
-  desktop checkpoint for CP2-E. Jetson work is deferred beyond CP2; desktop
-  results are not Jetson evidence.
-- `docs/cp2_d_e_desktop_inventory_candidate.md` is a data-free, read-only,
-  nonauthorizing inventory candidate. It is not a D capsule, an E profile, or
-  execution evidence.
-- CP2-D has no exact committed and approved evaluator/direct-math capsule
-  identity. Ambient evo/Python/NumPy/native-loader/license/source material is
-  not an admissible capsule and remains blocked pending an exact closure and
-  frozen known answers.
-- Independently, the current CP2-D artifact contract does not retain a complete
-  chronological filtered camera-message candidate view. A detached verifier
-  therefore cannot independently prove first-forward/no-search-past pairing;
-  correct producer code and runtime/extractor byte equality are insufficient.
-  D needs an approved evidence/schema extension and protecting tests.
-- CP2-D publication also remains blocked: its sequence publication helpers do
-  not yet prove descriptor-relative, failure-atomic reconciliation after every
-  post-rename error/interruption. This is separate from the capsule blocker.
-- CP2-E has no exact committed and approved timing-profile identity. The host
-  is presently unsuitable for official fixed-clock evidence because its
-  observed state includes `ondemand`, enabled boost, no frozen affinity, and no
-  complete CPU thermal surface.
-- CP2-D/E recorded-input access and actual execution remain unauthorized until
-  Moksh approves their exact committed capsule/profile identities. No host
-  control may be changed under the inventory authorization.
+- Desktop x86_64 remains the CP2 target.  Jetson work remains deferred beyond
+  CP2.
+- No dataset registry, bag, ground-truth file, or recorded-result tree was
+  accessed during this continuation.
+- No package was installed, no network request was made, and no host control,
+  service, module, affinity, cgroup, frequency, IRQ, or thermal state was
+  changed.
 
-Historical unit artifacts and their manifests are historical evidence only.
-They do not test the current live tree, do not activate current readiness, and
-must never be described as the current artifact. Any tracked change requires a
-new complete exact-commit unit gate before a later actual invocation.
+The governing chained authorization is
+`project/cp2_completion_chained_authorization.txt` (original attached bytes:
+8,606; SHA-256
+`8e07b1e1d5418b65b5d1993e791e9dab5340d7e77f9ea687e6d064e3bc803cca`).
+Its D addendum is `project/cp2_d_completion_authorization_addendum.txt`; its E
+addendum is `project/cp2_e_completion_authorization_addendum.txt`.  The latest
+user message also permits dependency installation if genuinely blocked.  No
+dependency blocker was found, and the E addendum's noninteractive-privilege
+and exact-evidence requirements remain unsatisfied.
 
-## Non-negotiable boundary
+## What is implemented
 
-Readiness did not pass. Until a repaired exact source identity is reviewed,
-approved, unit-tested, and passes the one-shot readiness barrier:
+### CP2-C
 
-- do not inspect or semantically parse the dataset registry;
-- do not resolve, open, hash, or sample a bag or ground-truth file;
-- do not inspect recorded results or invoke a CP2-C/D/E actual-mode path;
-- do not run a build or evidence command that can transitively touch those
-  surfaces; and
-- do not use any incident-derived value in implementation, thresholds,
-  profiles, fixtures, tests, sequence choices, or execution choices.
+- Approval-bound readiness/source-snapshot conformance repair, including
+  tracked files beneath separately snapshotted roots.
+- Exact serial lifecycle/timing trace, fatal-latching journal, output
+  capability, checked counters, and failure-atomic commit boundary.
+- Production shared feature gate and retained nullspace/Schur math evidence.
+- Detached assembly/replay and descriptor-bound, no-replace, reconciled
+  publication paths.
 
-The authorized D/E inventory was local, data-free, read-only, and
-nonauthorizing. It did not authorize a network installation, a capsule build,
-host-control mutation, recorded-input access, or recorded execution.
+### CP2-D
 
-## Math-first requirements
+- Complete chronological camera-candidate witness and detached replay of
+  first-forward, no-search-past, strict `< 20 ms`, and no-reuse pairing.
+- Shared nullspace-derived Kabsch transform, exact integer timestamp
+  association, translation ATE RMSE, p95 position/orientation parity, and
+  relative ATE checks.
+- Private evaluator/direct-math capsule builder, isolated launcher,
+  full-precision result archive, independent direct recomputation, known-answer
+  tests, relocation checks, license notices, and source inventory.
+- Descriptor-relative, no-replace sequence publication with rollback and
+  reconciliation fault injection.
 
-Mathematical correctness is the first priority at every checkpoint. A passing
-build or test run is necessary but is not, by itself, a proof. Before source
-freeze, independently recheck at least:
+The checked-in capsule identity files are still candidate bindings.  A fresh
+final capsule must be regenerated and frozen after the final source is stable;
+the older sealed candidate must not be represented as the final CP2-D capsule.
 
-- the frozen nullspace/Schur-equivalent whitening, rank, conditioning, QR,
-  lambda/eta/gamma, chi-square, and no-repair/no-fallback semantics;
-- shared-prior, proposal, state, covariance, commit-oracle, and whole-update
-  failure-atomicity semantics;
-- exact checked counters, finite-state requirements, source/provenance joins,
-  and detached replay;
-- stereo pairing's strict `< 20 ms` boundary, chronological record-time
-  ordering, first-forward-candidate rule, no reuse, exact integer schema, and
-  positive selected duration; and
-- failure containment, descriptor identity, descendant termination, immutable
-  sealing, trusted-parent verification, and no-replace publication.
+### CP2-E candidate
 
-Any mathematical or evidence-contract discrepancy stops source freeze. Never
-tune a threshold, profile, sequence, fixture, or implementation after looking
-at recorded data.
+- Exact integer/rational p50, p95, ratio, median-of-three, overflow, and
+  all-pairs-must-pass timing math.
+- Schema-v2 profile, raw APERF/MPERF/frequency/temperature/throttle evidence,
+  guardian stream, independent artifact verifier, and failure-atomic control
+  transaction candidate.
+- Estimator versus variable peer-to-helper control-chain partition, complete
+  descendant PID/TID witnesses, held descriptor-relative `/proc` identities,
+  helper-owned evidence files, durable recovery journal, root launcher,
+  profile binder, and least-privilege sudoers candidate.
+- Offline replacement for the quarantined web-informed cpuset conclusion.  It
+  limits the hard claim to the complete campaign descendant closure and keeps
+  foreign affinity eligibility observational and non-gating.
 
-## Pending chained CP2-C authorization
+Formal CP2-E actual mode remains intentionally locked in
+`scripts/cp2/run_timing_pair.py` and `ov_msckf/src/ros1_serial_msckf.cpp`.
 
-Moksh will supply the governing text himself when work resumes. Unless his exact
-statement says otherwise, interpret the intended chain as one fail-closed
-authorization with these ordered predicates:
+## Math-first verification completed
 
-1. Data-free repair, protecting tests, independent math/evidence audits,
-   readiness-digest repinning, and creation of one clean repair commit are
-   permitted first. Registry, bag, ground-truth, recorded-result, actual-mode,
-   network-installation, and host-control access remain forbidden in this phase.
-2. The repair commit/tree must be discovered and recorded after Git creates it;
-   it may not be predeclared. All data-free tests and audits must pass at that
-   exact identity with no contract, threshold, profile, or sequence drift.
-3. Only if the chained statement expressly authorizes the transition and every
-   prior predicate passes may one fresh exact-HEAD unit gate run. A unit failure
-   ends the chain without retry or tuning.
-4. Only if that unit gate passes may the same chain authorize one CP2-C process.
-   Readiness must pass before the sole registry read and frozen campaign; any
-   failure ends the chain. Successful publication must then pass independent
-   detached verification.
-5. The final externally anchored CP2-C artifact and audit record are the human
-   review target. The chain does not preapprove that result or permit CP2-D/E.
+The estimator derivation was independently rechecked before handoff:
 
-Do not substitute this description for Moksh's future authorization bytes.
+- direct scalar whitening, full Householder nullspace projection, SVD rank and
+  conditioning boundaries, and retained `lambda`, `eta`, and `gamma` agree
+  with the approved contract;
+- the shared feature gate constructs `S = H P H^T + sigma^2 I`, uses the
+  frozen strict chi-square comparison, and shares the exact marginal prior;
+- state/proposal/covariance joins, commit-oracle semantics, failure atomicity,
+  checked counters, and no-repair/no-fallback behavior remain intact;
+- Kabsch uses `C = sum((y-ybar)(x-xbar)^T)/N`,
+  `R = (U D) V^T`, `t = ybar - R xbar`; the same transform is applied to
+  both modes; and ATE RMSE is `sqrt(sum(||p-g||^2)/N)`;
+- timing quantiles use exact NumPy-linear ranks `1/2` and `19/20`; gates use
+  exact cross-products against `11/10` and `23/20`, inclusively, with every
+  pair required to pass.
 
-## Exact continuation flow after the failed readiness attempt
+No unresolved estimator-math discrepancy was found.  The remaining E
+blockers concern evidence reachability, lifecycle safety, provenance, and host
+feasibility, not a known error in the timing-ratio equations.
 
-The order below is mandatory. CP2-C/D/E must not be run in parallel.
+## Data-free diagnostics
 
-1. Preserve the failed attempt exactly. Do not rerun its unit gate, readiness
-   barrier, hidden verifier, or campaign, and do not relabel its exit-`78`
-   readiness failure as a pass.
-2. After the exact chained authorization is received, prepare a data-free
-   implementation-conformance repair under the already
-   approved replacement: remove the blanket tracked-path rejection for all
-   three separately snapshotted roots. Do not exclude those tracked files from
-   the source context or source archive; retain their simultaneous exact
-   coverage in the physical root snapshot.
-3. Add positive tracked `0100644` and `0100755` fixtures under the snapshotted
-   roots; prove exact source-context/archive and root-snapshot coverage while a
-   neighboring untracked leaf remains root-only. Add missing/mode/hash/blob,
-   mutation/substitution, special-file/control-file, and detached
-   tracked-versus-other classification rejections, all with zero registry/bag-
-   provider access. Re-run the full math, source-binding, publication, and
-   corruption audits data-free.
-4. Commit the complete repair and repin every readiness digest. Record the
-   actual commit/tree after Git creates them. No new contract clarification is
-   presently required. Continue without an intermediate review only if Moksh's
-   future chained statement expressly authorizes that conditional transition.
-5. If and only if every authorization predicate and data-free gate passes, run
-   one new clean exact-HEAD unit gate exactly once. If it fails, stop without
-   retry or tuning.
-6. Only if the new unit gate passes and the chain expressly permits it, invoke
-   the one-shot CP2-C process exactly once. Its readiness stage must pass before
-   its sole registry read and frozen recorded campaign. Any readiness or
-   campaign failure stops the attempt.
-7. After successful no-replace publication, independently verify the externally
-   anchored recorded artifact. Publication plus detached verification is the
-   CP2-C success boundary.
-8. Do not execute CP2-D or CP2-E. First freeze exact committed D capsule and E
-   profile candidates, including all evaluator/native/license/source/known-
-   answer and host/CPU/affinity/clock/boost/thermal bindings. Then obtain
-   Moksh's explicit approval of those exact committed identities. Each later
-   source/profile commit requires its own exact-HEAD unit/readiness chain.
-9. Run D only after C passes, and E only after C and the required preceding
-   gates pass. Any failure stops subsequent work. Desktop results are not
-   Jetson evidence.
+These are protecting diagnostics only.  They are not the one formal unit gate
+and do not constitute CP2 recorded evidence.
 
-## D/E candidate blockers
+- C++ diagnostic build: 25/25 test executables passed (216 captured cases in
+  the aggregated diagnostic inventory).
+- Focused CP2-C/D Python matrix: 256/256 passed.
+- CP2-E Python matrix: 189/189 passed:
+  - controls 19/19;
+  - artifact/profile evidence 39/39;
+  - exact timing math 42/42;
+  - orchestration 24/24;
+  - privileged backend 13/13;
+  - privileged helper 48/48; and
+  - root launcher 4/4.
+- `packaging/cp2e/schurvio-cp2e.sudoers` parses successfully with `visudo`.
+- `git diff --check` was clean before the handoff commit.
 
-CP2-D remains `data_free_candidate_only`:
+## Hard blockers
 
-- no immutable evaluator/direct-math capsule identity exists;
-- the ambient evo/Python/NumPy/native closure is not trusted as a capsule;
-- loader and native dependency closure, license notices and corresponding
-  source, relocation behavior, and stack-specific known-answer bits are not
-  frozen and approved; and
-- the detached artifact lacks an independently sufficient complete candidate
-  witness for first-forward/no-search-past pairing;
-- sequence publication still has unresolved post-rename rollback/
-  reconciliation failure windows; and
-- recorded inputs and D actual execution are unauthorized.
+### 1. Noninteractive privilege is absent
 
-CP2-E remains `data_free_candidate_only` and
-`blocked_pending_fixed_clock_profile`:
+Both `/usr/bin/sudo -n /usr/bin/true` and `/usr/bin/sudo -n -l` fail with
+`sudo: a password is required`.  The authorization permits only
+noninteractive sudo and forbids requesting, extracting, storing, or repurposing
+credentials.  Membership in `docker`/`lxd` is not an acceptable substitute or
+privilege-escalation path.
 
-- no exact machine/CPU-set/profile artifact is committed or approved;
-- the observed governor is `ondemand` and boost is enabled;
-- no exact affinity is frozen;
-- CPU thermal/throttling observation is incomplete; and
-- neither host-control mutation nor recorded E execution is authorized.
+### 2. The required CPU thermal/throttle witness is not proved
 
-## Required handoff
+Read-only inventory found Linux `5.15.0-67-generic` on a Ryzen 9 9950X.  The
+CPU host-bridge device is `1022:14e3`, but the installed, unloaded `k10temp`
+module's `modinfo` alias table does not include `14e3`.  There is no CPU hwmon
+sensor, no CPU `thermal_throttle` counter, and no installed `amd_hsmp` device
+or module.  `msr` is loaded, and `acpi-cpufreq` exposes 3.0/4.3 GHz states,
+userspace governor support, and a boost control; clock control may therefore
+be trial-feasible, but adequate bound temperature/throttle evidence is not.
+The E addendum requires a stop rather than a weakened profile.
 
-At the next stop, report separately:
+### 3. CP2-E production/runtime proof is incomplete
 
-- the exact source commit/tree and whether the worktree is clean;
-- incident acknowledgment and approval-binding status;
-- protecting-test and independent-audit results, without inflating them into
-  formal gate evidence;
-- exact unit, readiness, CP2-C campaign, and detached-verification status;
-- whether any recorded input was accessed;
-- any immutable artifact path and external anchor that was actually created;
-- the exact chained-authorization identity and which predicates, if any, were
-  reached;
-- D capsule and E profile identity/approval status; and
-- whether local and remote branch tips are identical.
+- There is no real `project/cp2_timing_profile.yaml`, privileged reversibility
+  receipt, or production six-run actual-mode adapter.
+- The root launcher binds three project Python sources, its interpreter, and
+  the profile, but the effective Python stdlib/native runtime is not closed.
+  A production-like probe loaded 65 module files and 16 mapped runtime files.
+  The installed sudo binary/plugin/config/PAM/rule closure is also not fully
+  verified.  The current four-file closure claim must not be used.
+- Held `/proc` descriptors detect PID/TID exit or reuse, but a numeric
+  affinity/cpuset mutation can still race reuse between its precheck and
+  syscall.  A lifecycle pin/freeze design and adversarial test are required to
+  prove no unrelated task can be mutated.
+- The late P1-to-P2 recovery path is fail-closed but lacks the complete
+  real-backend adversarial matrix for live/absent predecessor, mid-recovery
+  exit, PID/TID reuse, partial old chain, and new-chain collision.
 
-Do not mark CP2 complete unless CP2-C, CP2-D, and CP2-E all pass their exact
-approved gates. Keep `nullspace` as the default and keep CP3/two-pass work
-blocked until then.
+### 4. Formal-transition prerequisites remain
+
+- The two 2026-08-04 CP2-E network-scope incidents at
+  `17:45:11-04:00` and `21:31:51-04:00` in
+  `docs/cp2_predata_incident_log.md` remain unacknowledged at an exact committed
+  identity.  Their web-derived content remains quarantined.
+- Final D capsule and E profile identities are not frozen.
+- No final clean source-freeze commit/tree exists.
+- The exactly-once formal unit gate has not been invoked.
+- CP2-C/D/E recorded execution and detached verification remain not run.
+
+## Exact continuation order
+
+1. Review this pushed candidate and acknowledge the two exact incident
+   dispositions at its committed identity.
+2. Resolve the E platform prerequisite outside the formal chain: configure
+   the exact root-owned helper/sudo rule for noninteractive use and provide a
+   kernel/telemetry arrangement that exposes an authoritative, profile-bound
+   CPU temperature/throttle witness.  A kernel/reboot/new-module path requires
+   explicit authorization beyond the current E addendum.
+3. Close the root Python/OS/sudo runtime manifest, eliminate the numeric-task
+   mutation race, complete recovery tests, and implement the real E profile
+   builder and six-run actual adapter.  Re-run all data-free audits.
+4. Install the exact reviewed helper/profile and run one data-free privileged
+   apply/validate/restore feasibility transaction.  Any failure or
+   indeterminate restoration stops; do not retry or tune.
+5. Regenerate and freeze the final D capsule, E profile, source/readiness
+   digests, and one clean source-freeze commit/tree.
+6. Only then invoke the one authorized formal unit gate.  If it passes, run
+   exactly C, then the three D sequences in the frozen order, then E.  Any
+   failure stops the remainder without retry.
+
+CP3 must not begin until the final CP2 evidence package exists and Moksh Trehan
+provides the separate final human sign-off.

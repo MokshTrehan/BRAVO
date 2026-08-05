@@ -566,11 +566,11 @@ TEST(CP2ProductionSchurReducer, OrderedValidityAndRankBoundariesAreExact) {
         Eigen::MatrixXd::Identity(4, 4),
         diagonal_landmark_system(4, 1.0, 0.5, 0.25),
         Eigen::Vector4d::Ones(), 2.0);
-    EXPECT_EQ(result.status, ov_msckf::SchurReductionStatus::kNonfinite);
-    EXPECT_EQ(result.stage, ov_msckf::SchurReductionStage::kConditioning);
+    EXPECT_EQ(result.status, ov_msckf::SchurReductionStatus::kAccepted);
+    EXPECT_EQ(result.stage, ov_msckf::SchurReductionStage::kAccepted);
     EXPECT_TRUE(result.singular_values_available);
-    EXPECT_FALSE(result.singular_ratio_available);
-    EXPECT_TRUE(std::isnan(result.singular_ratio));
+    EXPECT_TRUE(result.singular_ratio_available);
+    EXPECT_DOUBLE_EQ(result.singular_ratio, 0.25);
 
     result = ov_msckf::SchurUpdate::Reduce(
         Eigen::MatrixXd::Identity(rows, rows),
@@ -579,8 +579,8 @@ TEST(CP2ProductionSchurReducer, OrderedValidityAndRankBoundariesAreExact) {
     EXPECT_EQ(result.status, ov_msckf::SchurReductionStatus::kRankDeficient);
     EXPECT_EQ(result.stage, ov_msckf::SchurReductionStage::kNumericalRank);
     EXPECT_TRUE(result.singular_values_available);
-    EXPECT_FALSE(result.singular_ratio_available);
-    EXPECT_TRUE(std::isnan(result.singular_ratio));
+    EXPECT_TRUE(result.singular_ratio_available);
+    EXPECT_FALSE(std::isnan(result.singular_ratio));
   }
   EXPECT_EQ(std::fegetround(), FE_TONEAREST);
 }

@@ -398,3 +398,23 @@ Required evidence:
 
 Failure action: preserve timestamped evidence of any portal failure and contact
 the conference chairs. Do not rush an unverified replacement submission.
+
+## 2026-08-04 CP2 candidate handoff addendum
+
+CP2 remains **unpassed**. Data-free implementation and math/evidence work now
+passes 25/25 C++ diagnostic executables, 256/256 focused C/D Python checks, and
+189/189 E Python checks. These are protecting diagnostics, not the formal unit
+gate and not recorded evidence. No registry, bag, ground truth, or recorded
+result was accessed during this continuation.
+
+CP2-E prevents source freeze. Formal actual mode remains intentionally locked;
+the root Python/OS/sudo runtime closure and numeric-task lifecycle proof are
+incomplete; the replacement-recovery path needs its full real-backend
+adversarial matrix; no final host profile or privileged reversibility receipt
+exists; noninteractive sudo is unavailable; and Linux `5.15.0-67-generic` on
+this Ryzen 9 9950X exposes no proved CPU temperature/throttle witness. The
+evidence standard is not weakened. The one formal gate and serialized C, D,
+and E executions remain not run.
+
+The exact continuation and blocker inventory is in `pickup.md`. CP3 remains
+blocked until CP2 execution completes and receives final human sign-off.

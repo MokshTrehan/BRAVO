@@ -47,10 +47,12 @@ P50_QUANTILE = (1, 2)
 P95_QUANTILE = (19, 20)
 MEDIAN_RATIO_LIMIT = (11, 10)
 P95_RATIO_LIMIT = (23, 20)
+TIMING_COMMON_DOMAIN = b"SchurVIO-CP2-timing-common-v1\0"
 
 _ALLOWED_QUANTILES = (P50_QUANTILE, P95_QUANTILE)
 _ALLOWED_RATIO_LIMITS = (MEDIAN_RATIO_LIMIT, P95_RATIO_LIMIT)
 _U128_HEX = re.compile(r"^[0-9a-f]{32}$")
+_U256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
 
 class TimingMathError(ValueError):
@@ -91,6 +93,23 @@ def u128_from_hex(value: Any, label: str = "u128 value") -> int:
 
     if type(value) is not str or _U128_HEX.fullmatch(value) is None:
         raise TimingMathError(label + " must be exactly 32 lowercase hexadecimal digits")
+    return int(value, 16)
+
+
+def u256_to_hex(value: Any, label: str = "u256 value") -> str:
+    """Encode one unsigned-256 value with leading zeros preserved."""
+
+    converted = _plain_integer(value, label)
+    if converted < 0 or converted > U256_MAX:
+        raise TimingMathError(label + " is outside u256")
+    return format(converted, "064x")
+
+
+def u256_from_hex(value: Any, label: str = "u256 value") -> int:
+    """Decode exactly 64 lowercase hexadecimal digits."""
+
+    if type(value) is not str or _U256_HEX.fullmatch(value) is None:
+        raise TimingMathError(label + " must be exactly 64 lowercase hexadecimal digits")
     return int(value, 16)
 
 
@@ -453,6 +472,88 @@ class RatioGate:
             raise TimingMathError("ratio-gate decision differs from exact comparison")
 
 
+@dataclass(frozen=True)
+class TimingPairResult:
+    """Exact CP2-E result for one interleaved nullspace/Schur pair.
+
+    The cross-mode population is bound independently from both duration
+    populations.  This prevents a producer from presenting correct quantiles
+    for a different timestamp intersection or silently permuting pair slots.
+    """
+
+    timing_pair_index: int
+    common_timestamps_ns: Tuple[int, ...]
+    common_payload_sha256: int
+    baseline_quantiles: TimingQuantiles
+    candidate_quantiles: TimingQuantiles
+    p50_gate: RatioGate
+    p95_gate: RatioGate
+    passed: bool
+
+    def __post_init__(self) -> None:
+        pair_index = _u64(self.timing_pair_index, "timing-pair index")
+        if pair_index > 2:
+            raise TimingMathError("timing-pair index is outside the frozen three-pair campaign")
+        timestamps = _validated_common_timestamps(self.common_timestamps_ns)
+        common_sha = _plain_integer(self.common_payload_sha256, "common payload SHA-256")
+        if common_sha < 0 or common_sha > U256_MAX:
+            raise TimingMathError("common payload SHA-256 is outside u256")
+        if _common_payload_sha256(pair_index, timestamps) != common_sha:
+            raise TimingMathError("common payload SHA-256 differs from exact recomputation")
+        baseline = _validated_timing_quantiles(self.baseline_quantiles, "baseline quantiles")
+        candidate = _validated_timing_quantiles(self.candidate_quantiles, "candidate quantiles")
+        if baseline.p50.rank.sample_count != len(timestamps) or candidate.p50.rank.sample_count != len(timestamps):
+            raise TimingMathError("timing quantile population count differs from the common timestamps")
+        p50 = _validated_ratio_gate(self.p50_gate, "p50 gate")
+        p95 = _validated_ratio_gate(self.p95_gate, "p95 gate")
+        if (
+            p50.baseline_ns != baseline.p50.value_ns
+            or p50.candidate_ns != candidate.p50.value_ns
+            or (p50.limit_numerator, p50.limit_denominator) != MEDIAN_RATIO_LIMIT
+        ):
+            raise TimingMathError("p50 gate does not bind the retained pair quantiles")
+        if (
+            p95.baseline_ns != baseline.p95.value_ns
+            or p95.candidate_ns != candidate.p95.value_ns
+            or (p95.limit_numerator, p95.limit_denominator) != P95_RATIO_LIMIT
+        ):
+            raise TimingMathError("p95 gate does not bind the retained pair quantiles")
+        expected_pass = p50.passed and p95.passed
+        if type(self.passed) is not bool or self.passed is not expected_pass:
+            raise TimingMathError("timing-pair decision differs from both exact gates")
+
+
+@dataclass(frozen=True)
+class TimingCampaignResult:
+    """Exact three-pair CP2-E aggregate with no aggregate-only escape hatch."""
+
+    pair_results: Tuple[TimingPairResult, TimingPairResult, TimingPairResult]
+    median_p50: MedianOfThreeRatio
+    median_p95: MedianOfThreeRatio
+    every_pair_passed: bool
+    passed: bool
+
+    def __post_init__(self) -> None:
+        if type(self.pair_results) is not tuple or len(self.pair_results) != 3:
+            raise TimingMathError("timing campaign must retain exactly three pair results")
+        pairs = tuple(_validated_timing_pair_result(value) for value in self.pair_results)
+        if tuple(value.timing_pair_index for value in pairs) != (0, 1, 2):
+            raise TimingMathError("timing campaign pair indices are not exactly 0,1,2")
+        expected_p50 = median_of_three_ratios(tuple(value.p50_gate.candidate_over_baseline for value in pairs))
+        expected_p95 = median_of_three_ratios(tuple(value.p95_gate.candidate_over_baseline for value in pairs))
+        median_p50 = _validated_median(self.median_p50, "campaign p50 median")
+        median_p95 = _validated_median(self.median_p95, "campaign p95 median")
+        if median_p50 != expected_p50 or median_p95 != expected_p95:
+            raise TimingMathError("timing campaign median differs from exact pair ratios")
+        expected_every = all(value.passed for value in pairs)
+        if type(self.every_pair_passed) is not bool or self.every_pair_passed is not expected_every:
+            raise TimingMathError("timing campaign every-pair decision differs")
+        # The medians are evidence summaries only.  They never rescue a failed
+        # pair, so the campaign pass bit is exactly the every-pair result.
+        if type(self.passed) is not bool or self.passed is not expected_every:
+            raise TimingMathError("timing campaign decision differs from every-pair gates")
+
+
 def linear_rank(
     sample_count: Any,
     quantile_numerator: Any,
@@ -606,6 +707,154 @@ def timing_quantiles_ns(samples: Any) -> TimingQuantiles:
     return TimingQuantiles(
         p50=_quantile_from_sorted(ordered, *P50_QUANTILE, population_sha256),
         p95=_quantile_from_sorted(ordered, *P95_QUANTILE, population_sha256),
+    )
+
+
+def _validated_timing_quantiles(value: Any, label: str) -> TimingQuantiles:
+    if type(value) is not TimingQuantiles:
+        raise TimingMathError(label + " must be canonical TimingQuantiles evidence")
+    try:
+        return TimingQuantiles(p50=value.p50, p95=value.p95)
+    except (AttributeError, TimingMathError) as exc:
+        raise TimingMathError(label + " is forged or invalid timing-quantile evidence") from exc
+
+
+def _validated_ratio_gate(value: Any, label: str) -> RatioGate:
+    if type(value) is not RatioGate:
+        raise TimingMathError(label + " must be canonical RatioGate evidence")
+    try:
+        return RatioGate(
+            baseline_ns=value.baseline_ns,
+            candidate_ns=value.candidate_ns,
+            candidate_over_baseline=value.candidate_over_baseline,
+            limit_numerator=value.limit_numerator,
+            limit_denominator=value.limit_denominator,
+            left_cross_product=value.left_cross_product,
+            right_cross_product=value.right_cross_product,
+            passed=value.passed,
+        )
+    except (AttributeError, TimingMathError) as exc:
+        raise TimingMathError(label + " is forged or invalid ratio-gate evidence") from exc
+
+
+def _validated_median(value: Any, label: str) -> MedianOfThreeRatio:
+    if type(value) is not MedianOfThreeRatio:
+        raise TimingMathError(label + " must be canonical MedianOfThreeRatio evidence")
+    try:
+        return MedianOfThreeRatio(value.ordered_ratios, value.median_ratio)
+    except (AttributeError, TimingMathError) as exc:
+        raise TimingMathError(label + " is forged or invalid median evidence") from exc
+
+
+def _validated_common_timestamps(value: Any) -> Tuple[int, ...]:
+    if type(value) is not tuple or not value:
+        raise TimingMathError("common timestamps must be one nonempty exact tuple")
+    if len(value) > MAX_TIMING_SAMPLE_COUNT:
+        raise TimingMathError("common timestamp population exceeds the resource limit")
+    previous = None
+    for timestamp in value:
+        retained = _u64(timestamp, "common camera timestamp")
+        if previous is not None and retained <= previous:
+            raise TimingMathError("common camera timestamps are not strictly increasing")
+        previous = retained
+    return value
+
+
+def canonical_common_population_payload(
+    timing_pair_index: Any, common_timestamps_ns: Any
+) -> bytes:
+    """Encode the frozen domain-separated common-population payload."""
+
+    pair_index = _u64(timing_pair_index, "timing-pair index")
+    if pair_index > 2:
+        raise TimingMathError("timing-pair index is outside the frozen three-pair campaign")
+    timestamps = _validated_common_timestamps(common_timestamps_ns)
+    output = bytearray(TIMING_COMMON_DOMAIN)
+    output.extend(pair_index.to_bytes(8, "big"))
+    output.extend(len(timestamps).to_bytes(8, "big"))
+    for timestamp in timestamps:
+        output.extend(timestamp.to_bytes(8, "big"))
+    return bytes(output)
+
+
+def _common_payload_sha256(pair_index: int, timestamps: Tuple[int, ...]) -> int:
+    return int.from_bytes(
+        hashlib.sha256(canonical_common_population_payload(pair_index, timestamps)).digest(),
+        "big",
+    )
+
+
+def timing_pair_result(
+    timing_pair_index: Any,
+    common_timestamps_ns: Any,
+    baseline_durations_ns: Any,
+    candidate_durations_ns: Any,
+) -> TimingPairResult:
+    """Build one exact pair result from already joined timestamp-order rows."""
+
+    pair_index = _u64(timing_pair_index, "timing-pair index")
+    timestamps = _validated_common_timestamps(common_timestamps_ns)
+    if not isinstance(baseline_durations_ns, Sequence) or isinstance(
+        baseline_durations_ns, (str, bytes, bytearray)
+    ):
+        raise TimingMathError("baseline timing durations must be a finite sequence")
+    if not isinstance(candidate_durations_ns, Sequence) or isinstance(
+        candidate_durations_ns, (str, bytes, bytearray)
+    ):
+        raise TimingMathError("candidate timing durations must be a finite sequence")
+    if len(baseline_durations_ns) != len(timestamps) or len(candidate_durations_ns) != len(timestamps):
+        raise TimingMathError("mode timing duration counts differ from the common timestamps")
+    baseline = timing_quantiles_ns(baseline_durations_ns)
+    candidate = timing_quantiles_ns(candidate_durations_ns)
+    p50 = ratio_gate(baseline.p50.value_ns, candidate.p50.value_ns, *MEDIAN_RATIO_LIMIT)
+    p95 = ratio_gate(baseline.p95.value_ns, candidate.p95.value_ns, *P95_RATIO_LIMIT)
+    return TimingPairResult(
+        timing_pair_index=pair_index,
+        common_timestamps_ns=timestamps,
+        common_payload_sha256=_common_payload_sha256(pair_index, timestamps),
+        baseline_quantiles=baseline,
+        candidate_quantiles=candidate,
+        p50_gate=p50,
+        p95_gate=p95,
+        passed=p50.passed and p95.passed,
+    )
+
+
+def _validated_timing_pair_result(value: Any) -> TimingPairResult:
+    if type(value) is not TimingPairResult:
+        raise TimingMathError("campaign pair result must be canonical TimingPairResult evidence")
+    try:
+        return TimingPairResult(
+            timing_pair_index=value.timing_pair_index,
+            common_timestamps_ns=value.common_timestamps_ns,
+            common_payload_sha256=value.common_payload_sha256,
+            baseline_quantiles=value.baseline_quantiles,
+            candidate_quantiles=value.candidate_quantiles,
+            p50_gate=value.p50_gate,
+            p95_gate=value.p95_gate,
+            passed=value.passed,
+        )
+    except (AttributeError, TimingMathError) as exc:
+        raise TimingMathError("campaign pair result is forged or invalid") from exc
+
+
+def timing_campaign_result(pair_results: Any) -> TimingCampaignResult:
+    """Build the frozen three-pair aggregate; every individual pair must pass."""
+
+    if type(pair_results) is not tuple or len(pair_results) != 3:
+        raise TimingMathError("timing campaign requires an exact three-pair tuple")
+    pairs = tuple(_validated_timing_pair_result(value) for value in pair_results)
+    if tuple(value.timing_pair_index for value in pairs) != (0, 1, 2):
+        raise TimingMathError("timing campaign pair indices are not exactly 0,1,2")
+    p50 = median_of_three_ratios(tuple(value.p50_gate.candidate_over_baseline for value in pairs))
+    p95 = median_of_three_ratios(tuple(value.p95_gate.candidate_over_baseline for value in pairs))
+    every = all(value.passed for value in pairs)
+    return TimingCampaignResult(
+        pair_results=pairs,  # type: ignore[arg-type]
+        median_p50=p50,
+        median_p95=p95,
+        every_pair_passed=every,
+        passed=every,
     )
 
 

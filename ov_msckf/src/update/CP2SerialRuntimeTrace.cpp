@@ -104,6 +104,105 @@ bool finite_pose(const std::array<double, 3U> &position,
                      [](double value) { return std::isfinite(value); });
 }
 
+bool terminal_pair_valid(const ov_msckf::CP2LiveUpdateEvent &event) noexcept {
+  using Status = ov_msckf::CP2UpdateTerminalStatus;
+  using Subreason = ov_msckf::CP2UpdateTerminalSubreason;
+  switch (event.terminal_status) {
+  case Status::kEmptyInput:
+    return event.terminal_subreason == Subreason::kInputEmpty;
+  case Status::kAllRejected:
+    if (event.raw_system_count == 0U) {
+      return event.terminal_subreason ==
+                 Subreason::kNoFeaturesAfterCleaning ||
+             event.terminal_subreason ==
+                 Subreason::kNoFeaturesAfterTriangulation ||
+             event.terminal_subreason == Subreason::kNoRawSystems;
+    }
+    return event.terminal_subreason ==
+           Subreason::kAllBaselineFeaturesRejected;
+  case Status::kEmptyAfterCompression:
+    return event.terminal_subreason ==
+           Subreason::kMeasurementCompressionEmpty;
+  case Status::kPreflightRejected:
+    return event.terminal_subreason ==
+           Subreason::kBaselinePreflightRejected;
+  case Status::kCommittedCounted:
+    return event.terminal_subreason == Subreason::kNone;
+  case Status::kInternalFailure:
+    return false;
+  }
+  return false;
+}
+
+bool timing_lifecycle_valid(
+    const ov_msckf::CP2LiveUpdateEvent &event) noexcept {
+  std::uint64_t reconstructed_duration = 0U;
+  const bool nonempty = event.input_feature_count != 0U;
+  const bool committed =
+      event.terminal_status ==
+      ov_msckf::CP2UpdateTerminalStatus::kCommittedCounted;
+  if (!event.timing_endpoint_valid ||
+      event.timing_end_ns < event.timing_start_ns) {
+    return false;
+  }
+  reconstructed_duration =
+      event.timing_end_ns - event.timing_start_ns;
+  const bool expected_precompression_rows_available =
+      event.raw_system_count != 0U;
+  const bool expected_precompression_nonempty =
+      event.baseline_precompression_rows_available &&
+      event.baseline_precompression_rows != 0U;
+  const bool expected_compressed_rows_available =
+      event.baseline_precompression_system_nonempty;
+  const bool expected_compressed_nonempty =
+      event.baseline_compressed_rows_available &&
+      event.baseline_compressed_rows != 0U;
+  const bool expected_preflight_attempted =
+      event.baseline_compressed_system_nonempty;
+  ov_msckf::CP2UpdateTerminalStatus reconstructed_status =
+      ov_msckf::CP2UpdateTerminalStatus::kInternalFailure;
+  if (!nonempty) {
+    reconstructed_status = ov_msckf::CP2UpdateTerminalStatus::kEmptyInput;
+  } else if (!event.baseline_precompression_system_nonempty) {
+    reconstructed_status = ov_msckf::CP2UpdateTerminalStatus::kAllRejected;
+  } else if (!event.baseline_compressed_system_nonempty) {
+    reconstructed_status =
+        ov_msckf::CP2UpdateTerminalStatus::kEmptyAfterCompression;
+  } else if (!event.baseline_preflight_accepted) {
+    reconstructed_status =
+        ov_msckf::CP2UpdateTerminalStatus::kPreflightRejected;
+  } else {
+    reconstructed_status =
+        ov_msckf::CP2UpdateTerminalStatus::kCommittedCounted;
+  }
+  if (event.duration_ns != reconstructed_duration ||
+      !terminal_pair_valid(event) ||
+      event.terminal_status != reconstructed_status ||
+      event.raw_system_count > event.input_feature_count ||
+      event.baseline_precompression_rows_available !=
+          expected_precompression_rows_available ||
+      (!event.baseline_precompression_rows_available &&
+       event.baseline_precompression_rows != 0U) ||
+      event.baseline_precompression_system_nonempty !=
+          expected_precompression_nonempty ||
+      event.baseline_compressed_rows_available !=
+          expected_compressed_rows_available ||
+      (!event.baseline_compressed_rows_available &&
+       event.baseline_compressed_rows != 0U) ||
+      event.baseline_compressed_system_nonempty !=
+          expected_compressed_nonempty ||
+      (event.baseline_compressed_rows_available &&
+       event.baseline_compressed_rows >
+           event.baseline_precompression_rows) ||
+      event.baseline_preflight_attempted !=
+          expected_preflight_attempted ||
+      event.baseline_preflight_accepted != committed ||
+      event.baseline_commit_occurred != committed) {
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 const char *ov_msckf::cp2_serial_runtime_enqueue_status_name(
@@ -131,6 +230,31 @@ ov_msckf::CP2SerialRuntimeTrace::CP2SerialRuntimeTrace(
     for (CP2SerialPair &pair : pairs) {
       Row row;
       row.pair = std::move(pair);
+      rows_.push_back(std::move(row));
+    }
+    (void)ValidateInitialPopulation();
+  } catch (...) {
+    Reject("serial trace population allocation failed");
+  }
+}
+
+ov_msckf::CP2SerialRuntimeTrace::CP2SerialRuntimeTrace(
+    CP2RuntimeContext context,
+    CP2RuntimeOutputCapabilities output_capabilities,
+    std::vector<CP2SerialPair> pairs) noexcept
+    : context_(std::move(context)),
+      output_capabilities_(std::move(output_capabilities)),
+      held_capability_mode_(true) {
+  try {
+    if (!ValidateCP2RuntimeOutputCapabilities(context_,
+                                               output_capabilities_)) {
+      Reject("serial trace output capability population is invalid");
+      return;
+    }
+    rows_.reserve(pairs.size());
+    for (CP2SerialPair &selected : pairs) {
+      Row row;
+      row.pair = std::move(selected);
       rows_.push_back(std::move(row));
     }
     (void)ValidateInitialPopulation();
@@ -269,14 +393,44 @@ bool ov_msckf::CP2SerialRuntimeTrace::NoteUpdate(
     Reject("updater event identity is invalid or noncontiguous");
     return false;
   }
+  if (context_.trace_level == CP2RuntimeTraceLevel::kTiming &&
+      !timing_lifecycle_valid(event)) {
+    Reject("timing updater lifecycle or endpoint is invalid");
+    return false;
+  }
   Row &row = rows_[static_cast<std::size_t>(event.pair_index)];
   if (!row.enqueue_noted || row.enqueue_status != "queued" ||
-      event.camera_timestamp_ns != row.pair.camera_timestamp_ns) {
+      event.camera_timestamp_ns != row.pair.camera_timestamp_ns ||
+      !row.updates.empty()) {
     Reject("updater event does not join its queued serial pair");
     return false;
   }
   try {
     row.updater_invocation_ids.push_back(event.invocation_id);
+    if (context_.trace_level == CP2RuntimeTraceLevel::kTiming) {
+      UpdateRow retained;
+      retained.invocation_id = event.invocation_id;
+      retained.timing_start_ns = event.timing_start_ns;
+      retained.timing_end_ns = event.timing_end_ns;
+      retained.duration_ns = event.duration_ns;
+      retained.input_feature_count = event.input_feature_count;
+      retained.raw_system_count = event.raw_system_count;
+      retained.terminal_status =
+          cp2_update_terminal_status_name(event.terminal_status);
+      retained.terminal_subreason =
+          cp2_update_terminal_subreason_name(event.terminal_subreason);
+      retained.nonempty = event.input_feature_count != 0U;
+      retained.baseline_preflight_attempted =
+          event.baseline_preflight_attempted;
+      retained.preflight_accepted = event.baseline_preflight_accepted;
+      retained.committed =
+          event.terminal_status ==
+              CP2UpdateTerminalStatus::kCommittedCounted &&
+          event.baseline_commit_occurred;
+      retained.primary = retained.nonempty && retained.preflight_accepted &&
+                         retained.committed;
+      row.updates.push_back(std::move(retained));
+    }
   } catch (...) {
     Reject("updater identity allocation failed");
     return false;
@@ -383,6 +537,11 @@ bool ov_msckf::CP2SerialRuntimeTrace::SerializeCallbacks(
     } else {
       output << "null";
     }
+    if (context_.trace_level == CP2RuntimeTraceLevel::kTiming) {
+      output << ",\"updater_invocation_ids\":"
+             << json_u64_array(row.updater_invocation_ids)
+             << ",\"updater_invoked\":" << json_bool(row.updater_invoked);
+    }
     output << "}\n";
   }
   output_bytes = output.str();
@@ -437,6 +596,78 @@ bool ov_msckf::CP2SerialRuntimeTrace::SerializeTrajectory(
   return true;
 }
 
+bool ov_msckf::CP2SerialRuntimeTrace::SerializeUpdater(
+    std::string &output_bytes) const {
+  std::ostringstream output;
+  output.imbue(std::locale::classic());
+  for (const Row &row : rows_) {
+    for (const UpdateRow &update : row.updates) {
+      output << "{\"baseline_preflight_attempted\":"
+             << json_bool(update.baseline_preflight_attempted)
+             << ",\"camera_timestamp_ns\":"
+             << row.pair.camera_timestamp_ns
+             << ",\"committed\":" << json_bool(update.committed)
+             << ",\"duration_ns\":" << update.duration_ns
+             << ",\"input_feature_count\":" << update.input_feature_count
+             << ",\"invocation_id\":" << update.invocation_id
+             << ",\"mode\":" << json_string(context_.mode)
+             << ",\"nonempty\":" << json_bool(update.nonempty)
+             << ",\"pair_index\":" << row.pair.pair_index
+             << ",\"preflight_accepted\":"
+             << json_bool(update.preflight_accepted)
+             << ",\"primary\":" << json_bool(update.primary)
+             << ",\"raw_system_count\":" << update.raw_system_count
+             << ",\"record_type\":\"updater_event\",\"schema_version\":1"
+             << ",\"sequence_id\":" << json_string(context_.sequence_id)
+             << ",\"sequence_index\":" << context_.sequence_index
+             << ",\"terminal_status\":"
+             << json_string(update.terminal_status)
+             << ",\"terminal_subreason\":"
+             << json_string(update.terminal_subreason)
+             << ",\"timer_clock\":\"std::chrono::steady_clock\""
+             << ",\"timer_end_ns\":" << update.timing_end_ns
+             << ",\"timer_start_ns\":" << update.timing_start_ns
+             << "}\n";
+    }
+  }
+  output_bytes = output.str();
+  return true;
+}
+
+bool ov_msckf::CP2SerialRuntimeTrace::SerializeTiming(
+    std::string &output_bytes) const {
+  std::ostringstream output;
+  output.imbue(std::locale::classic());
+  for (const Row &row : rows_) {
+    for (const UpdateRow &update : row.updates) {
+      output << "{\"cam0_record_time_ns\":"
+             << row.pair.cam0_record_time_ns
+             << ",\"camera_timestamp_ns\":"
+             << row.pair.camera_timestamp_ns
+             << ",\"committed\":" << json_bool(update.committed)
+             << ",\"duration_ns\":" << update.duration_ns
+             << ",\"invocation_id\":" << update.invocation_id
+             << ",\"mode\":" << json_string(context_.mode)
+             << ",\"nonempty\":" << json_bool(update.nonempty)
+             << ",\"preflight_accepted\":"
+             << json_bool(update.preflight_accepted)
+             << ",\"primary\":" << json_bool(update.primary)
+             << ",\"record_type\":\"updater_timing\",\"schema_version\":1"
+             << ",\"sequence_id\":" << json_string(context_.sequence_id)
+             << ",\"sequence_index\":" << context_.sequence_index
+             << ",\"serial_pair_index\":" << row.pair.pair_index
+             << ",\"terminal_status\":"
+             << json_string(update.terminal_status)
+             << ",\"timer_clock\":\"std::chrono::steady_clock\""
+             << ",\"timer_end_ns\":" << update.timing_end_ns
+             << ",\"timer_start_ns\":" << update.timing_start_ns
+             << "}\n";
+    }
+  }
+  output_bytes = output.str();
+  return true;
+}
+
 bool ov_msckf::CP2SerialRuntimeTrace::Finalize() noexcept {
   if (!ready() || finalized_ || !context_.serial_trace_path.available) {
     Reject("serial trace finalization state is invalid");
@@ -460,6 +691,19 @@ bool ov_msckf::CP2SerialRuntimeTrace::Finalize() noexcept {
         Reject("processed serial pair lacks a processing event");
         return false;
       }
+      if (context_.trace_level == CP2RuntimeTraceLevel::kTiming &&
+          (row.updater_invocation_ids.size() != row.updates.size() ||
+           (!row.updates.empty() && !row.processing_noted))) {
+        Reject("serial updater event population is incomplete");
+        return false;
+      }
+      for (std::size_t index = 0U; index < row.updates.size(); ++index) {
+        if (row.updater_invocation_ids[index] !=
+            row.updates[index].invocation_id) {
+          Reject("serial updater identity population is inconsistent");
+          return false;
+        }
+      }
       if (row.updater_invoked != !row.updater_invocation_ids.empty()) {
         Reject("serial updater-invoked flag disagrees with invocation joins");
         return false;
@@ -468,7 +712,8 @@ bool ov_msckf::CP2SerialRuntimeTrace::Finalize() noexcept {
 
     std::string serial;
     if (!SerializeSerial(serial) ||
-        !WriteNewFile(context_.serial_trace_path.value, serial)) {
+        !WriteOutput(context_.serial_trace_path,
+                     output_capabilities_.serial_trace, serial)) {
       Reject("serial trace file could not be created");
       return false;
     }
@@ -482,16 +727,34 @@ bool ov_msckf::CP2SerialRuntimeTrace::Finalize() noexcept {
       std::string trajectory;
       if (!SerializeCallbacks(callbacks) ||
           !SerializeTrajectory(trajectory) ||
-          !WriteNewFile(context_.callback_trace_path.value, callbacks) ||
-          !WriteNewFile(context_.trajectory_trace_path.value, trajectory)) {
+          !WriteOutput(context_.callback_trace_path,
+                       output_capabilities_.callback_trace, callbacks) ||
+          !WriteOutput(context_.trajectory_trace_path,
+                       output_capabilities_.trajectory_trace, trajectory)) {
         Reject("sequence callback/trajectory files could not be created");
         return false;
       }
     } else if (context_.trace_level == CP2RuntimeTraceLevel::kTiming) {
-      // CP2-E remains preregistered and blocked until an exact replacement
-      // schema is committed.  Refuse to manufacture a timing-evidence sink.
-      Reject("timing evidence schema is not frozen");
-      return false;
+      if (!context_.callback_trace_path.available ||
+          !context_.updater_trace_path.available ||
+          !context_.timing_trace_path.available) {
+        Reject("timing trace paths are unavailable");
+        return false;
+      }
+      std::string callbacks;
+      std::string updater;
+      std::string timing;
+      if (!SerializeCallbacks(callbacks) || !SerializeUpdater(updater) ||
+          !SerializeTiming(timing) ||
+          !WriteOutput(context_.callback_trace_path,
+                       output_capabilities_.callback_trace, callbacks) ||
+          !WriteOutput(context_.updater_trace_path,
+                       output_capabilities_.updater_trace, updater) ||
+          !WriteOutput(context_.timing_trace_path,
+                       output_capabilities_.timing_trace, timing)) {
+        Reject("timing callback/updater/sample files could not be created");
+        return false;
+      }
     }
     finalized_ = true;
     return true;
@@ -499,6 +762,18 @@ bool ov_msckf::CP2SerialRuntimeTrace::Finalize() noexcept {
     Reject("serial trace serialization failed");
     return false;
   }
+}
+
+bool ov_msckf::CP2SerialRuntimeTrace::WriteOutput(
+    const CP2NullablePath &path,
+    const CP2OutputCapability &capability,
+    const std::string &bytes) noexcept {
+  if (!path.available) {
+    return false;
+  }
+  return held_capability_mode_
+             ? WriteCP2OutputCapability(path.value, capability, bytes)
+             : WriteNewFile(path.value, bytes);
 }
 
 bool ov_msckf::CP2SerialRuntimeTrace::ReadLoaderMap(
@@ -540,18 +815,78 @@ bool ov_msckf::CP2SerialRuntimeTrace::ReadLoaderMap(
 
 bool ov_msckf::CP2SerialRuntimeTrace::WriteNewFile(
     const std::string &path, const std::string &bytes) noexcept {
+  const std::size_t separator = path.rfind('/');
+  if (path.empty() || path.front() != '/' || separator == std::string::npos ||
+      separator == 0U || separator + 1U >= path.size()) {
+    return false;
+  }
+  const std::string parent_path = path.substr(0U, separator);
+  const std::string leaf = path.substr(separator + 1U);
+  if (leaf == "." || leaf == "..") {
+    return false;
+  }
+  const ScopedDescriptor parent(
+      ::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW |
+                                      O_CLOEXEC));
+  if (parent.get() < 0) {
+    return false;
+  }
+  struct stat parent_identity {};
+  struct stat parent_by_path {};
+  if (::fstat(parent.get(), &parent_identity) != 0 ||
+      ::lstat(parent_path.c_str(), &parent_by_path) != 0 ||
+      !S_ISDIR(parent_identity.st_mode) ||
+      parent_identity.st_uid != ::geteuid() ||
+      (parent_identity.st_mode & 0777U) != 0700U ||
+      parent_identity.st_dev != parent_by_path.st_dev ||
+      parent_identity.st_ino != parent_by_path.st_ino) {
+    return false;
+  }
   const ScopedDescriptor descriptor(
-      ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC |
-                               O_NOFOLLOW,
-             S_IRUSR | S_IWUSR));
+      ::openat(parent.get(), leaf.c_str(),
+               O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+               S_IRUSR | S_IWUSR));
   if (descriptor.get() < 0) {
     return false;
   }
-  struct stat identity {};
-  return ::fstat(descriptor.get(), &identity) == 0 &&
-         S_ISREG(identity.st_mode) && identity.st_nlink == 1U &&
-         write_all(descriptor.get(),
-                   reinterpret_cast<const std::uint8_t *>(bytes.data()),
-                   bytes.size()) &&
-         ::fsync(descriptor.get()) == 0;
+  struct stat opened {};
+  if (::fstat(descriptor.get(), &opened) != 0 ||
+      !S_ISREG(opened.st_mode) || opened.st_uid != ::geteuid() ||
+      opened.st_nlink != 1U ||
+      !write_all(descriptor.get(),
+                 reinterpret_cast<const std::uint8_t *>(bytes.data()),
+                 bytes.size()) ||
+      ::fchmod(descriptor.get(), S_IRUSR | S_IRGRP | S_IROTH) != 0 ||
+      ::fsync(descriptor.get()) != 0) {
+    return false;
+  }
+  struct stat retained {};
+  struct stat by_name {};
+  struct stat parent_after {};
+  struct stat parent_path_after {};
+  if (::fstat(descriptor.get(), &retained) != 0 ||
+      ::fstatat(parent.get(), leaf.c_str(), &by_name,
+                AT_SYMLINK_NOFOLLOW) != 0 ||
+      !S_ISREG(retained.st_mode) || retained.st_nlink != 1U ||
+      retained.st_uid != ::geteuid() ||
+      (retained.st_mode & 0777U) != 0444U ||
+      retained.st_size < 0 ||
+      static_cast<std::uintmax_t>(retained.st_size) !=
+          static_cast<std::uintmax_t>(bytes.size()) ||
+      retained.st_dev != by_name.st_dev || retained.st_ino != by_name.st_ino ||
+      retained.st_mode != by_name.st_mode ||
+      retained.st_nlink != by_name.st_nlink ||
+      retained.st_uid != by_name.st_uid || retained.st_gid != by_name.st_gid ||
+      retained.st_size != by_name.st_size || ::fsync(parent.get()) != 0 ||
+      ::fstat(parent.get(), &parent_after) != 0 ||
+      ::lstat(parent_path.c_str(), &parent_path_after) != 0 ||
+      parent_identity.st_dev != parent_after.st_dev ||
+      parent_identity.st_ino != parent_after.st_ino ||
+      parent_after.st_dev != parent_path_after.st_dev ||
+      parent_after.st_ino != parent_path_after.st_ino ||
+      !S_ISDIR(parent_after.st_mode) || parent_after.st_uid != ::geteuid() ||
+      (parent_after.st_mode & 0777U) != 0700U) {
+    return false;
+  }
+  return true;
 }

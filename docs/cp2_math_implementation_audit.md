@@ -402,3 +402,49 @@ anchor must pass and bind to the approved commit. Until that barrier and the
 required approval are satisfied, registry contents, bags, ground truth, and
 recorded payloads remain out of scope. CP2-D and CP2-E remain unexecuted and
 unpassed.
+
+## 2026-08-04 final data-free CP2-C/D/E candidate audit
+
+Conclusion: **estimator and comparison mathematics remain green at synthetic
+scope; formal CP2 remains blocked.** No registry, bag, ground truth, or
+recorded result was accessed for this audit, and the exactly-once formal unit
+gate was not invoked.
+
+The production estimator equations were rederived again from the edited
+source. Direct scalar whitening, SVD rank/conditioning rejection, full
+Householder nullspace projection, and retained `lambda`, `eta`, and `gamma`
+match the approved contract. The shared feature gate constructs
+`S = H P H^T + sigma^2 I`, retains the strict chi-square boundary, and uses the
+same marginal prior for both proposals. State/covariance ownership,
+commit-oracle ordering, failure atomicity, checked counters, finite-state
+requirements, and every no-repair/no-fallback condition remain unchanged.
+
+The D re-audit independently confirmed the Kabsch convention
+`C = sum((y-ybar)(x-xbar)^T)/N`, `R = (U D) V^T`, and
+`t = ybar - R xbar`; the one transform derived from the nullspace baseline is
+applied to both modes. Timestamp association remains integer-nanosecond,
+nearest within the inclusive 10 ms boundary with deterministic lower-row ties.
+Translation ATE RMSE remains `sqrt(sum(||p-g||^2)/N)`, not a per-coordinate
+mean. The complete chronological stereo witness independently replays the
+strict first-forward, no-search-past, strict `< 20 ms`, and no-reuse rules.
+
+The E timing-math re-audit confirmed exact NumPy-linear ranks `1/2` and
+`19/20`, reduced rational values, inclusive `11/10` and `23/20` gates by exact
+cross-products, checked wide arithmetic, exact median-of-three ordering, and
+the rule that a median cannot rescue any failed pair. No floating-point
+rounding is used for a timing pass/fail decision.
+
+Protecting diagnostics passed 25/25 C++ executables (216 captured cases),
+256/256 focused C/D Python cases, and 189/189 E Python cases. The E total is
+19 controls, 39 artifact/profile, 42 timing-math, 24 orchestration, 13
+privileged-backend, 48 privileged-helper, and 4 root-launcher checks. The
+sudoers draft also parsed with `visudo`.
+
+This green mathematical result does not promote CP2-E. Formal E actual mode
+is still source-locked; the root Python/OS/sudo runtime closure is incomplete;
+numeric PID/TID affinity/cpuset mutation retains an unresolved reuse race; the
+late replacement-recovery path lacks its full real-backend adversarial matrix;
+no final profile or privileged reversibility receipt exists; noninteractive
+sudo is unavailable; and this kernel exposes no proved CPU temperature/
+throttle witness. These fail-closed conditions prevent final source freeze and
+all recorded execution.
