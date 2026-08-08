@@ -302,19 +302,26 @@ class SequenceTransportTests(unittest.TestCase):
             ground_truth[-1][1],
             ground_truth[-1][2],
         )
-        quaternions = [(0.0, 0.0, 0.0, 1.0)] * 5
+        mode_timestamps = (
+            [timestamps[0] - 20_000_000]
+            + timestamps
+            + [timestamps[-1] + 40_000_000]
+        )
+        mode_positions = [positions[0]] + positions + [positions[-1]]
+        quaternions = [(0.0, 0.0, 0.0, 1.0)] * len(mode_timestamps)
+        ground_truth_quaternions = [(0.0, 0.0, 0.0, 1.0)] * len(timestamps)
         request = codec.encode_sequence_request(
             sequence_index=0,
             sequence_id="MH_01_easy",
-            nullspace_timestamps_ns=timestamps,
-            nullspace_positions=positions,
+            nullspace_timestamps_ns=mode_timestamps,
+            nullspace_positions=mode_positions,
             nullspace_quaternions_xyzw=quaternions,
-            schur_timestamps_ns=timestamps,
-            schur_positions=positions,
+            schur_timestamps_ns=mode_timestamps,
+            schur_positions=mode_positions,
             schur_quaternions_xyzw=quaternions,
             ground_truth_timestamps_ns=[item + 10_000_000 for item in timestamps],
             ground_truth_positions=ground_truth,
-            ground_truth_quaternions_xyzw=quaternions,
+            ground_truth_quaternions_xyzw=ground_truth_quaternions,
         )
         decoded = codec.decode_sequence_response(
             worker.evaluate_sequence_request(request), request
@@ -327,6 +334,11 @@ class SequenceTransportTests(unittest.TestCase):
             [item["ground_truth_timestamp_ns"] for item in decoded.associations],
             [timestamps[0] + 10_000_000]
             + [item + 10_000_000 for item in timestamps[:-1]],
+        )
+        self.assertEqual(decoded.shared_timestamps_ns, tuple(timestamps))
+        self.assertEqual(
+            [item["estimator_index"] for item in decoded.associations],
+            [1, 2, 3, 4, 5],
         )
 
 

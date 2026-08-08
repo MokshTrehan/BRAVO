@@ -28,7 +28,12 @@ import numpy as np
 U64_MAX = (1 << 64) - 1
 EXACT_BINARY64_INTEGER_MAX = (1 << 53) - 1
 GROUND_TRUTH_MAX_DIFFERENCE_NS = 10_000_000
-QUATERNION_NORM_TOLERANCE = np.float64(1.0e-10)
+# The frozen OpenVINS EuRoC ground-truth transport contains linearly
+# interpolated, decimal-serialized quaternions.  They are rotations only after
+# normalization, so this is an input-admissibility guard rather than a metric
+# tolerance.  The exact inclusive boundary is shared with the stdlib codec and
+# detached verifier.
+QUATERNION_NORM_TOLERANCE = np.float64(1.0e-3)
 ROTATION_VALIDATION_TOLERANCE = np.float64(1.0e-10)
 POSITION_P95_LIMIT_M = np.float64(0.01)
 ORIENTATION_P95_LIMIT_DEG = np.float64(0.05)
@@ -586,7 +591,7 @@ def jpl_stored_xyzw_to_hamilton_inverse_rotation(stored_xyzw: Any) -> np.ndarray
     lower = np.float64(np.float64(1.0) - QUATERNION_NORM_TOLERANCE)
     upper = np.float64(np.float64(1.0) + QUATERNION_NORM_TOLERANCE)
     if not np.isfinite(norm) or norm < lower or norm > upper:
-        raise SequenceMathError("stored quaternion norm is outside [1-1e-10,1+1e-10]")
+        raise SequenceMathError("stored quaternion norm is outside [1-1e-3,1+1e-3]")
     normalized = np.empty(4, dtype=np.float64)
     for index in range(4):
         normalized[index] = np.float64(quaternion[index] / norm)

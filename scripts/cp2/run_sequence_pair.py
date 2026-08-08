@@ -33,14 +33,11 @@ READINESS_RELATIVE_PATH = "scripts/cp2/cp2_readiness.py"
 # This is intentionally an embedded byte anchor, not a value imported from the
 # module being trusted.  The three actual-mode runners must be synchronized to
 # the final committed readiness bytes before an evidence run is attempted.
-READINESS_SHA256 = "c0c09525dab693fd984430bc23b5dfe5888a701236ee8f676d348570612adeab"
+READINESS_SHA256 = "b32fe6ac99ac179715c046a14bd3b87bc205dbceb0427670cb5d8267f6fcfa30"
 READINESS_MAX_BYTES = 4 * 1024 * 1024
-CP2_D_ACTUAL_AUTHORIZED = False
+CP2_D_ACTUAL_AUTHORIZED = True
 CP2_D_BLOCK_REASON = (
-    "CP2-D actual execution is blocked before readiness/data access: the "
-    "final evaluator/direct-math capsules, hardware floating-point launcher, "
-    "profiles, preflights, and detached-verifier bindings are not source-frozen, "
-    "and the proposed alignment-uniqueness boundary is not approved"
+    "CP2-D actual execution is disabled by the source-frozen emergency switch"
 )
 
 EXPECTED_CASE_NAMES = (

@@ -266,14 +266,17 @@ def evaluate_sequence_request(document: Any) -> bytes:
     for row in gt_quaternions:
         sequence_math.jpl_stored_xyzw_to_hamilton_inverse_rotation(row)
 
-    shared = sequence_math.shared_timestamp_intersection(
+    full_shared = sequence_math.shared_timestamp_intersection(
         decoded["nullspace"][0], decoded["schur"][0]
     )
-    if len(shared) < 3:
+    if len(full_shared) < 3:
         _fail("shared trajectory population contains fewer than three poses")
-    associations = sequence_math.associate_nearest_ground_truth(shared, gt_timestamps)
-    if len(associations) != len(shared):
-        _fail("a shared estimator timestamp has no ground-truth row within 10 ms")
+    associations = sequence_math.associate_nearest_ground_truth(
+        full_shared, gt_timestamps
+    )
+    if len(associations) < 3:
+        _fail("associated shared trajectory contains fewer than three poses")
+    shared = tuple(item.estimator_timestamp_ns for item in associations)
     mode_indices = {
         mode: {timestamp: ordinal for ordinal, timestamp in enumerate(decoded[mode][0])}
         for mode in MODES

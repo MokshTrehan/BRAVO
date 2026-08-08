@@ -19,6 +19,7 @@ sys.path.insert(0, str(CP2_DIRECTORY))
 
 import cp2_schema as schema  # noqa: E402
 import cp2_sequence_math as sequence_math  # noqa: E402
+import cp2_sequence_math_codec as math_codec  # noqa: E402
 
 
 def rotation_z(radians):
@@ -501,11 +502,34 @@ class QuaternionConventionTests(unittest.TestCase):
         np.testing.assert_allclose(inverse_rotation.T, rotation_z(-math.pi / 2.0), rtol=0.0, atol=2.0e-15)
 
     def test_quaternion_norm_boundary_is_inclusive_without_repair_beyond_it(self):
+        self.assertEqual(
+            float(sequence_math.QUATERNION_NORM_TOLERANCE),
+            math_codec.QUATERNION_NORM_TOLERANCE,
+        )
+        lower = np.float64(1.0) - sequence_math.QUATERNION_NORM_TOLERANCE
         upper = np.float64(1.0) + sequence_math.QUATERNION_NORM_TOLERANCE
+        sequence_math.jpl_stored_xyzw_to_hamilton_inverse_rotation([0.0, 0.0, 0.0, lower])
         sequence_math.jpl_stored_xyzw_to_hamilton_inverse_rotation([0.0, 0.0, 0.0, upper])
+        math_codec.validate_stored_quaternion(
+            [0.0, 0.0, 0.0, float(lower)], "synthetic stored quaternion"
+        )
+        math_codec.validate_stored_quaternion(
+            [0.0, 0.0, 0.0, float(upper)], "synthetic stored quaternion"
+        )
+        below = np.nextafter(lower, np.float64(-math.inf))
         above = np.nextafter(upper, np.float64(math.inf))
         with self.assertRaises(sequence_math.SequenceMathError):
+            sequence_math.jpl_stored_xyzw_to_hamilton_inverse_rotation([0.0, 0.0, 0.0, below])
+        with self.assertRaises(sequence_math.SequenceMathError):
             sequence_math.jpl_stored_xyzw_to_hamilton_inverse_rotation([0.0, 0.0, 0.0, above])
+        with self.assertRaises(math_codec.SequenceMathCodecError):
+            math_codec.validate_stored_quaternion(
+                [0.0, 0.0, 0.0, float(below)], "synthetic stored quaternion"
+            )
+        with self.assertRaises(math_codec.SequenceMathCodecError):
+            math_codec.validate_stored_quaternion(
+                [0.0, 0.0, 0.0, float(above)], "synthetic stored quaternion"
+            )
 
     def test_bad_quaternions_fail_closed(self):
         bad_values = (

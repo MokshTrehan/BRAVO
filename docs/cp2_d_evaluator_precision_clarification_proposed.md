@@ -413,6 +413,50 @@ floating-point state: preflight must report and verify actual backend thread
 count, CPU dispatch/core policy, FE_TONEAREST, and x86 MXCSR or AArch64 FPCR
 state with subnormal preservation.
 
+## Frozen ground-truth quaternion transport correction
+
+The frozen OpenVINS EuRoC ground-truth files are an interpolated decimal pose
+transport, not a stream of already unit-normalized quaternion coefficients.
+The earlier `[1-1e-10,1+1e-10]` input gate was incompatible with those exact
+hash-bound inputs: the maximum absolute stored-norm deviations are
+`6.7540593134074456e-05` for `MH_01_easy`,
+`3.2973768952793137e-04` for `MH_03_medium`, and
+`7.6531429282766794e-07` for `V1_01_easy`. Those observations were made only
+after the 2026-08-07 full-completion authorization permitted ground-truth
+inspection and development reruns.
+
+The corrected frozen admissibility gate is the inclusive interval
+`[1-1e-3,1+1e-3]`. It is applied identically by the stdlib transport codec,
+the independent NumPy worker, producer-side parsing, and detached verification.
+Every admitted quaternion is still normalized exactly once before forming a
+rotation; a value outside the interval rejects, and there is no clamp,
+substitution, or alternate rotation. This changes only validation of the
+already frozen input representation. Association, common alignment, position
+and orientation metrics, evaluator RMSE, and every CP2-D acceptance threshold
+remain unchanged. Protecting tests retain equality at both the inclusive
+boundary and rejection of the next binary64 value outside it.
+
+## Associated shared-population transport correction
+
+The pre-existing frozen association rule selects the nearest ground-truth row
+within the unchanged inclusive 10,000,000-nanosecond gate and omits estimator
+timestamps for which no row is inside that gate. The direct NumPy worker and
+stdlib response codec had contradicted that rule by requiring every timestamp
+in the complete two-mode intersection to associate. On the available
+development `MH_01_easy` CP0 trace this made 21 ordinary post-ground-truth tail
+poses fatal: the complete intersection has 2,764 timestamps and the exact
+associated subset has 2,743.
+
+The corrected worker and transport retain the associated subset as the shared
+metric population. Each association continues to preserve its source
+`estimator_index` in the complete intersection, so an omitted head, interior,
+or tail timestamp leaves an independently verifiable index gap. The detached
+verifier reconstructs the complete intersection and checks that source-index
+mapping before accepting the shared payload. This correction changes neither
+the inclusive 10-ms gate nor any selected pose, association tie-break, common
+alignment, metric, or acceptance threshold. Protecting tests include omitted
+head and tail timestamps around exact inclusive-boundary associations.
+
 ## Historical decisions and current disposition
 
 The original proposal listed the following decisions before real capsule bytes

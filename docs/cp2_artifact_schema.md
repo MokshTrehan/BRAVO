@@ -1293,17 +1293,20 @@ projection of its mode trajectory JSONL and pose fields use lowercase C-locale
 `%.17g`. Ground-truth decimal
 timestamps are parsed exactly, must have at most nine fractional digits, and
 are converted to integer nanoseconds without binary64 rounding. Quaternions
-must have norm in `[1-1e-10,1+1e-10]` and rotations are formed only after
+must have norm in `[1-1e-3,1+1e-3]` and rotations are formed only after
 normalization.
 
-Mode output population is the exact intersection of unique
+The complete mode intersection is the exact intersection of unique
 `camera_timestamp_ns` values from the two completed callback/trajectory traces.
-In increasing
-estimator time, each timestamp is associated to the ground-truth row with
-minimum absolute integer-nanosecond difference at most 10,000,000; ties select
-the lower ground-truth row index and ground-truth reuse is allowed. This is the
-authoritative direct association; evo receives its already associated
-projection as described below. `shared_population.bin` starts with domain bytes
+In increasing estimator time, each timestamp is associated to the ground-truth
+row with minimum absolute integer-nanosecond difference at most 10,000,000;
+ties select the lower ground-truth row index and ground-truth reuse is allowed.
+Complete-intersection timestamps without a ground-truth row inside that gate
+are omitted. Every retained association preserves its source estimator index
+in the complete intersection, including any gaps, and at least three retained
+associations are required. The resulting associated subset is the authoritative
+shared metric population and direct association; evo receives its already
+associated projection as described below. `shared_population.bin` starts with domain bytes
 `SchurVIO-CP2-shared-population-v1\0`, then a u64 count, then for every row:
 estimator timestamp u64, ground-truth timestamp u64, nullspace position and
 quaternion, Schur position and quaternion, and ground-truth position and

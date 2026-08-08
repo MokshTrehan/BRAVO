@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import struct
 import sys
 import tarfile
 import tempfile
@@ -649,6 +650,35 @@ class DetachedReplayTests(unittest.TestCase):
             self._replay_evaluator(preflight_stream_mismatch=True)
 
     def test_retained_response_must_equal_source_bound_replay(self):
+        complete = verifier._actual_complete_timestamp_intersection(
+            (10, 20, 30, 40, 50),
+            (5, 10, 25, 30, 45, 50, 60),
+        )
+        self.assertEqual(complete, (10, 30, 50))
+        self.assertEqual(tuple(complete[index] for index in (0, 2)), (10, 50))
+
+        def tum(quaternion_w):
+            return (
+                "# timestamp tx ty tz qx qy qz qw\n"
+                "1.000000000 0 0 0 0 0 0 {}\n".format(
+                    format(quaternion_w, ".17g")
+                )
+            ).encode("ascii")
+
+        tolerance = verifier.ACTUAL_QUATERNION_NORM_TOLERANCE
+        lower = 1.0 - tolerance
+        upper = 1.0 + tolerance
+        verifier._actual_parse_tum(tum(lower), "synthetic lower", estimator=True)
+        verifier._actual_parse_tum(tum(upper), "synthetic upper", estimator=True)
+        lower_bits = int.from_bytes(struct.pack(">d", lower), "big")
+        upper_bits = int.from_bytes(struct.pack(">d", upper), "big")
+        for outside_bits in (lower_bits - 1, upper_bits + 1):
+            outside = struct.unpack(">d", outside_bits.to_bytes(8, "big"))[0]
+            with self.assertRaises(verifier.ActualVerificationError):
+                verifier._actual_parse_tum(
+                    tum(outside), "synthetic outside", estimator=True
+                )
+
         artifact = self.root / "artifact"
         direct = artifact / "direct_math"
         direct.mkdir(parents=True, mode=0o700)

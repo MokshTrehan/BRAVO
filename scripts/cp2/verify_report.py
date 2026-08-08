@@ -7965,6 +7965,7 @@ ACTUAL_OFFLINE_REPLAY_TIMEOUT_SECONDS = 300
 ACTUAL_PROCESS_GROUP_CLEANUP_SECONDS = 10.0
 ACTUAL_PROCESS_GROUP_POLL_SECONDS = 0.01
 ACTUAL_EXACT_BINARY64_INTEGER_MAX = (1 << 53) - 1
+ACTUAL_QUATERNION_NORM_TOLERANCE = 1.0e-3
 ACTUAL_SEQUENCE_IDS = ("MH_01_easy", "MH_03_medium", "V1_01_easy")
 ACTUAL_SEQUENCE_OFFSETS_SECONDS = (40.0, 5.0, 0.0)
 ACTUAL_SEQUENCE_BAG_SHA256 = (
@@ -12330,8 +12331,12 @@ def _actual_parse_tum(content, label, estimator=False):
         if not all(math.isfinite(value) for value in pose):
             _actual_fail(label + " contains a nonfinite pose")
         norm = math.sqrt(sum(value * value for value in pose[3:]))
-        if not 1.0 - 1.0e-10 <= norm <= 1.0 + 1.0e-10:
-            _actual_fail(label + " quaternion norm is outside [1-1e-10,1+1e-10]")
+        if not (
+            1.0 - ACTUAL_QUATERNION_NORM_TOLERANCE
+            <= norm
+            <= 1.0 + ACTUAL_QUATERNION_NORM_TOLERANCE
+        ):
+            _actual_fail(label + " quaternion norm is outside [1-1e-3,1+1e-3]")
         rows.append({"timestamp_ns": timestamp, "position": pose[:3], "quaternion": pose[3:]})
     return rows
 
@@ -14257,6 +14262,26 @@ def _actual_read_ground_truth_source(common):
     return rows
 
 
+def _actual_complete_timestamp_intersection(left, right):
+    """Independently reconstruct the exact ordered two-mode intersection."""
+
+    shared = []
+    left_index = 0
+    right_index = 0
+    while left_index < len(left) and right_index < len(right):
+        left_timestamp = left[left_index]
+        right_timestamp = right[right_index]
+        if left_timestamp < right_timestamp:
+            left_index += 1
+        elif right_timestamp < left_timestamp:
+            right_index += 1
+        else:
+            shared.append(left_timestamp)
+            left_index += 1
+            right_index += 1
+    return tuple(shared)
+
+
 def _actual_sequence_shared_math(artifact, manifest, report, mode_details, common):
     """Replay D math through the source/unit-bound capsule and join every surface."""
 
@@ -14400,16 +14425,25 @@ def _actual_sequence_shared_math(artifact, manifest, report, mode_details, commo
     associated_ground_truth_bits = direct.arrays[
         "ground_truth_associated_positions"
     ].bits
+    complete_intersection = _actual_complete_timestamp_intersection(
+        request.nullspace_timestamps_ns,
+        request.schur_timestamps_ns,
+    )
+    previous_source_index = -1
     for index, (shared, association) in enumerate(
         zip(shared_rows, direct.associations)
     ):
+        source_index = association["estimator_index"]
         if (
-            association["estimator_index"] != index
+            source_index <= previous_source_index
+            or source_index >= len(complete_intersection)
+            or complete_intersection[source_index] != shared["timestamp_ns"]
             or association["estimator_timestamp_ns"] != shared["timestamp_ns"]
             or association["ground_truth_timestamp_ns"]
             != shared["ground_truth_timestamp_ns"]
         ):
             _actual_fail("shared population/direct association differs")
+        previous_source_index = source_index
         ground_truth = source_ground_truth[association["ground_truth_index"]]
         if ground_truth["timestamp_ns"] != shared["ground_truth_timestamp_ns"]:
             _actual_fail("shared population ground-truth timestamp differs")

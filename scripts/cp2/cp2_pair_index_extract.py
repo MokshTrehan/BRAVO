@@ -38,7 +38,7 @@ IDENTITY_FIELDS = (
     "st_ctime_ns",
 )
 SEQUENCES = ("MH_01_easy", "MH_03_medium", "V1_01_easy")
-OFFSETS_SECONDS = (40, 40, 35)
+OFFSETS_SECONDS = (40, 5, 0)
 TOPICS = ("/imu0", "/cam0/image_raw", "/cam1/image_raw")
 STRICT_PAIR_DELTA_NS = 20_000_000
 WITNESS_BASENAME = "pair_selection_witness.jsonl"

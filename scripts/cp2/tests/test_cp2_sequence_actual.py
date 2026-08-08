@@ -383,6 +383,11 @@ class SequenceActualPureTests(unittest.TestCase):
         self.assertEqual(campaign.SEQUENCES, expected_sequences)
         self.assertEqual(actual.runner.SEQUENCES, expected_sequences)
         self.assertEqual(extractor.SEQUENCES, expected_sequences)
+        self.assertEqual(actual.runner.OFFSETS_SECONDS, (40.0, 5.0, 0.0))
+        self.assertEqual(
+            tuple(float(value) for value in extractor.OFFSETS_SECONDS),
+            actual.runner.OFFSETS_SECONDS,
+        )
         self.assertEqual(
             campaign.STRICT_PAIR_DELTA_NS,
             actual.runner.STRICT_PAIR_DELTA_NS,

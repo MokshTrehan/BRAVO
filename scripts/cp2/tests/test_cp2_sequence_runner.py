@@ -1298,7 +1298,6 @@ class BootstrapOrderingTests(unittest.TestCase):
             status_value = entrypoint._actual(
                 self.arguments(), readiness_loader=loader,
                 postauthorization_executor=executor,
-                _allow_unapproved_synthetic_test=True,
             )
         self.assertEqual(status_value, 0)
         self.assertIn('"passed":true', stdout.getvalue())
@@ -1349,17 +1348,18 @@ class BootstrapOrderingTests(unittest.TestCase):
         self.assertIn("synthetic close failure", stderr.getvalue())
         self.assertIn("handle-close", events)
 
-    def test_unapproved_actual_mode_stops_before_readiness_loader(self):
+    def test_disabled_actual_mode_stops_before_readiness_loader(self):
         reached = []
         stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr):
-            status_value = entrypoint._actual(
-                self.arguments(),
-                readiness_loader=lambda repo_root: reached.append(repo_root),
-            )
+        with mock.patch.object(entrypoint, "CP2_D_ACTUAL_AUTHORIZED", False):
+            with contextlib.redirect_stderr(stderr):
+                status_value = entrypoint._actual(
+                    self.arguments(),
+                    readiness_loader=lambda repo_root: reached.append(repo_root),
+                )
         self.assertEqual(status_value, 1)
         self.assertEqual(reached, [])
-        self.assertIn("blocked before readiness/data access", stderr.getvalue())
+        self.assertIn("disabled by the source-frozen emergency switch", stderr.getvalue())
 
     def test_descriptor_loader_matches_embedded_readiness_anchor(self):
         root = Path(__file__).resolve().parents[3]

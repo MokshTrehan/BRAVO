@@ -28,6 +28,7 @@ MAX_DOCUMENT_BYTES = 256 << 20
 MAX_POSE_COUNT = 1_000_000
 MAX_ARRAY_ELEMENTS = 9 * MAX_POSE_COUNT
 GROUND_TRUTH_MAX_DIFFERENCE_NS = 10_000_000
+QUATERNION_NORM_TOLERANCE = 1.0e-3
 SEQUENCES = ("MH_01_easy", "MH_03_medium", "V1_01_easy")
 MODES = ("nullspace", "schur")
 _BITS = re.compile(r"^[0-9a-f]{16}$")
@@ -148,8 +149,11 @@ def validate_stored_quaternion(value: Sequence[float], label: str) -> Tuple[floa
     for component in components:
         squared = float(squared + float(component * component))  # type: ignore[operator]
     norm = math.sqrt(squared)
-    if norm < 1.0 - 1.0e-10 or norm > 1.0 + 1.0e-10:
-        _fail(label + " norm is outside [1-1e-10,1+1e-10]")
+    if (
+        norm < 1.0 - QUATERNION_NORM_TOLERANCE
+        or norm > 1.0 + QUATERNION_NORM_TOLERANCE
+    ):
+        _fail(label + " norm is outside [1-1e-3,1+1e-3]")
     return components  # type: ignore[return-value]
 
 
@@ -469,17 +473,21 @@ def decode_sequence_response(
         or record["request_sha256"] != request.sha256
     ):
         _fail("sequence-math response does not bind its exact request")
-    expected_shared = _shared(
+    full_shared = _shared(
         request.nullspace_timestamps_ns, request.schur_timestamps_ns
+    )
+    expected_associations = _nearest_associations(
+        full_shared, request.ground_truth_timestamps_ns
+    )
+    expected_shared = tuple(
+        row["estimator_timestamp_ns"] for row in expected_associations
     )
     shared = _timestamps(record["shared_timestamps_ns"], "shared", unique=True)
     if shared != expected_shared or len(shared) < 3:
-        _fail("response shared timestamps are not the complete exact intersection")
-    expected_associations = _nearest_associations(
-        shared, request.ground_truth_timestamps_ns
-    )
-    if len(expected_associations) != len(shared):
-        _fail("a shared timestamp lacks ground truth within the inclusive 10-ms gate")
+        _fail(
+            "response shared timestamps are not the exact associated subset "
+            "of the complete mode intersection"
+        )
     if type(record["associations"]) is not list or len(record["associations"]) != len(shared):
         _fail("response association population differs")
     retained_associations = []
@@ -621,6 +629,7 @@ def decode_sequence_response(
 __all__ = [
     "F64BitsArray",
     "MAX_DOCUMENT_BYTES",
+    "QUATERNION_NORM_TOLERANCE",
     "REQUEST_RECORD_TYPE",
     "RESPONSE_RECORD_TYPE",
     "SequenceMathCodecError",
