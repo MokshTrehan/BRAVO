@@ -206,6 +206,7 @@ CONTRACT_INPUTS = (
     "project/cp2_completion_chained_authorization.txt",
     "project/cp2_d_completion_authorization_addendum.txt",
     "project/cp2_e_completion_authorization_addendum.txt",
+    "project/cp2_full_completion_authorization_20260807.txt",
     "project/cp2_predata_incident_disposition_approval.json",
     "project/cp2_gate.yaml",
 )

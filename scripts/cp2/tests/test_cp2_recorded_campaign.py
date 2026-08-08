@@ -79,6 +79,12 @@ class RecordedCampaignTests(unittest.TestCase):
 
     def test_cp2_c_launch_surface_and_held_output_population_are_exact(self):
         repository = Path(__file__).resolve().parents[3]
+        self.assertEqual(
+            campaign.CONTRACT_INPUTS.count(
+                "project/cp2_full_completion_authorization_20260807.txt"
+            ),
+            1,
+        )
         with tempfile.TemporaryDirectory(
             prefix="cp2-c-held-runtime-", dir="/tmp"
         ) as raw:
