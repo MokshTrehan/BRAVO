@@ -73,6 +73,7 @@ POSTAUTHORIZATION_SOURCE_PATHS = (
     "project/cp2_completion_chained_authorization.txt",
     "project/cp2_d_completion_authorization_addendum.txt",
     "project/cp2_e_completion_authorization_addendum.txt",
+    "project/cp2_full_completion_authorization_20260807.txt",
     "project/cp2_capsule_source_lock.json",
     "project/cp2_capsule_expected_identity.json",
     "project/cp2_capsule_unit_import.json",

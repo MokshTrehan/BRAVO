@@ -543,6 +543,7 @@ SOURCE_INPUTS = {
     "project/cp2_completion_chained_authorization.txt",
     "project/cp2_d_completion_authorization_addendum.txt",
     "project/cp2_e_completion_authorization_addendum.txt",
+    "project/cp2_full_completion_authorization_20260807.txt",
     "project/cp2_capsule_source_lock.json",
     "project/cp2_capsule_expected_identity.json",
     "project/cp2_capsule_unit_import.json",
@@ -641,6 +642,7 @@ CONTRACT_INPUTS = {
     "project/cp2_completion_chained_authorization.txt",
     "project/cp2_d_completion_authorization_addendum.txt",
     "project/cp2_e_completion_authorization_addendum.txt",
+    "project/cp2_full_completion_authorization_20260807.txt",
     "project/cp2_predata_incident_disposition_approval.json",
     "project/cp2_gate.yaml",
 }
@@ -667,8 +669,8 @@ FROZEN_CP2_C_APPROVAL_BINDING = {
         "sha256": "d07edcfe2112d41e5328882708aaec6f57e3a80c9fb605e94c8094df080986b4",
     },
     "docs/cp2_predata_incident_log.md": {
-        "git_blob": "644f35ba9e371ae27efc2827e146f8b69dab70fe",
-        "sha256": "5d1f8aa1728bedd6141a55c756ef9dc3bfd2d52e7480208c27a94324b321af56",
+        "git_blob": "0b4bb06c4303b253de738cc0366ffce7f4219221",
+        "sha256": "0121f141ea36a0e469dcba6c34c77034a3df9a72ea15b2901acc5c5d5ba03139",
     },
     "project/cp2_c_clarification_approval.json": {
         "git_blob": "0307342411e06dff57d58d48bc4d829fca138686",
@@ -679,8 +681,8 @@ FROZEN_CP2_C_APPROVAL_BINDING = {
         "sha256": "41dfe69b32f19a4be165aeb11292bd98822711ea10f9bb7de0c488b0ef22a768",
     },
     "project/cp2_predata_incident_disposition_approval.json": {
-        "git_blob": "c6c1a1b29324b31152cf038d6375fc216ca6f57c",
-        "sha256": "80d227032c77a060d4bae5b48c869cc207c999ab7e2f2259bc884767ca11412e",
+        "git_blob": "cbcde817dc2784db557fe1fd363c2cb5832e49d4",
+        "sha256": "e21d5910deb16ac34cf660d0db74958a2ab8e21c2492788d8525782ae9aa4f8d",
     },
 }
 FROZEN_CP2_C_APPROVAL_RECORDS = {
@@ -744,24 +746,51 @@ FROZEN_CP2_C_APPROVAL_RECORDS = {
         "exceptions": [],
     },
     "project/cp2_predata_incident_disposition_approval.json": {
-        "schema_version": 1,
+        "schema_version": 2,
         "record_type": "cp2_predata_incident_disposition_approval",
         "reviewer": "Moksh Trehan",
-        "approved_utc": "2026-08-04T11:41:12Z",
-        "reviewed_commit": "46b3010ad5e77ea61f9a571ccb7842ea2e0f1979",
+        "recorded_utc": "2026-08-08T03:39:09Z",
         "document_path": "docs/cp2_predata_incident_log.md",
-        "document_git_blob": "644f35ba9e371ae27efc2827e146f8b69dab70fe",
-        "document_sha256": "5d1f8aa1728bedd6141a55c756ef9dc3bfd2d52e7480208c27a94324b321af56",
-        "approval_statement": (
-            "I, Moksh Trehan, acknowledge the 2026-08-04 math-audit "
-            "registry/baseline-metadata incident and accept its disposition "
-            "as recorded in docs/cp2_predata_incident_log.md at commit "
-            "46b3010ad5e77ea61f9a571ccb7842ea2e0f1979; no exposed or "
-            "incident-derived value may influence CP2 implementation, "
-            "thresholds, profiles, tests, execution choices, or evidence. My "
-            "prior conditional CP2-C recorded-input authorization otherwise "
-            "remains unchanged; no exceptions."
-        ),
+        "document_content_commit": "d960f90567bf113d9d04a4449bc5c9721c250aea",
+        "document_git_blob": "0b4bb06c4303b253de738cc0366ffce7f4219221",
+        "document_sha256": "0121f141ea36a0e469dcba6c34c77034a3df9a72ea15b2901acc5c5d5ba03139",
+        "document_size_bytes": 15055,
+        "current_authority": {
+            "tracked_path": "project/cp2_full_completion_authorization_20260807.txt",
+            "tracked_canonicalization": (
+                "one_verbatim_conversation_copy_with_terminal_lf"
+            ),
+            "tracked_byte_count": 3629,
+            "tracked_sha256": (
+                "8cb4767c159d4ec30317799a6ce3fa9b6535c36e77b9f451b977a31a5a233b67"
+            ),
+            "tracked_git_blob": "8e4064dbb3436037b9f317be483b6553ecbe4de4",
+        },
+        "authorization_effect": {
+            "incident_log_retained_without_rewrite": True,
+            "prior_predata_access_stop_superseded": True,
+            "iterative_diagnosis_and_rerun_permitted": True,
+            "failed_designated_evidence_must_be_preserved_and_reported": True,
+            "silent_deletion_relabeling_threshold_weakening_or_concealment_forbidden": True,
+        },
+        "historical_approval": {
+            "approved_utc": "2026-08-04T11:41:12Z",
+            "reviewed_commit": "46b3010ad5e77ea61f9a571ccb7842ea2e0f1979",
+            "document_git_blob": "644f35ba9e371ae27efc2827e146f8b69dab70fe",
+            "document_sha256": (
+                "5d1f8aa1728bedd6141a55c756ef9dc3bfd2d52e7480208c27a94324b321af56"
+            ),
+            "approval_statement": (
+                "I, Moksh Trehan, acknowledge the 2026-08-04 math-audit "
+                "registry/baseline-metadata incident and accept its disposition "
+                "as recorded in docs/cp2_predata_incident_log.md at commit "
+                "46b3010ad5e77ea61f9a571ccb7842ea2e0f1979; no exposed or "
+                "incident-derived value may influence CP2 implementation, "
+                "thresholds, profiles, tests, execution choices, or evidence. My "
+                "prior conditional CP2-C recorded-input authorization otherwise "
+                "remains unchanged; no exceptions."
+            ),
+        },
         "exceptions": [],
     },
 }
@@ -778,44 +807,105 @@ FROZEN_CP2_COMPLETION_AUTHORIZATION_BINDING = {
         "git_blob": "3f9ea1f33f25a66f8cf715bfcd88cdc823a4878e",
         "sha256": "96b758e8ed8346720ab9fa1006c6c8c3cb68b31448fe54b676a71ee2e14149eb",
     },
+    "project/cp2_full_completion_authorization_20260807.txt": {
+        "git_blob": "8e4064dbb3436037b9f317be483b6553ecbe4de4",
+        "sha256": "8cb4767c159d4ec30317799a6ce3fa9b6535c36e77b9f451b977a31a5a233b67",
+    },
+    "docs/cp2_predata_incident_log.md": {
+        "git_blob": "0b4bb06c4303b253de738cc0366ffce7f4219221",
+        "sha256": "0121f141ea36a0e469dcba6c34c77034a3df9a72ea15b2901acc5c5d5ba03139",
+    },
+    "project/cp2_predata_incident_disposition_approval.json": {
+        "git_blob": "cbcde817dc2784db557fe1fd363c2cb5832e49d4",
+        "sha256": "e21d5910deb16ac34cf660d0db74958a2ab8e21c2492788d8525782ae9aa4f8d",
+    },
     "project/cp2_completion_authorization_binding.json": {
-        "git_blob": "a28242c45889a469ebe0217ccf1f609c9dec2a08",
-        "sha256": "5285bf33f4bcbe854b4fcc508376a7d83d7d4c5f9bb103744916781cbf1e6935",
+        "git_blob": "4ffe1e1caf9cf02e7cccfc3b51f91d67073e6f50",
+        "sha256": "be7c0dec8a77e6b18a6555c15aa476ae5991ea5ca17265c788225b443c0098fb",
     },
 }
 FROZEN_CP2_COMPLETION_AUTHORIZATION_RECORD = {
-    "schema_version": 1,
+    "schema_version": 2,
     "record_type": "cp2_completion_authorization_binding",
     "reviewer": "Moksh Trehan",
-    "recorded_date": "2026-08-04",
+    "recorded_date": "2026-08-07",
     "starting_branch": "schurvio-lite/cp2-one-pass",
-    "starting_commit": "1218d3fb73066760f099f87c621fe607f9de8b63",
-    "base_authorization": {
-        "user_supplied_byte_count": 8606,
-        "user_supplied_sha256": "8e07b1e1d5418b65b5d1993e791e9dab5340d7e77f9ea687e6d064e3bc803cca",
-        "tracked_path": "project/cp2_completion_chained_authorization.txt",
-        "tracked_canonicalization": "user_bytes_plus_one_terminal_lf",
-        "tracked_byte_count": 8607,
-        "tracked_sha256": "385193b010462c75622d0ff777310df1d96f773036eb7d93885200810e8f021e",
-        "tracked_git_blob": "7a9fe092abf28c6548ce26cacdd9b134594b5ad5",
-    },
-    "cp2_d_addendum": {
-        "tracked_path": "project/cp2_d_completion_authorization_addendum.txt",
-        "tracked_canonicalization": "one_semantic_copy_with_terminal_lf",
-        "conversation_receipt_repetitions": 2,
-        "tracked_byte_count": 4206,
-        "tracked_sha256": "1193feb1dd2f0d440f9b9f1390baf716eada7d1d9ac705520b7be0cfd31d1429",
-        "tracked_git_blob": "91ebdc2ebe81765ab8b96c5d05d422b6e415998a",
-    },
-    "cp2_e_addendum": {
-        "tracked_path": "project/cp2_e_completion_authorization_addendum.txt",
-        "tracked_canonicalization": "one_semantic_copy_with_terminal_lf",
+    "authorization_received_at_commit": (
+        "adeb4495b8b730e97787faa6ba28fc0cfe5600bb"
+    ),
+    "authorization_received_at_tree": "135406c33ca449b4c482a7cca7c8bba47ecfd399",
+    "full_completion_authorization": {
+        "tracked_path": "project/cp2_full_completion_authorization_20260807.txt",
+        "tracked_canonicalization": "one_verbatim_conversation_copy_with_terminal_lf",
         "conversation_receipt_repetitions": 1,
-        "tracked_byte_count": 2913,
-        "tracked_sha256": "96b758e8ed8346720ab9fa1006c6c8c3cb68b31448fe54b676a71ee2e14149eb",
-        "tracked_git_blob": "3f9ea1f33f25a66f8cf715bfcd88cdc823a4878e",
+        "tracked_byte_count": 3629,
+        "tracked_sha256": (
+            "8cb4767c159d4ec30317799a6ce3fa9b6535c36e77b9f451b977a31a5a233b67"
+        ),
+        "tracked_git_blob": "8e4064dbb3436037b9f317be483b6553ecbe4de4",
     },
-    "human_acceptance_timing": "deferred_until_final_cp2_review_package",
+    "incident_disposition_binding": {
+        "incident_log_path": "docs/cp2_predata_incident_log.md",
+        "incident_log_content_commit": "d960f90567bf113d9d04a4449bc5c9721c250aea",
+        "incident_log_byte_count": 15055,
+        "incident_log_sha256": (
+            "0121f141ea36a0e469dcba6c34c77034a3df9a72ea15b2901acc5c5d5ba03139"
+        ),
+        "incident_log_git_blob": "0b4bb06c4303b253de738cc0366ffce7f4219221",
+        "authority_record_path": (
+            "project/cp2_predata_incident_disposition_approval.json"
+        ),
+        "authority_record_byte_count": 1999,
+        "authority_record_sha256": (
+            "e21d5910deb16ac34cf660d0db74958a2ab8e21c2492788d8525782ae9aa4f8d"
+        ),
+        "authority_record_git_blob": "cbcde817dc2784db557fe1fd363c2cb5832e49d4",
+    },
+    "prior_authorizations": {
+        "base_authorization": {
+            "user_supplied_byte_count": 8606,
+            "user_supplied_sha256": (
+                "8e07b1e1d5418b65b5d1993e791e9dab5340d7e77f9ea687e6d064e3bc803cca"
+            ),
+            "tracked_path": "project/cp2_completion_chained_authorization.txt",
+            "tracked_canonicalization": "user_bytes_plus_one_terminal_lf",
+            "tracked_byte_count": 8607,
+            "tracked_sha256": (
+                "385193b010462c75622d0ff777310df1d96f773036eb7d93885200810e8f021e"
+            ),
+            "tracked_git_blob": "7a9fe092abf28c6548ce26cacdd9b134594b5ad5",
+        },
+        "cp2_d_addendum": {
+            "tracked_path": "project/cp2_d_completion_authorization_addendum.txt",
+            "tracked_canonicalization": "one_semantic_copy_with_terminal_lf",
+            "conversation_receipt_repetitions": 2,
+            "tracked_byte_count": 4206,
+            "tracked_sha256": (
+                "1193feb1dd2f0d440f9b9f1390baf716eada7d1d9ac705520b7be0cfd31d1429"
+            ),
+            "tracked_git_blob": "91ebdc2ebe81765ab8b96c5d05d422b6e415998a",
+        },
+        "cp2_e_addendum": {
+            "tracked_path": "project/cp2_e_completion_authorization_addendum.txt",
+            "tracked_canonicalization": "one_semantic_copy_with_terminal_lf",
+            "conversation_receipt_repetitions": 1,
+            "tracked_byte_count": 2913,
+            "tracked_sha256": (
+                "96b758e8ed8346720ab9fa1006c6c8c3cb68b31448fe54b676a71ee2e14149eb"
+            ),
+            "tracked_git_blob": "3f9ea1f33f25a66f8cf715bfcd88cdc823a4878e",
+        },
+    },
+    "authorization_precedence": (
+        "full_completion_authorization_supersedes_prior_terms_only_where_they_"
+        "prohibit_access_inspection_installation_iterative_debugging_recovery_or_reruns"
+    ),
+    "development_and_rehearsal_reruns_authorized": True,
+    "declared_campaign_reruns_after_documented_correction_authorized": True,
+    "failed_designated_evidence_preservation_and_reporting_required": True,
+    "silent_deletion_relabeling_threshold_weakening_or_concealment_forbidden": True,
+    "cp2_pass_requires_all_retained_acceptance_tests_and_detached_verifiers": True,
+    "complete_review_package_required": True,
     "cp3_authorized": False,
     "jetson_deferred_beyond_cp2": True,
     "exceptions": [],
@@ -1073,7 +1163,7 @@ def validate_cp2_c_approval_records(contents, errors):
 
 
 def validate_cp2_completion_authorization_binding(input_hashes, git_blobs, errors):
-    """Bind the one-pass completion authority and both scoped addenda."""
+    """Bind the current completion authority, incident disposition, and history."""
 
     for relative, expected in FROZEN_CP2_COMPLETION_AUTHORIZATION_BINDING.items():
         if input_hashes.get(relative) != expected["sha256"]:
@@ -5154,8 +5244,14 @@ def _unit_capsule_inode_record(value, label, errors):
     return record
 
 
-def collect_unit_capsule_import(artifact_dir, errors):
-    """Validate the exact source-frozen capsule import retained by the unit gate."""
+def collect_unit_capsule_import(artifact_dir, errors, detached_copy=False):
+    """Validate the exact source-frozen capsule import retained by the unit gate.
+
+    A readiness-held detached copy necessarily has new device/inode identities.
+    Its manifest-bound bytes, modes, ownership, size, and single-link status
+    remain exact; the original unit import is still checked against its receipt
+    before publication and by every non-detached verification.
+    """
 
     receipt_path = artifact_dir / UNIT_CAPSULE_IMPORT_RECEIPT
     try:
@@ -5400,8 +5496,13 @@ def collect_unit_capsule_import(artifact_dir, errors):
                 or receipt_file.get("sha256") != expected_file.get("sha256")
                 or not stat.S_ISREG(artifact_status.st_mode)
                 or artifact_status.st_nlink != 1
-                or unit_identity.get("device") != artifact_status.st_dev
-                or unit_identity.get("inode") != artifact_status.st_ino
+                or (
+                    not detached_copy
+                    and (
+                        unit_identity.get("device") != artifact_status.st_dev
+                        or unit_identity.get("inode") != artifact_status.st_ino
+                    )
+                )
                 or unit_identity.get("mode") != artifact_status.st_mode
                 or unit_identity.get("link_count") != artifact_status.st_nlink
                 or unit_identity.get("uid") != artifact_status.st_uid
@@ -5567,7 +5668,7 @@ def collect_verifier_self_test(artifact_dir, repo_root, errors, verifier_path=No
             "verifier self-test log lacks the exact CP2-D data-free protecting-test result"
         )
     if re.search(
-        r"^CP2_E_DATA_FREE_PROTECTING_TESTS count=188 passed=true "
+        r"^CP2_E_DATA_FREE_PROTECTING_TESTS count=189 passed=true "
         r"module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$",
         log_text,
         flags=re.MULTILINE,
@@ -5886,7 +5987,9 @@ def verify_unit_report(
     if set(source.get("contract_sha256", {})) != CONTRACT_INPUTS:
         errors.append("contract hash inventory differs from the CP2 contract")
 
-    independent_capsule_import = collect_unit_capsule_import(artifact_dir, errors)
+    independent_capsule_import = collect_unit_capsule_import(
+        artifact_dir, errors, detached_copy=detached
+    )
     if report.get("capsule_import") != independent_capsule_import:
         errors.append("reported capsule import differs from unit/source evidence")
 
@@ -7598,7 +7701,7 @@ def create_synthetic_artifact(artifact_dir, repo_root):
         "module_sha256={} output_sha256={}\n"
         "CP2_D_DATA_FREE_PROTECTING_TESTS count=256 passed=true "
         "module_sha256={} output_sha256={}\n"
-        "CP2_E_DATA_FREE_PROTECTING_TESTS count=188 passed=true "
+        "CP2_E_DATA_FREE_PROTECTING_TESTS count=189 passed=true "
         "module_sha256={} output_sha256={}\n".format(
             "0" * 64, "1" * 64, "2" * 64, "3" * 64,
             "4" * 64, "5" * 64,
@@ -14628,14 +14731,6 @@ def verify_sequence_artifact(artifact, manifest_sha256, quiet=False):
     if not os.path.isabs(raw) or os.path.normpath(raw) != raw:
         _actual_fail("sequence artifact path must be normalized and absolute")
     _actual_sha256(manifest_sha256, "sequence manifest anchor")
-    _actual_fail(
-        "CP2-D actual verification is blocked before artifact access: the final "
-        "evaluator/direct-math capsule and detached provenance bindings are not "
-        "source-frozen, and the proposed alignment-uniqueness boundary is not approved"
-    )
-
-    # Unreachable until the final source-freeze transition deliberately removes
-    # the pre-access block above; retained implementation remains reviewable.
     artifact = Path(artifact)
     manifest, observed, _ = _actual_scan_and_verify_manifest(artifact, manifest_sha256)
     required = {
@@ -15682,13 +15777,10 @@ def run_readiness_self_test():
             verify_sequence_artifact(
                 root / "must-not-be-read-sequence", "0" * 64, quiet=True
             )
-        except ActualVerificationError as exc:
-            if "blocked before artifact access" not in str(exc):
-                raise RuntimeError(
-                    "pending-contract sequence verifier failed for the wrong reason"
-                ) from exc
+        except ActualVerificationError:
+            pass
         else:
-            raise RuntimeError("pending-contract sequence verifier did not fail closed")
+            raise RuntimeError("missing sequence artifact did not fail closed")
 
     os.umask(0o077)
     temporary_root = Path(tempfile.mkdtemp(prefix="schurvio-lite-cp2-verifier-self-test-", dir="/tmp"))
@@ -16013,7 +16105,7 @@ CP2_E_DATA_FREE_PROTECTING_TESTS = (
     ("test_cp2_timing_evidence.py", 39),
     ("test_cp2_timing_math.py", 42),
     ("test_cp2_timing_orchestration.py", 24),
-    ("test_cp2_timing_privileged_backend.py", 12),
+    ("test_cp2_timing_privileged_backend.py", 13),
     ("test_cp2_timing_privileged_helper.py", 48),
     ("test_cp2_timing_root_launcher.py", 4),
 )
@@ -16282,17 +16374,20 @@ def run_unit_self_test():
     )
     if binding_errors:
         raise RuntimeError("valid CP2 completion authorization binding was rejected")
-    d_addendum_path = "project/cp2_d_completion_authorization_addendum.txt"
+    full_authorization_path = (
+        "project/cp2_full_completion_authorization_20260807.txt"
+    )
     wrong_completion_sha256 = dict(completion_sha256)
-    wrong_completion_sha256[d_addendum_path] = "0" * 64
+    wrong_completion_sha256[full_authorization_path] = "0" * 64
     binding_errors = []
     validate_cp2_completion_authorization_binding(
         wrong_completion_sha256, completion_git_blobs, binding_errors
     )
     if binding_errors != [
-        "CP2 completion authorization SHA-256 mismatch: " + d_addendum_path
+        "CP2 completion authorization SHA-256 mismatch: "
+        + full_authorization_path
     ]:
-        raise RuntimeError("wrong CP2-D addendum digest was not rejected exactly")
+        raise RuntimeError("wrong full CP2 authorization digest was not rejected exactly")
     completion_record_bytes = json.dumps(
         FROZEN_CP2_COMPLETION_AUTHORIZATION_RECORD,
         allow_nan=False,

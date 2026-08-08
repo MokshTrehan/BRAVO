@@ -1,6 +1,6 @@
 # CP2 recorded-evidence contract
 
-Status: **frozen implementation addendum; evidence pending**
+Status: **frozen evidence mathematics and thresholds; campaign evidence pending**
 
 Parent contract: `docs/cp2_one_pass_contract.md`
 
@@ -16,11 +16,23 @@ new estimator mode, or change the nullspace baseline. If this addendum and the
 parent contract can be read differently, the interpretation that produces the
 larger comparison population or the stricter failure outcome applies.
 
+Workflow permission is governed by the verbatim 2026-08-07 authorization in
+`project/cp2_full_completion_authorization_20260807.txt` and its binding record.
+It supersedes conflicting earlier restrictions on dataset/result access,
+iterative debugging, recovery, and global exactly-one execution attempts.
+References below to one campaign or one execution describe the internally
+complete population and command lifecycle of each declared attempt; they do
+not impose a lifetime one-attempt limit.  Development and rehearsal runs are
+nonformal.  A failed declared evidence attempt must be retained and reported;
+a corrected attempt requires a new source or profile identity and a new
+declaration.  No attempt may be silently deleted, relabeled, concealed, or
+made passing by a result-driven threshold change.
+
 ## Frozen recorded-data scope
 
-CP2-C is one deterministic campaign over all three CP2 sequences. It processes
-each sequence to completion and does not stop after the thousandth counted
-record.
+Each declared CP2-C evidence attempt is one deterministic campaign over all
+three CP2 sequences. It processes each sequence to completion and does not
+stop after the thousandth counted record.
 
 | sequence | frozen offset | frozen bag SHA-256 |
 | --- | ---: | --- |
@@ -504,7 +516,11 @@ follows, then the function returns. Durations are nonnegative integer
 nanoseconds. Shadow-enabled durations are labeled functional CP2-C diagnostics
 and are ineligible for CP2-E.
 
-No bag may be opened until all five preregistered CP2 entry points exist, their
-artifact-free self-tests pass under a bag-access prohibition, the complete
-CP1/CP2 unit suite passes at the exact clean runtime commit, and a fresh unit
-artifact anchors that commit.
+For a declared formal artifact to be eligible, all five preregistered CP2 entry
+points must exist, their artifact-free self-tests must pass under their
+bag-access prohibition, the complete CP1/CP2 unit suite must pass at the exact
+clean runtime commit, and a fresh unit artifact must anchor that commit before
+the campaign opens its bag.  The current authorization separately permits bag,
+registry, ground-truth, and recorded-result access during implementation,
+diagnosis, and rehearsal; such access and outputs are development-only and
+must not be represented as formal evidence.

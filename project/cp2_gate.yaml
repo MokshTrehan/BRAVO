@@ -5,7 +5,7 @@ timezone: America/Toronto
 gate:
   id: CP2
   name: one_pass_baseline_parity
-  status: stopped_cp2_c_predata_readiness_tracked_results_conflict_no_retry_cp2_d_e_unexecuted
+  status: authorized_in_progress_cp2_c_d_e_evidence_pending
   due: "2026-07-31T23:59:00-04:00"
   deadline_status: missed
   deadline_decision_recorded_at: "2026-08-01"
@@ -18,6 +18,22 @@ gate:
   artifact_schema: docs/cp2_artifact_schema.md
   cp1_authorization_commit: 8d80f483752411d34a3bc4c1ff6330b3a5c0fef3
   branch: schurvio-lite/cp2-one-pass
+
+completion_authorization:
+  status: active_full_cp2_completion_authority
+  received_date: "2026-08-07"
+  verbatim_path: project/cp2_full_completion_authorization_20260807.txt
+  verbatim_sha256: 8cb4767c159d4ec30317799a6ce3fa9b6535c36e77b9f451b977a31a5a233b67
+  verbatim_git_blob: 8e4064dbb3436037b9f317be483b6553ecbe4de4
+  binding_path: project/cp2_completion_authorization_binding.json
+  binding_sha256: be7c0dec8a77e6b18a6555c15aa476ae5991ea5ca17265c788225b443c0098fb
+  binding_git_blob: 4ffe1e1caf9cf02e7cccfc3b51f91d67073e6f50
+  supersedes_conflicting_prior_exactly_once_no_data_no_retry_installation_and_debugging_restrictions: true
+  dataset_registry_bag_ground_truth_result_access_authorized: true
+  iterative_development_rehearsal_readiness_and_verification_reruns_authorized: true
+  failed_declared_campaign_policy: preserve_report_correct_under_new_identity_and_declare_new_campaign
+  silent_deletion_relabeling_result_driven_threshold_weakening_or_concealment: forbidden
+  cp3_authorized: false
 
 scope:
   baseline_mode: nullspace
@@ -106,7 +122,7 @@ checkpoints:
     name: recorded_updater_parity
     status: pending
     implementation_readiness:
-      status: stopped_predata_readiness_failed_tracked_results_conflict_no_retry
+      status: authorized_for_new_exact_identity_unit_readiness_and_declared_campaign
       final_implementation_commit: c0dfecfd61e3ac067c4020bb61ab6421df926500
       final_implementation_tree: bd5372514f62cae4e7505e8008ba01b76e9b8520
       self_identity_policy: containing_commit_cannot_be_predeclared_exact_head_is_bound_by_unit_artifact
@@ -118,7 +134,7 @@ checkpoints:
       pairing_and_producer_mathematical_audit_status: passed_frozen_source_data_free_nonformal
       recorded_campaign_publication_audit_status: passed_frozen_source_data_free_nonformal
       unit_artifact_publication_atomicity_status: implemented_fault_injection_passed_independent_postfix_audit_clean_nonformal
-      evidence_binding_audit_status: passed_frozen_source_exact_incident_approval_binding_nonformal
+      evidence_binding_audit_status: pending_new_full_authorization_binding_unit_evidence
       protecting_test_status: frozen_source_data_free_nonformal_missed_tracked_results_topology
       protecting_test_results:
         campaign: 11_of_11_passed
@@ -157,12 +173,17 @@ checkpoints:
       quarantined_expanded_incident_log_sha256: 5d1f8aa1728bedd6141a55c756ef9dc3bfd2d52e7480208c27a94324b321af56
       quarantined_expanded_incident_log_acknowledgment: received_exact_no_exceptions
       incident_disposition_approval_record: project/cp2_predata_incident_disposition_approval.json
-      incident_disposition_approval_record_git_blob: c6c1a1b29324b31152cf038d6375fc216ca6f57c
-      incident_disposition_approval_record_sha256: 80d227032c77a060d4bae5b48c869cc207c999ab7e2f2259bc884767ca11412e
-      incident_disposition_approval_record_status: source_bound_at_final_implementation_commit
-      incident_disposition_source_binding: complete_at_final_implementation_commit
+      incident_disposition_approval_record_git_blob: cbcde817dc2784db557fe1fd363c2cb5832e49d4
+      incident_disposition_approval_record_sha256: e21d5910deb16ac34cf660d0db74958a2ab8e21c2492788d8525782ae9aa4f8d
+      incident_disposition_approval_record_status: bound_to_20260807_full_completion_authorization
+      current_incident_log_content_commit: d960f90567bf113d9d04a4449bc5c9721c250aea
+      current_incident_log_git_blob: 0b4bb06c4303b253de738cc0366ffce7f4219221
+      current_incident_log_sha256: 0121f141ea36a0e469dcba6c34c77034a3df9a72ea15b2901acc5c5d5ba03139
+      incident_disposition_source_binding: current_log_bound_to_full_completion_authority
       incident_derived_value_influence_permitted: false
-      recorded_access_authority: stopped_after_single_failed_predata_readiness_attempt_no_retry
+      recorded_access_authority: authorized_by_20260807_full_completion_authorization
+      declared_campaign_eligibility_still_requires_exact_identity_unit_and_readiness: true
+      prior_exactly_once_and_no_retry_attempt_limit: superseded
       post_acknowledgment_recorded_access_authority: not_exercised_readiness_never_authorized_registry_or_bag_access
       live_shadow_and_raw_proposal_codec: passed_frozen_source_commit_unit_evidence
       composite_state_snapshot: passed_frozen_source_commit_unit_evidence
@@ -271,27 +292,25 @@ checkpoints:
     jetson_evidence: deferred_beyond_cp2
     jetson_work: deferred_beyond_cp2
     desktop_results_are_jetson_evidence: false
-    implementation_status: data_free_candidate_only
+    implementation_status: data_free_candidate_complete_actual_mode_authorized_final_capsule_rebind_pending
     inventory_document: docs/cp2_d_e_desktop_inventory_candidate.md
     inventory_document_status: nonauthorizing
-    evaluator_direct_math_capsule_identity: absent_unapproved
-    recorded_input_authority: false
-    actual_execution_authority: false
+    evaluator_direct_math_capsule_identity: candidate_only_final_regeneration_and_rebind_pending
+    recorded_input_authority: true
+    actual_execution_authority: authorized_subject_to_exact_final_capsule_source_and_readiness
     inventory_authority: local_data_free_read_only_only
-    network_install_authority: false
+    network_install_authority: true
     capsule_blockers:
       - ambient_evo_python_numpy_not_an_immutable_approved_capsule
       - native_loader_and_dependency_closure_not_frozen
       - license_notice_and_corresponding_source_closure_not_frozen
       - stack_specific_known_answers_not_frozen
-    detached_pairing_recomputation_status: blocked_current_artifact_insufficient
-    publication_status: blocked_postrename_failure_atomicity
+    detached_pairing_recomputation_status: implemented_data_free_candidate_protected
+    publication_status: descriptor_relative_no_replace_failure_atomic_candidate_protected
     evidence_blockers:
-      - complete_chronological_filtered_camera_candidate_witness_absent
-      - detached_first_forward_no_search_past_recomputation_not_independently_provable
-      - coordinated_later_eligible_candidate_rejection_test_required
-      - descriptor_relative_no_replace_publication_and_exact_inode_reconciliation_not_complete
-      - postrename_fsync_rollback_collision_and_interruption_protecting_tests_required
+      - final_capsule_regeneration_and_exact_identity_binding_pending
+      - readiness_sha256_repin_pending
+      - frozen_ground_truth_decimal_quaternion_precision_contract_disposition_pending
     trace_level: sequence
     shadow_enabled: false
     launch_outputs:
@@ -340,19 +359,24 @@ checkpoints:
     jetson_evidence: deferred_beyond_cp2
     jetson_work: deferred_beyond_cp2
     desktop_results_are_jetson_evidence: false
-    implementation_status: data_free_candidate_only
+    implementation_status: implementation_in_progress_under_2026_08_07_full_completion_authorization
     inventory_document: docs/cp2_d_e_desktop_inventory_candidate.md
     inventory_document_status: nonauthorizing
-    exact_timing_profile_identity: absent_unapproved
-    recorded_input_authority: false
-    actual_execution_authority: false
-    host_control_mutation_authority: false
+    exact_timing_profile_identity: pending_final_builder_and_freeze
+    recorded_input_authority: true
+    actual_execution_authority: authorized_subject_to_exact_final_profile_helper_source_and_readiness
+    host_control_mutation_authority: authorized_via_final_root_owned_no_argument_helper_after_user_installation
     inventory_authority: local_data_free_read_only_only
     host_profile_blockers:
       - governor_observed_ondemand
       - boost_observed_enabled
       - exact_affinity_not_frozen
-      - complete_cpu_thermal_and_throttling_surface_unavailable
+      - final_aperf_mperf_effective_frequency_profile_not_frozen
+      - root_helper_profile_install_bundle_pending
+      - manual_root_installation_pending
+      - reversible_privileged_feasibility_transaction_pending
+    formal_telemetry_policy: APERF_MPERF_only
+    temperature_power_energy_or_embedded_claim: none
     trace_level: timing
     shadow_enabled: false
     launch_outputs:
@@ -427,14 +451,11 @@ protecting_configuration_tests:
   - runtime_failure_zero_silent_fallback
 
 blockers:
-  - cp2_c_readiness_rejects_75_tracked_historical_evidence_files_under_results
-  - cp2_c_tracked_results_topology_repair_and_protecting_test_not_approved
-  - cp2_c_new_exact_source_identity_unit_and_readiness_attempt_not_authorized
-  - cp2_c3_recorded_readiness_barrier_failed_predata_no_retry
+  - cp2_c_new_exact_source_identity_unit_and_readiness_not_yet_run
   - recorded_updater_parity_not_collected
-  - cp2_d_exact_committed_approved_capsule_identity_absent
-  - cp2_d_detached_first_forward_no_search_past_proof_artifact_insufficient
-  - cp2_d_postrename_publication_atomicity_open
+  - cp2_d_exact_final_committed_capsule_identity_absent
+  - cp2_d_frozen_ground_truth_decimal_quaternion_precision_contract_disposition_pending
   - three_sequence_parity_not_collected
-  - cp2_e_exact_committed_approved_profile_identity_absent
+  - cp2_e_exact_final_committed_profile_identity_absent
+  - cp2_e_root_owned_helper_not_installed
   - fixed_clock_timing_profile_not_established

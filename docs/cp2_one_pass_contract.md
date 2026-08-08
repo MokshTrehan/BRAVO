@@ -1,6 +1,6 @@
 # CP2 one-pass production contract
 
-Status: **frozen for implementation; evidence pending**
+Status: **mathematics and acceptance thresholds frozen; evidence pending**
 CP1 authorization commit: `8d80f483752411d34a3bc4c1ff6330b3a5c0fef3`
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 
@@ -8,6 +8,26 @@ This contract is the hard boundary for CP2. It permits a selectable one-pass
 square-root Schur reduction for transient `GLOBAL_3D` MSCKF landmarks. It does
 not permit fixed-two-pass behavior, a new covariance-update convention,
 regularization, or changes to the visual measurement model.
+
+## Governing completion authorization
+
+The current workflow authority is the verbatim 2026-08-07 authorization in
+`project/cp2_full_completion_authorization_20260807.txt`, mechanically bound by
+`project/cp2_completion_authorization_binding.json`.  The earlier chained
+authorization and its D/E addenda remain historical authority, but the new
+authorization supersedes their conflicting pre-data, exactly-one-attempt,
+no-retry, installation, and iterative-debugging restrictions.  This workflow
+change does not alter any estimator mathematics, dataset identity, sequence,
+offset, metric, threshold, or acceptance boundary in this contract.
+
+Dataset and recorded-result access, iterative development, rehearsal,
+readiness, verification, and documented campaign reruns are now permitted.
+Only a declared campaign bound to its exact source, profile, inputs, and
+artifacts can satisfy a CP2 checkpoint.  If such a campaign fails, its artifact
+and disposition must be preserved and reported.  A correction must use a new
+commit or profile identity and a new declared campaign; silent deletion,
+relabeling, result-driven threshold weakening, and concealment remain
+forbidden.
 
 ## Frozen modes and seam
 
@@ -252,8 +272,12 @@ equivalent to the Schur complement but is not, by itself, evidence of a novel
 or faster direct-statistics solver. No speed or novelty claim follows from a
 CP2 pass.
 
-Failure of CP2-A or CP2-B blocks dataset execution. Failure of CP2-C or CP2-D
-keeps the baseline default and blocks CP3. Failure of CP2-E blocks the CP2 pass
-decision but does not invalidate already sealed mathematical evidence.
+Failure of CP2-A or CP2-B blocks declaring recorded evidence eligible, but no
+longer prohibits authorized diagnostic dataset access. Failure of a declared
+CP2-C or CP2-D campaign keeps the baseline default and blocks CP3 until a
+documented correction under a new identity and a newly declared campaign
+passes. Failure of a declared CP2-E campaign similarly blocks the CP2 pass
+decision but does not invalidate already sealed mathematical evidence. Every
+failed declared campaign remains part of the final review record.
 Even a CP2 pass does not authorize fixed two-pass: the separate mixed-FEJ
 surrogate and chart-transport tests and review remain mandatory.

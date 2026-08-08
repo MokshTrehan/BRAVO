@@ -691,7 +691,7 @@ if ! grep -Eq -- '^CP2_D_DATA_FREE_PROTECTING_TESTS count=256 passed=true module
     rm -f -- "${verifier_self_test_log}"
     die "CP2-D data-free protecting tests are absent from the evidenced verifier gate"
 fi
-if ! grep -Eq -- '^CP2_E_DATA_FREE_PROTECTING_TESTS count=188 passed=true module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$' \
+if ! grep -Eq -- '^CP2_E_DATA_FREE_PROTECTING_TESTS count=189 passed=true module_sha256=[0-9a-f]{64} output_sha256=[0-9a-f]{64}$' \
     "${verifier_self_test_log}"; then
     sed -n '1,360p' "${verifier_self_test_log}" >&2
     rm -f -- "${verifier_self_test_log}"

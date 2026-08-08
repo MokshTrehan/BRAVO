@@ -300,7 +300,12 @@ class CommandEnvironmentTests(unittest.TestCase):
         )
 
     def test_environment_rejects_unallowlisted_or_nonstring_values(self):
-        for variables in ({"TZ": "UTC"}, {"PATH": 1}, {"PATH": "x\0y"}, [("PATH", "x")]):
+        for variables in (
+            {"NOT_CP2_ALLOWLISTED": "1"},
+            {"PATH": 1},
+            {"PATH": "x\0y"},
+            [("PATH", "x")],
+        ):
             with self.subTest(variables=variables):
                 with self.assertRaises(schema.SchemaError):
                     schema.encode_command_environment(variables)
