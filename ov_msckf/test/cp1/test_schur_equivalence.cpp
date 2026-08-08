@@ -4,6 +4,7 @@
  */
 
 #include "cp1_fixture_utils.h"
+#include "update/SchurUpdate.h"
 
 #include <gtest/gtest.h>
 
@@ -11,6 +12,7 @@
 #include <Eigen/SVD>
 
 #include <algorithm>
+#include <cstring>
 #include <iostream>
 
 namespace {
@@ -19,12 +21,18 @@ using schurvio_cp1::DeterministicRng;
 using schurvio_cp1::FactorStatus;
 using schurvio_cp1::SchurReduction;
 
+static_assert(ov_msckf::SchurUpdate::kMinimumSingularRatio == schurvio_cp1::kLandmarkRelativeSingularFloor,
+              "production and CP1 landmark-conditioning contracts must agree");
+
 TEST(CP1Schur, FullJointNullspaceAndReducedSystemsAgree) {
   DeterministicRng rng(schurvio_cp1::kMasterSeed);
   double worst_state_error = 0.0;
   double worst_landmark_error = 0.0;
   double worst_covariance_error = 0.0;
   double worst_nis_error = 0.0;
+  double worst_lambda_error = 0.0;
+  double worst_eta_error = 0.0;
+  double worst_gamma_error = 0.0;
   double worst_symmetry_ratio = 0.0;
   double minimum_normalized_eigenvalue = 1.0;
 
@@ -52,20 +60,86 @@ TEST(CP1Schur, FullJointNullspaceAndReducedSystemsAgree) {
       residual = rng.vector(measurement_size, 0.5);
     }
 
-    const SchurReduction reduction = schurvio_cp1::reduce_landmark(state_jacobian, landmark_jacobian, residual);
-    ASSERT_EQ(reduction.status, FactorStatus::kAccepted) << schurvio_cp1::factor_status_name(reduction.status);
-    EXPECT_EQ(reduction.degrees_of_freedom, measurement_size - 3);
-    EXPECT_GE(reduction.singular_ratio, schurvio_cp1::kLandmarkRelativeSingularFloor);
+    const Eigen::MatrixXd state_jacobian_before = state_jacobian;
+    const Eigen::MatrixXd landmark_jacobian_before = landmark_jacobian;
+    const Eigen::VectorXd residual_before = residual;
+    constexpr double sigma_px = 1.0;
+    const ov_msckf::SchurReductionResult production =
+        ov_msckf::SchurUpdate::Reduce(state_jacobian, landmark_jacobian, residual, sigma_px);
 
-    const Eigen::MatrixXd posterior_information = prior_information + reduction.lambda;
+    EXPECT_EQ(std::memcmp(state_jacobian.data(), state_jacobian_before.data(),
+                          static_cast<std::size_t>(state_jacobian.size()) * sizeof(double)),
+              0);
+    EXPECT_EQ(std::memcmp(landmark_jacobian.data(), landmark_jacobian_before.data(),
+                          static_cast<std::size_t>(landmark_jacobian.size()) * sizeof(double)),
+              0);
+    EXPECT_EQ(std::memcmp(residual.data(), residual_before.data(),
+                          static_cast<std::size_t>(residual.size()) * sizeof(double)),
+              0);
+
+    ASSERT_TRUE(production.accepted())
+        << ov_msckf::schur_reduction_status_name(production.status) << "/"
+        << ov_msckf::schur_reduction_stage_name(production.stage);
+    EXPECT_EQ(production.status, ov_msckf::SchurReductionStatus::kAccepted);
+    EXPECT_EQ(production.stage, ov_msckf::SchurReductionStage::kAccepted);
+    EXPECT_EQ(production.raw_rows, measurement_size);
+    EXPECT_EQ(production.degrees_of_freedom, measurement_size - 3);
+    EXPECT_TRUE(production.singular_values_available);
+    EXPECT_TRUE(production.singular_ratio_available);
+    EXPECT_TRUE(production.singular_values.allFinite());
+    EXPECT_TRUE(std::isfinite(production.singular_ratio));
+    EXPECT_GE(production.singular_ratio, schurvio_cp1::kLandmarkRelativeSingularFloor);
+    EXPECT_EQ(production.H_reduced.rows(), measurement_size - 3);
+    EXPECT_EQ(production.H_reduced.cols(), state_size);
+    EXPECT_EQ(production.residual_reduced.rows(), measurement_size - 3);
+    EXPECT_EQ(production.lambda.rows(), state_size);
+    EXPECT_EQ(production.lambda.cols(), state_size);
+    EXPECT_EQ(production.eta.rows(), state_size);
+    EXPECT_TRUE(production.H_reduced.allFinite());
+    EXPECT_TRUE(production.residual_reduced.allFinite());
+    EXPECT_TRUE(production.lambda.allFinite());
+    EXPECT_TRUE(production.eta.allFinite());
+    EXPECT_TRUE(std::isfinite(production.gamma));
+    EXPECT_TRUE(std::isfinite(production.noise_variance));
+    EXPECT_TRUE(std::isfinite(production.raw_lambda_symmetry_error_inf));
+    EXPECT_GE(production.gamma, 0.0);
+    EXPECT_GE(production.raw_lambda_symmetry_error_inf, 0.0);
+    EXPECT_DOUBLE_EQ(production.noise_variance, sigma_px * sigma_px);
+    EXPECT_EQ(production.jitter_count, 0U);
+    EXPECT_EQ(production.clamp_count, 0U);
+    EXPECT_EQ(production.regularization_count, 0U);
+    EXPECT_EQ(production.fallback_count, 0U);
+
+    const Eigen::MatrixXd row_lambda =
+        production.H_reduced.transpose() * production.H_reduced / production.noise_variance;
+    const Eigen::VectorXd row_eta =
+        production.H_reduced.transpose() * production.residual_reduced / production.noise_variance;
+    const double row_gamma = production.residual_reduced.squaredNorm() / production.noise_variance;
+    EXPECT_LE((production.lambda - row_lambda).norm(),
+              schurvio_cp1::mixed_tolerance(1.0e-10, 1.0e-8, row_lambda.norm()));
+    EXPECT_LE((production.eta - row_eta).norm(),
+              schurvio_cp1::mixed_tolerance(1.0e-10, 1.0e-8, row_eta.norm()));
+    EXPECT_LE(std::abs(production.gamma - row_gamma),
+              schurvio_cp1::mixed_tolerance(1.0e-10, 1.0e-8, std::abs(row_gamma)));
+
+    const SchurReduction oracle_reduction =
+        schurvio_cp1::reduce_landmark(state_jacobian, landmark_jacobian, residual);
+    ASSERT_EQ(oracle_reduction.status, FactorStatus::kAccepted)
+        << schurvio_cp1::factor_status_name(oracle_reduction.status);
+    EXPECT_EQ(oracle_reduction.degrees_of_freedom, measurement_size - 3);
+    EXPECT_GE(oracle_reduction.singular_ratio, schurvio_cp1::kLandmarkRelativeSingularFloor);
+
+    const Eigen::MatrixXd posterior_information = prior_information + production.lambda;
     Eigen::LDLT<Eigen::MatrixXd> posterior_factor(posterior_information);
     ASSERT_EQ(posterior_factor.info(), Eigen::Success);
-    const Eigen::VectorXd state_schur = posterior_factor.solve(reduction.eta);
+    const Eigen::VectorXd state_schur = posterior_factor.solve(production.eta);
     const Eigen::MatrixXd covariance_schur_raw =
         posterior_factor.solve(Eigen::MatrixXd::Identity(state_size, state_size));
     ASSERT_EQ(posterior_factor.info(), Eigen::Success);
+    ASSERT_TRUE(state_schur.allFinite());
+    ASSERT_TRUE(covariance_schur_raw.allFinite());
     const Eigen::Vector3d landmark_schur =
-        schurvio_cp1::back_substitute_landmark(reduction, state_jacobian, residual, state_schur);
+        schurvio_cp1::back_substitute_landmark(oracle_reduction, state_jacobian, residual, state_schur);
 
     Eigen::MatrixXd stacked = Eigen::MatrixXd::Zero(state_size + measurement_size, state_size + 3);
     stacked.block(0, 0, state_size, state_size) = prior_sqrt_information;
@@ -109,13 +183,16 @@ TEST(CP1Schur, FullJointNullspaceAndReducedSystemsAgree) {
     const Eigen::MatrixXd left_nullspace = nullspace_oracle.matrixU().rightCols(measurement_size - 3);
     const Eigen::MatrixXd null_state = left_nullspace.transpose() * state_jacobian;
     const Eigen::VectorXd null_residual = left_nullspace.transpose() * residual;
-    EXPECT_LE((reduction.lambda - null_state.transpose() * null_state).norm(),
-              schurvio_cp1::mixed_tolerance(1.0e-10, 1.0e-8, reduction.lambda.norm()));
-    EXPECT_LE((reduction.eta - null_state.transpose() * null_residual).norm(),
-              schurvio_cp1::mixed_tolerance(1.0e-10, 1.0e-8, reduction.eta.norm()));
-    EXPECT_LE(std::abs(reduction.gamma - null_residual.squaredNorm()),
+    const double lambda_error = (production.lambda - null_state.transpose() * null_state).norm();
+    const double eta_error = (production.eta - null_state.transpose() * null_residual).norm();
+    const double gamma_error = std::abs(production.gamma - null_residual.squaredNorm());
+    worst_lambda_error = std::max(worst_lambda_error, lambda_error);
+    worst_eta_error = std::max(worst_eta_error, eta_error);
+    worst_gamma_error = std::max(worst_gamma_error, gamma_error);
+    EXPECT_LE(lambda_error, schurvio_cp1::mixed_tolerance(1.0e-10, 1.0e-8, production.lambda.norm()));
+    EXPECT_LE(eta_error, schurvio_cp1::mixed_tolerance(1.0e-10, 1.0e-8, production.eta.norm()));
+    EXPECT_LE(gamma_error,
               schurvio_cp1::mixed_tolerance(1.0e-10, 1.0e-8, null_residual.squaredNorm()));
-    EXPECT_GE(reduction.gamma, -1.0e-10 * std::max(1.0, residual.squaredNorm()));
 
     Eigen::LDLT<Eigen::MatrixXd> prior_factor(prior_information);
     ASSERT_EQ(prior_factor.info(), Eigen::Success);
@@ -134,7 +211,7 @@ TEST(CP1Schur, FullJointNullspaceAndReducedSystemsAgree) {
               schurvio_cp1::mixed_tolerance(1.0e-9, 1.0e-7, covariance_nullspace.norm()));
 
     const double nis_nullspace = null_residual.dot(innovation_factor.solve(null_residual));
-    const double nis_schur = reduction.gamma - reduction.eta.dot(state_schur);
+    const double nis_schur = production.gamma - production.eta.dot(state_schur);
     const double nis_error = std::abs(nis_schur - nis_nullspace);
     worst_nis_error = std::max(worst_nis_error, nis_error);
     EXPECT_GE(nis_schur, -1.0e-10 * std::max(1.0, std::abs(nis_nullspace)));
@@ -159,6 +236,8 @@ TEST(CP1Schur, FullJointNullspaceAndReducedSystemsAgree) {
   std::cout << "CP1_EQUIVALENCE fixtures=128 near_column_space_fixtures=16 seed=" << schurvio_cp1::kMasterSeed
             << " max_state_error=" << worst_state_error << " max_landmark_error=" << worst_landmark_error
             << " max_covariance_error=" << worst_covariance_error << " max_nis_error=" << worst_nis_error
+            << " max_lambda_error=" << worst_lambda_error << " max_eta_error=" << worst_eta_error
+            << " max_gamma_error=" << worst_gamma_error
             << " max_symmetry_ratio=" << worst_symmetry_ratio
             << " min_normalized_eigenvalue=" << minimum_normalized_eigenvalue << std::endl;
 }
