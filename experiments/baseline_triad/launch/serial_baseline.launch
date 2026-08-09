@@ -1,0 +1,26 @@
+<launch>
+    <!-- Repository-neutral launch contract for the ordinary serial runner. -->
+    <arg name="config_path" />
+    <arg name="bag" />
+    <arg name="bag_start" default="0.0" />
+    <arg name="bag_durr" default="-1.0" />
+    <arg name="verbosity" default="INFO" />
+    <arg name="dotime" default="true" />
+    <arg name="path_est" />
+    <arg name="path_std" />
+    <arg name="path_time" />
+
+    <node name="ov_msckf" pkg="ov_msckf" type="ros1_serial_msckf"
+          output="screen" clear_params="true" required="true">
+        <param name="path_bag" type="str" value="$(arg bag)" />
+        <param name="bag_start" type="double" value="$(arg bag_start)" />
+        <param name="bag_durr" type="double" value="$(arg bag_durr)" />
+        <param name="verbosity" type="str" value="$(arg verbosity)" />
+        <param name="config_path" type="str" value="$(arg config_path)" />
+        <param name="record_timing_information" type="bool" value="$(arg dotime)" />
+        <param name="record_timing_filepath" type="str" value="$(arg path_time)" />
+        <param name="save_total_state" type="bool" value="true" />
+        <param name="filepath_est" type="str" value="$(arg path_est)" />
+        <param name="filepath_std" type="str" value="$(arg path_std)" />
+    </node>
+</launch>

@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "profile": "SUPPORTED_INTERSECTION_PROFILE",
+  "algorithm_freeze_commit": "82504db63fafda40dcf44b8e66cbd29609743a1d",
+  "methods": [
+    {
+      "id": "U-NS",
+      "repository": "https://github.com/rpng/open_vins.git",
+      "commit": "69488123ed9362dd44b6f28e7f4680abbff1442b",
+      "config": "configs/u_ns.yaml",
+      "elimination_mode": "nullspace",
+      "selection": "source_default_production_updater",
+      "selection_key": null,
+      "visual_passes": 1,
+      "pass_count_key": null
+    },
+    {
+      "id": "L-NS",
+      "repository": "https://github.com/MokshTrehan/schur-vio-lite.git",
+      "commit": "82504db63fafda40dcf44b8e66cbd29609743a1d",
+      "config": "configs/l_ns.yaml",
+      "elimination_mode": "nullspace",
+      "selection": "configuration",
+      "selection_key": "up_msckf_landmark_elimination",
+      "visual_passes": 1,
+      "pass_count_key": "up_msckf_max_visual_passes"
+    },
+    {
+      "id": "L-SCHUR",
+      "repository": "https://github.com/MokshTrehan/schur-vio-lite.git",
+      "commit": "82504db63fafda40dcf44b8e66cbd29609743a1d",
+      "config": "configs/l_schur.yaml",
+      "elimination_mode": "schur",
+      "selection": "configuration",
+      "selection_key": "up_msckf_landmark_elimination",
+      "visual_passes": 1,
+      "pass_count_key": "up_msckf_max_visual_passes"
+    },
+    {
+      "id": "OV-SCHUR",
+      "repository": "https://github.com/Jas0nG/ov_SchurVINS.git",
+      "branch": "feat/schurVINS",
+      "commit": "d988139c0ba3cc51abacb8b5b5acb482a19325ba",
+      "config": "configs/ov_schur.yaml",
+      "elimination_mode": "schur",
+      "selection": "source_hardwired_updater",
+      "selection_key": null,
+      "visual_passes": 1,
+      "pass_count_key": null
+    }
+  ],
+  "shared_external_configs": {
+    "imu": "configs/kalibr_imu_chain.yaml",
+    "camera_imu": "configs/kalibr_imucam_chain.yaml",
+    "upstream_source_imu_sha256": "408ea8b60b5f9e7c8251e6d302f04c0675bfefdd31229bb1afd139bc8f4a0287",
+    "upstream_source_camera_imu_sha256": "b9e11b7bcda102f7c8c384c97318d67f3916b58942f9073722f83c22bd7073f7"
+  },
+  "runtime_contract": {
+    "runner": "ros1_serial_msckf",
+    "bag_start_seconds": 0.0,
+    "visual_passes": 1,
+    "opencv_threads": 0,
+    "publisher_threads": false,
+    "subscriber_threads": false,
+    "library_thread_environment": {
+      "OMP_NUM_THREADS": 1,
+      "OPENBLAS_NUM_THREADS": 1,
+      "MKL_NUM_THREADS": 1,
+      "NUMEXPR_NUM_THREADS": 1,
+      "VECLIB_MAXIMUM_THREADS": 1
+    },
+    "python_hash_seed": 0,
+    "timezone": "UTC",
+    "locale": "C.UTF-8",
+    "gpu": false,
+    "cpu_affinity": "required_at_run_time",
+    "finite_timeout": "required_at_run_time"
+  },
+  "parser_audit": {
+    "upstream_and_ov_common_options": "byte-identical VioManagerOptions.h, StateOptions.h, FeatureInitializerOptions.h, and InertialInitializerOptions.h at the frozen commits",
+    "local_only_keys": [
+      "up_msckf_landmark_elimination",
+      "up_msckf_max_visual_passes"
+    ],
+    "ov_method_binding": "ov_msckf/src/core/VioManager.cpp constructs UpdaterSchurVINS and invokes it directly",
+    "upstream_method_binding": "ov_msckf/src/core/VioManager.cpp invokes the production UpdaterMSCKF nullspace updater"
+  },
+  "irreducible_ov_source_semantics": {
+    "classification": "implementation_differences_not_profile_parameters",
+    "residual_and_jacobian_scale": 0.25,
+    "huber_threshold": 1.5,
+    "per_feature_nis_gate": false,
+    "landmark_inverse": "direct Eigen inverse without a rank check",
+    "source": "ov_msckf/src/update/UpdaterSchurVINS.cpp"
+  }
+}
