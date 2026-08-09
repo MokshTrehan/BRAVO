@@ -30,6 +30,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -1182,6 +1183,111 @@ GoldenTwoPassReference build_golden_two_pass_reference(
       result.prior, selected_pass, entry.updater_options.sigma_pix_sq);
   result.valid = result.selected.valid;
   return result;
+}
+
+class DeterministicPropertyRng {
+public:
+  explicit DeterministicPropertyRng(std::uint64_t seed) : state_(seed) {}
+
+  std::uint64_t next() {
+    state_ = state_ * UINT64_C(6364136223846793005) +
+             UINT64_C(1442695040888963407);
+    return state_;
+  }
+
+  double symmetric(double magnitude) {
+    constexpr double kInverseTwoTo53 =
+        1.0 / static_cast<double>(UINT64_C(1) << 53U);
+    const double unit =
+        static_cast<double>(next() >> 11U) * kInverseTwoTo53;
+    return magnitude * (2.0 * unit - 1.0);
+  }
+
+private:
+  std::uint64_t state_;
+};
+
+struct PropertyPreviewOracle {
+  bool valid = false;
+  Eigen::VectorXd increment;
+  Eigen::MatrixXd posterior;
+  double nis = std::numeric_limits<double>::quiet_NaN();
+};
+
+PropertyPreviewOracle build_property_preview_oracle(
+    const MSCKFUpdatePreviewSnapshot &snapshot,
+    const std::vector<MSCKFUpdatePreviewBlock> &layout,
+    const Eigen::MatrixXd &H, const Eigen::VectorXd &residual,
+    const Eigen::MatrixXd &R) {
+  PropertyPreviewOracle result;
+  const Eigen::Index state_dimension = snapshot.covariance.rows();
+  if (state_dimension <= 0 ||
+      snapshot.covariance.cols() != state_dimension || H.rows() <= 0 ||
+      residual.rows() != H.rows() || R.rows() != H.rows() ||
+      R.cols() != H.rows()) {
+    return result;
+  }
+
+  Eigen::MatrixXd full_H =
+      Eigen::MatrixXd::Zero(H.rows(), state_dimension);
+  for (const MSCKFUpdatePreviewBlock &block : layout) {
+    if (block.covariance_id < 0 || block.size <= 0 || block.offset < 0 ||
+        block.covariance_id > state_dimension - block.size ||
+        block.offset > H.cols() - block.size) {
+      return result;
+    }
+    full_H.block(0, block.covariance_id, H.rows(), block.size) =
+        H.block(0, block.offset, H.rows(), block.size);
+  }
+  if (!snapshot.covariance.allFinite() || !full_H.allFinite() ||
+      !residual.allFinite() || !R.allFinite()) {
+    return result;
+  }
+
+  const Eigen::MatrixXd cross =
+      snapshot.covariance * full_H.transpose();
+  Eigen::MatrixXd innovation =
+      full_H * cross + R;
+  Eigen::LLT<Eigen::MatrixXd, Eigen::Upper> factor(innovation);
+  if (factor.info() != Eigen::Success) {
+    return result;
+  }
+  Eigen::MatrixXd innovation_inverse =
+      Eigen::MatrixXd::Identity(H.rows(), H.rows());
+  factor.solveInPlace(innovation_inverse);
+  if (factor.info() != Eigen::Success ||
+      !innovation_inverse.allFinite()) {
+    return result;
+  }
+  const Eigen::MatrixXd gain =
+      cross * innovation_inverse.selfadjointView<Eigen::Upper>();
+  result.increment = gain * residual;
+  result.posterior = snapshot.covariance;
+  result.posterior.triangularView<Eigen::Upper>() -=
+      gain * cross.transpose();
+  result.posterior =
+      result.posterior.selfadjointView<Eigen::Upper>();
+  result.nis = residual.dot(
+      innovation_inverse.selfadjointView<Eigen::Upper>() * residual);
+  result.valid = result.increment.allFinite() &&
+                 result.posterior.allFinite() && std::isfinite(result.nis);
+  return result;
+}
+
+std::vector<MSCKFUpdatePreviewBlock> rotated_property_layout(
+    const MSCKFUpdatePreviewSnapshot &snapshot, std::size_t rotation) {
+  std::vector<MSCKFUpdatePreviewBlock> layout = snapshot.state_blocks;
+  if (layout.empty()) {
+    return layout;
+  }
+  rotation %= layout.size();
+  std::rotate(layout.begin(), layout.begin() + rotation, layout.end());
+  Eigen::Index offset = 0;
+  for (MSCKFUpdatePreviewBlock &block : layout) {
+    block.offset = offset;
+    offset += block.size;
+  }
+  return layout;
 }
 
 class ScopedDebugPrint {
@@ -2679,6 +2785,463 @@ TEST(CP1MixedFejGolden, FixedTwoPassDecisionCasesAThroughF) {
           .accepted());
   expect_same_feature_observations(*rejected_fixture.accepted_feature,
                                    rejected_feature_before);
+}
+
+TEST(CP1MixedFejProperty,
+     DeterministicSamePriorTransactionsAreFiniteAtomicAndFallbackSafe) {
+  constexpr std::uint64_t kSeed = UINT64_C(0x534348555256494f);
+  constexpr std::size_t kTransactionCases = 432U;
+  constexpr std::size_t kIntegratedUpdaterCases = 24U;
+  DeterministicPropertyRng rng(kSeed);
+
+  std::size_t accepted_pass_two_candidates = 0U;
+  std::size_t invalid_pass_two_fallbacks = 0U;
+  std::size_t invalid_pass_one_rejections = 0U;
+  std::size_t selected_pass_one = 0U;
+  std::size_t selected_pass_two = 0U;
+  std::size_t committed_transactions = 0U;
+
+  for (std::size_t case_index = 0; case_index < kTransactionCases;
+       ++case_index) {
+    SCOPED_TRACE(testing::Message()
+                 << "seed=" << kSeed << " transaction=" << case_index);
+    Fixture fixture = make_mixed_fej_fixture();
+    const MSCKFUpdatePriorSnapshot prior =
+        UpdaterMSCKFPreview::CapturePrior(fixture.state);
+    const Eigen::MatrixXd frozen_covariance = prior.filter.covariance;
+    const Feature feature_before = *fixture.accepted_feature;
+    const Eigen::MatrixXd camera_before = fixture.camera->get_value();
+    std::vector<Eigen::MatrixXd> values_before;
+    std::vector<Eigen::MatrixXd> fej_before;
+    for (const auto &variable : fixture.state_order) {
+      values_before.push_back(variable->value());
+      fej_before.push_back(variable->fej());
+    }
+
+    std::vector<MSCKFUpdatePreviewBlock> pass_one_layout =
+        rotated_property_layout(prior.filter, case_index);
+    Eigen::Index jacobian_dimension = 0;
+    for (const MSCKFUpdatePreviewBlock &block : pass_one_layout) {
+      jacobian_dimension += block.size;
+    }
+    ASSERT_EQ(jacobian_dimension, frozen_covariance.rows());
+    const Eigen::Index measurement_dimension =
+        3 + static_cast<Eigen::Index>(case_index % 6U);
+    Eigen::MatrixXd pass_one_H(measurement_dimension,
+                               jacobian_dimension);
+    Eigen::MatrixXd pass_two_H(measurement_dimension,
+                               jacobian_dimension);
+    for (Eigen::Index row = 0; row < measurement_dimension; ++row) {
+      for (Eigen::Index column = 0; column < jacobian_dimension;
+           ++column) {
+        pass_one_H(row, column) = rng.symmetric(0.45);
+        pass_two_H(row, column) =
+            pass_one_H(row, column) + rng.symmetric(0.06);
+      }
+    }
+    Eigen::VectorXd pass_one_residual(measurement_dimension);
+    Eigen::VectorXd pass_two_residual(measurement_dimension);
+    for (Eigen::Index row = 0; row < measurement_dimension; ++row) {
+      pass_one_residual(row) = rng.symmetric(0.04);
+      pass_two_residual(row) =
+          0.75 * pass_one_residual(row) + rng.symmetric(0.004);
+    }
+    Eigen::MatrixXd noise_factor =
+        Eigen::MatrixXd::Zero(measurement_dimension,
+                              measurement_dimension);
+    for (Eigen::Index row = 0; row < measurement_dimension; ++row) {
+      noise_factor(row, row) = 0.35 + 0.15 *
+          static_cast<double>((case_index + static_cast<std::size_t>(row)) %
+                              5U);
+      for (Eigen::Index column = 0; column < row; ++column) {
+        noise_factor(row, column) = rng.symmetric(0.025);
+      }
+    }
+    const Eigen::MatrixXd pass_one_R =
+        noise_factor * noise_factor.transpose();
+    Eigen::MatrixXd pass_two_R = pass_one_R;
+    std::vector<MSCKFUpdatePreviewBlock> pass_two_layout =
+        pass_one_layout;
+
+    const std::size_t mode = case_index % 9U;
+    if (mode == 8U) {
+      pass_one_residual(0) = std::numeric_limits<double>::quiet_NaN();
+    } else if (mode == 5U) {
+      pass_two_residual(0) = std::numeric_limits<double>::quiet_NaN();
+    } else if (mode == 6U) {
+      ASSERT_GE(pass_two_layout.size(), 2U);
+      pass_two_layout[1].covariance_id =
+          pass_two_layout[0].covariance_id;
+    } else if (mode == 7U) {
+      pass_two_R = -100.0 * Eigen::MatrixXd::Identity(
+                                  measurement_dimension,
+                                  measurement_dimension);
+    }
+
+    const Eigen::MatrixXd pass_one_H_before = pass_one_H;
+    const Eigen::VectorXd pass_one_residual_before = pass_one_residual;
+    const Eigen::MatrixXd pass_one_R_before = pass_one_R;
+    const std::vector<MSCKFUpdatePreviewBlock> pass_one_layout_before =
+        pass_one_layout;
+    const ov_msckf::MSCKFUpdateMeanResult pass_one_mean =
+        UpdaterMSCKFPreview::ComputeMeanFromSnapshot(
+            prior.filter, pass_one_layout, pass_one_H,
+            pass_one_residual, pass_one_R);
+    expect_same_bytes(pass_one_H, pass_one_H_before);
+    expect_same_bytes(pass_one_residual, pass_one_residual_before);
+    expect_same_bytes(pass_one_R, pass_one_R_before);
+    expect_same_layout(pass_one_layout, pass_one_layout_before);
+    expect_same_bytes(prior.filter.covariance, frozen_covariance);
+    EXPECT_TRUE(UpdaterMSCKFPreview::MatchPrior(fixture.state, prior)
+                    .accepted());
+    expect_same_feature_observations(*fixture.accepted_feature,
+                                     feature_before);
+
+    if (mode == 8U) {
+      ++invalid_pass_one_rejections;
+      EXPECT_FALSE(pass_one_mean.accepted());
+      EXPECT_EQ(pass_one_mean.diagnostics.status,
+                ov_msckf::MSCKFUpdatePreviewStatus::kNonfinite);
+      EXPECT_EQ(pass_one_mean.diagnostics.stage,
+                ov_msckf::MSCKFUpdatePreviewStage::kRawInputs);
+      expect_same_bytes(StateHelper::get_full_covariance(fixture.state),
+                        frozen_covariance);
+      ASSERT_EQ(fixture.state_order.size(), values_before.size());
+      for (std::size_t index = 0; index < fixture.state_order.size();
+           ++index) {
+        expect_same_bytes(fixture.state_order[index]->value(),
+                          values_before[index]);
+        expect_same_bytes(fixture.state_order[index]->fej(),
+                          fej_before[index]);
+      }
+      expect_same_bytes(fixture.camera->get_value(), camera_before);
+      continue;
+    }
+
+    ASSERT_TRUE(pass_one_mean.accepted());
+    const PropertyPreviewOracle pass_one_oracle =
+        build_property_preview_oracle(
+            prior.filter, pass_one_layout, pass_one_H,
+            pass_one_residual, pass_one_R);
+    ASSERT_TRUE(pass_one_oracle.valid);
+    EXPECT_LE((pass_one_mean.dx - pass_one_oracle.increment).norm(),
+              schurvio_cp1::mixed_tolerance(
+                  1.0e-12, 1.0e-10,
+                  pass_one_oracle.increment.norm()));
+    EXPECT_LE(std::abs(pass_one_mean.nis - pass_one_oracle.nis),
+              schurvio_cp1::mixed_tolerance(
+                  1.0e-12, 1.0e-10,
+                  std::abs(pass_one_oracle.nis)));
+    EXPECT_EQ(pass_one_mean.diagnostics.repair_count, 0U);
+    EXPECT_EQ(pass_one_mean.diagnostics.fallback_count, 0U);
+
+    const Eigen::MatrixXd pass_two_H_before = pass_two_H;
+    const Eigen::VectorXd pass_two_residual_before = pass_two_residual;
+    const Eigen::MatrixXd pass_two_R_before = pass_two_R;
+    const std::vector<MSCKFUpdatePreviewBlock> pass_two_layout_before =
+        pass_two_layout;
+    const ov_msckf::MSCKFUpdateMeanResult pass_two_mean =
+        UpdaterMSCKFPreview::ComputeMeanFromSnapshot(
+            prior.filter, pass_two_layout, pass_two_H,
+            pass_two_residual, pass_two_R);
+    expect_same_bytes(pass_two_H, pass_two_H_before);
+    expect_same_bytes(pass_two_residual, pass_two_residual_before);
+    expect_same_bytes(pass_two_R, pass_two_R_before);
+    expect_same_layout(pass_two_layout, pass_two_layout_before);
+    expect_same_bytes(prior.filter.covariance, frozen_covariance);
+    EXPECT_TRUE(UpdaterMSCKFPreview::MatchPrior(fixture.state, prior)
+                    .accepted());
+
+    if (mode <= 4U) {
+      ++accepted_pass_two_candidates;
+      ASSERT_TRUE(pass_two_mean.accepted());
+      const PropertyPreviewOracle pass_two_oracle =
+          build_property_preview_oracle(
+              prior.filter, pass_two_layout, pass_two_H,
+              pass_two_residual, pass_two_R);
+      ASSERT_TRUE(pass_two_oracle.valid);
+      EXPECT_LE((pass_two_mean.dx - pass_two_oracle.increment).norm(),
+                schurvio_cp1::mixed_tolerance(
+                    1.0e-12, 1.0e-10,
+                    pass_two_oracle.increment.norm()));
+      EXPECT_LE(std::abs(pass_two_mean.nis - pass_two_oracle.nis),
+                schurvio_cp1::mixed_tolerance(
+                    1.0e-12, 1.0e-10,
+                    std::abs(pass_two_oracle.nis)));
+    } else {
+      ++invalid_pass_two_fallbacks;
+      EXPECT_FALSE(pass_two_mean.accepted());
+      if (mode == 5U) {
+        EXPECT_EQ(pass_two_mean.diagnostics.status,
+                  ov_msckf::MSCKFUpdatePreviewStatus::kNonfinite);
+        EXPECT_EQ(pass_two_mean.diagnostics.stage,
+                  ov_msckf::MSCKFUpdatePreviewStage::kRawInputs);
+      } else if (mode == 6U) {
+        EXPECT_EQ(pass_two_mean.diagnostics.status,
+                  ov_msckf::MSCKFUpdatePreviewStatus::kInvalidInput);
+        EXPECT_EQ(pass_two_mean.diagnostics.stage,
+                  ov_msckf::MSCKFUpdatePreviewStage::kStateOrder);
+      } else {
+        EXPECT_EQ(pass_two_mean.diagnostics.status,
+                  ov_msckf::MSCKFUpdatePreviewStatus::kFactorizationFailed);
+        EXPECT_EQ(
+            pass_two_mean.diagnostics.stage,
+            ov_msckf::MSCKFUpdatePreviewStage::kInnovationFactorization);
+      }
+    }
+    EXPECT_EQ(pass_two_mean.diagnostics.repair_count, 0U);
+    EXPECT_EQ(pass_two_mean.diagnostics.fallback_count, 0U);
+
+    const bool choose_pass_two =
+        pass_two_mean.accepted() && (mode == 0U || mode == 2U || mode == 4U);
+    const std::vector<MSCKFUpdatePreviewBlock> &selected_layout =
+        choose_pass_two ? pass_two_layout : pass_one_layout;
+    const Eigen::MatrixXd &selected_H =
+        choose_pass_two ? pass_two_H : pass_one_H;
+    const Eigen::VectorXd &selected_residual =
+        choose_pass_two ? pass_two_residual : pass_one_residual;
+    const Eigen::MatrixXd &selected_R =
+        choose_pass_two ? pass_two_R : pass_one_R;
+    const ov_msckf::MSCKFUpdateMeanResult &selected_mean =
+        choose_pass_two ? pass_two_mean : pass_one_mean;
+    if (choose_pass_two) {
+      ++selected_pass_two;
+    } else {
+      ++selected_pass_one;
+    }
+
+    int selected_covariance_count = 0;
+    ++selected_covariance_count;
+    const ov_msckf::MSCKFUpdatePreviewResult selected_preview =
+        UpdaterMSCKFPreview::ComputeFromSnapshot(
+            prior.filter, selected_layout, selected_H,
+            selected_residual, selected_R);
+    ASSERT_TRUE(selected_preview.accepted())
+        << ov_msckf::msckf_update_preview_status_name(
+               selected_preview.diagnostics.status)
+        << "/"
+        << ov_msckf::msckf_update_preview_stage_name(
+               selected_preview.diagnostics.stage);
+    EXPECT_EQ(selected_covariance_count, 1);
+    EXPECT_EQ(selected_preview.diagnostics.jitter_count, 0U);
+    EXPECT_EQ(selected_preview.diagnostics.repair_count, 0U);
+    EXPECT_EQ(selected_preview.diagnostics.alternate_solve_count, 0U);
+    EXPECT_EQ(selected_preview.diagnostics.clamp_count, 0U);
+    EXPECT_EQ(selected_preview.diagnostics.regularization_count, 0U);
+    EXPECT_EQ(selected_preview.diagnostics.fallback_count, 0U);
+    EXPECT_LE((selected_preview.dx - selected_mean.dx).norm(),
+              schurvio_cp1::mixed_tolerance(
+                  1.0e-12, 1.0e-10, selected_mean.dx.norm()));
+
+    const PropertyPreviewOracle selected_oracle =
+        build_property_preview_oracle(
+            prior.filter, selected_layout, selected_H,
+            selected_residual, selected_R);
+    ASSERT_TRUE(selected_oracle.valid);
+    EXPECT_LE((selected_preview.dx - selected_oracle.increment).norm(),
+              schurvio_cp1::mixed_tolerance(
+                  1.0e-12, 1.0e-10,
+                  selected_oracle.increment.norm()));
+    EXPECT_LE((selected_preview.P_plus - selected_oracle.posterior).norm(),
+              schurvio_cp1::mixed_tolerance(
+                  1.0e-12, 1.0e-10,
+                  selected_oracle.posterior.norm()));
+    ASSERT_TRUE(selected_preview.dx.allFinite());
+    ASSERT_TRUE(selected_preview.P_plus.allFinite());
+    const double symmetry_error = schurvio_cp1::matrix_inf_norm(
+        selected_preview.P_plus - selected_preview.P_plus.transpose());
+    const double covariance_scale = std::max(
+        1.0, schurvio_cp1::matrix_inf_norm(selected_preview.P_plus));
+    EXPECT_LE(symmetry_error, 1.0e-10 * covariance_scale);
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> posterior_solver(
+        0.5 * (selected_preview.P_plus +
+               selected_preview.P_plus.transpose()));
+    ASSERT_EQ(posterior_solver.info(), Eigen::Success);
+    EXPECT_GE(posterior_solver.eigenvalues().minCoeff(),
+              -1.0e-10 *
+                  std::max(1.0,
+                           posterior_solver.eigenvalues().maxCoeff()));
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> information_solver(
+        0.5 * ((frozen_covariance - selected_preview.P_plus) +
+               (frozen_covariance - selected_preview.P_plus).transpose()));
+    ASSERT_EQ(information_solver.info(), Eigen::Success);
+    EXPECT_GE(information_solver.eigenvalues().minCoeff(),
+              -1.0e-10 *
+                  std::max(1.0,
+                           information_solver.eigenvalues().maxCoeff()));
+
+    expect_same_bytes(prior.filter.covariance, frozen_covariance);
+    EXPECT_TRUE(UpdaterMSCKFPreview::MatchPrior(fixture.state, prior)
+                    .accepted());
+    expect_same_feature_observations(*fixture.accepted_feature,
+                                     feature_before);
+    int live_commit_count = 0;
+    ++live_commit_count;
+    ASSERT_TRUE(StateHelper::CommitPrecomputedUpdate(
+        fixture.state, selected_preview.dx, selected_preview.P_plus,
+        StateHelper::PrecomputedCovariancePolicy::NUMERICAL_PSD));
+    ++committed_transactions;
+    EXPECT_EQ(live_commit_count, 1);
+    EXPECT_EQ(selected_covariance_count, 1);
+    expect_same_bytes(StateHelper::get_full_covariance(fixture.state),
+                      selected_preview.P_plus);
+    ASSERT_EQ(fixture.state_order.size(), fej_before.size());
+    for (std::size_t index = 0; index < fixture.state_order.size();
+         ++index) {
+      EXPECT_TRUE(fixture.state_order[index]->value().allFinite());
+      expect_same_bytes(fixture.state_order[index]->fej(),
+                        fej_before[index]);
+    }
+    expect_same_bytes(
+        fixture.camera->get_value(),
+        fixture.state->_cam_intrinsics.at(0)->value());
+    expect_same_feature_observations(*fixture.accepted_feature,
+                                     feature_before);
+    expect_same_bytes(prior.filter.covariance, frozen_covariance);
+  }
+
+  EXPECT_EQ(accepted_pass_two_candidates, 240U);
+  EXPECT_EQ(invalid_pass_two_fallbacks, 144U);
+  EXPECT_EQ(invalid_pass_one_rejections, 48U);
+  EXPECT_EQ(selected_pass_one, 240U);
+  EXPECT_EQ(selected_pass_two, 144U);
+  EXPECT_EQ(committed_transactions, 384U);
+
+  const std::array<UpdaterMSCKFOrdinaryTestAccess::Fault, 5>
+      updater_faults = {{
+          UpdaterMSCKFOrdinaryTestAccess::Fault::kNone,
+          UpdaterMSCKFOrdinaryTestAccess::Fault::kPassTwoGeometryFailure,
+          UpdaterMSCKFOrdinaryTestAccess::Fault::
+              kPassTwoSchurRankDeficient,
+          UpdaterMSCKFOrdinaryTestAccess::Fault::kPassTwoNonfinite,
+          UpdaterMSCKFOrdinaryTestAccess::Fault::kPassTwoException,
+      }};
+  const std::array<const char *, 5> updater_failure_reasons = {{
+      "", "geometry", "schur", "jacobian", "exception",
+  }};
+  std::size_t integrated_fallbacks = 0U;
+  for (std::size_t case_index = 0;
+       case_index < kIntegratedUpdaterCases; ++case_index) {
+    SCOPED_TRACE(testing::Message()
+                 << "seed=" << kSeed << " updater=" << case_index);
+    Fixture fixture = make_mixed_fej_fixture();
+    fixture.updater_options.max_visual_passes = 2;
+    fixture.updater_options.chi2_multipler = 100.0;
+    fixture.updater_options.sigma_pix = 0.5;
+    fixture.updater_options.sigma_pix_sq = 0.25;
+    const Eigen::Matrix<double, 8, 1> intrinsics =
+        fixture.state->_cam_intrinsics.at(0)->value();
+    for (std::size_t measurement_index = 0;
+         measurement_index < fixture.accepted_feature->uvs.at(0).size();
+         ++measurement_index) {
+      const float jitter_x = static_cast<float>(rng.symmetric(0.004));
+      const float jitter_y = static_cast<float>(rng.symmetric(0.004));
+      fixture.accepted_feature->uvs.at(0).at(measurement_index)(0) +=
+          jitter_x;
+      fixture.accepted_feature->uvs.at(0).at(measurement_index)(1) +=
+          jitter_y;
+      fixture.accepted_feature->uvs_norm.at(0).at(measurement_index)(0) +=
+          jitter_x / static_cast<float>(intrinsics(0));
+      fixture.accepted_feature->uvs_norm.at(0).at(measurement_index)(1) +=
+          jitter_y / static_cast<float>(intrinsics(1));
+    }
+
+    const MSCKFUpdatePriorSnapshot prior =
+        UpdaterMSCKFPreview::CapturePrior(fixture.state);
+    const Eigen::MatrixXd frozen_covariance = prior.filter.covariance;
+    const Feature feature_before = *fixture.accepted_feature;
+    Feature *const feature_pointer = fixture.accepted_feature.get();
+    std::vector<Eigen::MatrixXd> fej_before;
+    for (const auto &variable : fixture.state_order) {
+      fej_before.push_back(variable->fej());
+    }
+    std::vector<std::shared_ptr<Feature>> features = {
+        fixture.accepted_feature};
+    UpdaterMSCKF updater(fixture.updater_options,
+                         fixture.initializer_options);
+    const std::size_t fault_index = case_index % updater_faults.size();
+    UpdaterMSCKFOrdinaryTestAccess::SetFault(
+        updater, updater_faults[fault_index]);
+
+    std::string output;
+    {
+      ScopedDebugPrint debug_print;
+      testing::internal::CaptureStdout();
+      updater.update(fixture.state, features);
+      output = testing::internal::GetCapturedStdout();
+    }
+    ASSERT_EQ(features.size(), 1U);
+    EXPECT_EQ(features.front().get(), feature_pointer);
+    EXPECT_EQ(features.front(), fixture.accepted_feature);
+    EXPECT_NE(output.find("requested_passes=2"), std::string::npos);
+    EXPECT_NE(output.find("attempted_passes=2"), std::string::npos);
+    EXPECT_NE(output.find("status=committed"), std::string::npos);
+    EXPECT_NE(output.find("mean_commits=1 covariance_commits=1 "),
+              std::string::npos);
+    EXPECT_NE(output.find("feature_finalizations=1"),
+              std::string::npos);
+    if (fault_index == 0U) {
+      EXPECT_NE(output.find("completed_passes=2"), std::string::npos);
+      EXPECT_NE(output.find("pass=2 status=accepted"),
+                std::string::npos);
+      EXPECT_NE(output.find("repairs=0"), std::string::npos);
+    } else {
+      ++integrated_fallbacks;
+      EXPECT_NE(output.find("completed_passes=1"), std::string::npos);
+      EXPECT_NE(output.find("pass=2 status=invalid reason=" +
+                            std::string(updater_failure_reasons[fault_index])),
+                std::string::npos);
+      EXPECT_NE(output.find("selected_pass=1"), std::string::npos);
+    }
+
+    expect_same_bytes(prior.filter.covariance, frozen_covariance);
+    const Eigen::MatrixXd covariance =
+        StateHelper::get_full_covariance(fixture.state);
+    ASSERT_TRUE(covariance.allFinite());
+    const double symmetry_error = schurvio_cp1::matrix_inf_norm(
+        covariance - covariance.transpose());
+    EXPECT_LE(symmetry_error,
+              1.0e-10 * std::max(
+                              1.0,
+                              schurvio_cp1::matrix_inf_norm(covariance)));
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> covariance_solver(
+        0.5 * (covariance + covariance.transpose()));
+    ASSERT_EQ(covariance_solver.info(), Eigen::Success);
+    EXPECT_GE(covariance_solver.eigenvalues().minCoeff(),
+              -1.0e-10 *
+                  std::max(1.0,
+                           covariance_solver.eigenvalues().maxCoeff()));
+    ASSERT_EQ(fixture.state_order.size(), fej_before.size());
+    for (std::size_t index = 0; index < fixture.state_order.size();
+         ++index) {
+      EXPECT_TRUE(fixture.state_order[index]->value().allFinite());
+      expect_same_bytes(fixture.state_order[index]->fej(),
+                        fej_before[index]);
+    }
+    expect_same_bytes(
+        fixture.camera->get_value(),
+        fixture.state->_cam_intrinsics.at(0)->value());
+    Feature raw_expected = feature_before;
+    raw_expected.to_delete = fixture.accepted_feature->to_delete;
+    raw_expected.anchor_cam_id = fixture.accepted_feature->anchor_cam_id;
+    raw_expected.anchor_clone_timestamp =
+        fixture.accepted_feature->anchor_clone_timestamp;
+    raw_expected.p_FinA = fixture.accepted_feature->p_FinA;
+    raw_expected.p_FinG = fixture.accepted_feature->p_FinG;
+    expect_same_feature_observations(*fixture.accepted_feature,
+                                     raw_expected);
+    EXPECT_TRUE(fixture.accepted_feature->to_delete);
+  }
+  EXPECT_EQ(integrated_fallbacks, 19U);
+
+  std::cout << "CP1_TWO_PASS_PROPERTY seed=0x534348555256494f"
+            << " transaction_cases=" << kTransactionCases
+            << " committed_transactions=" << committed_transactions
+            << " invalid_pass1=" << invalid_pass_one_rejections
+            << " invalid_pass2_fallbacks=" << invalid_pass_two_fallbacks
+            << " integrated_updater_cases=" << kIntegratedUpdaterCases
+            << " integrated_fallbacks=" << integrated_fallbacks
+            << std::endl;
 }
 
 TEST(CP1OnePassRegression,
