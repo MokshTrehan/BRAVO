@@ -233,6 +233,66 @@ TEST(CP1VisualPassConfig, SupportedReducerAndPassCombinationsValidate) {
   }
 }
 
+TEST(CP1VisualPassConfig,
+     ShadowDefaultsFalseAndOnlyEnablesForFixedTwoPassSchur) {
+  const UpdaterOptions defaults;
+  EXPECT_FALSE(defaults.pass2_shadow_only);
+
+  struct ValidCase {
+    int passes;
+    const char *elimination;
+    bool shadow_only;
+  };
+  const std::vector<ValidCase> valid_cases{
+      {1, "nullspace", false},
+      {1, "schur", false},
+      {2, "schur", false},
+      {2, "schur", true},
+  };
+  for (const ValidCase &test_case : valid_cases) {
+    SCOPED_TRACE(testing::Message()
+                 << "passes=" << test_case.passes
+                 << " elimination=" << test_case.elimination
+                 << " shadow_only=" << test_case.shadow_only);
+    const TemporaryYaml yaml(
+        full_msckf_yaml(std::to_string(test_case.passes),
+                        test_case.elimination) +
+        "up_msckf_pass2_shadow_only: " +
+        (test_case.shadow_only ? "true\n" : "false\n"));
+    const auto parser = parser_for(yaml);
+    VioManagerOptions options;
+    options.load_and_validate_msckf_update_configuration(parser);
+    EXPECT_EQ(options.msckf_options.max_visual_passes, test_case.passes);
+    EXPECT_EQ(options.msckf_options.pass2_shadow_only,
+              test_case.shadow_only);
+    EXPECT_TRUE(parser->successful());
+  }
+
+  const TemporaryYaml missing_shadow(full_msckf_yaml("2", "schur"));
+  const auto missing_parser = parser_for(missing_shadow);
+  VioManagerOptions missing_options;
+  missing_options.load_and_validate_msckf_update_configuration(
+      missing_parser);
+  EXPECT_FALSE(missing_options.msckf_options.pass2_shadow_only);
+  EXPECT_TRUE(missing_parser->successful());
+
+  const TemporaryYaml invalid_shadow(
+      full_msckf_yaml("1", "schur") +
+      "up_msckf_pass2_shadow_only: true\n");
+  EXPECT_EXIT(
+      {
+        (void)::dup2(STDERR_FILENO, STDOUT_FILENO);
+        const auto parser =
+            std::make_shared<YamlParser>(invalid_shadow.path());
+        VioManagerOptions options;
+        options.load_and_validate_msckf_update_configuration(parser);
+        std::exit(EXIT_SUCCESS);
+      },
+      ::testing::ExitedWithCode(EXIT_FAILURE),
+      "up_msckf_pass2_shadow_only.*requires.*"
+      "up_msckf_max_visual_passes=2.*schur");
+}
+
 TEST(CP1VisualPassConfig, TwoPassNullspaceFailsStartupClearly) {
   const TemporaryYaml yaml(full_msckf_yaml("2", "nullspace"));
   EXPECT_EXIT(

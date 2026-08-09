@@ -1302,6 +1302,87 @@ private:
   ov_core::Printer::PrintLevel previous_;
 };
 
+std::string run_fixture_update(
+    Fixture &fixture, std::vector<std::shared_ptr<Feature>> &features,
+    UpdaterMSCKFOrdinaryTestAccess::Fault fault =
+        UpdaterMSCKFOrdinaryTestAccess::Fault::kNone) {
+  UpdaterMSCKF updater(fixture.updater_options,
+                       fixture.initializer_options);
+  UpdaterMSCKFOrdinaryTestAccess::SetFault(updater, fault);
+
+  std::string output;
+  {
+    ScopedDebugPrint debug_print;
+    testing::internal::CaptureStdout();
+    updater.update(fixture.state, features);
+    output = testing::internal::GetCapturedStdout();
+  }
+  return output;
+}
+
+const Feature *fixture_feature_with_id(const Fixture &fixture,
+                                       std::size_t feature_id) {
+  if (fixture.accepted_feature &&
+      fixture.accepted_feature->featid == feature_id) {
+    return fixture.accepted_feature.get();
+  }
+  if (fixture.rejected_feature &&
+      fixture.rejected_feature->featid == feature_id) {
+    return fixture.rejected_feature.get();
+  }
+  return nullptr;
+}
+
+void expect_byte_exact_fixture_update(
+    const Fixture &actual,
+    const std::vector<std::shared_ptr<Feature>> &actual_population,
+    const Fixture &expected,
+    const std::vector<std::shared_ptr<Feature>> &expected_population) {
+  expect_same_bytes(StateHelper::get_full_covariance(actual.state),
+                    StateHelper::get_full_covariance(expected.state));
+  ASSERT_EQ(actual.state_order.size(), expected.state_order.size());
+  for (std::size_t index = 0; index < actual.state_order.size(); ++index) {
+    SCOPED_TRACE(testing::Message() << "state_block=" << index);
+    EXPECT_EQ(actual.state_order[index]->id(),
+              expected.state_order[index]->id());
+    expect_same_bytes(actual.state_order[index]->value(),
+                      expected.state_order[index]->value());
+    expect_same_bytes(actual.state_order[index]->fej(),
+                      expected.state_order[index]->fej());
+  }
+  expect_same_bytes(actual.camera->get_value(),
+                    expected.camera->get_value());
+
+  ASSERT_TRUE(actual.accepted_feature);
+  ASSERT_TRUE(expected.accepted_feature);
+  ASSERT_TRUE(actual.rejected_feature);
+  ASSERT_TRUE(expected.rejected_feature);
+  expect_same_feature_observations(*actual.accepted_feature,
+                                   *expected.accepted_feature);
+  expect_same_feature_observations(*actual.rejected_feature,
+                                   *expected.rejected_feature);
+
+  ASSERT_EQ(actual_population.size(), expected_population.size());
+  for (std::size_t index = 0; index < actual_population.size(); ++index) {
+    SCOPED_TRACE(testing::Message() << "feature_population_index="
+                                    << index);
+    ASSERT_TRUE(actual_population[index]);
+    ASSERT_TRUE(expected_population[index]);
+    EXPECT_EQ(actual_population[index]->featid,
+              expected_population[index]->featid);
+    const Feature *const actual_original = fixture_feature_with_id(
+        actual, actual_population[index]->featid);
+    const Feature *const expected_original = fixture_feature_with_id(
+        expected, expected_population[index]->featid);
+    ASSERT_NE(actual_original, nullptr);
+    ASSERT_NE(expected_original, nullptr);
+    EXPECT_EQ(actual_population[index].get(), actual_original);
+    EXPECT_EQ(expected_population[index].get(), expected_original);
+    expect_same_feature_observations(*actual_population[index],
+                                     *expected_population[index]);
+  }
+}
+
 void expect_live_pass_two_fault_falls_back_to_pass_one(
     UpdaterMSCKFOrdinaryTestAccess::Fault fault,
     const std::string &reason, bool expect_schur_rank_diagnostics) {
@@ -2171,6 +2252,152 @@ TEST(CP1MixedFejGolden,
             -1.0e-10 *
                 std::max(1.0,
                          eigensolver.eigenvalues().maxCoeff()));
+}
+
+TEST(CP1ShadowOracle,
+     ValidOraclePassTwoStillCommitsByteExactOnePass) {
+  constexpr double kSigmaPix = 0.5;
+  const GoldenTwoPassReference reference =
+      build_golden_two_pass_reference(100.0, kSigmaPix);
+  ASSERT_TRUE(reference.valid);
+  ASSERT_EQ(reference.decision.selected_pass, 2);
+  ASSERT_TRUE(reference.pass_one_cost.geometry);
+  ASSERT_TRUE(reference.pass_two_cost.geometry);
+  EXPECT_GT((reference.pass_one_cost.geometry->p_FinG -
+             reference.pass_two_cost.geometry->p_FinG)
+                .norm(),
+            1.0e-10);
+
+  Fixture one_pass = make_mixed_fej_fixture();
+  Fixture shadow = make_mixed_fej_fixture();
+  one_pass.updater_options.max_visual_passes = 1;
+  shadow.updater_options.max_visual_passes = 2;
+  shadow.updater_options.pass2_shadow_only = true;
+  for (Fixture *fixture : {&one_pass, &shadow}) {
+    fixture->updater_options.chi2_multipler = 100.0;
+    fixture->updater_options.sigma_pix = kSigmaPix;
+    fixture->updater_options.sigma_pix_sq = kSigmaPix * kSigmaPix;
+  }
+
+  std::vector<std::shared_ptr<Feature>> one_pass_features = {
+      one_pass.accepted_feature, one_pass.rejected_feature};
+  std::vector<std::shared_ptr<Feature>> shadow_features = {
+      shadow.accepted_feature, shadow.rejected_feature};
+  const std::string one_pass_output =
+      run_fixture_update(one_pass, one_pass_features);
+  const std::string shadow_output =
+      run_fixture_update(shadow, shadow_features);
+
+  EXPECT_NE(one_pass_output.find("requested_passes=1"),
+            std::string::npos);
+  EXPECT_NE(one_pass_output.find("pass2_attempts=0"),
+            std::string::npos);
+  EXPECT_NE(one_pass_output.find(
+                "mean_commits=1 covariance_commits=1 "),
+            std::string::npos);
+  EXPECT_NE(one_pass_output.find("feature_finalizations=1"),
+            std::string::npos);
+
+  EXPECT_NE(shadow_output.find("shadow_only=1"), std::string::npos);
+  EXPECT_NE(shadow_output.find(
+                "requested_passes=2 attempted_passes=2"),
+            std::string::npos);
+  EXPECT_NE(shadow_output.find("completed_passes=2"),
+            std::string::npos);
+  EXPECT_NE(shadow_output.find("pass=1 status=accepted"),
+            std::string::npos);
+  EXPECT_NE(shadow_output.find("pass=2 status=accepted"),
+            std::string::npos);
+  EXPECT_NE(shadow_output.find("Cpix="), std::string::npos);
+  EXPECT_NE(shadow_output.find("Cpost="), std::string::npos);
+  EXPECT_NE(shadow_output.find("oracle_selected_pass=2"),
+            std::string::npos);
+  EXPECT_NE(shadow_output.find("selected_pass=1"),
+            std::string::npos);
+  EXPECT_NE(shadow_output.find("status=committed"),
+            std::string::npos);
+  EXPECT_NE(shadow_output.find(
+                "mean_commits=1 covariance_commits=1 "),
+            std::string::npos);
+  EXPECT_NE(shadow_output.find("feature_finalizations=1"),
+            std::string::npos);
+
+  expect_byte_exact_fixture_update(
+      shadow, shadow_features, one_pass, one_pass_features);
+}
+
+TEST(CP1ShadowOracle,
+     InvalidPassTwoFaultsCannotAffectByteExactOnePass) {
+  constexpr double kSigmaPix = 0.5;
+  Fixture one_pass = make_mixed_fej_fixture();
+  one_pass.updater_options.max_visual_passes = 1;
+  one_pass.updater_options.chi2_multipler = 100.0;
+  one_pass.updater_options.sigma_pix = kSigmaPix;
+  one_pass.updater_options.sigma_pix_sq = kSigmaPix * kSigmaPix;
+  std::vector<std::shared_ptr<Feature>> one_pass_features = {
+      one_pass.accepted_feature, one_pass.rejected_feature};
+  const std::string one_pass_output =
+      run_fixture_update(one_pass, one_pass_features);
+  ASSERT_NE(one_pass_output.find("status=committed"),
+            std::string::npos);
+
+  struct FaultCase {
+    UpdaterMSCKFOrdinaryTestAccess::Fault fault;
+    const char *reason;
+    const char *diagnostic;
+  };
+  const std::array<FaultCase, 4> fault_cases{{
+      {UpdaterMSCKFOrdinaryTestAccess::Fault::kPassTwoGeometryFailure,
+       "geometry", "gate_diagnostics_available="},
+      {UpdaterMSCKFOrdinaryTestAccess::Fault::kPassTwoSchurRankDeficient,
+       "schur", "singular_ratio_available=1"},
+      {UpdaterMSCKFOrdinaryTestAccess::Fault::kPassTwoNonfinite,
+       "jacobian", "gate_diagnostics_available="},
+      {UpdaterMSCKFOrdinaryTestAccess::Fault::kPassTwoException,
+       "exception", "gate_diagnostics_available="},
+  }};
+
+  for (const FaultCase &test_case : fault_cases) {
+    SCOPED_TRACE(test_case.reason);
+    Fixture shadow = make_mixed_fej_fixture();
+    shadow.updater_options.max_visual_passes = 2;
+    shadow.updater_options.pass2_shadow_only = true;
+    shadow.updater_options.chi2_multipler = 100.0;
+    shadow.updater_options.sigma_pix = kSigmaPix;
+    shadow.updater_options.sigma_pix_sq = kSigmaPix * kSigmaPix;
+    std::vector<std::shared_ptr<Feature>> shadow_features = {
+        shadow.accepted_feature, shadow.rejected_feature};
+    const std::string output = run_fixture_update(
+        shadow, shadow_features, test_case.fault);
+
+    EXPECT_NE(output.find("shadow_only=1"), std::string::npos);
+    EXPECT_NE(output.find(
+                  "requested_passes=2 attempted_passes=2"),
+              std::string::npos);
+    EXPECT_NE(output.find("completed_passes=1"), std::string::npos);
+    EXPECT_NE(output.find("pass=1 status=accepted"),
+              std::string::npos);
+    EXPECT_NE(output.find(std::string("pass=2 status=invalid reason=") +
+                          test_case.reason),
+              std::string::npos);
+    EXPECT_NE(output.find(test_case.diagnostic), std::string::npos);
+    EXPECT_NE(output.find("oracle_selected_pass=1"),
+              std::string::npos);
+    EXPECT_NE(output.find(std::string("oracle_reason=") +
+                          test_case.reason),
+              std::string::npos);
+    EXPECT_NE(output.find("completed_passes=1 selected_pass=1"),
+              std::string::npos);
+    EXPECT_NE(output.find("status=committed"), std::string::npos);
+    EXPECT_NE(output.find(
+                  "mean_commits=1 covariance_commits=1 "),
+              std::string::npos);
+    EXPECT_NE(output.find("feature_finalizations=1"),
+              std::string::npos);
+
+    expect_byte_exact_fixture_update(
+        shadow, shadow_features, one_pass, one_pass_features);
+  }
 }
 
 TEST(CP1MixedFejGolden,
