@@ -242,6 +242,8 @@ if (CATKIN_ENABLE_TESTING)
     catkin_add_gtest(test_cp1_visual_pass_config
             test/cp1/gtest_main.cpp
             test/cp1/test_visual_pass_config.cpp)
+    add_executable(schur_conditioning_benchmark
+            test/conditioning/schur_conditioning_benchmark.cpp)
 
     set(CP1_TEST_TARGETS
             test_cp1_schur_equivalence
@@ -263,6 +265,11 @@ if (CATKIN_ENABLE_TESTING)
                     -fsigned-zeros)
         endif ()
     endforeach ()
+    target_link_libraries(schur_conditioning_benchmark ov_msckf_lib ${thirdparty_libraries})
+    target_compile_options(schur_conditioning_benchmark PRIVATE
+            -fno-fast-math
+            -ffp-contract=off
+            -fsigned-zeros)
 endif ()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CP2Tests.cmake)
