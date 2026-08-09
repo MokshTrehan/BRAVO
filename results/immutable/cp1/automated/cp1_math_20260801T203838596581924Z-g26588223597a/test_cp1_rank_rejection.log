@@ -1,0 +1,13 @@
+[==========] Running 2 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 2 tests from CP1Schur
+[ RUN      ] CP1Schur.DegenerateLandmarksAreRejectedDeterministically
+CP1_RANK fixtures=128 seed=1934903571 rank_deficient=96 ill_conditioned=32
+[       OK ] CP1Schur.DegenerateLandmarksAreRejectedDeterministically (2 ms)
+[ RUN      ] CP1Schur.BoundaryAndInvalidInputsHaveExplicitStatus
+[       OK ] CP1Schur.BoundaryAndInvalidInputsHaveExplicitStatus (0 ms)
+[----------] 2 tests from CP1Schur (2 ms total)
+
+[----------] Global test environment tear-down
+[==========] 2 tests from 1 test suite ran. (2 ms total)
+[  PASSED  ] 2 tests.

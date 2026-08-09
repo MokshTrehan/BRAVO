@@ -1,0 +1,461 @@
+schema_version: 1
+project: SchurVIO-Lite
+timezone: America/Toronto
+
+gate:
+  id: CP2
+  name: one_pass_baseline_parity
+  status: authorized_in_progress_cp2_c_d_e_evidence_pending
+  due: "2026-07-31T23:59:00-04:00"
+  deadline_status: missed
+  deadline_decision_recorded_at: "2026-08-01"
+  deadline_decision: continue_cp2_without_waiver_or_cp3_deadline_change
+  deadline_reason: extended_adversarial_cp1_audit_and_fresh_commit_specific_signoff
+  deadline_scope_impact: cp2_evidence_delayed_cp3_schedule_compressed_requirements_unchanged
+  source_of_truth: docs/checkpoints.md
+  implementation_contract: docs/cp2_one_pass_contract.md
+  recorded_evidence_contract: docs/cp2_recorded_evidence_contract.md
+  artifact_schema: docs/cp2_artifact_schema.md
+  cp1_authorization_commit: 8d80f483752411d34a3bc4c1ff6330b3a5c0fef3
+  branch: schurvio-lite/cp2-one-pass
+
+completion_authorization:
+  status: active_full_cp2_completion_authority
+  received_date: "2026-08-07"
+  verbatim_path: project/cp2_full_completion_authorization_20260807.txt
+  verbatim_sha256: 8cb4767c159d4ec30317799a6ce3fa9b6535c36e77b9f451b977a31a5a233b67
+  verbatim_git_blob: 8e4064dbb3436037b9f317be483b6553ecbe4de4
+  binding_path: project/cp2_completion_authorization_binding.json
+  binding_sha256: be7c0dec8a77e6b18a6555c15aa476ae5991ea5ca17265c788225b443c0098fb
+  binding_git_blob: 4ffe1e1caf9cf02e7cccfc3b51f91d67073e6f50
+  supersedes_conflicting_prior_exactly_once_no_data_no_retry_installation_and_debugging_restrictions: true
+  dataset_registry_bag_ground_truth_result_access_authorized: true
+  iterative_development_rehearsal_readiness_and_verification_reruns_authorized: true
+  failed_declared_campaign_policy: preserve_report_correct_under_new_identity_and_declare_new_campaign
+  silent_deletion_relabeling_result_driven_threshold_weakening_or_concealment: forbidden
+  cp3_authorized: false
+
+scope:
+  baseline_mode: nullspace
+  candidate_mode: schur
+  default_mode: nullspace
+  configuration_key: up_msckf_landmark_elimination
+  configuration_required: false
+  valid_configuration_values: [nullspace, schur]
+  frozen_euroc_yaml_modified_for_mode_key: false
+  evidence_mode_selection: dedicated_ros_launch_override
+  evidence_launch: project/cp2_serial.launch
+  evidence_launch_sha256: a29c9b74aa6d4f0a5d783d0ba1eadeaca49ad0783f3b8121c5b68c8091023a12
+  landmark_representation: GLOBAL_3D
+  landmark_dimension: 3
+  startup_validation:
+    mode_known: required
+    sigma_px_finite_and_strictly_positive: required
+    sigma_px_squared_finite_and_strictly_positive_binary64: required
+    chi2_multiplier_finite: required
+    chi2_constructor_table_q_1_through_499_finite: required
+    schur_representation_GLOBAL_3D: required
+    failure: fail_fast_before_feature_processing
+  camera_model: CamRadtan
+  use_fej: true
+  frontend: stereo_KLT
+  clone_count: 11
+  camera_extrinsic_calibration: false
+  camera_intrinsic_calibration: false
+  camera_timeoffset_calibration: false
+  imu_intrinsic_calibration: false
+  imu_g_sensitivity_calibration: false
+  ground_truth_initialization: false
+  fixed_two_pass_permitted: false
+  direct_information_covariance_update_permitted: false
+  state_update: unchanged_StateHelper_EKFUpdate
+  shared_update_preflight:
+    applies_to: [nullspace, schur]
+    position: after_global_compression_before_any_live_write
+    checks:
+      - shapes_and_finite_H_res_R_P
+      - exact_H_order_full_state_M
+      - finite_S_and_successful_LLT
+      - finite_S_inverse_K_dx_and_subtractive_mirrored_P_plus
+      - nonnegative_P_plus_diagonal
+    failure: reject_whole_update_zero_writes
+    repair_or_fallback: forbidden
+  covariance_reset: identity_for_openvins_parity
+  robust_weights: disabled_unit_weights
+  silent_fallback: forbidden
+  regularization: forbidden
+
+reduction:
+  whitening: scalar_sigma_px
+  whitening_evaluation: direct_elementwise_division_not_reciprocal_multiplication
+  rank_check: thin_svd_on_whitened_landmark_jacobian
+  square_root: householder_qr_on_whitened_landmark_jacobian
+  emitted_system: Q2T_Hx_Q2T_res_with_sigma_px_squared_identity_noise
+  invariant_statistics: [lambda, eta, gamma]
+  degrees_of_freedom: raw_rows_minus_3
+  condition_ratio_floor: 1.0e-6
+  largest_singular_value_floor: strict_greater_than_std_numeric_limits_double_min
+  numerical_rank_boundary: smallest_strictly_greater_than_max_rows_cols_times_epsilon_times_largest
+  conditioning_boundary: reject_strictly_below_1e-6_accept_equality
+  svd_requirement: complete_finite_three_value_spectrum
+  qr_requirement: complete_m_row_householder_QT_transform_bottom_m_minus_3_rows_finite
+  chi_square_confidence: 0.95
+  rejection_boundary: strict_greater_than
+
+checkpoints:
+  CP2-A:
+    name: production_reducer
+    status: passed
+    minimum_fixtures: 1024
+    statistics_tolerance:
+      absolute: 1.0e-10
+      relative: 1.0e-8
+    posterior_tolerance:
+      absolute: 1.0e-8
+      relative: 1.0e-6
+  CP2-B:
+    name: openvins_fej_and_clone_semantics
+    status: passed
+    minimum_clone_fixtures: 128
+    clone_api: StateHelper_clone
+  CP2-C:
+    name: recorded_updater_parity
+    status: pending
+    implementation_readiness:
+      status: authorized_for_new_exact_identity_unit_readiness_and_declared_campaign
+      final_implementation_commit: c0dfecfd61e3ac067c4020bb61ab6421df926500
+      final_implementation_tree: bd5372514f62cae4e7505e8008ba01b76e9b8520
+      self_identity_policy: containing_commit_cannot_be_predeclared_exact_head_is_bound_by_unit_artifact
+      resume_base_head: 46b3010ad5e77ea61f9a571ccb7842ea2e0f1979
+      resume_base_tree: 04aa071dd68133beb3877c7e07058936e359c3b2
+      resume_remote_tip: f98eb347552ddab8965d899516143344dcb8a0b4
+      resume_worktree: clean_at_formal_unit_and_readiness_invocations_handoff_edit_follows
+      source_hardening_status: source_frozen_at_final_implementation_commit
+      pairing_and_producer_mathematical_audit_status: passed_frozen_source_data_free_nonformal
+      recorded_campaign_publication_audit_status: passed_frozen_source_data_free_nonformal
+      unit_artifact_publication_atomicity_status: implemented_fault_injection_passed_independent_postfix_audit_clean_nonformal
+      evidence_binding_audit_status: pending_new_full_authorization_binding_unit_evidence
+      protecting_test_status: frozen_source_data_free_nonformal_missed_tracked_results_topology
+      protecting_test_results:
+        campaign: 11_of_11_passed
+        approval_bound_actual_runner: 12_of_12_passed
+        opaque_repository: 12_of_12_passed
+        sequence_actual: 15_of_15_passed
+        sequence_runner: 15_of_15_passed
+        strict_cpp_pairing: 6_of_6_passed
+        readiness: 31_of_31_passed_after_exact_incident_approval_binding
+        readiness_engine_aggregate: 43_of_43_passed
+      fresh_exact_head_unit_gate: passed_exactly_once_at_final_implementation_commit
+      formal_unit_gate_attempt_count: 1
+      formal_unit_gate_runner_exit_code: 0
+      formal_unit_artifact_path: /home/moksh/newSlam variant/results/staging/cp2/unit/cp2_unit_20260804T115532208174128Z-gc0dfecfd61e3-1b7s3Qlz
+      formal_unit_external_sha256sums_anchor: 8676cb804692230a639b9f212f979955d2ef7da48187467ef4863ee8766950c7
+      formal_unit_postcleanup_positional_verifier_diagnostic: failed_nonprotocol_live_workspace_mode_not_a_gate_failure
+      formal_unit_protocol_status: unit_gate_passed_readiness_nested_prevalidated_verifier_not_reached
+      readiness_digest_pins: synchronized_to_c0c09525dab693fd984430bc23b5dfe5888a701236ee8f676d348570612adeab_at_final_implementation_commit
+      unit_evidence_record: project/cp2_ab_unit_evidence.json
+      historical_unit_evidence_only_not_valid_for_live_head: true
+      clarification_document: docs/cp2_c_composite_and_readiness_clarification.md
+      clarification_status: approved
+      clarification_reviewed_commit: b37eff6e5baa035175e1dde3cae52ee496ca9e2d
+      clarification_approval_record: project/cp2_c_clarification_approval.json
+      detached_readiness_clarification_document: docs/cp2_c_detached_readiness_binding_clarification_proposed.md
+      detached_readiness_clarification_status: approved_complete_replacement_no_exceptions_source_bound
+      detached_readiness_reviewed_commit: 0d71fee98499a10df4e92176709c1afe14077f90
+      detached_readiness_reviewed_tree: 9e3dd0c72134b319f17c002c41aa63337de26414
+      detached_readiness_approval_record: project/cp2_c_detached_readiness_binding_approval.json
+      detached_readiness_approval_record_status: source_bound_at_final_implementation_commit
+      incident_log: docs/cp2_predata_incident_log.md
+      prior_acknowledged_incident_log_commit: c2f3ad9c54ed126cc69526c76adb3134c3bf9545
+      prior_incident_disposition: acknowledged_and_accepted_no_incident_derived_influence
+      quarantined_expanded_incident_log_commit: 46b3010ad5e77ea61f9a571ccb7842ea2e0f1979
+      quarantined_expanded_incident_log_git_blob: 644f35ba9e371ae27efc2827e146f8b69dab70fe
+      quarantined_expanded_incident_log_sha256: 5d1f8aa1728bedd6141a55c756ef9dc3bfd2d52e7480208c27a94324b321af56
+      quarantined_expanded_incident_log_acknowledgment: received_exact_no_exceptions
+      incident_disposition_approval_record: project/cp2_predata_incident_disposition_approval.json
+      incident_disposition_approval_record_git_blob: cbcde817dc2784db557fe1fd363c2cb5832e49d4
+      incident_disposition_approval_record_sha256: e21d5910deb16ac34cf660d0db74958a2ab8e21c2492788d8525782ae9aa4f8d
+      incident_disposition_approval_record_status: bound_to_20260807_full_completion_authorization
+      current_incident_log_content_commit: d960f90567bf113d9d04a4449bc5c9721c250aea
+      current_incident_log_git_blob: 0b4bb06c4303b253de738cc0366ffce7f4219221
+      current_incident_log_sha256: 0121f141ea36a0e469dcba6c34c77034a3df9a72ea15b2901acc5c5d5ba03139
+      incident_disposition_source_binding: current_log_bound_to_full_completion_authority
+      incident_derived_value_influence_permitted: false
+      recorded_access_authority: authorized_by_20260807_full_completion_authorization
+      declared_campaign_eligibility_still_requires_exact_identity_unit_and_readiness: true
+      prior_exactly_once_and_no_retry_attempt_limit: superseded
+      post_acknowledgment_recorded_access_authority: not_exercised_readiness_never_authorized_registry_or_bag_access
+      live_shadow_and_raw_proposal_codec: passed_frozen_source_commit_unit_evidence
+      composite_state_snapshot: passed_frozen_source_commit_unit_evidence
+      detached_commit_oracle: passed_frozen_source_commit_unit_evidence
+      state_snapshot_file: passed_frozen_source_commit_unit_evidence_not_recorded_joined
+      updater_phase_ordering_and_failure_atomicity: passed_frozen_source_commit_unit_evidence
+      updater_commit_oracle_and_commit_boundary: passed_frozen_source_commit_unit_evidence
+      production_fault_link_isolation: passed_frozen_source_commit_unit_evidence
+      authoritative_sink_and_fatal_latch: passed_frozen_source_commit_unit_evidence
+      literal_commit_clock_fill_boundary: passed_frozen_source_commit_unit_evidence
+      exact_checked_counters_and_retained_gamma: passed_frozen_source_commit_unit_evidence
+      candidate_live_writes_required_and_observed_in_unit_fixtures: 0
+      recorded_process_attempt_count: 1
+      recorded_process_exit_code: 78
+      recorded_readiness_barrier: failed_predata_before_self_tests_lock_unit_anchor_registry_or_bag
+      recorded_readiness_failure: tracked_source_may_not_live_under_separately_snapshotted_roots
+      recorded_readiness_failure_cause: 75_stage0_tracked_cp0_cp1_evidence_files_under_results
+      recorded_readiness_unit_archive_contains_conflicting_tracked_files: 75
+      recorded_readiness_retry_attempted: false
+      recorded_input_accessed: false
+      recorded_campaign_started: false
+      recorded_artifact_reporting: not_run
+      cp2_c_recorded_evidence: not_run
+    minimum_visual_updates: 1000
+    counted_record: accepted_nonempty_global_system_preflight_passed_and_baseline_committed
+    noncounted_records_reported: [empty_input, all_rejected, empty_after_compression, preflight_rejected, internal_failure]
+    disagreement_exempts_state_or_covariance_bound: false
+    minimum_accept_reject_agreement: 0.999
+    source: deterministic_serial_ROS1_on_predeclared_CP2_bags_offsets_and_config
+    sequences: [MH_01_easy, MH_03_medium, V1_01_easy]
+    startup_offsets_seconds:
+      MH_01_easy: 40.0
+      MH_03_medium: 5.0
+      V1_01_easy: 0.0
+    bag_sha256:
+      MH_01_easy: 57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9
+      MH_03_medium: c51b0064681dfb287b6653f5fd54e6c56af5d9151c866e17574fdbc527db2311
+      V1_01_easy: 6dc6192fac63dd0a05ba745548b41fe8cae14724168a98865a81d37e681bbc81
+    config_sha256:
+      estimator: b706f0082106e49e20c3292147d238b7e225b0df414106b9d4ac009bbb123f3b
+      imu: 408ea8b60b5f9e7c8251e6d302f04c0675bfefdd31229bb1afd139bc8f4a0287
+      imucam: b9e11b7bcda102f7c8c384c97318d67f3916b58942f9073722f83c22bd7073f7
+    ground_truth_sha256:
+      MH_01_easy: ab1579de35a047d241e2d0d1a4f4306b4fa51d99c6f11bcdebf336ab2b784df9
+      MH_03_medium: 8c7c9873f5cb102eda2b68d665134f144eed9d5778f0dbdc82bbf8e8fdbd558e
+      V1_01_easy: 6d2f961334ff3069105be0aacf118d3c7e82bf3ab0e238acd5f40f1d897573d1
+    process_all_sequences_to_completion: true
+    stop_after_minimum_visual_updates: false
+    feature_agreement_denominator: union_of_per_mode_finite_boolean_gate_decisions_in_all_updater_invocations
+    row_weighted_agreement_denominator: sum_pre_elimination_raw_rows_over_same_union_in_all_updater_invocations
+    official_gate_population: union_of_per_mode_finite_boolean_gate_decisions_counted_once_per_feature
+    official_gate_match_population: intersection_with_equal_boolean_decision
+    one_sided_missing_gate_decision: denominator_only_disagreement
+    both_sided_missing_gate_decision: traced_but_not_in_gate_denominator
+    row_weight: pre_elimination_raw_measurement_rows
+    ratio_check: exact_integer_cross_product_1000_numerator_gte_999_denominator
+    both_agreements_required: true
+    accepted_set_digest: sha256_domain_separated_sorted_unique_big_endian_uint64_v1
+    accepted_sequence_digest: sha256_domain_separated_processing_order_big_endian_uint64_v1
+    per_feature_statistics_population: every_shared_raw_system_in_every_invocation_where_both_reductions_are_valid
+    per_feature_statistics_failure: any_unavailable_nonfinite_or_out_of_tolerance_comparison_fails_campaign
+    per_feature_statistics_tolerance:
+      absolute: 1.0e-10
+      relative: 1.0e-8
+    nullspace_statistics_evaluation: direct_elementwise_whitening_then_gemm_dot_and_post_raw_check_symmetrization
+    schur_statistics_source: accepted_production_reducer_result_without_unwhitened_reconstruction
+    statistics_floating_point: strict_no_fast_math_no_fp_contraction
+    disagreement_classes:
+      - both_match_accept
+      - both_match_reject
+      - boolean_nullspace_accept_schur_reject
+      - boolean_nullspace_reject_schur_accept
+      - nullspace_only
+      - schur_only
+      - neither_decision
+    shadow_enablement: orthogonal_evidence_capability_live_mode_must_be_nullspace
+    trace_level: recorded_full
+    launch_outputs:
+      save_total_state: false
+      record_openvins_timing: false
+    candidate_missing_proposal_on_counted_record: hard_failure
+    candidate_live_write_count_required: 0
+    baseline_ekf_update_calls_per_counted_record: 1
+    state_block_tolerance:
+      absolute: 1.0e-8
+      relative: 1.0e-6
+    state_blocks:
+      - imu_theta
+      - imu_position
+      - imu_velocity
+      - imu_gyro_bias
+      - imu_accel_bias
+      - every_clone_theta
+      - every_clone_position
+      - every_active_slam_landmark_full_error_block
+    unexpected_active_type: fail_evidence_before_hashing
+    covariance_scope: every_block_pair
+    covariance_block_pairs_ordered: true
+    covariance_block_pair_tolerance:
+      absolute: 1.0e-8
+      relative: 1.0e-6
+  CP2-D:
+    name: sequence_parity
+    status: pending
+    execution_target: desktop_x86_64
+    jetson_evidence: deferred_beyond_cp2
+    jetson_work: deferred_beyond_cp2
+    desktop_results_are_jetson_evidence: false
+    implementation_status: data_free_candidate_complete_actual_mode_authorized_final_capsule_rebind_pending
+    inventory_document: docs/cp2_d_e_desktop_inventory_candidate.md
+    inventory_document_status: nonauthorizing
+    evaluator_direct_math_capsule_identity: candidate_only_final_regeneration_and_rebind_pending
+    recorded_input_authority: true
+    actual_execution_authority: authorized_subject_to_exact_final_capsule_source_and_readiness
+    inventory_authority: local_data_free_read_only_only
+    network_install_authority: true
+    capsule_blockers:
+      - ambient_evo_python_numpy_not_an_immutable_approved_capsule
+      - native_loader_and_dependency_closure_not_frozen
+      - license_notice_and_corresponding_source_closure_not_frozen
+      - stack_specific_known_answers_not_frozen
+    detached_pairing_recomputation_status: implemented_data_free_candidate_protected
+    publication_status: descriptor_relative_no_replace_failure_atomic_candidate_protected
+    evidence_blockers:
+      - final_capsule_regeneration_and_exact_identity_binding_pending
+      - readiness_sha256_repin_pending
+      - frozen_ground_truth_decimal_quaternion_precision_contract_disposition_pending
+    trace_level: sequence
+    shadow_enabled: false
+    launch_outputs:
+      save_total_state: true
+      record_openvins_timing: true
+    sequences: [MH_01_easy, MH_03_medium, V1_01_easy]
+    startup_offsets_seconds:
+      MH_01_easy: 40.0
+      MH_03_medium: 5.0
+      V1_01_easy: 0.0
+    bag_sha256:
+      MH_01_easy: 57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9
+      MH_03_medium: c51b0064681dfb287b6653f5fd54e6c56af5d9151c866e17574fdbc527db2311
+      V1_01_easy: 6dc6192fac63dd0a05ba745548b41fe8cae14724168a98865a81d37e681bbc81
+    config_sha256:
+      estimator: b706f0082106e49e20c3292147d238b7e225b0df414106b9d4ac009bbb123f3b
+      imu: 408ea8b60b5f9e7c8251e6d302f04c0675bfefdd31229bb1afd139bc8f4a0287
+      imucam: b9e11b7bcda102f7c8c384c97318d67f3916b58942f9073722f83c22bd7073f7
+    ground_truth_sha256:
+      MH_01_easy: ab1579de35a047d241e2d0d1a4f4306b4fa51d99c6f11bcdebf336ab2b784df9
+      MH_03_medium: 8c7c9873f5cb102eda2b68d665134f144eed9d5778f0dbdc82bbf8e8fdbd558e
+      V1_01_easy: 6d2f961334ff3069105be0aacf118d3c7e82bf3ab0e238acd5f40f1d897573d1
+    minimum_selected_input_time_coverage: 0.995
+    minimum_processed_synchronized_fraction: 0.995
+    synchronized_pair_rule:
+      source: hashed_rosbag_topic_index_and_serial_callback_trace
+      topics: [/cam0/image_raw, /cam1/image_raw]
+      strict_max_difference_seconds: 0.02
+      search: serial_forward_search_with_used_message_deduplication
+    alignment: one_nullspace_to_ground_truth_SE3_on_shared_timestamps_applied_to_both_modes
+    position_p95_m_max: 0.01
+    orientation_p95_deg_max: 0.05
+    relative_ate_formula: abs_ATE_schur_minus_ATE_nullspace_divided_by_ATE_nullspace
+    relative_ate_difference_max: 0.01
+    evaluator:
+      command: evo_ape
+      format: tum
+      pose_relation: trans_part
+      statistic: rmse
+      alignment: SE3_no_scale
+      timestamp_association_max_difference_seconds: 0.01
+  CP2-E:
+    name: fixed_clock_timing
+    status: blocked_pending_fixed_clock_profile
+    execution_target: desktop_x86_64
+    jetson_evidence: deferred_beyond_cp2
+    jetson_work: deferred_beyond_cp2
+    desktop_results_are_jetson_evidence: false
+    implementation_status: implementation_in_progress_under_2026_08_07_full_completion_authorization
+    inventory_document: docs/cp2_d_e_desktop_inventory_candidate.md
+    inventory_document_status: nonauthorizing
+    exact_timing_profile_identity: pending_final_builder_and_freeze
+    recorded_input_authority: true
+    actual_execution_authority: authorized_subject_to_exact_final_profile_helper_source_and_readiness
+    host_control_mutation_authority: authorized_via_final_root_owned_no_argument_helper_after_user_installation
+    inventory_authority: local_data_free_read_only_only
+    host_profile_blockers:
+      - governor_observed_ondemand
+      - boost_observed_enabled
+      - exact_affinity_not_frozen
+      - final_aperf_mperf_effective_frequency_profile_not_frozen
+      - root_helper_profile_install_bundle_pending
+      - manual_root_installation_pending
+      - reversible_privileged_feasibility_transaction_pending
+    formal_telemetry_policy: APERF_MPERF_only
+    temperature_power_energy_or_embedded_claim: none
+    trace_level: timing
+    shadow_enabled: false
+    launch_outputs:
+      save_total_state: false
+      record_openvins_timing: false
+      status: draft_non_authorizing_pending_timing_profile
+    observed_governor: ondemand
+    primary_sample: nonempty_msckf_invocation_reaching_and_committing_global_update
+    clock: std_chrono_steady_clock_integer_nanoseconds
+    timer_start: first_operation_in_UpdaterMSCKF_update
+    committing_timer_end: immediately_after_StateHelper_EKFUpdate_returns
+    early_return_timer_end: immediately_before_each_return
+    warmup_seconds_after_frozen_offset: 60.0
+    quantile_method: numpy_linear
+    minimum_paired_interleaved_runs_per_mode: 3
+    paired_order: [nullspace_schur, schur_nullspace, nullspace_schur]
+    paired_population: intersection_of_post_warmup_committing_camera_timestamps
+    cross_run_gate: every_pair_ratio_must_pass
+    cross_run_summary: median_of_three_paired_ratios
+    candidate_median_ratio_max: 1.10
+    candidate_p95_ratio_max: 1.15
+
+evidence_policy:
+  clean_source_required: true
+  rerun_complete_cp1_suite: true
+  immutable_no_overwrite_seal_required: true
+  independent_verifier_required: true
+  sha256_manifest_required: true
+  report_schema_version: 1
+  report_filename: cp2_report.json
+  planned_commands:
+    unit: scripts/cp2/run_unit_gate.sh
+    recorded_parity: scripts/cp2/run_recorded_parity.py
+    sequence_pair: scripts/cp2/run_sequence_pair.py
+    timing_pair: scripts/cp2/run_timing_pair.py
+    verifier: scripts/cp2/verify_report.py
+  commands_must_exist_and_pass_self_tests_before_evidence: true
+  current_exact_head_artifact: frozen_source_commit_unit_only_at_c0dfecfd_not_valid_for_later_handoff_head
+  historical_artifact:
+    path: results/staging/cp2/unit/cp2_unit_20260802T185623152114466Z-g162ed140cb3f-WtrFa1xv
+    report: results/staging/cp2/unit/cp2_unit_20260802T185623152114466Z-g162ed140cb3f-WtrFa1xv/cp2_report.json
+    manifest: results/staging/cp2/unit/cp2_unit_20260802T185623152114466Z-g162ed140cb3f-WtrFa1xv/SHA256SUMS
+    evidence_record: project/cp2_ab_unit_evidence.json
+    tested_commit: 162ed140cb3fee301cf3f2e212c9afa28829798a
+    tested_tree: 46935c58e7a7184f659a6f67fcd33896ebe02d46
+    result: passed_cp2_a_b_cp2_c2_unit_only
+    generated_utc: "2026-08-02T19:12:51.622333Z"
+    sha256sums_sha256: 58bc351d513bb093a6e355a808fcf62a7d952e01dee5902594ed74946d76f579
+    report_sha256: b1eda70bc3fab8f73dc060deb8654d72d9967774ae664ab5e8f7bd641bb16a33
+    manifest_entries: 110
+    external_manifest_anchor_matched: true
+    independent_verifier_exit_status: 0
+    verifier_self_test_corruptions_rejected: 85
+    historical_only: true
+    valid_for_current_live_head: false
+    scope: cp2_a_b_cp2_c2_unit_only
+    stage: staging_cp2_c2_unit_passed_pending_cp2_c3_cp2_c_cp2_d_cp2_e
+    evidence_class: trusted_runner_local_staging_evidence
+    finalization: read_only_staging_finalization_only
+    no_overwrite: true
+    distribution_status: internal_non_conveyable_staging
+    eligible_for_cp2_seal: false
+    independent_source_to_binary_attestation: false
+    dataset_or_bag_accessed: false
+
+protecting_configuration_tests:
+  - absent_key_selects_nullspace
+  - explicit_schur_selects_candidate_only
+  - unknown_mode_rejected
+  - fixed_two_pass_mode_rejected
+  - unsupported_schur_representation_rejected
+  - runtime_failure_zero_silent_fallback
+
+blockers:
+  - cp2_c_new_exact_source_identity_unit_and_readiness_not_yet_run
+  - recorded_updater_parity_not_collected
+  - cp2_d_exact_final_committed_capsule_identity_absent
+  - cp2_d_frozen_ground_truth_decimal_quaternion_precision_contract_disposition_pending
+  - three_sequence_parity_not_collected
+  - cp2_e_exact_final_committed_profile_identity_absent
+  - cp2_e_root_owned_helper_not_installed
+  - fixed_clock_timing_profile_not_established

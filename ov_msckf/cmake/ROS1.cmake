@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Modified in 2026 by Moksh Trehan for SchurVIO-Lite CP2.
+
 cmake_minimum_required(VERSION 3.3)
 
 # Find ROS build system
@@ -19,7 +22,6 @@ else ()
     set(CATKIN_PACKAGE_BIN_DESTINATION "${CMAKE_INSTALL_BINDIR}")
     set(CATKIN_GLOBAL_INCLUDE_DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/open_vins/")
 endif ()
-
 
 # Include our header files
 include_directories(
@@ -83,13 +85,65 @@ list(APPEND LIBRARY_SOURCES
         src/state/Propagator.cpp
         src/core/VioManager.cpp
         src/core/VioManagerHelper.cpp
+        src/update/CP2Canonical.cpp
+        src/update/CP2CommitBoundary.cpp
+        src/update/CP2CommitOracle.cpp
+        src/update/CP2CompositeState.cpp
+        src/update/CP2FeatureGate.cpp
+        src/update/CP2OfflineReplay.cpp
+        src/update/CP2OutputCapability.cpp
+        src/update/CP2RuntimeContext.cpp
+        src/update/CP2SerialPairing.cpp
+        src/update/CP2SerialRuntimeTrace.cpp
+        src/update/CP2TimingClock.cpp
+        src/update/CP2ShadowMath.cpp
+        src/update/CP2StateTraceCodec.cpp
+        src/update/CP2TraceCodec.cpp
+        src/update/CP2TraceJournal.cpp
+        src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
+        src/update/UpdaterMSCKFPreview.cpp
         src/update/UpdaterSLAM.cpp
         src/update/UpdaterZeroVelocity.cpp
 )
+
+# CP2 evidence and the preview/live-commit oracle have exact binary64
+# semantics. Override the repository-wide relaxed signed-zero setting on every
+# production translation unit that owns contracted arithmetic, including the
+# actual Givens/compression and EKF implementations called by strict wrappers.
+set_source_files_properties(
+        src/ros1_serial_msckf.cpp
+        src/state/StateHelper.cpp
+        src/ros/CP2ROS1RuntimeParameters.cpp
+        src/update/CP2Canonical.cpp
+        src/update/CP2CommitBoundary.cpp
+        src/update/CP2CommitOracle.cpp
+        src/update/CP2CompositeState.cpp
+        src/update/CP2FeatureGate.cpp
+        src/update/CP2OfflineReplay.cpp
+        src/update/CP2OutputCapability.cpp
+        src/update/CP2RecordedAssemble.cpp
+        src/update/CP2RuntimeContext.cpp
+        src/update/CP2SerialPairing.cpp
+        src/update/CP2SerialRuntimeTrace.cpp
+        src/update/CP2TimingClock.cpp
+        src/update/CP2ShadowMath.cpp
+        src/update/CP2StateTraceCodec.cpp
+        src/update/CP2TraceCodec.cpp
+        src/update/CP2TraceJournal.cpp
+        src/update/SchurUpdate.cpp
+        src/update/UpdaterHelper.cpp
+        src/update/UpdaterMSCKF.cpp
+        src/update/UpdaterMSCKFPreview.cpp
+        PROPERTIES
+        COMPILE_FLAGS "-fno-fast-math -ffp-contract=off -fsigned-zeros")
+
 if (catkin_FOUND AND ENABLE_ROS)
-    list(APPEND LIBRARY_SOURCES src/ros/ROS1Visualizer.cpp src/ros/ROSVisualizerHelper.cpp)
+    list(APPEND LIBRARY_SOURCES
+            src/ros/CP2ROS1RuntimeParameters.cpp
+            src/ros/ROS1Visualizer.cpp
+            src/ros/ROSVisualizerHelper.cpp)
 endif ()
 file(GLOB_RECURSE LIBRARY_HEADERS "src/*.h")
 add_library(ov_msckf_lib SHARED ${LIBRARY_SOURCES} ${LIBRARY_HEADERS})
@@ -103,6 +157,14 @@ install(TARGETS ov_msckf_lib
 install(DIRECTORY src/
         DESTINATION ${CATKIN_GLOBAL_INCLUDE_DESTINATION}
         FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
+)
+
+add_executable(cp2_recorded_assemble src/update/CP2RecordedAssemble.cpp)
+target_link_libraries(cp2_recorded_assemble ov_msckf_lib ${thirdparty_libraries})
+install(TARGETS cp2_recorded_assemble
+        ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+        LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+        RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
 
@@ -171,11 +233,23 @@ if (CATKIN_ENABLE_TESTING)
     catkin_add_gtest(test_cp1_projection_jacobian
             test/cp1/gtest_main.cpp
             test/cp1/test_projection_jacobian.cpp)
+    catkin_add_gtest(test_cp1_prior_and_compression
+            test/cp1/gtest_main.cpp
+            test/cp1/test_prior_and_compression.cpp)
+    catkin_add_gtest(test_cp1_one_pass_regression
+            test/cp1/gtest_main.cpp
+            test/cp1/test_one_pass_regression.cpp)
+    catkin_add_gtest(test_cp1_visual_pass_config
+            test/cp1/gtest_main.cpp
+            test/cp1/test_visual_pass_config.cpp)
 
     set(CP1_TEST_TARGETS
             test_cp1_schur_equivalence
             test_cp1_rank_rejection
-            test_cp1_projection_jacobian)
+            test_cp1_projection_jacobian
+            test_cp1_prior_and_compression
+            test_cp1_one_pass_regression
+            test_cp1_visual_pass_config)
     foreach (CP1_TEST_TARGET ${CP1_TEST_TARGETS})
         if (TARGET ${CP1_TEST_TARGET})
             target_link_libraries(${CP1_TEST_TARGET} ov_msckf_lib ${thirdparty_libraries})
@@ -190,3 +264,5 @@ if (CATKIN_ENABLE_TESTING)
         endif ()
     endforeach ()
 endif ()
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CP2Tests.cmake)

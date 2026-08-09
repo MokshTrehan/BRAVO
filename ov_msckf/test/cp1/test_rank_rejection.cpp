@@ -9,6 +9,7 @@
 
 #include <Eigen/Dense>
 
+#include <cmath>
 #include <iostream>
 #include <limits>
 
@@ -89,6 +90,8 @@ TEST(CP1Schur, BoundaryAndInvalidInputsHaveExplicitStatus) {
   exact_boundary(2, 2) = schurvio_cp1::kLandmarkRelativeSingularFloor;
   const auto boundary = schurvio_cp1::reduce_landmark(state_jacobian, exact_boundary, residual);
   EXPECT_EQ(boundary.status, schurvio_cp1::FactorStatus::kAccepted);
+  EXPECT_TRUE(boundary.singular_values_available);
+  EXPECT_TRUE(boundary.singular_ratio_available);
   EXPECT_DOUBLE_EQ(boundary.singular_ratio, schurvio_cp1::kLandmarkRelativeSingularFloor);
 
   Eigen::Vector3d accepted_values;
@@ -105,11 +108,49 @@ TEST(CP1Schur, BoundaryAndInvalidInputsHaveExplicitStatus) {
 
   const auto too_short = schurvio_cp1::reduce_landmark(state_jacobian.topRows(3), left.topRows(3), residual.head(3));
   EXPECT_EQ(too_short.status, schurvio_cp1::FactorStatus::kInsufficientRows);
+  EXPECT_FALSE(too_short.singular_values_available);
+  EXPECT_FALSE(too_short.singular_ratio_available);
+
+  const auto incompatible_dimensions =
+      schurvio_cp1::reduce_landmark(state_jacobian.topRows(rows - 1), left, residual);
+  EXPECT_EQ(incompatible_dimensions.status, schurvio_cp1::FactorStatus::kNonfinite);
+  EXPECT_FALSE(incompatible_dimensions.singular_values_available);
+  EXPECT_FALSE(incompatible_dimensions.singular_ratio_available);
 
   Eigen::MatrixXd nonfinite = left;
   nonfinite(0, 0) = std::numeric_limits<double>::quiet_NaN();
   const auto invalid = schurvio_cp1::reduce_landmark(state_jacobian, nonfinite, residual);
   EXPECT_EQ(invalid.status, schurvio_cp1::FactorStatus::kNonfinite);
+  EXPECT_FALSE(invalid.singular_values_available);
+  EXPECT_FALSE(invalid.singular_ratio_available);
+
+  Eigen::MatrixXd largest_at_floor = Eigen::MatrixXd::Zero(rows, 3);
+  largest_at_floor(0, 0) = std::numeric_limits<double>::min();
+  const auto zero_scale = schurvio_cp1::reduce_landmark(state_jacobian, largest_at_floor, residual);
+  EXPECT_EQ(zero_scale.status, schurvio_cp1::FactorStatus::kRankDeficient);
+  EXPECT_TRUE(zero_scale.singular_values_available);
+  EXPECT_FALSE(zero_scale.singular_ratio_available);
+
+  const double numerical_rank_floor =
+      static_cast<double>(rows) * std::numeric_limits<double>::epsilon();
+  Eigen::MatrixXd exactly_numerical_rank_floor = Eigen::MatrixXd::Zero(rows, 3);
+  exactly_numerical_rank_floor(0, 0) = 1.0;
+  exactly_numerical_rank_floor(1, 1) = 0.5;
+  exactly_numerical_rank_floor(2, 2) = numerical_rank_floor;
+  const auto rank_floor =
+      schurvio_cp1::reduce_landmark(state_jacobian, exactly_numerical_rank_floor, residual);
+  EXPECT_EQ(rank_floor.status, schurvio_cp1::FactorStatus::kRankDeficient);
+  EXPECT_TRUE(rank_floor.singular_values_available);
+  EXPECT_TRUE(rank_floor.singular_ratio_available);
+
+  Eigen::MatrixXd immediately_above_rank_floor = exactly_numerical_rank_floor;
+  immediately_above_rank_floor(2, 2) =
+      std::nextafter(numerical_rank_floor, std::numeric_limits<double>::infinity());
+  const auto above_rank_floor =
+      schurvio_cp1::reduce_landmark(state_jacobian, immediately_above_rank_floor, residual);
+  EXPECT_EQ(above_rank_floor.status, schurvio_cp1::FactorStatus::kIllConditioned);
+  EXPECT_TRUE(above_rank_floor.singular_values_available);
+  EXPECT_TRUE(above_rank_floor.singular_ratio_available);
 }
 
 } // namespace

@@ -41,8 +41,15 @@
 #include <std_msgs/Float64.h>
 #include <tf/transform_broadcaster.h>
 
+#include "update/UpdaterMSCKF.h"
+#include "utils/sensor_data.h"
+
+#include <array>
 #include <atomic>
+#include <cstdint>
+#include <deque>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <mutex>
 
@@ -60,6 +67,27 @@ namespace ov_msckf {
 
 class VioManager;
 class Simulator;
+
+enum class CP2SerialEnqueueStatus : std::uint8_t {
+  kQueued,
+  kFrequencyDropped,
+  kCam0DecodeFailed,
+  kCam1DecodeFailed,
+};
+
+const char *cp2_serial_enqueue_status_name(
+    CP2SerialEnqueueStatus status) noexcept;
+
+/** Value-only result emitted after one queued CP2 camera is processed. */
+struct CP2SerialProcessingEvent {
+  CP2UpdateInvocationContext context;
+  bool processing_entered = false;
+  bool processing_returned = false;
+  bool updater_invoked = false;
+  bool state_row_emitted = false;
+  std::array<double, 3> position_G{{0.0, 0.0, 0.0}};
+  std::array<double, 4> quaternion_ItoG_xyzw{{0.0, 0.0, 0.0, 1.0}};
+};
 
 /**
  * @brief Helper class that will publish results onto the ROS framework.
@@ -80,7 +108,9 @@ public:
    * @param app Core estimator manager
    * @param sim Simulator if we are simulating
    */
-  ROS1Visualizer(std::shared_ptr<ros::NodeHandle> nh, std::shared_ptr<VioManager> app, std::shared_ptr<Simulator> sim = nullptr);
+  ROS1Visualizer(std::shared_ptr<ros::NodeHandle> nh,
+                 std::shared_ptr<VioManager> app,
+                 std::shared_ptr<Simulator> sim = nullptr);
 
   /**
    * @brief Will setup ROS subscribers and callbacks
@@ -114,7 +144,25 @@ public:
   /// Callback for synchronized stereo camera information
   void callback_stereo(const sensor_msgs::ImageConstPtr &msg0, const sensor_msgs::ImageConstPtr &msg1, int cam_id0, int cam_id1);
 
+  /** Queue one frozen serial pair with identity carried to processing. */
+  CP2SerialEnqueueStatus callback_stereo_cp2(
+      const sensor_msgs::ImageConstPtr &msg0,
+      const sensor_msgs::ImageConstPtr &msg1, int cam_id0, int cam_id1,
+      const CP2UpdateInvocationContext &context);
+
+  using CP2SerialProcessingObserver =
+      std::function<bool(const CP2SerialProcessingEvent &)>;
+
+  /** Install the synchronous value-only serial processing observer. */
+  bool set_cp2_serial_processing_observer(
+      CP2SerialProcessingObserver observer);
+
 protected:
+  CP2SerialEnqueueStatus callback_stereo_impl(
+      const sensor_msgs::ImageConstPtr &msg0,
+      const sensor_msgs::ImageConstPtr &msg1, int cam_id0, int cam_id1,
+      const CP2UpdateInvocationContext *context);
+
   /// Publish the current state
   void publish_state();
 
@@ -176,8 +224,15 @@ protected:
   /// exactly one IMU measurement with timestamp newer than the camera measurement
   /// This also handles out-of-order camera measurements, which is rare, but
   /// a nice feature to have for general robustness to bad camera drivers.
-  std::deque<ov_core::CameraData> camera_queue;
+  struct QueuedCameraData {
+    ov_core::CameraData message;
+    bool cp2_context_available = false;
+    CP2UpdateInvocationContext cp2_context;
+  };
+  std::deque<QueuedCameraData> camera_queue;
   std::mutex camera_queue_mtx;
+
+  CP2SerialProcessingObserver cp2_serial_processing_observer;
 
   // Last camera message timestamps we have received (mapped by cam id)
   std::map<int, double> camera_last_timestamp;

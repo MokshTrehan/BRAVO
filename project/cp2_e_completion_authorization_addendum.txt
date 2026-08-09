@@ -1,0 +1,52 @@
+I, Moksh Trehan, reaffirm the complete chained CP2 authorization contained in
+the 8,606-byte approval file with SHA-256
+8e07b1e1d5418b65b5d1993e791e9dab5340d7e77f9ea687e6d064e3bc803cca.
+
+This addendum supersedes only the paragraph beginning “For CP2-E only” and its
+conflicting prohibition on kernel-module or directly timing-related service
+controls. All other mathematical, data-access, source-freeze, exactly-once,
+failure, publication, licensing, final-review, CP3, and Jetson conditions remain
+unchanged.
+
+For CP2-E preparation and execution, I authorize Codex to use noninteractive
+privileged authority already configured on this desktop for the exact,
+temporary, reversible controls required by the final audited timing profile.
+This authority includes:
+
+1. process and complete ROS-descendant CPU affinity, cpuset/cgroup placement,
+   and SMT-sibling placement;
+2. CPU governor, scaling minimum/maximum frequency, boost/turbo, CPU-online,
+   CPU-idle/C-state, and CPU DMA-latency controls;
+3. exact interrupt affinity and temporary irqbalance control when required for
+   the frozen CPU set;
+4. loading and unloading only already-installed read-only AMD CPU telemetry
+   modules, limited to k10temp and msr, solely to obtain bound CPU
+   thermal/throttle/frequency evidence; and
+5. read-only use of sysfs, procfs, hwmon, cpufreq, APERF/MPERF, scheduler,
+   interrupt, and thermal surfaces needed to validate the profile.
+
+Before source freeze, Codex may perform data-free feasibility trials of these
+controls without opening a registry, bag, ground truth, or recorded result.
+Each trial must capture the exact prior state, prove that the requested control
+takes effect, collect no recorded-workload timing, and restore and verify the
+exact prior state before continuing.
+
+The final source must contain an audited setup/validation/restoration procedure
+and exact profile. During CP2-E actual execution, every changed control must be
+bound to that profile, continuously checked where applicable, and restored to
+its exact captured prior state after success, failure, interruption, or
+verification exit. Codex may use sudo only noninteractively and may not request,
+extract, store, or repurpose credentials.
+
+This authority does not permit BIOS or firmware changes, reboot, kernel command-
+line changes, installing or removing system packages, replacing the active CPU
+frequency driver, destructive storage changes, unrelated service changes, or
+GPU overclocking/control. The RTX 5090 is not part of the CP2 computation path
+and must not be introduced into the estimator, evaluator, or timing metric.
+
+If an adequate bound CPU thermal/throttle surface, effective stable clock
+control, exact restoration, or required noninteractive permission cannot be
+proved, CP2-E must stop rather than weaken the evidence standard. Recorded
+timing failure still ends the chain without tuning or retry.
+
+No exceptions.

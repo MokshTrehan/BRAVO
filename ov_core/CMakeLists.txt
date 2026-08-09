@@ -1,6 +1,16 @@
 cmake_minimum_required(VERSION 3.3)
 project(ov_core)
 
+# SchurVIO-Lite's strict binary64 evidence contract forbids fused Eigen packet
+# arithmetic. Eigen 3.3 can issue explicit NEON FMA intrinsics on AArch64 that
+# -ffp-contract=off cannot disable, and this macro also affects Eigen alignment
+# and inline definitions. Keep it uniform across every Eigen-using workspace
+# package instead of applying it to selected translation units.
+add_definitions(
+        -DEIGEN_DONT_VECTORIZE=1
+        -DEIGEN_MAX_ALIGN_BYTES=16
+        -DEIGEN_MAX_STATIC_ALIGN_BYTES=16)
+
 # Include libraries (if we don't have opencv 4, then fallback to opencv 3)
 # The OpenCV version needs to match the one used by cv_bridge otherwise you will get a segmentation fault!
 find_package(Eigen3 REQUIRED)
@@ -64,7 +74,5 @@ else ()
     message(STATUS "No ROS versions found or building with ROS disabled, building ROS1.cmake without ROS")
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ROS1.cmake)
 endif ()
-
-
 
 

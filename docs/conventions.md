@@ -1,13 +1,18 @@
 # Estimator conventions
 
-Status: **automated CP1 evidence passed; blocking on named human signoff**
+Status: **CP1 passed; one-pass and narrow fixed-two-pass implementation authorized**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
-Human reviewer: **unassigned**
-Signoff date: **not signed**
+Prior human reviewer: **Moksh Trehan (project-author self-review)**
+Prior signoff date: **2026-07-27 (date-only attestation; superseded for authorization)**
 
-No production estimator modification is permitted until the human review below
-is signed. Each decision cites the defining source file/function and the test
-or later parity gate that protects it.
+The replacement mathematical contract and evidence received fresh,
+commit-specific signoff on 2026-08-01. The fixed-two-pass affine-FEJ contract
+received its separate project-author approval on 2026-08-09 after the
+deterministic golden at commit
+`e5441605e1da2072fec578ed7d4b649a83f5307a` passed. Implementation is
+authorized only within the narrow scope recorded in
+`docs/two_pass_fej_contract_review.md`. Each decision cites the defining
+source file/function and the test or later parity gate that protects it.
 
 ## Frames and transforms
 
@@ -66,19 +71,41 @@ or later parity gate that protects it.
 ## Residual and innovation
 
 - Reprojection residual sign: `r = z_measured - z_predicted` in distorted
-  pixel coordinates. OpenVINS stores `H=+d h/d delta`, so `d r/d delta=-H`
-  and the linear measurement equation is `r ~= H*delta + noise`.
+  pixel coordinates. The runtime prediction uses `CamBase::distort_d`, which
+  casts through float. OpenVINS stores a positive-sign model matrix `H_model`
+  and uses the affine surrogate `r ~= H_model*delta + noise`.
+- Derivative scope: on the frozen EuRoC `CamRadtan` path and tested valid
+  geometry, with FEJ disabled, `H_model=+d h_cont/d delta` for the intended
+  smooth all-double camera model and
+  `d(z-h_cont)/d delta=-H_model`. It is not the literal derivative of the
+  float-quantized runtime wrapper. With FEJ enabled, `H_model` is the pinned
+  mixed-current/FEJ surrogate and is not generally the derivative of a single
+  current residual function. CP1 makes no projection-derivative claim for
+  `CamEqui`.
 - Innovation sign: identical to the residual sign above.
 - State increment sign: `delta_x = K*r`, followed directly by each type's
   `update(delta_x_block)` operation.
 - Measurement whitening convention: the MSCKF baseline does not explicitly
   whiten. It assumes isotropic `sigma_px^2 I`; orthogonal nullspace and
   measurement-compression rotations preserve that covariance.
+- Compression statistic convention: the Givens rotation preserves the full
+  residual norm, but `measurement_compress_inplace` then truncates
+  zero-Jacobian rows. The resized system preserves `Lambda` and `eta`, not
+  `gamma`; retain pre-compression `gamma` (or the dropped squared residual)
+  whenever NIS/objective parity needs it.
+- Gate convention: `q=m-3`, threshold is the configured chi-square multiplier
+  times the 95% `ChiSquared(q)` quantile, and rejection occurs only for a
+  strict `chi2 > threshold`; equality is accepted.
 - Evidence: `ov_msckf/src/update/UpdaterHelper.cpp`,
   `UpdaterMSCKF.cpp`, and `ov_msckf/src/state/StateHelper.cpp:EKFUpdate`.
 - Protecting test: `CP1Projection.ActualOpenVINSJacobiansMatchAllDoubleFiniteDifferences`
-  asserts `r=z-h`, `H=dh/delta`, and `dr/delta=-H`; positive update injection
-  is checked by the CP2 one-pass parity fixture.
+  checks the nominal stored `r=z-h_runtime`, then checks
+  `H_model=d h_cont/delta` and `d(z-h_cont)/d delta=-H_model` with FEJ off on
+  the frozen EuRoC `CamRadtan` path. Positive update injection and the pinned
+  mixed-FEJ matrices are checked by the CP2 parity fixtures; `CamEqui` remains
+  outside the CP1 projection proof.
+  `CP1Compression.ProductionTruncationPreservesLambdaEtaButNotGamma` calls the
+  actual production compressor and checks the retained/dropped statistics.
 
 ## State and covariance ordering
 
@@ -150,13 +177,29 @@ or later parity gate that protects it.
   the normalized-projection derivative, but `uv_norm` is not recomputed before
   the distortion Jacobian. One-pass parity must preserve this mixed evaluation
   until a separately tested ablation changes it.
+- Mathematical scope: this mixed-FEJ matrix is not generally the derivative
+  of the current residual function. One-pass Schur/nullspace equivalence only
+  requires both paths to consume the same matrix. The FEJ-on golden at commit
+  `e5441605e1da2072fec578ed7d4b649a83f5307a` freezes the fixed-two-pass rule as
+  an explicitly defined affine surrogate. The 2026-08-09 review authorizes
+  that algorithmic contract; it does not authorize a Taylor, Newton, or
+  chart-consistent covariance claim.
 - Evidence: `ov_core/src/types/Type.h`, `PoseJPL.h`,
   `ov_msckf/src/state/Propagator.cpp`,
   `ov_msckf/src/update/UpdaterHelper.cpp`, and `UpdaterMSCKF.cpp`.
-- Protecting test: planned FEJ one-pass regression fixture at CP2.
+- Protecting tests: `test_cp1_one_pass_regression`, specifically
+  `CP1MixedFejGolden.ProductionRawSchurAndPreviewMatchFixedChartIndependentOracle`,
+  `CP1MixedFejGolden.ActualTwoPassUsesSamePriorEvaluatesTrueCostsAndCommitsOnce`,
+  and `CP1MixedFejGolden.FixedTwoPassDecisionCasesAThroughF`.
 
 ## Covariance and manifold reset
 
+- Prior rank: exact `StateHelper::clone` augmentation copies a pose covariance
+  and all cross-covariances, so a valid full prior may be positive
+  semidefinite. Schur state updates use a possibly rectangular factor
+  `P=L L^T` and the strictly positive-definite reduced matrix
+  `I+L^T Lambda L`. They may not require `LLT(P)`, invert `P`, add clone noise,
+  inject diagonal jitter, or silently clamp eigenvalues.
 - Kalman covariance update form: baseline computes `M=P*H^T`,
   `S=H*P_small*H^T+R`, `K=M*S^-1` through LLT, and updates
   `P <- P-K*M^T`. It is not Joseph form.
@@ -166,7 +209,12 @@ or later parity gate that protects it.
 - Manifold reset Jacobian and timing: **the baseline applies no explicit
   covariance reset transport after nominal-state injection**. The primary
   policy is frozen to `G=I` through CP3 so CP2 covariance parity is not
-  confounded; exact chart transport is a later named ablation.
+  confounded. This is a baseline-parity approximation, not a chart-consistent
+  local covariance statement. The exact differential reset Jacobian is
+  `T(delta)`; within the EKF's first-order covariance model, the corresponding
+  transport is `T(delta) P T(delta)^T`. It is not the exact finite
+  transformation of a nonlinear probability distribution and remains a
+  separately named ablation.
 - Regularization policy: landmark nullspace elimination and
   `StateHelper::EKFUpdate` add no numerical regularization; LLT assumes a valid
   innovation covariance. Upstream feature refinement separately uses declared
@@ -174,28 +222,43 @@ or later parity gate that protects it.
   must reject and log conditioning failures rather than silently clamp.
 - Evidence: `ov_msckf/src/state/StateHelper.cpp:EKFUpdate` and the type-specific
   `update` methods.
-- Protecting test: CP1 full/nullspace/Schur covariance and PSD tests; iterated
-  final-covariance/reset tests at CP3.
+- Protecting test: CP1 full/nullspace/Schur covariance tests and
+  `CP1Prior.SemidefiniteCloneAugmentationMatchesInnovationUpdate`; iterated
+  final-covariance/reset tests remain required before the fixed-two-pass
+  production and EuRoC gates can pass.
 
-## Iterated-update invariants
+## Fixed-two-pass affine-FEJ invariants — narrow implementation authorized
+
+These rules freeze the reviewed affine surrogate and transaction policy. The
+FEJ-on golden and project-author review gate are satisfied as recorded in
+`docs/two_pass_fej_contract_review.md`. They permit an ordinary Schur update
+with at most two passes only for the reviewed `GLOBAL_3D`/`CamRadtan` path.
+They do not establish that the mixed-FEJ matrix is a Taylor derivative.
 
 - Frozen predicted prior: snapshot `x^-`, `P^-`, FEJ values, observations,
   feature order, and configuration before pass 1. Both proposals are absolute
   corrections in `x(delta)=x^- boxplus delta`.
 - Pass-1 behavior: gate and freeze the accepted feature set, then compute a
-  working mean proposal without writing the live mean or covariance.
+  working mean proposal without writing the live mean or covariance. If pass 1
+  is invalid or has a nonfinite acceptance cost, reject the complete update.
 - Pass-2 behavior: reconstruct the working state from the frozen prior and the
   pass-1 absolute proposal; re-triangulate the fixed feature set and use the
   fixed-chart Jacobian/right-hand-side correction defined in
   `docs/iterated_update_spec.md`.
 - Cross-pass policy: robust weights remain one; feature IDs, measurements,
-  order, gate decisions, weights, and clone FEJ values are frozen. Any
-  pass-2 feature failure rejects the complete second pass.
+  order, pass-1 gate decisions, weights, and clone FEJ values are frozen.
+  Pass 2 applies the same production NIS rule against `P^-` only as a
+  whole-proposal validity check; it never adds, drops, or independently
+  re-gates a feature. Any pass-2 feature failure rejects the complete second
+  pass.
 - Final commit: select pass 1 or pass 2 using the same-set pixel cost and
-  frozen-prior objective, compute covariance once from `P^-`, and commit mean
-  and covariance exactly once.
-- Reset: use `G=I` through CP3 to preserve OpenVINS covariance parity. Exact
-  `T(delta) P T(delta)^T` transport is a separately named later ablation.
+  frozen-prior objective, compute only the selected covariance from `P^-`, and
+  commit mean and covariance exactly once. A selected-covariance symmetry/PSD
+  failure rejects the update without computing the alternative covariance.
+- Reset: use `G=I`. This authorization is for inherited OpenVINS parity only.
+  Differential reset transport remains a separate, unimplemented ablation;
+  this implementation and its results may not make a chart-consistent local
+  covariance claim.
 - Evidence: `docs/iterated_update_spec.md`.
 - Protecting tests: CP1 Schur/retraction tests and CP3 exactly-once/fallback
   integration tests.
@@ -205,7 +268,70 @@ or later parity gate that protects it.
 Reviewer signoff means the cited code, equations, and tests agree. It does not
 mean that the proposed algorithm or paper claim is accepted in advance.
 
-- Reviewer:
-- Date:
-- Reviewed commit:
-- Exceptions:
+- Reviewer: Moksh Trehan
+- Reviewer relationship: project-author self-review
+- Date: 2026-07-27 (date-only attestation, recorded 2026-08-01)
+- Reviewed commit: `7288b4a2d09420266cfadd9983145e09fd4cf789`
+- Remote verification: `origin/schurvio-lite/cp1-math` resolved to the reviewed
+  commit on 2026-08-01.
+- Exceptions: none stated
+- Post-review note: later audit corrections are not covered by this signoff;
+  their replacement commit requires a fresh attestation before production
+  estimator mathematics is enabled.
+
+## Post-review addendum lock
+
+- Corrected/tested commit: `26588223597a2864149fd228e52caf569e7dfd12`
+- Automated evidence: `results/immutable/cp1/automated/cp1_math_20260801T203838596581924Z-g26588223597a`
+- `SHA256SUMS` SHA-256: `320c8cda3a98a4036718e34d499c909a8ac70dd0f8d9e71041a6e3fe134d42c3`
+- Automated result: 7 tests passed, 0 failures/errors/disabled; clean source
+- Signoff use: superseded by the second-audit derivative-scope correction;
+  artifact integrity remains valid, but it cannot authorize implementation
+- Fresh signoff status: not applicable; this artifact was superseded before
+  fresh signoff
+
+## Second adversarial re-audit replacement lock
+
+- Corrected/tested commit: `1f29c92ac070ce1392384d24e4cac431c6142bf9`
+- Automated evidence: `results/immutable/cp1/automated/cp1_math_20260801T213626466303302Z-g1f29c92ac070`
+- `SHA256SUMS` SHA-256: `8d554519dbeb4259515869bc21ce9f98b96f16c793077e6f229da5cbc0ae7fda`
+- Automated result: 7 tests passed, 0 failures/errors/disabled; clean source;
+  24 hashed source inputs and 4 hashed binaries
+- Corrected scope: runtime-float residual versus continuous `CamRadtan`
+  derivatives; mixed-FEJ surrogate; ordered rank/diagnostic availability;
+  dual acceptance costs; sufficient idempotence invariants; selected-only
+  covariance; raw symmetry then `P_sym` numerical PSD; differential
+  first-order chart transport
+- Evidence boundary: schema 3 executes the CP1 algebra/Jacobian/rank/PSD-prior
+  component and hashes the complete normative scope; fixed-two-pass behavior
+  still requires its separately named CP2/CP3 protecting tests
+- Authorization status: CP1 passed; one-pass production implementation is
+  authorized; fixed two-pass remains unauthorized
+- Fresh reviewer: Moksh Trehan
+- Reviewer relationship: project-author self-review
+- Fresh signoff date: 2026-08-01 (recorded at 2026-08-01T17:44:55-04:00)
+- Fresh reviewed commit: `952771e955fe3459f2fd43122a9c6f8ce57d1799`
+- Fresh attestation: "I, Moksh Trehan, approve the CP1 replacement
+  mathematical contract and evidence recorded at commit
+  952771e955fe3459f2fd43122a9c6f8ce57d1799, including the review-lock scope
+  in docs/iterated_update_spec.md; no exceptions."
+- Fresh exceptions: none
+
+## Fixed-two-pass FEJ contract approval
+
+- Reviewer: Moksh Trehan
+- Reviewer relationship: project-author self-review
+- Review window: 2026-08-08--2026-08-09
+- Approval date: 2026-08-09
+- Golden commit:
+  `e5441605e1da2072fec578ed7d4b649a83f5307a`
+- Golden target: `test_cp1_one_pass_regression`
+- Automated result: Release builds of all five CP1 binaries passed 14/14
+  tests with no disabled or skipped tests
+- Accepted scope: ordinary Schur, transient `GLOBAL_3D`, `CamRadtan`, and a
+  configured maximum of one or two visual passes using the inherited mixed-FEJ
+  affine surrogate and `G=I` reset convention
+- Excluded claims and modes: Taylor/Newton derivation, chart-consistent
+  covariance, `CamEqui`, adaptive pass scheduling, and more than two passes
+- Review record: `docs/two_pass_fej_contract_review.md`
+- Exceptions: none

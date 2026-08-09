@@ -40,8 +40,12 @@
 #include "state/State.h"
 #include "state/StateHelper.h"
 #include "update/UpdaterMSCKF.h"
+#include "update/CP2OutputCapability.h"
 #include "update/UpdaterSLAM.h"
 #include "update/UpdaterZeroVelocity.h"
+
+#include <stdexcept>
+#include <utility>
 
 using namespace ov_core;
 using namespace ov_type;
@@ -103,22 +107,37 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
 
   // If we are recording statistics, then open our file
   if (params.record_timing_information) {
-    // If the file exists, then delete it
-    if (boost::filesystem::exists(params.record_timing_filepath)) {
-      boost::filesystem::remove(params.record_timing_filepath);
-      PRINT_INFO(YELLOW "[STATS]: found old file found, deleted...\n" RESET);
+    if (params.cp2_preopened_output_mode) {
+      if (!OpenCP2PreopenedLegacyStream(
+              params.cp2_legacy_timing_canonical_path,
+              params.record_timing_filepath,
+              params.cp2_legacy_timing_capability, of_statistics)) {
+        throw std::runtime_error(
+            "CP2 preopened timing output could not be bound");
+      }
+    } else {
+      // Ordinary OpenVINS behavior owns the pathname and may replace it.
+      if (boost::filesystem::exists(params.record_timing_filepath)) {
+        boost::filesystem::remove(params.record_timing_filepath);
+        PRINT_INFO(YELLOW "[STATS]: found old file found, deleted...\n" RESET);
+      }
+      boost::filesystem::path p(params.record_timing_filepath);
+      boost::filesystem::create_directories(p.parent_path());
+      of_statistics.open(params.record_timing_filepath,
+                         std::ofstream::out | std::ofstream::app);
     }
-    // Create the directory that we will open the file in
-    boost::filesystem::path p(params.record_timing_filepath);
-    boost::filesystem::create_directories(p.parent_path());
-    // Open our statistics file!
-    of_statistics.open(params.record_timing_filepath, std::ofstream::out | std::ofstream::app);
+    if (!of_statistics.is_open() || !of_statistics.good()) {
+      throw std::runtime_error("timing output stream failed to open");
+    }
     // Write the header information into it
     of_statistics << "# timestamp (sec),tracking,propagation,msckf update,";
     if (state->_options.max_slam_features > 0) {
       of_statistics << "slam update,slam delayed,";
     }
     of_statistics << "re-tri & marg,total" << std::endl;
+    if (!of_statistics.good()) {
+      throw std::runtime_error("timing output header write failed");
+    }
   }
 
   //===================================================================================
@@ -161,6 +180,60 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
                                                         propagator, params.gravity_mag, params.zupt_max_velocity,
                                                         params.zupt_noise_multiplier, params.zupt_max_disparity);
   }
+}
+
+bool VioManager::set_cp2_invocation_context(
+    const CP2UpdateInvocationContext &context) noexcept {
+  return !cp2_camera_context_active && updaterMSCKF &&
+         updaterMSCKF->set_cp2_invocation_context(context);
+}
+
+bool VioManager::feed_measurement_camera_with_cp2_context(
+    const ov_core::CameraData &message,
+    const CP2UpdateInvocationContext &context, bool &updater_invoked) {
+  updater_invoked = false;
+  if (cp2_camera_context_active || !updaterMSCKF ||
+      updaterMSCKF->cp2_trace_fatal_latched()) {
+    return false;
+  }
+  cp2_camera_context = context;
+  cp2_camera_context_consumed = false;
+  cp2_camera_context_active = true;
+  try {
+    track_image_and_update(message);
+    updater_invoked = cp2_camera_context_consumed;
+    cp2_camera_context = CP2UpdateInvocationContext{};
+    cp2_camera_context_consumed = false;
+    cp2_camera_context_active = false;
+    return true;
+  } catch (...) {
+    updater_invoked = cp2_camera_context_consumed;
+    cp2_camera_context = CP2UpdateInvocationContext{};
+    cp2_camera_context_consumed = false;
+    cp2_camera_context_active = false;
+    throw;
+  }
+}
+
+bool VioManager::set_cp2_update_callback(
+    UpdaterMSCKF::CP2UpdateCallback callback, bool enable_shadow) {
+  return updaterMSCKF && updaterMSCKF->set_cp2_update_callback(
+                             std::move(callback), enable_shadow);
+}
+
+bool VioManager::set_cp2_recorded_sink(
+    std::shared_ptr<CP2RecordedUpdateSink> sink) {
+  return updaterMSCKF &&
+         updaterMSCKF->set_cp2_recorded_sink(std::move(sink));
+}
+
+bool VioManager::cp2_trace_fatal_latched() const noexcept {
+  return updaterMSCKF && updaterMSCKF->cp2_trace_fatal_latched();
+}
+
+CP2TraceFatalReason VioManager::cp2_trace_fatal_reason() const noexcept {
+  return updaterMSCKF ? updaterMSCKF->cp2_trace_fatal_reason()
+                      : CP2TraceFatalReason::kNone;
 }
 
 void VioManager::feed_measurement_imu(const ov_core::ImuData &message) {
@@ -522,6 +595,13 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // NOTE: this should only really be used if you want to track a lot of features, or have limited computational resources
   if ((int)featsup_MSCKF.size() > state->_options.max_msckf_in_update)
     featsup_MSCKF.erase(featsup_MSCKF.begin(), featsup_MSCKF.end() - state->_options.max_msckf_in_update);
+  if (cp2_camera_context_active) {
+    if (!updaterMSCKF->set_cp2_invocation_context(cp2_camera_context)) {
+      throw std::logic_error(
+          "CP2 serial camera identity was rejected at the MSCKF call boundary");
+    }
+    cp2_camera_context_consumed = true;
+  }
   updaterMSCKF->update(state, featsup_MSCKF);
   propagator->invalidate_cache();
   rT4 = boost::posix_time::microsec_clock::local_time();

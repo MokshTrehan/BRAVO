@@ -85,28 +85,100 @@ Required evidence:
   state increments, landmark back-substitution, and posterior covariance obey
   `||candidate-reference|| <= 1e-9 + 1e-7*||reference||`; final residual norms
   obey the same bound with an absolute term of `1e-10`.
-- Central finite-difference pose and landmark projection Jacobians pass at
-  least 200 seeded valid-geometry cases with maximum normalized Frobenius error
-  at most `1e-5`.
+- Central finite-difference pose and landmark model matrices pass at least 200
+  seeded valid-geometry cases on the frozen EuRoC `CamRadtan` path against the
+  intended all-double continuous projection with FEJ disabled, with maximum
+  normalized Frobenius error at most `1e-5`. The nominal stored residual is
+  separately checked against the float-quantized runtime projection;
+  mixed-FEJ matrices are treated as affine surrogates and require a CP2 golden
+  fixture. `CamEqui` is outside this CP1 derivative proof.
 - At least 100 singular or ill-conditioned landmark fixtures are rejected
   deterministically without an explicit matrix inverse or NaN.
-- Posterior covariance symmetry error is at most
-  `1e-10 * max(1, ||P||_inf)` and its minimum eigenvalue is at least
-  `-1e-10 * max(1, lambda_max(P))` on seeded fixtures.
+- At least 100 algebraic exact clone-copy PSD fixtures match the
+  covariance-form innovation update through rectangular prior factors; no
+  full-prior LLT, inverse, clone noise, jitter, or eigenvalue clamping is
+  permitted. A production `StateHelper::clone` integration fixture remains a
+  CP2 requirement.
+- At least 100 tall-system calls to the actual OpenVINS measurement compressor
+  prove `Lambda/eta` preservation and explicitly account for residual-only
+  energy discarded from `gamma`.
+- Raw posterior covariance symmetry error is at most
+  `1e-10 * max(1, ||P||_inf)`. After that check passes, define
+  `P_sym=0.5*(P+P^T)`; its minimum eigenvalue is at least
+  `-1e-10 * max(1, lambda_max(P_sym))` on seeded fixtures.
 
-Pass decision: production one-pass implementation is permitted.
+Pass decision: production one-pass implementation is permitted. Fixed
+two-pass remains blocked until the mixed-FEJ affine-surrogate semantics and
+chart-consistent first-order covariance-transport claim receive their own
+protecting test and review.
 
 Failure action: estimator integration remains blocked. Fix the derivation or
 tests; do not change the baseline to make the tests pass.
 
 ## CP2 — one-pass parity — July 31, 23:59
 
+Deadline record (2026-08-01): the July 31 checkpoint was missed because the
+adversarial CP1 audit and fresh commit-specific signoff were completed first.
+Decision: continue CP2 without waiving evidence or moving CP3's August 5 due
+date. Impact: CP2 evidence is delayed and the CP3 schedule is compressed;
+fixed-two-pass work remains blocked.
+
+CP2-C1 implementation sub-gate record (2026-08-02): the isolated composite
+state, canonical state-file codec, detached production-type commit oracle, and
+prepared allocation-free phase-3 capture passed at clean source commit
+`fe00fc8a979bec8676d33961ef868ab9e64803e0` (tree
+`dc6f9e1304debab4f00e769e6fc1514c7fbd3a21`). The rolling unit record is
+`project/cp2_ab_unit_evidence.json`; its retained staging artifact has
+`SHA256SUMS` SHA-256
+`85deb80c2fe03e5379addc9609b7f73bdf90c61ea8412d4b7c7fdc169948d945`.
+The clean serialized build and all 15 captured executables passed, covering
+91/91 CP1/CP2 cases, and independent re-execution and verification passed.
+This is a unit-only implementation sub-gate: it does not pass CP2-C, authorize
+recorded-data access, or establish AArch64/Jetson behavior. At that CP2-C1
+checkpoint, CP2-C2, CP2-C3, CP2-C, CP2-D, and CP2-E remained unexecuted and
+unpassed. This paragraph is post-run metadata and is not part of the tested
+source tree above.
+
+CP2-C2 implementation sub-gate record (2026-08-02): updater phase ordering,
+failure atomicity, exact counters, retained gamma, production-library/source-
+inventory provenance, the detached postcommit oracle, and the authoritative
+fatal-latching evidence sink passed at clean source commit
+`162ed140cb3fee301cf3f2e212c9afa28829798a` (tree
+`46935c58e7a7184f659a6f67fcd33896ebe02d46`). The retained staging artifact is
+`results/staging/cp2/unit/cp2_unit_20260802T185623152114466Z-g162ed140cb3f-WtrFa1xv`;
+its external `SHA256SUMS` SHA-256 is
+`58bc351d513bb093a6e355a808fcf62a7d952e01dee5902594ed74946d76f579`.
+All 6/6 serialized build commands and 18/18 captured executables passed,
+covering 139/139 executions (132 CP2 and 7 CP1; 125 unique names with 14
+updater names intentionally executed against both production and fault
+runtimes). All 139 executions passed independent re-execution, both exact
+23-source runtime inventories passed linkage isolation, and the verifier
+rejected all 85 synthetic corruptions. The first fresh attempt at
+`fa350bf5caccc9789c70d0f69660881608963c0c` failed closed solely because the
+commit-boundary implementation was header-only, so the boundary test did not
+load the production DSO despite all 139 executions passing. The corrected
+commit adds an out-of-line production boundary symbol, and its fresh gate and
+independent verification both passed.
+
+This closes CP2-C2 only at x86_64 unit scope. It is trusted-runner internal
+non-conveyable staging evidence, not an independent source-to-binary
+attestation, and is ineligible for a CP2 seal. CP2-C3 must still implement and
+pass the five artifact-free entry-point self-tests, opaque source/readiness
+barrier, exact artifact joins, and detached-replay plumbing/self-tests before
+semantic access to the dataset registry or inspection of any bag, ground
+truth, or payload is permitted; actual recorded replay occurs only during
+CP2-C after authorization. CP2-C/D/E and
+AArch64/Jetson evidence remain unexecuted and unpassed; CP2-E is specifically
+blocked pending a fixed-clock profile. This paragraph is post-run metadata and
+is not part of the tested source tree above.
+
 Required evidence:
 
 - A deterministic updater fixture matches baseline state increment and
   posterior covariance to `1e-8 + 1e-6*||reference||` by state block on at
-  least 1,000 recorded visual updates, and accept/reject decisions agree on at
-  least 99.9% of measurements.
+  least 1,000 recorded visual updates. Both feature-gate decision agreement
+  and the same agreement weighted by raw measurement-row count are at least
+  99.9%.
 - On MH_01_easy, MH_03_medium, and V1_01_easy, both modes complete with identical calibration,
   initialization, startup offset, inputs, and gating configuration.
 - The aligned trajectory difference between modes is at most 1 cm at p95 in
@@ -116,7 +188,9 @@ Required evidence:
 - Median visual-update time is no more than 10% above baseline and p95 is no
   more than 15% above baseline on the frozen desktop profile.
 
-Pass decision: permit fixed two-pass implementation.
+Pass decision: one-pass parity is established. Fixed-two-pass implementation
+is permitted only if its separately recorded FEJ-surrogate and chart-transport
+prerequisites have also passed; CP2 alone does not satisfy them.
 
 Failure action: keep the original updater as default, revert the integration
 branch, and block two-pass work until parity is restored.
@@ -125,14 +199,19 @@ branch, and block two-pass work until parity is restored.
 
 Required evidence:
 
-- A linear fixture produces identical one- and two-pass mean/covariance with
-  relative error at most `1e-10`.
-- Across 100 seeded nonlinear fixtures, pass 2 lowers true reprojection cost in
-  at least 90% of trials, with at least 10% median reduction and no aggregate
-  cost increase from an altered accepted measurement set.
-- Runtime assertions prove both passes use the same predicted prior, pass 1
-  does not commit covariance, and posterior covariance/reset occur exactly
-  once at the final linearization.
+- The canonical Euclidean affine fixture uses `T=I`, locked measurements, the
+  same predicted prior, constant same-model `H_x,H_f,R`, and exact landmark
+  rebasing within `col(H_f)`; it produces identical one- and two-pass
+  mean/covariance with relative error at most `1e-10`.
+- Across 100 seeded nonlinear fixtures, pass 2 lowers the actual unweighted
+  runtime-pixel `C_pix` in at least 90% of trials, with at least 10% median
+  reduction and no aggregate cost increase from an altered accepted
+  measurement set.
+- Runtime assertions prove both passes use the same predicted prior and pass 1
+  does not commit covariance. A successful update computes and commits only
+  the selected posterior covariance once at the final linearization; a rejected
+  update has zero mean/covariance commits and never computes an alternative
+  covariance after a selected-posterior failure.
 - MH_01_easy, V1_01_easy, and MH_04_difficult complete in one-pass and fixed
   two-pass modes without NaN, covariance-gate violation, or unexplained reset.
 - Fixed two-pass ATE is no more than 10% worse than one-pass on any of those
@@ -319,3 +398,23 @@ Required evidence:
 
 Failure action: preserve timestamped evidence of any portal failure and contact
 the conference chairs. Do not rush an unverified replacement submission.
+
+## 2026-08-04 CP2 candidate handoff addendum
+
+CP2 remains **unpassed**. Data-free implementation and math/evidence work now
+passes 25/25 C++ diagnostic executables, 256/256 focused C/D Python checks, and
+189/189 E Python checks. These are protecting diagnostics, not the formal unit
+gate and not recorded evidence. No registry, bag, ground truth, or recorded
+result was accessed during this continuation.
+
+CP2-E prevents source freeze. Formal actual mode remains intentionally locked;
+the root Python/OS/sudo runtime closure and numeric-task lifecycle proof are
+incomplete; the replacement-recovery path needs its full real-backend
+adversarial matrix; no final host profile or privileged reversibility receipt
+exists; noninteractive sudo is unavailable; and Linux `5.15.0-67-generic` on
+this Ryzen 9 9950X exposes no proved CPU temperature/throttle witness. The
+evidence standard is not weakened. The one formal gate and serialized C, D,
+and E executions remain not run.
+
+The exact continuation and blocker inventory is in `pickup.md`. CP3 remains
+blocked until CP2 execution completes and receives final human sign-off.

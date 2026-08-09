@@ -1,14 +1,17 @@
 # Reduced and iterated visual update specification
 
-Status: **automated CP1 evidence passed; blocking on named human signoff**
+Status: **CP1 passed; one-pass and narrow fixed-two-pass implementation authorized**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 Frozen rank threshold: `1e-6` relative singular-value ratio
 Primary reset policy through CP3: identity, for OpenVINS covariance parity
 
-This document is normative for the SchurVIO-Lite one-pass and fixed two-pass
-visual updates. Production estimator integration remains forbidden until the
-automated CP1 tests pass and the named human reviewer signs the convention and
-equation locks.
+This document is normative for the SchurVIO-Lite one-pass update and the
+reviewed fixed-two-pass affine-FEJ contract. The post-review CP1 evidence
+authorizes one-pass production integration. The 2026-08-09 project-author
+approval and deterministic golden at commit
+`e5441605e1da2072fec578ed7d4b649a83f5307a` additionally authorize the narrow
+fixed-two-pass implementation defined here and in
+`docs/two_pass_fej_contract_review.md`.
 
 ## 1. Symbols and scope
 
@@ -24,26 +27,45 @@ For one transient feature:
 - `N` observations give `m=2N` distorted-pixel residual rows. A useful feature
   must have `m>3` and a full-rank three-column landmark Jacobian.
 - `r in R^m`, `H_x in R^(m x n)`, `H_f in R^(m x 3)`, and
-  `R in R^(m x m)` denote the residual, state Jacobian, landmark Jacobian, and
-  measurement covariance before landmark elimination.
+  `R in R^(m x m)` denote the residual, positive-sign state model matrix,
+  positive-sign landmark model matrix, and measurement covariance before
+  landmark elimination.
 
-The OpenVINS residual and Jacobian signs are deliberately different objects:
-
-```text
-r = z_measured - h(x_hat, lambda_hat)
-H_x = + d h(x_hat boxplus delta_x, lambda_hat) / d delta_x at zero
-H_f = + d h(x_hat, lambda_hat + delta_lambda) / d delta_lambda at zero
-```
-
-Therefore the local measurement model used by the positive Kalman correction
-is
+OpenVINS evaluates the stored residual as
 
 ```text
-r = H_x delta_x + H_f delta_lambda + noise,
+r = z_measured - h_runtime(x_hat, lambda_hat).
 ```
 
-while the derivative of the residual itself is `-H`. This is defined by
-`UpdaterHelper.cpp:get_feature_jacobian_full` and
+`h_runtime` calls `CamBase::distort_d`, which casts normalized coordinates to
+float and casts the result back to double. For the frozen EuRoC `CamRadtan`
+path and tested valid geometry, the analytic camera Jacobians represent the
+intended smooth all-double camera model `h_cont`, not the literal derivative
+of that quantized wrapper. CP1 makes no derivative claim for `CamEqui`; that
+model remains outside the proved projection scope.
+
+With FEJ disabled, the positive-sign model matrices are the continuous-model
+derivatives
+
+```text
+H_x = + d h_cont(x_hat boxplus delta_x, lambda_hat) / d delta_x at zero
+H_f = + d h_cont(x_hat, lambda_hat + delta_lambda) / d delta_lambda at zero
+d(z_measured-h_cont)/d(delta_x,delta_lambda) = -[H_x H_f].
+```
+
+With FEJ enabled, `H_x` and `H_f` are the pinned mixed-current/FEJ affine
+surrogate produced by `get_feature_jacobian_full`; they are not generally the
+derivative of either `h_runtime` or a single current `h_cont` residual. In both
+cases, the positive Kalman correction consumes the baseline linear surrogate
+
+```text
+r ~= H_x delta_x + H_f delta_lambda + noise.
+```
+
+Schur/nullspace equivalence requires both paths to consume identical
+`r,H_x,H_f`; it does not require the FEJ model matrix to be a current-residual
+derivative. These semantics are defined by
+`UpdaterHelper.cpp:get_feature_jacobian_full`, `CamBase.h:distort_d`, and
 `StateHelper.cpp:EKFUpdate`.
 
 ## 2. OpenVINS retraction and fixed prior chart
@@ -101,22 +123,36 @@ gate.
 
 Rank and conditioning are tested on the whitened `B`, never on `B^T B`, a
 determinant, or an explicit inverse. Let its singular values satisfy
-`s_1 >= s_2 >= s_3 >= 0` and define `rho=s_3/s_1`.
+`s_1 >= s_2 >= s_3 >= 0`. After `s_1` passes its floor, define
+`rho=s_3/s_1`; before that point `rho` is unavailable.
 
-Reject the complete feature before gating when any condition holds:
+Reject the complete feature before gating using this ordered status priority:
 
-1. `m<=3`, or a residual/Jacobian field is nonfinite;
-2. `s_1` is zero at the numerical scale of `B`;
-3. numerical rank is less than three using
-   `max(m,3)*epsilon*s_1`;
-4. `rho < 1e-6`.
+1. incompatible `A`, `B`, or `b` dimensions (`nonfinite`, the helper's legacy
+   invalid-input status);
+2. `m<=3` (`insufficient_rows`);
+3. a residual/Jacobian field is nonfinite (`nonfinite`);
+4. the SVD does not produce a finite, complete three-value singular spectrum
+   (`nonfinite`);
+5. `s_1` is not strictly greater than
+   `std::numeric_limits<double>::min()` (`rank_deficient`);
+6. `s_3` is not strictly greater than
+   `max(m,3)*std::numeric_limits<double>::epsilon()*s_1`
+   (`rank_deficient`);
+7. `rho < 1e-6` (`ill_conditioned`).
 
-No diagonal damping, pseudo-measurement, clamping, or silent rank repair is
-allowed. Every rejection logs the three singular values, `rho`, feature ID,
-pass index, and one of `nonfinite`, `insufficient_rows`, `rank_deficient`, or
-`ill_conditioned`. The `1e-6` policy is frozen before real-data Schur results
-are inspected and bounds the condition number of the conceptual normal block
-to approximately `1e12`.
+The conditions are evaluated in the numbered order above. Thus equality at
+the numerical-rank floor is rejected, while equality at the `rho=1e-6`
+conditioning boundary is accepted. No diagonal damping,
+pseudo-measurement, clamping, or silent rank repair is
+allowed. Every rejection logs feature ID, pass index, row count, and one of
+`nonfinite`, `insufficient_rows`, `rank_deficient`, or `ill_conditioned`.
+Log `s_1,s_2,s_3` only after a successful SVD, and log `rho` only when `s_1`
+passes its floor. Otherwise record those fields as unavailable with the
+precise pre-SVD or zero-scale reason; never fabricate numeric values. The
+`1e-6` policy is frozen before real-data Schur results are inspected and
+bounds the condition number of the conceptual normal block to approximately
+`1e12`.
 
 For accepted `B`, use a direct QR or SVD factorization. With
 
@@ -130,12 +166,17 @@ matrix `.inverse()`.
 
 ## 5. Schur sufficient statistics
 
-The whitened joint MAP problem is
+For an SPD prior, the whitened joint MAP problem can be written
 
 ```text
 min 0.5 ||delta_x||_(P^-)^-1^2
   + 0.5 ||b - A delta_x - B delta_lambda||^2.
 ```
+
+This inverse notation is conceptual and is not valid for the exact
+clone-augmented covariance, which can be positive semidefinite. The
+rectangular-factor formulation in Section 7 is normative for both SPD and PSD
+priors.
 
 Landmark elimination produces three sufficient statistics:
 
@@ -186,44 +227,78 @@ q      = m - 3.
 ```
 
 The per-feature innovation statistic, using the marginal prior covariance
-`P_s^-` for the touched state blocks, is
+`P_s^-=L_s L_s^T` for the touched state blocks, is
 
 ```text
 chi2 = b_N^T solve(I + A_N P_s^- A_N^T, b_N)
-     = gamma - eta^T solve((P_s^-)^-1 + Lambda, eta).
+u    = L_s^T eta
+chi2 = gamma - u^T solve(I + L_s^T Lambda L_s, u).
 ```
 
-The second form is evaluated with a symmetric factorization, not an explicit
-inverse. Its chi-square threshold uses exactly `q=m-3` degrees of freedom,
-matching `UpdaterMSCKF.cpp`. A naive `m`-row projector is forbidden because it
-would silently change the threshold even if its numerical NIS matched.
+Here `L_s` may be rectangular. The reduced matrix is strictly positive
+definite because of its identity term, so the second form uses a symmetric
+solve and never an inverse of `P_s^-`. For an SPD prior only, this is
+algebraically equal to the inverse-information expression.
 
-Global OpenVINS measurement compression is another orthogonal transform and
-does not alter the summed `Lambda`, `eta`, or `gamma`.
+The gate freezes the exact baseline policy
+
+```text
+threshold(q) = chi2_multiplier * quantile(ChiSquared(q), 0.95)
+reject if and only if chi2 > threshold(q).
+```
+
+Thus equality is accepted. The frozen EuRoC profile has
+`up_msckf_chi2_multipler=1`; other profiles use their configured multiplier.
+The gate uses exactly `q=m-3` degrees of freedom, matching
+`UpdaterMSCKF.cpp`. A naive `m`-row projector is forbidden because it would
+silently change the threshold even if its numerical NIS matched.
+
+Global OpenVINS measurement compression first applies an orthogonal transform
+and then truncates zero-Jacobian rows. If
+
+```text
+Q^T A_N = [R; 0],       Q^T b_N = [c; d],
+```
+
+the truncated system preserves `Lambda=R^T R` and `eta=R^T c`, but its stored
+residual norm is only `c^T c`; the pre-compression statistic is
+`gamma=c^T c+d^T d`. Any code that needs objective or NIS parity after this
+compression must retain the pre-compression `gamma` or explicitly carry the
+dropped energy `d^T d`. It may not reconstruct `gamma` from the resized
+residual alone.
 
 ## 7. One-pass state and covariance update
 
 Lift and sum the accepted per-feature state statistics into the full filter
-ordering. With `P^-=L_p L_p^T`, solve without forming `(P^-)^-1`:
+ordering. Clone augmentation copies a pose and its cross-covariances exactly,
+so a valid OpenVINS `P^-` can be PSD. Use any full-column covariance factor
+`L_p in R^(n x r)`, `r<=n`, satisfying `P^-=L_p L_p^T`; it may be rectangular.
+Then solve
 
 ```text
-J = I + L_p^T Lambda L_p
+J = I_r + L_p^T Lambda L_p
 solve J y = L_p^T eta
 delta_1 = L_p y
 P_chart,1 = L_p solve(J, L_p^T).
 ```
 
-This is algebraically identical to
+`J` is strictly positive definite on the prior support. This is algebraically
+identical to the covariance-form innovation update for both SPD and PSD
+priors. Only when `P^-` is SPD is it also legitimate to write the conceptual
+inverse-information form
 
 ```text
 ((P^-)^-1 + Lambda) delta_1 = eta
 P_chart,1 = ((P^-)^-1 + Lambda)^-1
 ```
 
-and to the baseline nullspace Kalman update. The CP1 full-joint oracle and
-nullspace oracle must agree with the Schur state increment, back-substituted
-landmark increment, final residual norm, NIS, and posterior covariance at the
-declared tolerances.
+and it remains identical to the baseline nullspace Kalman update. A production
+path may use a preserved augmentation factor or a rank-revealing factor with a
+declared numerical-zero tolerance. It may not demand `LLT(P^-)`, add clone
+noise, apply diagonal jitter, or silently clamp negative eigenvalues. The CP1
+full-joint oracle and nullspace oracle must agree with the Schur state
+increment, back-substituted landmark increment, final residual norm, NIS, and
+posterior covariance at the declared tolerances.
 
 For CP2 parity, inject the mean once using each OpenVINS type's `update` and
 use an identity covariance reset:
@@ -235,10 +310,21 @@ P_live^+ = P_chart,1.              # G = I
 
 OpenVINS performs no explicit covariance reset transport after injection.
 This identity policy is a deliberate baseline-parity approximation and must be
-used by both compared one-pass paths. Exact chart transport is reserved for a
-separately named ablation after CP3.
+used by both compared one-pass paths. Chart-consistent first-order covariance
+transport is reserved for a separately named ablation after CP3.
 
-## 8. Fixed two-pass update
+## 8. Fixed two-pass affine-FEJ contract — accepted
+
+The primary EuRoC configuration uses a mixed FEJ Jacobian: its residual is
+evaluated at current values while parts of its projection Jacobian use frozen
+FEJ geometry. That matrix is not, in general, the derivative of the current
+residual function. Consequently the rules below define an affine FEJ
+surrogate; they are not a Taylor/Newton derivation of the current pixel
+objective. The FEJ-on golden at commit
+`e5441605e1da2072fec578ed7d4b649a83f5307a` and the 2026-08-09 project-author
+review accept this contract for the ordinary Schur `GLOBAL_3D`/`CamRadtan`
+path with a configured maximum of one or two passes and inherited `G=I`
+reset. They do not accept a differential chart-covariance interpretation.
 
 Before pass 1, snapshot `x^-`, `P^-`, every clone FEJ value, raw observations,
 feature IDs/order, configuration, and the predicted prior factor. A pass uses
@@ -249,8 +335,8 @@ At pass `i` with absolute fixed-chart proposal `delta_i`:
 1. Construct `x_i=x^- boxplus delta_i` from the snapshot. Never apply an
    absolute proposal sequentially to the previous working state.
 2. Triangulate and refine each permitted transient feature using `x_i`.
-3. Form the current distorted-pixel residual `r_i` and local OpenVINS
-   Jacobians `H_x,i`, `H_f,i`.
+3. Form the current distorted-pixel residual `r_i` and the baseline mixed-FEJ
+   OpenVINS matrices `H_x,i`, `H_f,i`.
 4. Map the local state Jacobian to the frozen prior chart:
    `A_i = whiten(H_x,i T(delta_i))`.
 5. Correct the right-hand side for the absolute chart:
@@ -258,15 +344,27 @@ At pass `i` with absolute fixed-chart proposal `delta_i`:
 6. Factor the whitened landmark Jacobian, form the Schur statistics, and solve
    from the original `P^-`.
 
-The correction follows from
+The candidate defines the affine surrogate
 
 ```text
-h(delta) ~= h(delta_i) + H_x,i T(delta_i) (delta-delta_i).
+r_i + H_x,i T(delta_i) delta_i
+    ~= H_x,i T(delta_i) delta + H_f,i delta_lambda.
 ```
 
-Thus `r_i + A_i delta_i ~= A_i delta + B_i delta_lambda`. For a linear
-system, pass 2 recreates the pass-1 right-hand side and must return identical
-mean and covariance.
+If `r_i=z-h_i`, `H_x,i=d h_i/d(local)`, and
+`H_f,i=d h_i/d(lambda)` for the same smooth current model `h_i`, this follows
+from the usual Taylor model of `h_i`. Under the frozen mixed-FEJ baseline—and
+also when pairing the float-quantized runtime residual with the continuous
+`CamRadtan` derivatives—it is instead an explicit algorithmic definition and
+no stronger derivative claim is made.
+More generally, pass idempotence is guaranteed when
+`A_i=whiten(H_x,i T(delta_i))`, the whitened landmark column space, and the
+projected corrected right-hand side are pass-invariant. The canonical CP3
+fixture is Euclidean (`T=I`) with a locked measurement set and constant affine
+same-model `H_x,H_f,R`; exact landmark rebasing changes the right-hand side
+only inside the whitened `col(H_f)`, which elimination removes. Under those
+hypotheses pass 2 must reproduce pass 1's mean and covariance at the declared
+tolerance.
 
 ### Pass-1 selection lock
 
@@ -274,7 +372,11 @@ mean and covariance.
   explicit `m-3` degrees of freedom.
 - Freeze accepted feature IDs, raw measurements, order, gate decisions, and
   unit weights.
-- Pass 2 may not admit a feature, drop one independently, or re-gate.
+- Pass 2 may not admit a feature, drop one independently, or revise a pass-1
+  gate decision. For every locked feature it recomputes the production NIS
+  against the same `P^-`, with `q=m-3` and the inherited strict-`>` threshold,
+  solely as a whole-proposal validity check. Any such failure invalidates all
+  of pass 2; it does not change membership in the locked set.
 - Clone FEJ values stay frozen. Each transient feature's pass-local FEJ point
   is reset to that pass's triangulation, matching upstream construction.
 - Preserve the upstream mixed FEJ behavior: residuals and `uv_norm` are
@@ -288,24 +390,39 @@ feature-set fallback is forbidden.
 
 ### Pass-2 acceptance and fallback
 
-Evaluate both proposals on the same accepted raw pixel measurements. For each
-proposal, re-triangulate/refine the locked features and compute:
-
-- the unweighted distorted-pixel cost before nullspace/compression; and
-- the frozen-prior posterior objective, including
-  `0.5*delta^T(P^-)^-1*delta`.
-
-The initializer's normalized-coordinate LM cost is not this acceptance cost.
-Select pass 2 only when both costs are finite and neither exceeds the pass-1
-value by more than
+Evaluate both proposals on the same accepted raw pixel measurements. For
+proposal `j`, re-triangulate/refine every locked feature, evaluate its actual
+runtime pixel residual `r_f,j`, and define
 
 ```text
-tau_cost = 1e-9 * max(1, abs(pass1_cost)).
+C_pix,j  = sum_f ||r_f,j||^2
+C_post,j = 0.5 * min_{xi: L_p xi=delta_j} ||xi||^2
+           + 0.5 * sum_f ||solve(L_f,r_f,j)||^2,
+R_f      = L_f L_f^T.
 ```
 
-Otherwise select pass 1 and log the precise fallback reason. Equal-cost linear
-fixtures are valid. CP3 improvement statistics use the raw, untoleranced cost
-difference.
+`C_pix` is the unweighted distorted-pixel cost before nullspace/compression.
+`C_post` is the frozen-prior negative-log posterior objective up to constants,
+with unit robust weights and the frozen measurement covariance. If
+`L_p xi=delta_j` is infeasible, `C_post,j=+infinity`; inverse-covariance
+notation is allowed only for an SPD prior.
+
+The initializer's normalized-coordinate LM cost is not either acceptance
+cost. For each `c in {pix,post}`, define its own tolerance
+
+```text
+tau_c = 1e-9 * max(1, abs(C_c,1)).
+```
+
+Pass 1 must remain valid under every Section 9 geometry, finite, rank,
+conditioning, and solve-factorization check, and both of its costs must be
+finite. Otherwise reject the complete update and leave the live state unchanged
+because no valid fallback exists. Given a valid pass 1, select pass 2 only when
+both pass-2 costs are finite and
+`C_c,2 <= C_c,1 + tau_c` for both cost types. Otherwise select pass 1 and log
+the precise fallback reason. Equal-cost linear fixtures are valid. CP3 logs
+both raw, untoleranced differences; its reprojection-improvement criterion
+uses `C_pix,1-C_pix,2`.
 
 ### Exactly-once commit
 
@@ -320,34 +437,58 @@ P_live = P_chart,*                 # identity reset through CP3
 ```
 
 No `P_1 -> P_2` sequential covariance update is permitted. Runtime counters
-must prove `pass1_live_mean_writes=0`, `pass1_covariance_writes=0`,
-`final_mean_commits=1`, and `final_covariance_commits=1`.
+must prove `pass1_live_mean_writes=0` and `pass1_covariance_writes=0`. After
+selection, compute only the selected posterior covariance. If it fails the
+Section 9 symmetry or numerical PSD bound, reject the complete update, leave
+the live state unchanged, and do not compute an alternative-pass covariance.
+A successful update has `final_mean_commits=1` and
+`final_covariance_commits=1`; a rejected update has both counters equal to
+zero.
 
-The mathematically exact optional transport would be
-`P_live=T(delta_*) P_chart,* T(delta_*)^T`. It is explicitly not the primary
-CP1--CP3 policy because mixing it with an identity-reset baseline would
-confound iteration with reset effects.
+The exact differential of the selected retraction is `T(delta_*)`. Within the
+EKF's first-order covariance model, the chart-consistent coordinate transport
+is `P_live=T(delta_*) P_chart,* T(delta_*)^T`; this is not the exact finite
+transformation of a nonlinear probability distribution. The transport is not
+the primary CP1--CP3 policy because mixing it with an identity-reset baseline
+would confound iteration with reset effects. Therefore identity-reset results
+may be called baseline-parity results, but not chart-consistent local
+covariance results.
 
 ## 9. Failure and diagnostics contract
 
-Any failed factorization, nonfinite value, invalid depth, inconsistent state
-ordering, or non-PSD posterior rejects the affected proposal. No failure may
-silently add damping or repair an eigenvalue. Required diagnostics include:
+Before selection, any failed factorization, nonfinite value, invalid depth, or
+inconsistent state ordering rejects the affected proposal under the Section 8
+selection/fallback rules. After selection, a posterior that fails the declared
+symmetry or numerical PSD bound rejects the complete update without an
+alternative covariance computation. No failure may silently add damping or
+repair an eigenvalue. Required diagnostics include:
 
-- mode, pass, feature ID, row count, rank, singular values, and `rho`;
+- mode, pass, applicable feature ID, row count, status, and precise reason;
+- rank and singular values after a successful SVD, plus `rho` only when `s_1`
+  passes its floor; otherwise explicit unavailable markers;
+- for every remaining stage-dependent field below, the value when that stage
+  was reached and computed, or an explicit `unavailable`/`not_reached` marker
+  with the causal status otherwise;
 - `Lambda` raw symmetry error, `eta`, `gamma`, NIS, gate DoF and decision;
 - triangulation/refinement result and accepted-set hash;
 - fixed-chart correction, current and corrected residual norms;
 - pass costs, fallback reason, and selected pass;
 - prior/state/config hashes and mean/covariance write counters;
-- posterior symmetry error, minimum eigenvalue, and maximum diagonal.
+- posterior symmetry error, `lambda_min(P_sym)`, `lambda_max(P_sym)`, the two
+  computed acceptance bounds, and maximum diagonal.
 
 The posterior acceptance bounds are
 
 ```text
 ||P-P^T||_inf <= 1e-10 * max(1, ||P||_inf)
-lambda_min(P) >= -1e-10 * max(1, lambda_max(P)).
+P_sym = 0.5 * (P+P^T)
+lambda_min(P_sym) >= -1e-10 * max(1, lambda_max(P_sym)).
 ```
+
+Check the raw symmetry inequality first. Only then compute the eigenvalues of
+`0.5*(P+P^T)` for the numerical PSD inequality. A small negative eigenvalue
+inside the declared roundoff band is accepted and logged, not clamped; failure
+of either inequality rejects the complete update.
 
 ## 10. CP1 protecting tests
 
@@ -356,30 +497,73 @@ The automated gate must cover at least:
 1. 100 deterministic well-conditioned full-joint, nullspace, and Schur
    fixtures for state increment, landmark back-substitution, residual norm,
    `Lambda/eta/gamma`, NIS, and posterior covariance.
-2. 200 seeded valid-geometry `GLOBAL_3D` projection cases using the actual JPL
-   retraction and an all-double forward projection oracle with FEJ disabled.
-   Compare `H` to `d h/d delta`, or `-H` to `d r/d delta`.
+2. 200 seeded valid-geometry `GLOBAL_3D` projection cases on the frozen EuRoC
+   `CamRadtan` path using the actual JPL retraction and an all-double
+   continuous forward-projection oracle with FEJ disabled. Compare `H` to
+   `d h_cont/d delta`, or `-H` to the derivative of `z-h_cont`; separately
+   verify the nominal stored residual against the float-quantized runtime
+   projection. `CamEqui` is outside this CP1 derivative proof.
 3. 100 exact-rank-deficient or condition-ratio-at-most-`1e-12` landmark
    fixtures, all rejected deterministically without `.inverse()` or NaN.
-4. Raw posterior symmetry and PSD checks before any symmetric view hides an
-   error.
+4. A raw posterior symmetry check before forming `P_sym`, followed by the
+   numerical PSD check on `P_sym`.
 5. Fixed-chart `T_theta` finite differences through the exact normalized JPL
    perturbing quaternion.
+6. At least 100 algebraic exact clone-copy PSD priors, comparing known and
+   rank-revealing rectangular-factor updates with the covariance-form
+   innovation oracle without jitter or a prior inverse. CP2 must additionally
+   exercise production `StateHelper::clone`.
+7. At least 100 calls to the actual production measurement compressor on tall
+   systems, proving `Lambda/eta` preservation and accounting for the strictly
+   positive discarded contribution to `gamma`.
 
-An FEJ-on golden fixture is required for CP2 parity because the mixed FEJ
-Jacobian is intentionally not the finite-difference derivative of a single
-current residual function.
+The required FEJ-on golden is frozen by commit
+`e5441605e1da2072fec578ed7d4b649a83f5307a`. Target
+`test_cp1_one_pass_regression` protects it with
+`CP1MixedFejGolden.ProductionRawSchurAndPreviewMatchFixedChartIndependentOracle`,
+`CP1MixedFejGolden.ActualTwoPassUsesSamePriorEvaluatesTrueCostsAndCommitsOnce`,
+and `CP1MixedFejGolden.FixedTwoPassDecisionCasesAThroughF`. The mixed-FEJ
+Jacobian remains an affine algorithmic surrogate, not the finite-difference
+derivative of a single current residual function.
 
-## 11. Review lock
+## 11. Fixed-two-pass review lock — accepted
 
-Human signoff must explicitly approve:
+The project-author approval supplied for the 2026-08-08--2026-08-09 review
+window became effective after the golden and associated Release tests passed.
+It explicitly approves:
 
-- residual/Jacobian sign and exact JPL chart;
+- runtime residual, continuous-model derivative, mixed-FEJ surrogate, positive
+  update sign, and exact JPL chart;
 - whitening, three Schur statistics, NIS, and `m-3` gate DoF;
 - the `1e-6` rank threshold and no-regularization rule;
-- fixed-prior absolute iteration, pass-1 selection lock, and whole-pass
-  fallback;
-- exactly-once posterior computation and identity reset through CP3.
+- rectangular-factor handling of exact clone-augmented PSD priors;
+- pre-compression `gamma`, the 95% chi-square quantile, configured multiplier,
+  `m-3` DoF, and strict-`>` rejection boundary;
+- the narrow mixed-FEJ fixed-two-pass algorithm as an affine surrogate, with
+  no Taylor/Newton derivative claim;
+- the separate `C_pix/C_post` objectives and tolerances, invalid-pass-1
+  rejection, pass-2 fallback rule, selected-covariance failure behavior, and
+  sufficient linear-idempotence invariants;
+- pre-SVD diagnostic availability and the raw-symmetry-then-`P_sym` numerical
+  PSD sequence;
+- identity reset as a baseline-parity policy, and differential
+  chart-consistent first-order covariance transport as a separate ablation.
 
-Reviewer, date, reviewed commit, and exceptions are recorded in
-`docs/conventions.md` and `project/checkpoints.yaml`.
+The authorization is limited to ordinary Schur, transient `GLOBAL_3D`,
+`CamRadtan`, a configured maximum of one or two passes, one frozen `x^-` and
+`P^-`, a pass-1-locked feature set, pass-2 same-`P^-` NIS as a whole-proposal
+validity check, independently tolerated `C_pix` and `C_post`, selected-only
+covariance construction, exactly one final commit, and inherited `G=I`
+OpenVINS parity. It excludes `CamEqui`, adaptive scheduling, more than two
+passes, and chart-consistent covariance claims.
+
+- Reviewer: Moksh Trehan
+- Reviewer relationship: project-author self-review
+- Review window: 2026-08-08--2026-08-09
+- Approval date: 2026-08-09
+- Golden commit:
+  `e5441605e1da2072fec578ed7d4b649a83f5307a`
+- Golden result: all five CP1 Release binaries passed 14/14 tests, with no
+  disabled or skipped tests
+- Technical review: `docs/two_pass_fej_contract_review.md`
+- Exceptions: none

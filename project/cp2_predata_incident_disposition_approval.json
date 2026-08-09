@@ -1,0 +1,33 @@
+{
+  "schema_version": 2,
+  "record_type": "cp2_predata_incident_disposition_approval",
+  "reviewer": "Moksh Trehan",
+  "recorded_utc": "2026-08-08T03:39:09Z",
+  "document_path": "docs/cp2_predata_incident_log.md",
+  "document_content_commit": "d960f90567bf113d9d04a4449bc5c9721c250aea",
+  "document_git_blob": "0b4bb06c4303b253de738cc0366ffce7f4219221",
+  "document_sha256": "0121f141ea36a0e469dcba6c34c77034a3df9a72ea15b2901acc5c5d5ba03139",
+  "document_size_bytes": 15055,
+  "current_authority": {
+    "tracked_path": "project/cp2_full_completion_authorization_20260807.txt",
+    "tracked_canonicalization": "one_verbatim_conversation_copy_with_terminal_lf",
+    "tracked_byte_count": 3629,
+    "tracked_sha256": "8cb4767c159d4ec30317799a6ce3fa9b6535c36e77b9f451b977a31a5a233b67",
+    "tracked_git_blob": "8e4064dbb3436037b9f317be483b6553ecbe4de4"
+  },
+  "authorization_effect": {
+    "incident_log_retained_without_rewrite": true,
+    "prior_predata_access_stop_superseded": true,
+    "iterative_diagnosis_and_rerun_permitted": true,
+    "failed_designated_evidence_must_be_preserved_and_reported": true,
+    "silent_deletion_relabeling_threshold_weakening_or_concealment_forbidden": true
+  },
+  "historical_approval": {
+    "approved_utc": "2026-08-04T11:41:12Z",
+    "reviewed_commit": "46b3010ad5e77ea61f9a571ccb7842ea2e0f1979",
+    "document_git_blob": "644f35ba9e371ae27efc2827e146f8b69dab70fe",
+    "document_sha256": "5d1f8aa1728bedd6141a55c756ef9dc3bfd2d52e7480208c27a94324b321af56",
+    "approval_statement": "I, Moksh Trehan, acknowledge the 2026-08-04 math-audit registry/baseline-metadata incident and accept its disposition as recorded in docs/cp2_predata_incident_log.md at commit 46b3010ad5e77ea61f9a571ccb7842ea2e0f1979; no exposed or incident-derived value may influence CP2 implementation, thresholds, profiles, tests, execution choices, or evidence. My prior conditional CP2-C recorded-input authorization otherwise remains unchanged; no exceptions."
+  },
+  "exceptions": []
+}

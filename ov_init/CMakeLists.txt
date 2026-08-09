@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.3)
 project(ov_init)
 
+# Keep Eigen's scalar/no-packet ABI consistent with ov_core and ov_msckf. This
+# prevents explicit AArch64 NEON FMA in the frozen CP2 arithmetic path.
+add_definitions(
+        -DEIGEN_DONT_VECTORIZE=1
+        -DEIGEN_MAX_ALIGN_BYTES=16
+        -DEIGEN_MAX_STATIC_ALIGN_BYTES=16)
+
 
 # Include libraries (if we don't have opencv 4, then fallback to opencv 3)
 # The OpenCV version needs to match the one used by cv_bridge otherwise you will get a segmentation fault!
@@ -57,4 +64,3 @@ else ()
     message(STATUS "No ROS versions found or building with ROS disabled, building ROS1.cmake without ROS")
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ROS1.cmake)
 endif ()
-

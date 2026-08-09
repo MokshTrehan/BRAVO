@@ -16,13 +16,16 @@ import subprocess
 import xml.etree.ElementTree as ET
 
 
-SUMMARY_PATTERN = re.compile(r"^(CP1_[A-Z]+)\s+(.*)$")
+SUMMARY_PATTERN = re.compile(r"^(CP1_[A-Z][A-Z0-9_]*)\s+(.*)$")
 EXPECTED_TEST_FILES = {
+    "test_cp1_prior_and_compression.xml": 2,
     "test_cp1_projection_jacobian.xml": 2,
     "test_cp1_rank_rejection.xml": 2,
     "test_cp1_schur_equivalence.xml": 1,
 }
 EXPECTED_TEST_CASES = {
+    "CP1Compression.ProductionTruncationPreservesLambdaEtaButNotGamma",
+    "CP1Prior.SemidefiniteCloneAugmentationMatchesInnovationUpdate",
     "CP1Projection.ActualOpenVINSJacobiansMatchAllDoubleFiniteDifferences",
     "CP1Retraction.FixedPriorChartDifferentialMatchesExactJPLRetraction",
     "CP1Schur.BoundaryAndInvalidInputsHaveExplicitStatus",
@@ -30,12 +33,20 @@ EXPECTED_TEST_CASES = {
     "CP1Schur.FullJointNullspaceAndReducedSystemsAgree",
 }
 EXPECTED_SUMMARIES = {
+    "CP1_COMPRESSION": {"fixtures": 128, "seed": 443998030361},
     "CP1_EQUIVALENCE": {"fixtures": 128, "near_column_space_fixtures": 16, "seed": 20260728},
+    "CP1_PSD_PRIOR": {"fixtures": 128, "seed": 21320732},
     "CP1_PROJECTION": {"fixtures": 256, "seed": 1900496914},
     "CP1_RANK": {"fixtures": 128, "seed": 1934903571},
     "CP1_RETRACTION": {"fixtures": 256, "seed": 32199698170528780},
 }
 REQUIRED_SUMMARY_FIELDS = {
+    "CP1_COMPRESSION": {
+        "max_eta_tolerance_ratio",
+        "max_gamma_reconstruction_tolerance_ratio",
+        "max_lambda_tolerance_ratio",
+        "min_discarded_energy",
+    },
     "CP1_EQUIVALENCE": {
         "max_covariance_error",
         "max_landmark_error",
@@ -50,10 +61,22 @@ REQUIRED_SUMMARY_FIELDS = {
         "max_residual_sign_normalized_frobenius",
         "max_state_normalized_frobenius",
     },
+    "CP1_PSD_PRIOR": {
+        "max_clone_nullspace_tolerance_ratio",
+        "max_known_covariance_tolerance_ratio",
+        "max_known_nis_tolerance_ratio",
+        "max_known_state_tolerance_ratio",
+        "max_spectral_covariance_tolerance_ratio",
+        "max_spectral_nis_tolerance_ratio",
+        "max_spectral_state_tolerance_ratio",
+        "max_zero_eigenvalue_tolerance_ratio",
+        "min_posterior_normalized_eigenvalue",
+    },
     "CP1_RANK": {"ill_conditioned", "rank_deficient"},
     "CP1_RETRACTION": {"max_normalized_frobenius"},
 }
 EXPECTED_BINARY_NAMES = {
+    "test_cp1_prior_and_compression",
     "test_cp1_projection_jacobian",
     "test_cp1_rank_rejection",
     "test_cp1_schur_equivalence",
@@ -90,8 +113,9 @@ def parse_value(value: str):
             return value
 
 
-def parse_summaries(log_path: Path) -> dict:
+def parse_summaries(log_path: Path) -> tuple[dict, list[str]]:
     summaries = {}
+    duplicates = []
     for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
         match = SUMMARY_PATTERN.match(line)
         if not match:
@@ -102,8 +126,11 @@ def parse_summaries(log_path: Path) -> dict:
                 continue
             key, value = token.split("=", 1)
             fields[key] = parse_value(value)
-        summaries[match.group(1)] = fields
-    return summaries
+        name = match.group(1)
+        if name in summaries:
+            duplicates.append(name)
+        summaries[name] = fields
+    return summaries, duplicates
 
 
 def display_path(path: Path, repo_root: Path) -> str:
@@ -127,7 +154,7 @@ def main() -> int:
     errors = 0
     disabled = 0
     suites = []
-    test_cases = set()
+    test_cases = []
     validation_errors = []
     actual_xml_names = {path.name for path in xml_files}
     expected_log_names = {name[:-4] + ".log" for name in EXPECTED_TEST_FILES}
@@ -156,7 +183,7 @@ def main() -> int:
                 f"{xml_path.name}: expected {EXPECTED_TEST_FILES[xml_path.name]} tests, got {file_tests}"
             )
         for test_case in root.findall(".//testcase"):
-            test_cases.add(f"{test_case.attrib.get('classname', '')}.{test_case.attrib.get('name', '')}")
+            test_cases.append(f"{test_case.attrib.get('classname', '')}.{test_case.attrib.get('name', '')}")
         suites.append(
             {
                 "file": xml_path.name,
@@ -169,9 +196,20 @@ def main() -> int:
         )
 
     summaries = {}
+    duplicate_summaries = []
     for log_path in log_files:
-        summaries.update(parse_summaries(log_path))
-    if test_cases != EXPECTED_TEST_CASES:
+        parsed_summaries, within_file_duplicates = parse_summaries(log_path)
+        duplicate_summaries.extend(within_file_duplicates)
+        for name, fields in parsed_summaries.items():
+            if name in summaries:
+                duplicate_summaries.append(name)
+            summaries[name] = fields
+    duplicate_test_cases = sorted({name for name in test_cases if test_cases.count(name) > 1})
+    if duplicate_test_cases:
+        validation_errors.append(f"duplicate test cases: {duplicate_test_cases}")
+    if duplicate_summaries:
+        validation_errors.append(f"duplicate summaries: {sorted(set(duplicate_summaries))}")
+    if set(test_cases) != EXPECTED_TEST_CASES:
         validation_errors.append(
             "test case set mismatch: expected {} got {}".format(
                 sorted(EXPECTED_TEST_CASES), sorted(test_cases)
@@ -218,10 +256,36 @@ def main() -> int:
         validation_errors.append("CP1_RANK rejection totals differ from 96/32")
     if summaries.get("CP1_RETRACTION", {}).get("max_normalized_frobenius", math.inf) > 1.0e-7:
         validation_errors.append("CP1_RETRACTION.max_normalized_frobenius exceeds 1e-7")
+    for summary_name, fields in {
+        "CP1_COMPRESSION": (
+            "max_eta_tolerance_ratio",
+            "max_gamma_reconstruction_tolerance_ratio",
+            "max_lambda_tolerance_ratio",
+        ),
+        "CP1_PSD_PRIOR": (
+            "max_clone_nullspace_tolerance_ratio",
+            "max_known_covariance_tolerance_ratio",
+            "max_known_nis_tolerance_ratio",
+            "max_known_state_tolerance_ratio",
+            "max_spectral_covariance_tolerance_ratio",
+            "max_spectral_nis_tolerance_ratio",
+            "max_spectral_state_tolerance_ratio",
+            "max_zero_eigenvalue_tolerance_ratio",
+        ),
+    }.items():
+        for field in fields:
+            if summaries.get(summary_name, {}).get(field, math.inf) > 1.0:
+                validation_errors.append(f"{summary_name}.{field} exceeds its frozen tolerance")
+    if summaries.get("CP1_COMPRESSION", {}).get("min_discarded_energy", -math.inf) <= 0.1:
+        validation_errors.append("CP1_COMPRESSION.min_discarded_energy does not demonstrate gamma loss")
+    if summaries.get("CP1_PSD_PRIOR", {}).get("min_posterior_normalized_eigenvalue", -math.inf) < -1.0e-10:
+        validation_errors.append("CP1_PSD_PRIOR.min_posterior_normalized_eigenvalue is below -1e-10")
 
     tracked_inputs = [
+        repo_root / "docs/checkpoints.md",
         repo_root / "docs/conventions.md",
         repo_root / "docs/iterated_update_spec.md",
+        repo_root / "docs/schurvio_lite_execution_plan.md",
         repo_root / "project/cp1_gate.yaml",
         repo_root / "ov_msckf/cmake/ROS1.cmake",
         repo_root / "ov_msckf/package.xml",
@@ -230,6 +294,7 @@ def main() -> int:
         repo_root / "ov_msckf/test/cp1/test_schur_equivalence.cpp",
         repo_root / "ov_msckf/test/cp1/test_rank_rejection.cpp",
         repo_root / "ov_msckf/test/cp1/test_projection_jacobian.cpp",
+        repo_root / "ov_msckf/test/cp1/test_prior_and_compression.cpp",
         repo_root / "scripts/cp1/make_report.py",
         repo_root / "scripts/cp1/run_cp1.sh",
         repo_root / "scripts/cp1/verify_report.py",
@@ -257,10 +322,10 @@ def main() -> int:
     dirty_lines = git(repo_root, "status", "--porcelain=v1").splitlines()
     passed = failures == 0 and errors == 0 and disabled == 0 and not validation_errors
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "checkpoint": "CP1",
-        "evidence_scope": "automated_math_component_only",
-        "overall_checkpoint_status": "in_progress_pending_human_signoff",
+        "evidence_scope": "automated_math_component_with_post_review_addendum",
+        "overall_checkpoint_status": "in_progress_post_review_addendum_pending_fresh_signoff",
         "production_estimator_math_edits_permitted": False,
         "status": "passed" if passed else "failed",
         "generated_utc": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -280,6 +345,8 @@ def main() -> int:
             "well_conditioned_equivalence_fixtures": 128,
             "projection_finite_difference_fixtures": 256,
             "rank_rejection_fixtures": 128,
+            "semidefinite_clone_prior_fixtures": 128,
+            "production_compression_fixtures": 128,
             "ill_conditioned_fixture_relative_singular_value": 1e-13,
             "landmark_relative_singular_floor": 1e-6,
         },

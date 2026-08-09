@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# CP2-E candidate only.  Installation is intentionally outside Codex's
+# authority while the noninteractive feasibility predicate is failed.
+
+Cmnd_Alias SCHURVIO_CP2E_HELPER = /opt/schurvio-cp2e/bin/cp2e-helper ""
+
+Defaults!SCHURVIO_CP2E_HELPER env_reset
+Defaults!SCHURVIO_CP2E_HELPER closefrom_override
+Defaults!SCHURVIO_CP2E_HELPER !set_home
+Defaults!SCHURVIO_CP2E_HELPER secure_path=/usr/bin:/bin
+
+moksh ALL=(root) NOPASSWD: SCHURVIO_CP2E_HELPER

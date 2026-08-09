@@ -116,6 +116,8 @@ inline const char *factor_status_name(FactorStatus status) {
 
 struct SchurReduction {
   FactorStatus status = FactorStatus::kNonfinite;
+  bool singular_values_available = false;
+  bool singular_ratio_available = false;
   Eigen::Vector3d singular_values = Eigen::Vector3d::Zero();
   double singular_ratio = 0.0;
   int degrees_of_freedom = 0;
@@ -152,7 +154,12 @@ inline SchurReduction reduce_landmark(const Eigen::MatrixXd &state_jacobian, con
   }
 
   Eigen::JacobiSVD<Eigen::MatrixXd> svd(landmark_jacobian, Eigen::ComputeThinU | Eigen::ComputeThinV);
+  if (svd.singularValues().size() != 3 || !svd.singularValues().allFinite()) {
+    result.status = FactorStatus::kNonfinite;
+    return result;
+  }
   result.singular_values = svd.singularValues();
+  result.singular_values_available = true;
   const double largest = result.singular_values(0);
   const double smallest = result.singular_values(2);
   if (!(largest > std::numeric_limits<double>::min())) {
@@ -160,6 +167,7 @@ inline SchurReduction reduce_landmark(const Eigen::MatrixXd &state_jacobian, con
     return result;
   }
   result.singular_ratio = smallest / largest;
+  result.singular_ratio_available = true;
   const double numerical_floor =
       static_cast<double>(std::max(landmark_jacobian.rows(), landmark_jacobian.cols())) * std::numeric_limits<double>::epsilon() * largest;
   if (!(smallest > numerical_floor)) {

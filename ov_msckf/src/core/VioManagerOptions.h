@@ -4,6 +4,8 @@
  * Copyright (C) 2018-2023 Guoquan Huang
  * Copyright (C) 2018-2023 OpenVINS Contributors
  * Copyright (C) 2018-2019 Kevin Eckenhoff
+ * Copyright (C) 2026 Moksh Trehan
+ * Modified in 2026 by Moksh Trehan for SchurVIO-Lite CP2.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,6 +25,8 @@
 #define OV_MSCKF_VIOMANAGEROPTIONS_H
 
 #include <Eigen/Eigen>
+#include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -30,6 +34,7 @@
 #include <vector>
 
 #include "state/StateOptions.h"
+#include "update/CP2OutputCapability.h"
 #include "update/UpdaterOptions.h"
 #include "utils/NoiseManager.h"
 
@@ -100,6 +105,17 @@ struct VioManagerOptions {
   /// The path to the file we will record the timing information into
   std::string record_timing_filepath = "ov_msckf_timing.txt";
 
+  /// Internal-only CP2 switch; never populated by YAML or ROS parameters.
+  bool cp2_preopened_output_mode = false;
+
+  /// Internal exact identities for the three CP2-D legacy output inodes.
+  CP2OutputCapability cp2_legacy_state_capability;
+  CP2OutputCapability cp2_legacy_deviation_capability;
+  CP2OutputCapability cp2_legacy_timing_capability;
+  std::string cp2_legacy_state_canonical_path;
+  std::string cp2_legacy_deviation_canonical_path;
+  std::string cp2_legacy_timing_canonical_path;
+
   /**
    * @brief This function will load print out all estimator settings loaded.
    * This allows for visual checking that everything was loaded properly from ROS/CMD parsers.
@@ -147,6 +163,94 @@ struct VioManagerOptions {
   /// Update options for zero velocity (chi2 multiplier)
   UpdaterOptions zupt_options;
 
+  /// Load the optional CP2 MSCKF landmark-elimination selector.
+  void load_msckf_landmark_elimination(const std::shared_ptr<ov_core::YamlParser> &parser) {
+    std::string configured_mode = UpdaterOptions::landmark_elimination_as_string(msckf_options.landmark_elimination);
+    if (parser != nullptr) {
+      parser->parse_config("up_msckf_landmark_elimination", configured_mode, false);
+    }
+    msckf_options.landmark_elimination = UpdaterOptions::landmark_elimination_from_string_or_exit(configured_mode);
+  }
+
+  /// Load the optional fixed visual-pass count without YAML/ROS scalar coercion.
+  void load_msckf_max_visual_passes_or_exit(const std::shared_ptr<ov_core::YamlParser> &parser) {
+    if (parser == nullptr) {
+      return;
+    }
+
+    int configured_count = msckf_options.max_visual_passes;
+    const ov_core::YamlParser::OptionalExactIntResult parsed =
+        parser->parse_optional_exact_int("up_msckf_max_visual_passes", configured_count);
+    if (parsed.status == ov_core::YamlParser::OptionalExactIntStatus::WRONG_TYPE ||
+        parsed.status == ov_core::YamlParser::OptionalExactIntStatus::READ_ERROR) {
+      const char *source = parsed.source == ov_core::YamlParser::OptionalExactIntSource::ROS ? "ROS" : "YAML";
+      PRINT_ERROR(RED "invalid up_msckf_max_visual_passes value from %s: expected an exact integer scalar\n" RESET, source);
+      std::exit(EXIT_FAILURE);
+    }
+    msckf_options.max_visual_passes = configured_count;
+  }
+
+  /**
+   * @brief Validate and materialize the global MSCKF update configuration.
+   *
+   * This is the single production validation seam used after YAML/ROS loading
+   * and by direct API callers of print_and_load_noise(). It intentionally
+   * terminates startup instead of selecting a fallback configuration.
+   */
+  void validate_msckf_update_configuration_or_exit() {
+    if (!UpdaterOptions::landmark_elimination_is_supported(msckf_options.landmark_elimination)) {
+      PRINT_ERROR(RED "invalid MSCKF landmark elimination mode: %s\n" RESET,
+                  UpdaterOptions::landmark_elimination_as_string(msckf_options.landmark_elimination).c_str());
+      PRINT_ERROR(RED "please select a valid mode: nullspace, schur\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
+    if (!UpdaterOptions::max_visual_passes_is_supported(msckf_options.max_visual_passes)) {
+      PRINT_ERROR(RED "up_msckf_max_visual_passes must be exactly 1 or 2 (got %d)\n" RESET,
+                  msckf_options.max_visual_passes);
+      std::exit(EXIT_FAILURE);
+    }
+    if (!UpdaterOptions::visual_pass_combination_is_supported(msckf_options.max_visual_passes,
+                                                               msckf_options.landmark_elimination)) {
+      PRINT_ERROR(RED "up_msckf_max_visual_passes=2 requires up_msckf_landmark_elimination=schur\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
+    if (!std::isfinite(msckf_options.sigma_pix) || !(msckf_options.sigma_pix > 0.0)) {
+      PRINT_ERROR(RED "invalid MSCKF pixel sigma: %.17g\n" RESET, msckf_options.sigma_pix);
+      PRINT_ERROR(RED "up_msckf_sigma_px must be finite and strictly positive\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
+    if (!std::isfinite(msckf_options.chi2_multipler)) {
+      PRINT_ERROR(RED "invalid MSCKF chi2 multiplier: %.17g\n" RESET,
+                  msckf_options.chi2_multipler);
+      PRINT_ERROR(RED "up_msckf_chi2_multipler must be finite\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
+    const double msckf_sigma_pix_sq = msckf_options.sigma_pix * msckf_options.sigma_pix;
+    if (!std::isfinite(msckf_sigma_pix_sq) || !(msckf_sigma_pix_sq > 0.0)) {
+      PRINT_ERROR(RED "unrepresentable MSCKF pixel variance for sigma %.17g\n" RESET, msckf_options.sigma_pix);
+      PRINT_ERROR(RED "up_msckf_sigma_px squared must be finite and strictly positive\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
+    if (msckf_options.landmark_elimination == UpdaterOptions::LandmarkElimination::SCHUR &&
+        state_options.feat_rep_msckf != ov_type::LandmarkRepresentation::Representation::GLOBAL_3D) {
+      PRINT_ERROR(RED "MSCKF Schur landmark elimination requires feat_rep_msckf=GLOBAL_3D (got %s)\n" RESET,
+                  ov_type::LandmarkRepresentation::as_string(state_options.feat_rep_msckf).c_str());
+      std::exit(EXIT_FAILURE);
+    }
+    msckf_options.sigma_pix_sq = msckf_sigma_pix_sq;
+  }
+
+  /// Load and validate the complete MSCKF updater configuration at one seam.
+  void load_and_validate_msckf_update_configuration(const std::shared_ptr<ov_core::YamlParser> &parser) {
+    if (parser != nullptr) {
+      parser->parse_config("up_msckf_sigma_px", msckf_options.sigma_pix);
+      parser->parse_config("up_msckf_chi2_multipler", msckf_options.chi2_multipler);
+      load_msckf_landmark_elimination(parser);
+      load_msckf_max_visual_passes_or_exit(parser);
+    }
+    validate_msckf_update_configuration_or_exit();
+  }
+
   /**
    * @brief This function will load print out all noise parameters loaded.
    * This allows for visual checking that everything was loaded properly from ROS/CMD parsers.
@@ -162,20 +266,22 @@ struct VioManagerOptions {
       parser->parse_external("relative_config_imu", "imu0", "accelerometer_random_walk", imu_noises.sigma_ab);
     }
     imu_noises.print();
+    load_and_validate_msckf_update_configuration(parser);
     if (parser != nullptr) {
-      parser->parse_config("up_msckf_sigma_px", msckf_options.sigma_pix);
-      parser->parse_config("up_msckf_chi2_multipler", msckf_options.chi2_multipler);
       parser->parse_config("up_slam_sigma_px", slam_options.sigma_pix);
       parser->parse_config("up_slam_chi2_multipler", slam_options.chi2_multipler);
       parser->parse_config("up_aruco_sigma_px", aruco_options.sigma_pix);
       parser->parse_config("up_aruco_chi2_multipler", aruco_options.chi2_multipler);
-      msckf_options.sigma_pix_sq = std::pow(msckf_options.sigma_pix, 2);
       slam_options.sigma_pix_sq = std::pow(slam_options.sigma_pix, 2);
       aruco_options.sigma_pix_sq = std::pow(aruco_options.sigma_pix, 2);
       parser->parse_config("zupt_chi2_multipler", zupt_options.chi2_multipler);
     }
+
     PRINT_DEBUG("  Updater MSCKF Feats:\n");
     msckf_options.print();
+    PRINT_DEBUG("    - landmark_elimination: %s\n",
+                UpdaterOptions::landmark_elimination_as_string(msckf_options.landmark_elimination).c_str());
+    PRINT_DEBUG("    - max_visual_passes: %d\n", msckf_options.max_visual_passes);
     PRINT_DEBUG("  Updater SLAM Feats:\n");
     slam_options.print();
     PRINT_DEBUG("  Updater ARUCO Tags:\n");

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Modified in 2026 by Moksh Trehan for SchurVIO-Lite CP2.
+
 cmake_minimum_required(VERSION 3.3)
 
 # Find ROS build system
@@ -61,11 +64,57 @@ list(APPEND LIBRARY_SOURCES
         src/state/Propagator.cpp
         src/core/VioManager.cpp
         src/core/VioManagerHelper.cpp
+        src/update/CP2Canonical.cpp
+        src/update/CP2CommitBoundary.cpp
+        src/update/CP2CommitOracle.cpp
+        src/update/CP2CompositeState.cpp
+        src/update/CP2FeatureGate.cpp
+        src/update/CP2OfflineReplay.cpp
+        src/update/CP2OutputCapability.cpp
+        src/update/CP2RuntimeContext.cpp
+        src/update/CP2SerialPairing.cpp
+        src/update/CP2SerialRuntimeTrace.cpp
+        src/update/CP2TimingClock.cpp
+        src/update/CP2ShadowMath.cpp
+        src/update/CP2StateTraceCodec.cpp
+        src/update/CP2TraceCodec.cpp
+        src/update/CP2TraceJournal.cpp
+        src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
+        src/update/UpdaterMSCKFPreview.cpp
         src/update/UpdaterSLAM.cpp
         src/update/UpdaterZeroVelocity.cpp
 )
+
+# Keep every CP2 evidence/preview/commit arithmetic owner on the same strict
+# binary64 contract, despite the project-wide optimization flags inherited
+# above. This includes the Givens/compression and live EKF implementations.
+set_source_files_properties(
+        src/state/StateHelper.cpp
+        src/update/CP2Canonical.cpp
+        src/update/CP2CommitBoundary.cpp
+        src/update/CP2CommitOracle.cpp
+        src/update/CP2CompositeState.cpp
+        src/update/CP2FeatureGate.cpp
+        src/update/CP2OfflineReplay.cpp
+        src/update/CP2OutputCapability.cpp
+        src/update/CP2RecordedAssemble.cpp
+        src/update/CP2RuntimeContext.cpp
+        src/update/CP2SerialPairing.cpp
+        src/update/CP2SerialRuntimeTrace.cpp
+        src/update/CP2TimingClock.cpp
+        src/update/CP2ShadowMath.cpp
+        src/update/CP2StateTraceCodec.cpp
+        src/update/CP2TraceCodec.cpp
+        src/update/CP2TraceJournal.cpp
+        src/update/SchurUpdate.cpp
+        src/update/UpdaterHelper.cpp
+        src/update/UpdaterMSCKF.cpp
+        src/update/UpdaterMSCKFPreview.cpp
+        PROPERTIES
+        COMPILE_FLAGS "-fno-fast-math -ffp-contract=off -fsigned-zeros")
+
 list(APPEND LIBRARY_SOURCES src/ros/ROS2Visualizer.cpp src/ros/ROSVisualizerHelper.cpp)
 file(GLOB_RECURSE LIBRARY_HEADERS "src/*.h")
 add_library(ov_msckf_lib SHARED ${LIBRARY_SOURCES} ${LIBRARY_HEADERS})
@@ -87,6 +136,11 @@ ament_export_libraries(ov_msckf_lib)
 ##################################################
 # Make binary files!
 ##################################################
+
+add_executable(cp2_recorded_assemble src/update/CP2RecordedAssemble.cpp)
+ament_target_dependencies(cp2_recorded_assemble ${ament_libraries})
+target_link_libraries(cp2_recorded_assemble ov_msckf_lib ${thirdparty_libraries})
+install(TARGETS cp2_recorded_assemble DESTINATION lib/${PROJECT_NAME})
 
 add_executable(run_subscribe_msckf src/run_subscribe_msckf.cpp)
 ament_target_dependencies(run_subscribe_msckf ${ament_libraries})

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "record_type": "cp2_c_detached_readiness_binding_approval",
+  "reviewer": "Moksh Trehan",
+  "approved_utc": "2026-08-04T06:13:32Z",
+  "reviewed_commit": "0d71fee98499a10df4e92176709c1afe14077f90",
+  "document_path": "docs/cp2_c_detached_readiness_binding_clarification_proposed.md",
+  "document_git_blob": "cd2ae23d9aef345457e86bb618f9611ace7b5e82",
+  "document_sha256": "d07edcfe2112d41e5328882708aaec6f57e3a80c9fb605e94c8094df080986b4",
+  "approval_statement": "I, Moksh Trehan, acknowledge every preauthorization incident and accept the evidence dispositions recorded in docs/cp2_predata_incident_log.md at commit c2f3ad9c54ed126cc69526c76adb3134c3bf9545; no incident-derived value may influence CP2 implementation, thresholds, profiles, or execution choices.\nI approve the complete CP2-C detached-readiness and evidence-binding replacement in docs/cp2_c_detached_readiness_binding_clarification_proposed.md as reviewed at commit 0d71fee98499a10df4e92176709c1afe14077f90; no exceptions.\nI select desktop x86_64 for CP2-D and retain the frozen fixed-clock desktop checkpoint for CP2-E. Jetson work is deferred beyond CP2.\nI authorize a data-free, read-only inventory of this desktop’s evaluator/direct-math candidates, CPU topology, affinity, clock/governor/boost/thermal surfaces, and corresponding license/source material solely to prepare exact CP2-D capsule and CP2-E profile candidates. This does not authorize network installation, recorded-input access, or changing any host control.\nAfter the approval-bound unit gate and readiness barrier pass, I authorize frozen recorded-input access for CP2-C. CP2-D/E recorded execution remains unauthorized until I approve their exact committed capsule/profile identities. No exceptions.\n\ngo ahead and execute your plan",
+  "exceptions": []
+}

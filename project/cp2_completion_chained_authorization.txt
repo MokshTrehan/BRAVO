@@ -1,0 +1,136 @@
+I, Moksh Trehan, authorize Codex, starting from clean branch
+schurvio-lite/cp2-one-pass at commit
+1218d3fb73066760f099f87c621fe607f9de8b63, to complete all remaining
+CP2 work—CP2-C, CP2-D, and CP2-E—in one sequential, fail-closed,
+math-first chain without intermediate human approval, subject to every
+condition below.
+
+For this chain only, I replace the prior requirement that I separately approve
+the final CP2-C repair identity, CP2-D capsule identity, and CP2-E profile
+identity before execution. Codex is authorized to create, independently audit,
+freeze, and mechanically bind those exact identities before recorded access.
+Human acceptance is deferred until all CP2 evidence has been generated and
+presented at the end. This changes only the timing of human approval; it does
+not waive exact source, capsule, profile, artifact, license, or provenance
+binding.
+
+Before any formal gate or recorded access, Codex may iteratively perform
+data-free implementation, synthetic testing, formal reasoning, and independent
+math/evidence audits necessary to complete CP2. This includes:
+
+1. repairing CP2-C readiness so tracked files under build/results/Testing obey
+   the approved every-stage-0-tracked-file source-context, source-archive, and
+   root-snapshot contract;
+2. adding all positive, mutation, corruption, identity, publication, and
+   failure-atomicity protecting tests required for that repair;
+3. completing CP2-D’s chronological candidate witness so detached verification
+   independently proves strict first-forward, no-search-past, no-reuse stereo
+   pairing;
+4. making CP2-D sequence publication descriptor-bound, no-replace,
+   failure-atomic, and reconcilable after every error or interruption;
+5. creating an exact evaluator/direct-math capsule with a closed executable and
+   native-library dependency inventory, relocation checks, frozen synthetic
+   known answers, license notices, and applicable corresponding source;
+6. creating an exact desktop x86_64 CP2-E profile binding the machine, CPU set,
+   affinity, governor, frequency, boost state, clock, warmup, run order,
+   monitoring, thermal evidence, and restoration procedure; and
+7. correcting additional data-free CP2 implementation or evidence defects found
+   before formal source freeze, provided the correction conforms to the already
+   approved mathematics and does not change a frozen threshold, dataset,
+   sequence, offset, mode, metric, or acceptance boundary.
+
+Mathematical correctness is the first priority throughout. Before source freeze,
+Codex must independently rederive and verify nullspace/Schur equivalence,
+whitening, rank and conditioning boundaries, QR behavior, lambda/eta/gamma,
+chi-square decisions, shared-prior and proposal semantics, state and covariance
+joins, checked arithmetic and exact counters, finite-state requirements,
+commit-oracle and whole-update failure atomicity, strict stereo pairing, metric
+definitions, and every no-repair/no-fallback rule. A passing build alone is not
+sufficient. Any unresolved mathematical discrepancy ends the chain before
+recorded access.
+
+All development and corrections before formal source freeze must remain
+data-free. Project/dataset registry content, bags, ground truth, and recorded
+results may not be semantically inspected or used to choose implementation,
+fixtures, thresholds, profiles, sequences, capsule contents, or execution
+choices. No exposed or incident-derived value may influence any such choice.
+
+Codex may use the network before formal source freeze only when necessary to
+construct the CP2-D capsule, and only for authoritative upstream or operating-
+system source material. Every retrieved component must have its URL, version,
+cryptographic digest, executable/native dependency closure, license notice, and
+applicable corresponding source recorded. Network material may not be installed
+system-wide or obtained using new credentials. Network use ends before formal
+source freeze.
+
+Codex may create intermediate data-free commits, but none is formal evidence.
+After all C/D/E implementation, capsule, profile, protecting tests, and
+independent audits pass, Codex must create one final clean CP2 source-freeze
+commit and tree. It must record the actual Git identities only after creation,
+repin every affected entrypoint/readiness digest, verify a clean exact HEAD, and
+freeze the D capsule and E profile identities before any formal or recorded run.
+No tracked source, contract, capsule, profile, threshold, or execution choice
+may change after that freeze until the entire CP2 chain stops or finishes.
+
+At that final identity, I authorize exactly one sanitized formal unit gate.
+It must test the complete CP1/CP2 suite, strict floating-point and dependency
+ABI requirements, all mathematical and protecting fixtures, license/source
+closure, and publication integrity. Its immutable artifact and external
+SHA256SUMS anchor must bind the exact source commit and tree. Any unit-gate
+failure, interruption, indeterminate publication, or verification failure ends
+the chain without retry, tuning, repair, rerun, or relabeling.
+
+If and only if the formal unit gate passes, I authorize the following actual
+executions, strictly sequentially and at the same frozen source identity:
+
+1. exactly one CP2-C process, whose readiness barrier must pass before its sole
+   registry read and frozen recorded campaign, followed by immutable publication
+   and exactly one independent detached verification;
+2. only if CP2-C passes, exactly one CP2-D process for each frozen sequence in
+   the committed order MH_01_easy, MH_03_medium, and V1_01_easy, with a fresh
+   readiness barrier for each, independent verification of every published
+   artifact, and one detached three-sequence set verification; and
+3. only if all CP2-D evidence passes, exactly one CP2-E timing campaign using
+   the frozen desktop profile, followed by independent timing verification.
+
+After each readiness barrier passes, I authorize only the recorded registry,
+bag, and ground-truth access required by that frozen process. All sequences,
+offsets, hashes, launch files, configurations, modes, thresholds, metrics,
+alignment rules, run order, warmup, and execution commands must come solely
+from the final committed source, capsule, and profile. No result-derived change,
+alternate run, silent retry, or tuning is permitted. Failure at C stops D and E;
+failure at any D sequence stops later D work and E; failure at E stops the chain.
+
+For CP2-E only, I authorize the exact reversible host controls selected and
+frozen in the final audited profile, limited to process/CPU affinity, CPU
+frequency governor and min/max frequency surfaces, and CPU boost/turbo control.
+Codex must capture exact before-state, use only noninteractive authority already
+available, make no BIOS, kernel-module, reboot, package-installation, storage,
+network, or unrelated system change, continuously retain required clock and
+thermal evidence, and restore every changed control to its exact prior value
+after success or failure. If required permission or an adequate fixed-clock/
+thermal surface is unavailable, CP2-E must stop rather than weaken the profile
+or evidence standard.
+
+All actual workers and descendants must terminate cleanly. Every artifact must
+use trusted-parent verification, immutable sealing, no-replace publication,
+external manifest anchoring, and independent detached verification. Any
+readiness, execution, timeout, worker, replay, cleanup, host-profile,
+publication, or detached-verification failure ends the chain without retry.
+
+Codex may commit and push source and tracked handoff/evidence metadata within
+this scope. Generated binaries and recorded artifacts must not be conveyed
+through Git unless separately authorized. Existing GPLv3 corresponding-source
+and license-notice obligations remain applicable.
+
+If every CP2-C, CP2-D, and CP2-E gate and detached verification passes, Codex
+must report the result only as CP2-execution-complete-pending-final-human-
+approval. It must then stop and present one final review package containing the
+exact source commit/tree, unit artifact and anchor, C artifact and anchor, all D
+artifact and aggregate anchors, E artifact and anchor, capsule and profile
+identities, mathematical audit results, protecting-test results, recorded-access
+disposition, host restoration evidence, verifier results, and every limitation.
+
+CP2 must not be marked finally human-approved and CP3 must not begin until I
+review that exact final package and provide a separate written sign-off. Jetson
+work remains deferred beyond CP2. No exceptions.

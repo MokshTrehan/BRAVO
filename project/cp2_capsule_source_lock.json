@@ -1,0 +1,455 @@
+{
+  "authorization_binding_sha256": "8e07b1e1d5418b65b5d1993e791e9dab5340d7e77f9ea687e6d064e3bc803cca",
+  "checkpoint": "CP2-D",
+  "record_type": "cp2_d_minimal_two_capsule_source_lock",
+  "schema_version": 2,
+  "status": "active_approval_dependent_candidate_not_formal_source_freeze",
+  "source_freeze_commit": null,
+  "formal_execution_permitted_by_this_record": false,
+  "network_must_end_before_formal_source_freeze": true,
+  "system_install_permitted": false,
+  "capsules": {
+    "direct_math": {
+      "runtime_components": [
+        "schurvio-cp2-project-code",
+        "cpython-3.11.15-source-build",
+        "numpy-2.4.6-exact-wheel",
+        "numpy-bundled-openblas-0.3.31.188.0",
+        "ubuntu-glibc-2.31-0ubuntu9.18",
+        "ubuntu-zlib-1.2.11.dfsg-2ubuntu1.5"
+      ],
+      "forbidden_runtime_components": ["evo", "scipy", "python-build-standalone"]
+    },
+    "evaluator": {
+      "runtime_components": [
+        "schurvio-cp2-project-code",
+        "cpython-3.11.15-source-build",
+        "ubuntu-glibc-2.31-0ubuntu9.18",
+        "ubuntu-gcc-runtime-10.5.0-1ubuntu1~20.04",
+        "ubuntu-zlib-1.2.11.dfsg-2ubuntu1.5"
+      ],
+      "forbidden_runtime_components": ["evo", "numpy", "scipy", "python-build-standalone"]
+    }
+  },
+  "upstream_artifacts": [
+    {
+      "id": "cpython-source",
+      "filename": "Python-3.11.15.tar.xz",
+      "kind": "corresponding-source",
+      "version": "3.11.15",
+      "url": "https://www.python.org/ftp/python/3.11.15/Python-3.11.15.tar.xz",
+      "size_bytes": 20332596,
+      "sha256": "272179ddd9a2e41a0fc8e42e33dfbdca0b3711aa5abf372d3f2d51543d09b625",
+      "license": "Python-2.0"
+    },
+    {
+      "id": "numpy-wheel",
+      "filename": "numpy-2.4.6-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "kind": "runtime-wheel",
+      "version": "2.4.6",
+      "url": "https://files.pythonhosted.org/packages/02/03/74fe2a4cb3817d94d86402f2506554130a2f01414e299b5a843e5a8a957f/numpy-2.4.6-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "size_bytes": 16918164,
+      "sha256": "89cd468399cfd2504718f0ba50e410dca55a170b61a02ad92bb18c8a65186e93",
+      "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0"
+    },
+    {
+      "id": "numpy-source",
+      "filename": "numpy-2.4.6.tar.gz",
+      "kind": "corresponding-source",
+      "version": "2.4.6",
+      "url": "https://files.pythonhosted.org/packages/d0/ad/fed0499ce6a338d2a03ebae59cd15093910c8875328855781952abf6c2fe/numpy-2.4.6.tar.gz",
+      "size_bytes": 20735807,
+      "sha256": "f3a3570c4a2a16746ac2c31a7c7c7b0c186b95ce902e33db6f28094ed7387dda",
+      "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0"
+    },
+    {
+      "id": "scipy-openblas-wheel",
+      "filename": "scipy_openblas64-0.3.31.188.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "kind": "native-build-input-and-sbom",
+      "version": "0.3.31.188.0",
+      "url": "https://files.pythonhosted.org/packages/c7/55/2aaa75707b6fa14b970e79f363b9170859e1cf00391e06a40a6cf171b179/scipy_openblas64-0.3.31.188.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "size_bytes": 8738257,
+      "sha256": "2d02f588ba6817a222be8d7053c0dc8bea7f1083de78fdeb2bf9b3e53dcaacb9",
+      "license": "BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1"
+    },
+    {
+      "id": "openblas-build-repository",
+      "filename": "openblas-libs-v0.3.31.188.0.tar.gz",
+      "kind": "build-source",
+      "version": "v0.3.31.188.0",
+      "git_tag_object": "d3e39d4cb640d4236df8f215bc717afa72c277d7",
+      "git_commit": "2387cb313f653b694d864f2d1d6888a26d7b2ba1",
+      "url": "https://github.com/MacPython/openblas-libs/archive/refs/tags/v0.3.31.188.0.tar.gz",
+      "size_bytes": 412064,
+      "sha256": "60862454d21c941be64010ddb33513a1ad2e1e50dfe70bad1537f42e0c6c5334",
+      "license": "MIT"
+    },
+    {
+      "id": "openblas-source",
+      "filename": "OpenBLAS-4956446ca26d365f209bf729123349f19dd820b6.tar.gz",
+      "kind": "corresponding-source",
+      "version": "0.3.31-188-g4956446c",
+      "git_commit": "4956446ca26d365f209bf729123349f19dd820b6",
+      "url": "https://github.com/OpenMathLib/OpenBLAS/archive/4956446ca26d365f209bf729123349f19dd820b6.tar.gz",
+      "size_bytes": 25253799,
+      "sha256": "22bd18e25cf0acac85f8029dd06e8a2439b2c3fecfe97c75595f4f3bb93e3bfb",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "id": "centos-libgfortran-source",
+      "filename": "gcc-libraries-8.3.1-2.1.1.el7.src.rpm",
+      "kind": "corresponding-source",
+      "version": "8.3.1-2.1.1.el7",
+      "url": "https://vault.centos.org/7.9.2009/os/Source/SPackages/gcc-libraries-8.3.1-2.1.1.el7.src.rpm",
+      "size_bytes": 137335596,
+      "sha256": "4d3e523f8b8588ee4432b796b6e12f62b022e2c1cdda92668bb6965f397f27cb",
+      "license": "GPL-3.0-or-later WITH GCC-exception-3.1"
+    },
+    {
+      "id": "centos-libquadmath-source",
+      "filename": "gcc-4.8.5-44.el7.src.rpm",
+      "kind": "corresponding-source",
+      "version": "4.8.5-44.el7",
+      "url": "https://vault.centos.org/7.9.2009/os/Source/SPackages/gcc-4.8.5-44.el7.src.rpm",
+      "size_bytes": 79313551,
+      "sha256": "6643d84fcfcfdc315e2fec8c3122391be5685c3bd7eb62573fd6af3306e97de7",
+      "license": "GPL-3.0-or-later WITH GCC-exception-3.1"
+    },
+    {
+      "id": "ubuntu-libc6-runtime",
+      "filename": "libc6_2.31-0ubuntu9.18_amd64.deb",
+      "kind": "runtime-package",
+      "version": "2.31-0ubuntu9.18",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+files/libc6_2.31-0ubuntu9.18_amd64.deb",
+      "size_bytes": 2720364,
+      "sha256": "1b2281aac4935dfea1f89dfc19e445fdbb45303202af60679ccb8bf035f081a0",
+      "license": "LGPL-2.1-or-later AND GPL-2.0-or-later"
+    },
+    {
+      "id": "ubuntu-glibc-source-orig",
+      "filename": "glibc_2.31.orig.tar.xz",
+      "kind": "corresponding-source",
+      "version": "2.31-0ubuntu9.18",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/glibc/2.31-0ubuntu9.18/glibc_2.31.orig.tar.xz",
+      "size_bytes": 17317924,
+      "sha256": "2b22c7b04a36747d6c74796a73193a6f8856bfd1efc551b5db96baefa053fe5e",
+      "license": "LGPL-2.1-or-later AND GPL-2.0-or-later"
+    },
+    {
+      "id": "ubuntu-glibc-source-debian",
+      "filename": "glibc_2.31-0ubuntu9.18.debian.tar.xz",
+      "kind": "corresponding-source-patches",
+      "version": "2.31-0ubuntu9.18",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/glibc/2.31-0ubuntu9.18/glibc_2.31-0ubuntu9.18.debian.tar.xz",
+      "size_bytes": 891764,
+      "sha256": "958d60a6e4f212f6438862b2ac2a4c45eca75891b5dc1894f62053cc775d2ea3",
+      "license": "LGPL-2.1-or-later AND GPL-2.0-or-later"
+    },
+    {
+      "id": "ubuntu-glibc-source-dsc",
+      "filename": "glibc_2.31-0ubuntu9.18.dsc",
+      "kind": "source-manifest",
+      "version": "2.31-0ubuntu9.18",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/glibc/2.31-0ubuntu9.18/glibc_2.31-0ubuntu9.18.dsc",
+      "size_bytes": 9422,
+      "sha256": "b21e6952f2bb957d2c8bae40485ad94b1f6fb539b91bb3ceedce3af4a6340f13",
+      "license": "source-manifest"
+    },
+    {
+      "id": "ubuntu-libgcc-runtime",
+      "filename": "libgcc-s1_10.5.0-1ubuntu1~20.04_amd64.deb",
+      "kind": "runtime-package",
+      "version": "10.5.0-1ubuntu1~20.04",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+files/libgcc-s1_10.5.0-1ubuntu1~20.04_amd64.deb",
+      "size_bytes": 41824,
+      "sha256": "4aa7b9c9f3225df65a750ae0ff5c890fc6108c82a609b3c5abd45d211838bf3c",
+      "license": "GPL-3.0-or-later WITH GCC-exception-3.1"
+    },
+    {
+      "id": "ubuntu-libstdcpp-runtime",
+      "filename": "libstdc++6_10.5.0-1ubuntu1~20.04_amd64.deb",
+      "kind": "runtime-package",
+      "version": "10.5.0-1ubuntu1~20.04",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+files/libstdc++6_10.5.0-1ubuntu1~20.04_amd64.deb",
+      "size_bytes": 501136,
+      "sha256": "7f9222342d3551d063bf651319ec397c39278eeeb9ab5950ae0e8c28ef0af431",
+      "license": "GPL-3.0-or-later WITH GCC-exception-3.1"
+    },
+    {
+      "id": "ubuntu-gcc10-source-orig",
+      "filename": "gcc-10_10.5.0.orig.tar.gz",
+      "kind": "corresponding-source",
+      "version": "10.5.0-1ubuntu1~20.04",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/gcc-10/10.5.0-1ubuntu1~20.04/gcc-10_10.5.0.orig.tar.gz",
+      "size_bytes": 84203753,
+      "sha256": "57aee1976fee1f8d4b89ee7c40e4421fd7382590faeba9a2b1edd79ab8f7b2ee",
+      "license": "GPL-3.0-or-later WITH GCC-exception-3.1"
+    },
+    {
+      "id": "ubuntu-gcc10-source-debian",
+      "filename": "gcc-10_10.5.0-1ubuntu1~20.04.debian.tar.xz",
+      "kind": "corresponding-source-patches",
+      "version": "10.5.0-1ubuntu1~20.04",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/gcc-10/10.5.0-1ubuntu1~20.04/gcc-10_10.5.0-1ubuntu1~20.04.debian.tar.xz",
+      "size_bytes": 5953836,
+      "sha256": "c28ebc634208673949953344b3df402537c595a22df7496978f9e697c01b4ffe",
+      "license": "GPL-3.0-or-later WITH GCC-exception-3.1"
+    },
+    {
+      "id": "ubuntu-gcc10-source-dsc",
+      "filename": "gcc-10_10.5.0-1ubuntu1~20.04.dsc",
+      "kind": "source-manifest",
+      "version": "10.5.0-1ubuntu1~20.04",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/gcc-10/10.5.0-1ubuntu1~20.04/gcc-10_10.5.0-1ubuntu1~20.04.dsc",
+      "size_bytes": 31130,
+      "sha256": "74c66739e1b4e5d6add5d8ab8f37f8509cbb5a08052827c88805fa397ea4382e",
+      "license": "source-manifest"
+    },
+    {
+      "id": "ubuntu-zlib-runtime",
+      "filename": "zlib1g_1.2.11.dfsg-2ubuntu1.5_amd64.deb",
+      "kind": "runtime-package",
+      "version": "1.2.11.dfsg-2ubuntu1.5",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+files/zlib1g_1.2.11.dfsg-2ubuntu1.5_amd64.deb",
+      "size_bytes": 54164,
+      "sha256": "bf67018f5303466eb468680b637a5d3f3bb17b9d44decf3d82d40b35babcd3e0",
+      "license": "Zlib"
+    },
+    {
+      "id": "ubuntu-zlib-source-orig",
+      "filename": "zlib_1.2.11.dfsg.orig.tar.gz",
+      "kind": "corresponding-source",
+      "version": "1.2.11.dfsg-2ubuntu1.5",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/zlib/1:1.2.11.dfsg-2ubuntu1.5/zlib_1.2.11.dfsg.orig.tar.gz",
+      "size_bytes": 370248,
+      "sha256": "80c481411a4fe8463aeb8270149a0e80bb9eaf7da44132b6e16f2b5af01bc899",
+      "license": "Zlib"
+    },
+    {
+      "id": "ubuntu-zlib-source-debian",
+      "filename": "zlib_1.2.11.dfsg-2ubuntu1.5.debian.tar.xz",
+      "kind": "corresponding-source-patches",
+      "version": "1.2.11.dfsg-2ubuntu1.5",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/zlib/1:1.2.11.dfsg-2ubuntu1.5/zlib_1.2.11.dfsg-2ubuntu1.5.debian.tar.xz",
+      "size_bytes": 56436,
+      "sha256": "09b9d80f1c3a02f7019a3991fedf7679a21092c57eaf8eb4bf58eee709b22ef9",
+      "license": "Zlib"
+    },
+    {
+      "id": "ubuntu-zlib-source-dsc",
+      "filename": "zlib_1.2.11.dfsg-2ubuntu1.5.dsc",
+      "kind": "source-manifest",
+      "version": "1.2.11.dfsg-2ubuntu1.5",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/zlib/1:1.2.11.dfsg-2ubuntu1.5/zlib_1.2.11.dfsg-2ubuntu1.5.dsc",
+      "size_bytes": 2649,
+      "sha256": "406e60b3c9311249b151a4e784ed3e146413fdb686a129c628da91397bb751f7",
+      "license": "source-manifest"
+    },
+    {
+      "id": "ubuntu-gcc9-build-source-orig",
+      "filename": "gcc-9_9.4.0.orig.tar.gz",
+      "kind": "build-tool-source",
+      "version": "9.4.0-1ubuntu1~20.04.2",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/gcc-9/9.4.0-1ubuntu1~20.04.2/gcc-9_9.4.0.orig.tar.gz",
+      "size_bytes": 92368536,
+      "sha256": "ec1e4c12fe4bcf40ef3aad1aeeef33ea918b5e63a371274cf903667639fba642",
+      "license": "GPL-3.0-or-later"
+    },
+    {
+      "id": "ubuntu-gcc9-build-source-debian",
+      "filename": "gcc-9_9.4.0-1ubuntu1~20.04.2.debian.tar.xz",
+      "kind": "build-tool-source-patches",
+      "version": "9.4.0-1ubuntu1~20.04.2",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/gcc-9/9.4.0-1ubuntu1~20.04.2/gcc-9_9.4.0-1ubuntu1~20.04.2.debian.tar.xz",
+      "size_bytes": 579772,
+      "sha256": "ab3063758ba6918406f865632429cf5a0870e869bb5287496388d856413b2509",
+      "license": "GPL-3.0-or-later"
+    },
+    {
+      "id": "ubuntu-gcc9-build-source-dsc",
+      "filename": "gcc-9_9.4.0-1ubuntu1~20.04.2.dsc",
+      "kind": "build-tool-source-manifest",
+      "version": "9.4.0-1ubuntu1~20.04.2",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/gcc-9/9.4.0-1ubuntu1~20.04.2/gcc-9_9.4.0-1ubuntu1~20.04.2.dsc",
+      "size_bytes": 23760,
+      "sha256": "8fd0e94bc001ef407d6800fd819d7ad2556ea7345b73118730089b2eebe2c2a4",
+      "license": "source-manifest"
+    },
+    {
+      "id": "ubuntu-binutils-build-source-orig",
+      "filename": "binutils_2.34.orig.tar.xz",
+      "kind": "build-tool-source",
+      "version": "2.34-6ubuntu1.11",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/binutils/2.34-6ubuntu1.11/binutils_2.34.orig.tar.xz",
+      "size_bytes": 21637796,
+      "sha256": "f00b0e8803dc9bab1e2165bd568528135be734df3fabf8d0161828cd56028952",
+      "license": "GPL-3.0-or-later"
+    },
+    {
+      "id": "ubuntu-binutils-build-source-debian",
+      "filename": "binutils_2.34-6ubuntu1.11.debian.tar.xz",
+      "kind": "build-tool-source-patches",
+      "version": "2.34-6ubuntu1.11",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/binutils/2.34-6ubuntu1.11/binutils_2.34-6ubuntu1.11.debian.tar.xz",
+      "size_bytes": 189512,
+      "sha256": "35458e20139caefcfa1ddc4224c37a26f82c7d4ba8161f0df8af429ee711ed2c",
+      "license": "GPL-3.0-or-later"
+    },
+    {
+      "id": "ubuntu-binutils-build-source-dsc",
+      "filename": "binutils_2.34-6ubuntu1.11.dsc",
+      "kind": "build-tool-source-manifest",
+      "version": "2.34-6ubuntu1.11",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/binutils/2.34-6ubuntu1.11/binutils_2.34-6ubuntu1.11.dsc",
+      "size_bytes": 8833,
+      "sha256": "75237069433b6bf5f70e10a9027ef3127296907aca200e65200ee784abc1f984",
+      "license": "source-manifest"
+    },
+    {
+      "id": "ubuntu-make-build-source-orig",
+      "filename": "make-dfsg_4.2.1.orig.tar.gz",
+      "kind": "build-tool-source",
+      "version": "4.2.1-1.2",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/make-dfsg/4.2.1-1.2/make-dfsg_4.2.1.orig.tar.gz",
+      "size_bytes": 1485018,
+      "sha256": "480405e8995796ea47cc54b281b7855280f0d815d296a1af1993eeeb72074e39",
+      "license": "GPL-3.0-or-later"
+    },
+    {
+      "id": "ubuntu-make-build-source-diff",
+      "filename": "make-dfsg_4.2.1-1.2.diff.gz",
+      "kind": "build-tool-source-patches",
+      "version": "4.2.1-1.2",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/make-dfsg/4.2.1-1.2/make-dfsg_4.2.1-1.2.diff.gz",
+      "size_bytes": 53108,
+      "sha256": "80e0b96cee381391a5d3322317075e23d8474c92c5fa4fecd334bc2e0920887b",
+      "license": "GPL-3.0-or-later"
+    },
+    {
+      "id": "ubuntu-make-build-source-dsc",
+      "filename": "make-dfsg_4.2.1-1.2.dsc",
+      "kind": "build-tool-source-manifest",
+      "version": "4.2.1-1.2",
+      "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/make-dfsg/4.2.1-1.2/make-dfsg_4.2.1-1.2.dsc",
+      "size_bytes": 2019,
+      "sha256": "0c8a2da5d51e03bf43e2929322d5a8406f08e5ee2d81a71ed6e5a8734f1b05cb",
+      "license": "source-manifest"
+    }
+  ],
+  "runtime_byte_mappings": [
+    {"capsule_path": "native/ld-linux-x86-64.so.2", "package_id": "ubuntu-libc6-runtime", "payload_sha256": "cfd44e4341767033532d1483c8250d200ad4cdf535d0abc19064ae34cdc51ca0", "applies_to": ["direct_math", "evaluator"]},
+    {"capsule_path": "native/libc.so.6", "package_id": "ubuntu-libc6-runtime", "payload_sha256": "53b909551f8e581120ddc2d24cfb5df76c52e3c2e2a5dac0d202b25638b3e902", "applies_to": ["direct_math", "evaluator"]},
+    {"capsule_path": "native/libdl.so.2", "package_id": "ubuntu-libc6-runtime", "payload_sha256": "e0d0cace80b627e50ca3f7b621b64917677c27c74077080854d57cf4e548edc6", "applies_to": ["direct_math", "evaluator"]},
+    {"capsule_path": "native/libm.so.6", "package_id": "ubuntu-libc6-runtime", "payload_sha256": "a0e70f48f02a399e8dd37f861a99e226c285a9daf50a25d19fff7ccf18b97f9c", "applies_to": ["direct_math", "evaluator"]},
+    {"capsule_path": "native/libpthread.so.0", "package_id": "ubuntu-libc6-runtime", "payload_sha256": "af27ed906f6185e0143b9c0d0da287788efa7eb6b2639e44d48fb2939415fdc5", "applies_to": ["direct_math", "evaluator"]},
+    {"capsule_path": "native/librt.so.1", "package_id": "ubuntu-libc6-runtime", "payload_sha256": "fd90f6cc09dda34e0fefeaba5bc60533773c4240f9e7ef672c508b1d610c425e", "applies_to": ["direct_math", "evaluator"]},
+    {"capsule_path": "native/libutil.so.1", "package_id": "ubuntu-libc6-runtime", "payload_sha256": "bf3fc8a2b1a9c61a720d246159df980be573721210ab1430e90dd13378e55160", "applies_to": ["direct_math", "evaluator"]},
+    {"capsule_path": "native/libgcc_s.so.1", "package_id": "ubuntu-libgcc-runtime", "payload_sha256": "489803ded8a4d803e2c792763a2767c12185f5764b7bba080742d14ef2452b27", "applies_to": ["direct_math"]},
+    {"capsule_path": "native/libstdc++.so.6", "package_id": "ubuntu-libstdcpp-runtime", "payload_sha256": "26916e7389a561537a0510661fc75538cea236139346f3dbe21bc64ba65605bf", "applies_to": ["direct_math"]},
+    {"capsule_path": "native/libz.so.1", "package_id": "ubuntu-zlib-runtime", "payload_sha256": "ccfda8d7e0d2f77c8a4feb2febbae057edab668d7d7ee6410e2c517724c056c8", "applies_to": ["direct_math", "evaluator"]}
+  ],
+  "numpy_wheel_identity": {
+    "retained_file_count": 1042,
+    "all_retained_files_byte_identical_to_wheel": true,
+    "canonical_path_size_sha256_manifest_sha256": "9202e0dc9185484885852d625207d183459492dca1f17cf403c08da577754d3f",
+    "bundled_native_files": [
+      {"path": "numpy.libs/libgfortran-040039e1-0352e75f.so.5.0.0", "sha256": "c6090048eccc763522c12ef016f81da6b627cb3a044f55cf0479a839c41c0980", "base_build_id": "5bbe74eb6855e0a2c043c0bec2f484bf3e9f14c0", "corresponding_source_id": "centos-libgfortran-source"},
+      {"path": "numpy.libs/libquadmath-96973f99-934c22de.so.0.0.0", "sha256": "6ed5137f412781ad7863439fb543613f620b43c32b63292a0029246162f5bbc6", "base_build_id": "549b4c82347785459571c79239872ad31509dcf4", "corresponding_source_id": "centos-libquadmath-source"},
+      {"path": "numpy.libs/libscipy_openblas64_-32a4b2a6.so", "sha256": "05c9f9eb89ee68a4b9d673184fa91c99587e736392c0c2d49180a8aa5303d080", "base_artifact_sha256_prefix": "32a4b2a6", "corresponding_source_id": "openblas-source", "build_source_id": "openblas-build-repository"}
+    ],
+    "auditwheel_base_artifact_sha256_prefixes": {
+      "libgfortran": "0352e75f",
+      "libquadmath": "934c22de",
+      "libscipy_openblas64": "32a4b2a6"
+    }
+  },
+  "candidate_build_identity": {
+    "source_date_epoch": 1785283200,
+    "cpython_configure_arguments": ["--without-ensurepip", "--disable-test-modules"],
+    "compiler": {"version": "gcc 9.4.0-1ubuntu1~20.04.2", "executable_sha256": "6cb2d84ccd9fd3485d4e47ba032e626be65692601c38fad46866a6b565f3100f"},
+    "linker": {"version": "GNU ld 2.34-6ubuntu1.11", "executable_sha256": "476b24d5cc1fef54f80412d06e7430b2dcf4e2b6f1525ee17e6eaaf16b28a00f"},
+    "assembler": {"version": "GNU as 2.34-6ubuntu1.11", "executable_sha256": "8d45684bbd6420e3e97907257c510f199bb6c5f9b02ea8ee0a590c1a8b662ead"},
+    "make": {"version": "GNU make 4.2.1-1.2", "executable_sha256": "0d4e89c3b814ce99c4900b2a4c758ab780303ae98dddd71ab0dd82ec0ca07fa6"},
+    "cpython_executable": {"size_bytes": 32681992, "sha256": "e923d0ccfcd6d914fa0ae561e60d75bc8127093311f7bf6d780998e0a18c31db"},
+    "capsule_sandbox": {"size_bytes": 896544, "sha256": "f541e7dd07d803e3df548203e5efa17346044bc7063f4360eceffe594f8f4d71"},
+    "direct_launcher": {"size_bytes": 877424, "sha256": "8a4b4ff3f7756c5073acb45770a30b7358e352a249de526f8e7b227180806fd6"},
+    "evaluator_launcher": {"size_bytes": 877424, "sha256": "4d1e027462e6433d77b0c23c130a0b7bb2abec009c90e603c87d071a0c1d4306"},
+    "native_fp_extension": {"size_bytes": 17632, "sha256": "434e51b56d516d0d4964e01f6fb35b941c5cd07ce3b2a3c17170cafd27afc8e0"},
+    "native_build_commands": {
+      "capsule_sandbox": ["/usr/bin/gcc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-static", "scripts/cp2/cp2_capsule_sandbox.c", "-o", "{OUTPUT}"],
+      "direct_launcher": ["/usr/bin/gcc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-static", "-DCP2_ENTRY_MODULE=\\\"cp2_sequence_math_worker\\\"", "-DCP2_NUMPY_RUNTIME=1", "scripts/cp2/cp2_capsule_launcher.c", "-o", "{OUTPUT}"],
+      "evaluator_launcher": ["/usr/bin/gcc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-static", "-DCP2_ENTRY_MODULE=\\\"cp2_equivalent_evaluator\\\"", "-DCP2_NUMPY_RUNTIME=0", "scripts/cp2/cp2_capsule_launcher.c", "-o", "{OUTPUT}"],
+      "native_fp_extension": ["/usr/bin/gcc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-fPIC", "-shared", "-I{CPYTHON_3_11_15_INCLUDE}", "scripts/cp2/cp2_fp_control_module.c", "-o", "{OUTPUT}"]
+    },
+    "project_source_files": {
+      "scripts/cp2/cp2_capsule.py": "0192c9d97246901e6074f0d3b1a1a418af06594872dddcd6dded437d045bbe4f",
+      "scripts/cp2/cp2_capsule_builder.py": "b2e225a3055d51bd64920f1448be72dfe3290e0ba98d263d8ead70aef7662dcf",
+      "scripts/cp2/cp2_capsule_launcher.c": "4ba3e61eb994359eb91ee33566c4a7e3223324c35a875811ef02fa06b84cbbe8",
+      "scripts/cp2/cp2_capsule_sandbox.c": "f322a40d5c0e42c8e2a528436138bc1001d1f1009f7729f599b1e43b906f483f",
+      "scripts/cp2/cp2_direct_kat.py": "31f0d2b828ed85c0e9b40587a23b37116297a501642905c9509e4f8dc53f6736",
+      "scripts/cp2/cp2_direct_kat_builder.py": "0f07b5f0a777c83233bf21c3bd93e821200ee386aef6637c1df68d871ce29f9a",
+      "scripts/cp2/cp2_equivalent_evaluator.py": "d61e06ddbe79c8bf86d294171bf8fc5b1c9957886d3c914ae0af9382a952b874",
+      "scripts/cp2/cp2_evaluator_result.py": "497774cc16d1e8cf1e074b4ca4f65145cec141a6ce021b4d191a5e178f04a0c2",
+      "scripts/cp2/cp2_f64_codec.py": "b89d5cbdc1a4399f838401b3f6cc1078def05cf01d84ac3939c9616f7e2cb798",
+      "scripts/cp2/cp2_fp_control_module.c": "286a2e28a9786c625392abb280c5ef4ff722ff0651c69cf2d3338d84483d01f3",
+      "scripts/cp2/cp2_sequence_math.py": "783a650342b7e21232b14718689331dedb30b24bb5285fa33821dca2d8252604",
+      "scripts/cp2/cp2_sequence_math_codec.py": "555a4e864c891e4acc7f3deeccda8503c210ab3afe2a342dba6c8a161bbdf0d4",
+      "scripts/cp2/cp2_sequence_math_worker.py": "244d69d6d182fb014edb6b7d78ed5686b2d3958340a5ca3567c420bd998d801b"
+    },
+    "direct_kat_candidate": {
+      "request_size_bytes": 3573,
+      "request_sha256": "36ab5707a10b8ea0de8c234d5140ab84994d6133a0aedcbe1ba59340adad4f03",
+      "known_answers_size_bytes": 9282,
+      "known_answers_sha256": "c82c96fd711e3e004dfd9ca666400b920825ec3f301ff8602535999e5bd537a3",
+      "observed_two_repeat_response_size_bytes": 18331,
+      "observed_two_repeat_response_sha256": "4ec5a374b1eca7cdd6f2d241a6bbea62ddc8f214bd3b51cf21d9b0b3f60fd865"
+    }
+  },
+  "candidate_math_contract": {
+    "approval_state": "unapproved_requires_human_math_review",
+    "source_position_minimum_rank": 2,
+    "cross_covariance_minimum_rank": 2,
+    "strict_rank_threshold": "singular_value[1] > binary64(binary64(max(population_count,3) * epsilon) * singular_value[0])",
+    "reflection_correction_uniqueness": "if det(UV^T) < 0, binary64(singular_value[1] - singular_value[2]) must be strictly greater than the same rank threshold",
+    "reflection_correction_marker_retained": true,
+    "formal_d_entry_point_state": "disabled"
+  },
+  "output_identity_layers": {
+    "embedded_lock_scope": "component-source-and-KAT-only",
+    "embedded_archive_or_profile_identity_fields_forbidden": true,
+    "external_expected_identity_path": "project/cp2_capsule_expected_identity.json",
+    "external_expected_identity_included_in_capsules": false,
+    "external_expected_identity_state": "generated_only_after_both_exact_archive/profile pairs exist"
+  },
+  "profile_contract_bindings": [
+    {"path": "docs/cp2_d_alignment_uniqueness_clarification_proposed.md", "size": 5463, "sha256": "233868e8dae7890fb8c5b16bc3ca10eb3a842c00798b90a0cbf6157762277e9a"},
+    {"path": "docs/cp2_d_evaluator_precision_clarification_proposed.md", "size": 28296, "sha256": "f00fa6170b38dac9880ddfc6b107ae0074433a5c7da605caf0c84b8abeb70367"},
+    {"path": "project/cp2_completion_authorization_binding.json", "size": 1720, "sha256": "5285bf33f4bcbe854b4fcc508376a7d83d7d4c5f9bb103744916781cbf1e6935"},
+    {"path": "project/cp2_d_completion_authorization_addendum.txt", "size": 4206, "sha256": "1193feb1dd2f0d440f9b9f1390baf716eada7d1d9ac705520b7be0cfd31d1429"}
+  ],
+  "numerical_dispatch_identity": {
+    "numpy_version": "2.4.6",
+    "numpy_baseline": ["X86_V2"],
+    "numpy_disabled_dispatch_targets": ["X86_V3", "X86_V4", "AVX512_ICL", "AVX512_SPR"],
+    "openblas_version": "0.3.31.188.0",
+    "openblas_config": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY SkylakeX MAX_THREADS=64",
+    "openblas_corename": "SkylakeX",
+    "openblas_required_threads": 1,
+    "x86_machine": {"vendor": "AuthenticAMD", "family": 26, "model": 68, "stepping": 0}
+  },
+  "retained_notice_requirements": [
+    "SchurVIO-Lite GPL-3.0-or-later license",
+    "CPython 3.11.15 LICENSE",
+    "all NumPy wheel license members",
+    "NumPy bundled OpenBLAS/libgfortran/libquadmath notices",
+    "Ubuntu glibc/GCC-runtime/zlib copyright files",
+    "this exact source lock"
+  ],
+  "truthfulness": {
+    "evo_or_pbs_bytes_present": false,
+    "source_lock_is_not_a_formal_run_record": true,
+    "source_lock_does_not_self_bind_a_future_commit_or_containing_output": true,
+    "final_unit_gate_must_byte_validate_the_external_exact_output_identity": true,
+    "recorded_input_accessed_to_construct_this_lock": false
+  }
+}

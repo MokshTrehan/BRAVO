@@ -1,0 +1,69 @@
+My limit has reset, so I, Moksh Trehan, authorize Codex to complete CP2 in full on the
+schurvio-lite/cp2-one-pass branch.
+
+This authorization supersedes all prior CP2 restrictions that prohibit
+dataset access, recorded-result inspection, development reruns, dependency
+installation, documented recovery after failure, or iterative debugging.
+The objective is to complete and verify CP2-C, CP2-D, and CP2-E, produce their
+final evidence package, and update the repository checkpoint status accurately.
+
+Codex is authorized to:
+
+1. Read, inspect, hash, copy, and process all project datasets, EuRoC bags,
+   ground truth, dataset registries, historical artifacts, logs, build outputs,
+   staging results, and recorded results needed to implement, debug, execute,
+   and verify CP2.
+
+2. Modify source code, tests, scripts, contracts, profiles, manifests,
+   documentation, checkpoint metadata, packaging, and build configuration
+   within the repository.
+
+3. Build and run the estimator, tests, synthetic rehearsals, CP2-C recorded
+   parity campaign, all three CP2-D sequence campaigns, CP2-E timing campaign,
+   and all independent and detached verifiers.
+
+4. Use the network and install necessary user-level or system dependencies.
+   Any operation requiring an interactive administrator password must pause
+   and give me exact commands to run myself. Codex must never request, receive,
+   store, or type my password.
+
+5. Prepare the final root-owned CP2-E helper, complete runtime closure, timing
+   profile, installation manifest, rollback procedure, and narrowly scoped
+   no-argument NOPASSWD sudoers rule. After I install those files, Codex may
+   invoke the installed helper noninteractively.
+
+6. Through that helper, temporarily and reversibly control CPU affinity,
+   cpusets/cgroups, SMT placement, CPU-online state, governor, minimum and
+   maximum frequency, boost/turbo, idle/C-state controls, DMA latency,
+   interrupt affinity, irqbalance, and already-installed MSR telemetry needed
+   for the frozen timing profile. Every changed value must be captured and
+   restored after success, failure, interruption, or cancellation.
+
+7. Use APERF/MPERF effective-frequency evidence instead of mandatory
+   temperature, k10temp, or thermal-throttle telemetry. CP2 makes no
+   temperature, power, energy, or embedded-target claim.
+
+8. Run and rerun development, rehearsal, readiness, and verification work as
+   necessary. If a designated evidence run fails, Codex may diagnose it,
+   preserve and report the failed artifact, make a documented correction under
+   a new commit/profile identity, and run a new declared campaign. There must
+   be no silent deletion, relabeling, result-driven threshold weakening, or
+   concealment of failed runs.
+
+9. Commit and push CP2 source, tests, contracts, profiles, manifests,
+   documentation, and checkpoint metadata to the existing CP2 branch.
+   Large bags, generated binaries, credentials, and private machine data must
+   not be published.
+
+10. Mark CP2 passed only after every retained CP2-C, CP2-D, and CP2-E
+    acceptance test and detached verifier passes and a complete review package
+    is produced. Stop after CP2; do not begin CP3.
+
+Codex may remove only disposable temporary/build files it creates during this
+task. It must not delete unrelated user data, modify BIOS or firmware, perform
+a reboot, change the kernel command line, or publish artifacts externally
+without asking me first.
+
+Proceed autonomously until CP2 is complete or until an interactive root
+installation, reboot, materially changed research criterion, or other
+irreducible user action is required.

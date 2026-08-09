@@ -1,7 +1,7 @@
 schema_version: 1
 project: SchurVIO-Lite
 timezone: America/Toronto
-as_of: 2026-07-22
+as_of: 2026-08-01
 upstream_commit: 69488123ed9362dd44b6f28e7f4680abbff1442b
 source_of_truth: docs/checkpoints.md
 checkpoints:
@@ -12,10 +12,9 @@ checkpoints:
       - path: project/datasets.yaml
         result: all_11_euroc_bags_verified
       - path: project/dependencies.yaml
-        result: dataset_and_gpl_pass_hardware_and_reviewer_open
+        result: dataset_gpl_and_reviewer_pass_jetson_nano_family_selected_remaining_hardware_details_open
     blockers:
       - target_board_and_power_interface
-      - mathematical_reviewer
   - id: CP0
     due: 2026-07-24T23:59:00-04:00
     status: passed
@@ -36,14 +35,23 @@ checkpoints:
     decision: baseline_frozen_specification_work_permitted
   - id: CP1
     due: 2026-07-28T23:59:00-04:00
-    status: in_progress
+    status: passed
     evidence:
       - path: project/cp1_gate.yaml
         result: frozen_automated_and_human_acceptance_contract
       - path: docs/conventions.md
-        result: mathematical_decisions_frozen_human_signoff_pending
+        result: replacement_schema3_automated_evidence_and_fresh_commit_specific_signoff_passed
+        prior_reviewer: Moksh Trehan
+        prior_signed_at: "2026-07-27"
+        prior_reviewed_commit: 7288b4a2d09420266cfadd9983145e09fd4cf789
+        fresh_review_status: passed
+        fresh_reviewer: Moksh Trehan
+        fresh_signed_at: "2026-08-01"
+        fresh_recorded_at: "2026-08-01T17:44:55-04:00"
+        fresh_reviewed_commit: 952771e955fe3459f2fd43122a9c6f8ce57d1799
+        fresh_exceptions: []
       - path: docs/iterated_update_spec.md
-        result: equations_rank_gate_and_two_pass_policy_specified
+        result: second_adversarial_contract_hashed_replacement_cp1_component_verified_later_cp2_cp3_tests_required
       - path: results/immutable/cp1/automated/cp1_math_20260722T184905076028292Z-g8b05afb88ce8
         result: automated_math_component_passed_human_signoff_pending
         tested_commit: 8b05afb88ce89b2b18bbb77d462a0866a2cac571
@@ -54,12 +62,56 @@ checkpoints:
         rank_rejection_fixtures: 128
         projection_fixtures: 256
         retraction_fixtures: 256
-    blockers:
-      - named_human_vio_ekf_reviewer_and_signoff
+      - path: results/immutable/cp1/automated/cp1_math_20260801T203838596581924Z-g26588223597a
+        result: integrity_verified_but_superseded_for_authorization_by_second_audit_derivative_scope_correction
+        tested_commit: 26588223597a2864149fd228e52caf569e7dfd12
+        source_dirty: false
+        sha256sums_sha256: 320c8cda3a98a4036718e34d499c909a8ac70dd0f8d9e71041a6e3fe134d42c3
+        gtests: 7
+        failures: 0
+        errors: 0
+        disabled: 0
+        semidefinite_clone_prior_fixtures: 128
+        production_measurement_compression_fixtures: 128
+      - path: results/immutable/cp1/automated/cp1_math_20260801T210721366464774Z-g8f8a4e6a9633
+        result: integrity_verified_but_superseded_for_authorization_by_later_diagnostics_cost_and_covariance_control_flow_corrections
+        tested_commit: 8f8a4e6a96331f50bde33bcae418b13db8bd89f0
+        source_dirty: false
+        sha256sums_sha256: 6bd4144b81a347359ce402adeb65ec8c11264303bd3a0a890f08903013c58cd3
+        gtests: 7
+        failures: 0
+        errors: 0
+        disabled: 0
+      - path: results/immutable/cp1/automated/cp1_math_20260801T213626466303302Z-g1f29c92ac070
+        result: replacement_schema3_automated_component_passed_and_fresh_signoff_recorded
+        tested_commit: 1f29c92ac070ce1392384d24e4cac431c6142bf9
+        source_dirty: false
+        sha256sums_sha256: 8d554519dbeb4259515869bc21ce9f98b96f16c793077e6f229da5cbc0ae7fda
+        gtests: 7
+        failures: 0
+        errors: 0
+        disabled: 0
+        well_conditioned_equivalence_fixtures: 128
+        rank_rejection_fixtures: 128
+        projection_finite_difference_fixtures: 256
+        retraction_differential_fixtures: 256
+        semidefinite_clone_prior_fixtures: 128
+        production_measurement_compression_fixtures: 128
+    decision: one_pass_production_implementation_permitted_fixed_two_pass_remains_blocked
+    blockers: []
   - id: CP2
     due: 2026-07-31T23:59:00-04:00
-    status: pending
-    evidence: []
+    status: in_progress
+    deadline_status: missed
+    deadline_decision_recorded_at: "2026-08-01"
+    deadline_reason: extended_adversarial_cp1_audit_and_fresh_commit_specific_signoff
+    decision: continue_without_waiver_or_cp3_deadline_change
+    scope_impact: cp2_evidence_delayed_cp3_schedule_compressed_requirements_unchanged
+    evidence:
+      - path: docs/cp2_one_pass_contract.md
+        result: implementation_contract_frozen_evidence_pending
+      - path: project/cp2_gate.yaml
+        result: machine_readable_gate_in_progress
   - id: CP3
     due: 2026-08-05T23:59:00-04:00
     status: pending

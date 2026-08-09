@@ -1,0 +1,17 @@
+[==========] Running 2 tests from 2 test suites.
+[----------] Global test environment set-up.
+[----------] 1 test from CP1Prior
+[ RUN      ] CP1Prior.SemidefiniteCloneAugmentationMatchesInnovationUpdate
+CP1_PSD_PRIOR fixtures=128 seed=21320732 max_known_state_tolerance_ratio=7.39038e-09 max_known_covariance_tolerance_ratio=3.53087e-09 max_known_nis_tolerance_ratio=4.93098e-08 max_spectral_state_tolerance_ratio=4.03889e-08 max_spectral_covariance_tolerance_ratio=4.02405e-08 max_spectral_nis_tolerance_ratio=1.29293e-07 max_zero_eigenvalue_tolerance_ratio=0.000305143 max_clone_nullspace_tolerance_ratio=0.000600235 min_posterior_normalized_eigenvalue=-3.2182e-16
+[       OK ] CP1Prior.SemidefiniteCloneAugmentationMatchesInnovationUpdate (9 ms)
+[----------] 1 test from CP1Prior (9 ms total)
+
+[----------] 1 test from CP1Compression
+[ RUN      ] CP1Compression.ProductionTruncationPreservesLambdaEtaButNotGamma
+CP1_COMPRESSION fixtures=128 seed=443998030361 max_lambda_tolerance_ratio=8.51133e-08 max_eta_tolerance_ratio=2.99246e-07 max_gamma_reconstruction_tolerance_ratio=8.43061e-08 min_discarded_energy=3.01374
+[       OK ] CP1Compression.ProductionTruncationPreservesLambdaEtaButNotGamma (1 ms)
+[----------] 1 test from CP1Compression (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 2 tests from 2 test suites ran. (10 ms total)
+[  PASSED  ] 2 tests.

@@ -29,6 +29,9 @@
 
 #include <boost/math/distributions/chi_squared.hpp>
 
+#include <algorithm>
+#include <cmath>
+
 using namespace ov_core;
 using namespace ov_type;
 using namespace ov_msckf;
@@ -194,6 +197,97 @@ void StateHelper::EKFUpdate(std::shared_ptr<State> state, const std::vector<std:
       state->_cam_intrinsics_cameras.at(calib.first)->set_value(calib.second->value());
     }
   }
+}
+
+bool StateHelper::CommitPrecomputedUpdate(
+    std::shared_ptr<State> state, const Eigen::VectorXd &dx,
+    const Eigen::MatrixXd &posterior_covariance,
+    PrecomputedCovariancePolicy covariance_policy) {
+  if (!state) {
+    return false;
+  }
+  const Eigen::Index state_dimension = state->_Cov.rows();
+  if (state_dimension <= 0 || state->_Cov.cols() != state_dimension ||
+      dx.rows() != state_dimension || dx.cols() != 1 ||
+      posterior_covariance.rows() != state_dimension ||
+      posterior_covariance.cols() != state_dimension || !dx.allFinite() ||
+      !posterior_covariance.allFinite()) {
+    return false;
+  }
+
+  Eigen::Index expected_id = 0;
+  for (const auto &variable : state->_variables) {
+    if (!variable || variable->id() != expected_id || variable->size() <= 0 ||
+        variable->size() > state_dimension - expected_id) {
+      return false;
+    }
+    expected_id += variable->size();
+  }
+  const double symmetry_error =
+      (posterior_covariance - posterior_covariance.transpose())
+          .cwiseAbs()
+          .maxCoeff();
+  if (expected_id != state_dimension) {
+    return false;
+  }
+  if (covariance_policy ==
+      PrecomputedCovariancePolicy::LEGACY_NONNEGATIVE_DIAGONAL) {
+    const double legacy_covariance_scale =
+        std::max(1.0, posterior_covariance.cwiseAbs().maxCoeff());
+    if (symmetry_error > 1.0e-10 * legacy_covariance_scale ||
+        (posterior_covariance.diagonal().array() < 0.0).any()) {
+      return false;
+    }
+  } else if (covariance_policy ==
+             PrecomputedCovariancePolicy::NUMERICAL_PSD) {
+    const double covariance_inf_norm =
+        posterior_covariance.cwiseAbs().rowwise().sum().maxCoeff();
+    if (!std::isfinite(covariance_inf_norm) ||
+        symmetry_error >
+            1.0e-10 * std::max(1.0, covariance_inf_norm)) {
+      return false;
+    }
+    const Eigen::MatrixXd symmetric =
+        0.5 * (posterior_covariance + posterior_covariance.transpose());
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigensolver(symmetric);
+    if (eigensolver.info() != Eigen::Success ||
+        !eigensolver.eigenvalues().allFinite()) {
+      return false;
+    }
+    const double minimum_eigenvalue =
+        eigensolver.eigenvalues().minCoeff();
+    const double maximum_eigenvalue =
+        eigensolver.eigenvalues().maxCoeff();
+    if (minimum_eigenvalue <
+        -1.0e-10 * std::max(1.0, maximum_eigenvalue)) {
+      return false;
+    }
+  } else {
+    return false;
+  }
+  if (state->_options.do_calib_camera_intrinsics) {
+    for (const auto &calibration : state->_cam_intrinsics) {
+      const auto camera = state->_cam_intrinsics_cameras.find(calibration.first);
+      if (!calibration.second ||
+          camera == state->_cam_intrinsics_cameras.end() || !camera->second) {
+        return false;
+      }
+    }
+  }
+
+  // Preserve the baseline identity-reset commit order exactly: covariance,
+  // current nominal values, then the mutable camera-model cache.
+  state->_Cov = posterior_covariance;
+  for (const auto &variable : state->_variables) {
+    variable->update(dx.segment(variable->id(), variable->size()));
+  }
+  if (state->_options.do_calib_camera_intrinsics) {
+    for (const auto &calibration : state->_cam_intrinsics) {
+      state->_cam_intrinsics_cameras.at(calibration.first)
+          ->set_value(calibration.second->value());
+    }
+  }
+  return true;
 }
 
 void StateHelper::set_initial_covariance(std::shared_ptr<State> state, const Eigen::MatrixXd &covariance,
