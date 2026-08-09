@@ -1078,6 +1078,156 @@ MSCKFTwoPassCost msckf_evaluate_true_cost(
   return result;
 }
 
+struct MSCKFPassOneCausalDiagnostics {
+  std::size_t accepted_tracks = 0;
+  Eigen::Index compressed_rows = 0;
+  bool compressed_nis_per_row_available = false;
+  double compressed_nis_per_row =
+      std::numeric_limits<double>::quiet_NaN();
+  bool reduced_whitened_residual_rms_available = false;
+  double reduced_whitened_residual_rms =
+      std::numeric_limits<double>::quiet_NaN();
+  bool prior_whitened_correction_norm_available = false;
+  double prior_whitened_correction_norm =
+      std::numeric_limits<double>::quiet_NaN();
+  bool imu_block_norms_available = false;
+  double orientation_correction_norm =
+      std::numeric_limits<double>::quiet_NaN();
+  double position_correction_norm =
+      std::numeric_limits<double>::quiet_NaN();
+  double velocity_correction_norm =
+      std::numeric_limits<double>::quiet_NaN();
+  double gyro_bias_correction_norm =
+      std::numeric_limits<double>::quiet_NaN();
+  double accelerometer_bias_correction_norm =
+      std::numeric_limits<double>::quiet_NaN();
+  bool clone_aggregate_correction_norm_available = false;
+  double clone_aggregate_correction_norm =
+      std::numeric_limits<double>::quiet_NaN();
+  bool minimum_schur_singular_ratio_available = false;
+  double minimum_schur_singular_ratio =
+      std::numeric_limits<double>::quiet_NaN();
+  bool median_track_observations_available = false;
+  double median_track_observations =
+      std::numeric_limits<double>::quiet_NaN();
+};
+
+MSCKFPassOneCausalDiagnostics msckf_pass_one_causal_diagnostics(
+    const MSCKFUpdatePriorSnapshot &prior, Eigen::Index imu_id,
+    Eigen::Index imu_size, const Eigen::VectorXd &dx, double global_nis,
+    Eigen::Index compressed_rows, Eigen::Index reduced_rows,
+    double retained_gamma, bool retained_gamma_available,
+    const MSCKFTwoPassCost &cost,
+    double minimum_schur_singular_ratio,
+    bool minimum_schur_singular_ratio_available,
+    const std::vector<std::shared_ptr<Feature>> &accepted_features) {
+  MSCKFPassOneCausalDiagnostics result;
+  result.accepted_tracks = accepted_features.size();
+  result.compressed_rows = compressed_rows;
+
+  if (compressed_rows > 0 && std::isfinite(global_nis)) {
+    result.compressed_nis_per_row =
+        global_nis / static_cast<double>(compressed_rows);
+    result.compressed_nis_per_row_available =
+        std::isfinite(result.compressed_nis_per_row);
+  }
+  if (retained_gamma_available && reduced_rows > 0 &&
+      std::isfinite(retained_gamma) && retained_gamma >= 0.0) {
+    result.reduced_whitened_residual_rms = std::sqrt(
+        retained_gamma / static_cast<double>(reduced_rows));
+    result.reduced_whitened_residual_rms_available =
+        std::isfinite(result.reduced_whitened_residual_rms);
+  }
+  if (cost.valid && std::isfinite(cost.prior) && cost.prior >= 0.0) {
+    result.prior_whitened_correction_norm =
+        std::sqrt(2.0 * cost.prior);
+    result.prior_whitened_correction_norm_available =
+        std::isfinite(result.prior_whitened_correction_norm);
+  }
+
+  if (imu_id >= 0 && imu_size >= 15 &&
+      imu_id <= dx.rows() - 15 && dx.allFinite()) {
+    result.orientation_correction_norm = dx.segment<3>(imu_id).norm();
+    result.position_correction_norm = dx.segment<3>(imu_id + 3).norm();
+    result.velocity_correction_norm = dx.segment<3>(imu_id + 6).norm();
+    result.gyro_bias_correction_norm = dx.segment<3>(imu_id + 9).norm();
+    result.accelerometer_bias_correction_norm =
+        dx.segment<3>(imu_id + 12).norm();
+    result.imu_block_norms_available =
+        std::isfinite(result.orientation_correction_norm) &&
+        std::isfinite(result.position_correction_norm) &&
+        std::isfinite(result.velocity_correction_norm) &&
+        std::isfinite(result.gyro_bias_correction_norm) &&
+        std::isfinite(result.accelerometer_bias_correction_norm);
+  }
+
+  bool clone_norm_valid = dx.allFinite();
+  double clone_squared_norm = 0.0;
+  for (const MSCKFUpdatePriorCloneBinding &binding :
+       prior.clone_bindings) {
+    if (binding.covariance_id < 0 ||
+        binding.covariance_id > dx.rows() - 6) {
+      clone_norm_valid = false;
+      break;
+    }
+    const double block_squared_norm =
+        dx.segment(binding.covariance_id, 6).squaredNorm();
+    const double updated_squared_norm =
+        clone_squared_norm + block_squared_norm;
+    if (!std::isfinite(block_squared_norm) ||
+        !std::isfinite(updated_squared_norm)) {
+      clone_norm_valid = false;
+      break;
+    }
+    clone_squared_norm = updated_squared_norm;
+  }
+  if (clone_norm_valid) {
+    result.clone_aggregate_correction_norm =
+        std::sqrt(clone_squared_norm);
+    result.clone_aggregate_correction_norm_available =
+        std::isfinite(result.clone_aggregate_correction_norm);
+  }
+
+  if (minimum_schur_singular_ratio_available &&
+      std::isfinite(minimum_schur_singular_ratio)) {
+    result.minimum_schur_singular_ratio =
+        minimum_schur_singular_ratio;
+    result.minimum_schur_singular_ratio_available = true;
+  }
+
+  std::vector<double> observation_counts;
+  observation_counts.reserve(accepted_features.size());
+  for (const auto &feature : accepted_features) {
+    if (!feature) {
+      observation_counts.clear();
+      break;
+    }
+    std::size_t observation_count = 0;
+    for (const auto &camera : feature->timestamps) {
+      if (camera.second.size() >
+          std::numeric_limits<std::size_t>::max() - observation_count) {
+        observation_counts.clear();
+        return result;
+      }
+      observation_count += camera.second.size();
+    }
+    observation_counts.push_back(
+        static_cast<double>(observation_count));
+  }
+  if (!observation_counts.empty()) {
+    std::sort(observation_counts.begin(), observation_counts.end());
+    const std::size_t middle = observation_counts.size() / 2U;
+    result.median_track_observations =
+        observation_counts.size() % 2U == 0U
+            ? 0.5 * observation_counts[middle - 1U] +
+                  0.5 * observation_counts[middle]
+            : observation_counts[middle];
+    result.median_track_observations_available =
+        std::isfinite(result.median_track_observations);
+  }
+  return result;
+}
+
 struct MSCKFPosteriorValidation {
   bool valid = false;
   double symmetry_error = std::numeric_limits<double>::quiet_NaN();
@@ -1534,14 +1684,19 @@ UpdaterMSCKF::UpdaterMSCKF(UpdaterOptions &options, ov_core::FeatureInitializerO
           _options.max_visual_passes) ||
       !UpdaterOptions::visual_pass_combination_is_supported(
           _options.max_visual_passes, _options.landmark_elimination) ||
+      (_options.pass2_shadow_only &&
+       (_options.max_visual_passes != 2 ||
+        _options.landmark_elimination !=
+            UpdaterOptions::LandmarkElimination::SCHUR)) ||
       !std::isfinite(_options.sigma_pix) || !(_options.sigma_pix > 0.0) || !std::isfinite(sigma_pix_sq) ||
       !(sigma_pix_sq > 0.0) || !std::isfinite(_options.chi2_multipler)) {
     PRINT_ERROR(RED
                 "invalid MSCKF updater configuration: mode=%s sigma_px=%.17g sigma_px_sq=%.17g "
-                "chi2_multiplier=%.17g max_visual_passes=%d\n" RESET,
+                "chi2_multiplier=%.17g max_visual_passes=%d pass2_shadow_only=%d\n" RESET,
                 UpdaterOptions::landmark_elimination_as_string(_options.landmark_elimination).c_str(), _options.sigma_pix,
                 sigma_pix_sq, _options.chi2_multipler,
-                _options.max_visual_passes);
+                _options.max_visual_passes,
+                _options.pass2_shadow_only ? 1 : 0);
     std::exit(EXIT_FAILURE);
   }
   _options.sigma_pix_sq = sigma_pix_sq;
@@ -1869,6 +2024,8 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   int ordinary_attempted_passes = 0;
   int ordinary_completed_passes = 0;
   int ordinary_selected_pass = 0;
+  int shadow_oracle_selected_pass = 0;
+  const char *shadow_oracle_reason = "not_attempted";
   bool ordinary_iteration_terminal_logged = false;
 
   const auto finish_update = [this, &notify_observer, &update_event,
@@ -1879,6 +2036,8 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
                               &ordinary_attempted_passes,
                               &ordinary_completed_passes,
                               &ordinary_selected_pass,
+                              &shadow_oracle_selected_pass,
+                              &shadow_oracle_reason,
                               &ordinary_iteration_terminal_logged](CP2UpdateTerminalStatus status,
                                                  CP2UpdateTerminalSubreason terminal_subreason) {
     const CP2SteadyClockEndpoint cp2_update_end =
@@ -1893,18 +2052,37 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     update_event.terminal_subreason =
         duration_valid ? terminal_subreason : CP2UpdateTerminalSubreason::kTraceInvariantFailure;
     if (!recorded_mode && !ordinary_iteration_terminal_logged) {
-      PRINT_DEBUG(
-          "[MSCKF-ITER]: timestamp=%.17g terminal=1 requested_passes=%d "
-          "attempted_passes=%d completed_passes=%d selected_pass=%d "
-          "status=%s reason=%s mean_commits=%zu covariance_commits=%zu "
-          "feature_finalizations=%zu\n",
-          state ? state->_timestamp : 0.0, _options.max_visual_passes,
-          ordinary_attempted_passes, ordinary_completed_passes,
-          ordinary_selected_pass,
-          cp2_update_terminal_status_name(update_event.terminal_status),
-          cp2_update_terminal_subreason_name(update_event.terminal_subreason),
-          ordinary_mean_commit_count, ordinary_covariance_commit_count,
-          ordinary_feature_finalization_count);
+      if (_options.pass2_shadow_only) {
+        PRINT_DEBUG(
+            "[MSCKF-ITER]: timestamp=%.17g terminal=1 shadow_only=1 "
+            "requested_passes=%d attempted_passes=%d completed_passes=%d "
+            "selected_pass=%d oracle_selected_pass=%d oracle_reason=%s "
+            "status=%s reason=%s mean_commits=%zu covariance_commits=%zu "
+            "feature_finalizations=%zu\n",
+            state ? state->_timestamp : 0.0, _options.max_visual_passes,
+            ordinary_attempted_passes, ordinary_completed_passes,
+            ordinary_selected_pass, shadow_oracle_selected_pass,
+            shadow_oracle_reason,
+            cp2_update_terminal_status_name(update_event.terminal_status),
+            cp2_update_terminal_subreason_name(
+                update_event.terminal_subreason),
+            ordinary_mean_commit_count, ordinary_covariance_commit_count,
+            ordinary_feature_finalization_count);
+      } else {
+        PRINT_DEBUG(
+            "[MSCKF-ITER]: timestamp=%.17g terminal=1 requested_passes=%d "
+            "attempted_passes=%d completed_passes=%d selected_pass=%d "
+            "status=%s reason=%s mean_commits=%zu covariance_commits=%zu "
+            "feature_finalizations=%zu\n",
+            state ? state->_timestamp : 0.0, _options.max_visual_passes,
+            ordinary_attempted_passes, ordinary_completed_passes,
+            ordinary_selected_pass,
+            cp2_update_terminal_status_name(update_event.terminal_status),
+            cp2_update_terminal_subreason_name(
+                update_event.terminal_subreason),
+            ordinary_mean_commit_count, ordinary_covariance_commit_count,
+            ordinary_feature_finalization_count);
+      }
       ordinary_iteration_terminal_logged = true;
     }
     notify_observer(update_event, false);
@@ -1967,6 +2145,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   // copies. Recorded mode retains its existing live-feature lifecycle.
   MSCKFUpdatePriorSnapshot ordinary_prior;
   StateOptions ordinary_state_options;
+  bool ordinary_two_pass_visual_contract_supported = true;
   std::unique_ptr<MSCKFDetachedFeatureBatch> ordinary_feature_batch;
   std::vector<std::shared_ptr<Feature>> *proposal_features = &feature_vec;
   if (!recorded_mode) {
@@ -1997,7 +2176,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
       return;
     }
     if (_options.max_visual_passes == 2) {
-      bool visual_contract_supported =
+      ordinary_two_pass_visual_contract_supported =
           _options.landmark_elimination ==
               UpdaterOptions::LandmarkElimination::SCHUR &&
           ordinary_prior.do_fej &&
@@ -2006,11 +2185,12 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
                   LandmarkRepresentation::Representation::GLOBAL_3D) &&
           !ordinary_prior.cameras.empty();
       for (const MSCKFUpdatePriorCamera &camera : ordinary_prior.cameras) {
-        visual_contract_supported =
-            visual_contract_supported &&
+        ordinary_two_pass_visual_contract_supported =
+            ordinary_two_pass_visual_contract_supported &&
             camera.model == MSCKFUpdatePriorCameraModel::kRadtan;
       }
-      if (!visual_contract_supported) {
+      if (!ordinary_two_pass_visual_contract_supported &&
+          !_options.pass2_shadow_only) {
         PRINT_WARNING(
             YELLOW
             "[MSCKF-ITER]: timestamp=%.17g terminal=1 requested_passes=2 "
@@ -2230,6 +2410,9 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   double two_pass_one_max_feature_nis =
       std::numeric_limits<double>::quiet_NaN();
   double two_pass_one_max_gate_threshold =
+      std::numeric_limits<double>::quiet_NaN();
+  bool shadow_pass_one_minimum_schur_ratio_available = false;
+  double shadow_pass_one_minimum_schur_ratio =
       std::numeric_limits<double>::quiet_NaN();
 
   // Recorded mode takes exactly one tentative full composite at this existing
@@ -2523,6 +2706,9 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     // Schur row system after the signed rank/conditioning checks.
     double feature_gamma = 0.0;
     bool reduction_evidence_available = true;
+    bool feature_schur_ratio_available = false;
+    double feature_schur_ratio =
+        std::numeric_limits<double>::quiet_NaN();
     if (_options.landmark_elimination == UpdaterOptions::LandmarkElimination::SCHUR) {
       SchurReductionResult reduction = SchurUpdate::Reduce(H_x, H_f, res, _options.sigma_pix);
       if (!reduction.accepted()) {
@@ -2553,6 +2739,12 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
         (*it2)->to_delete = true;
         it2 = proposal_feature_vec.erase(it2);
         continue;
+      }
+      if (_options.pass2_shadow_only &&
+          reduction.singular_ratio_available &&
+          std::isfinite(reduction.singular_ratio)) {
+        feature_schur_ratio_available = true;
+        feature_schur_ratio = reduction.singular_ratio;
       }
       H_x = std::move(reduction.H_reduced);
       res = std::move(reduction.residual_reduced);
@@ -2620,6 +2812,13 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
                     "[MSCKF-GATE]: feature=%zu pass=1 rows=%d status=evidence_unavailable stage=%s "
                     "lifecycle=accepted\n" RESET,
                     feat.featid, (int)res.rows(), cp2_feature_gate_stage_name(gate.stage));
+    }
+    if (_options.pass2_shadow_only && feature_schur_ratio_available &&
+        (!shadow_pass_one_minimum_schur_ratio_available ||
+         feature_schur_ratio <
+             shadow_pass_one_minimum_schur_ratio)) {
+      shadow_pass_one_minimum_schur_ratio = feature_schur_ratio;
+      shadow_pass_one_minimum_schur_ratio_available = true;
     }
 
     // Gamma is objective evidence only. Evaluate each binary64 sum once and
@@ -2892,7 +3091,8 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   // The fixed two-pass estimator is an ordinary-mode, Schur-only branch. The
   // complete max=1/nullspace/recorded path below remains the established
   // one-pass implementation.
-  if (!recorded_mode && _options.max_visual_passes == 2 &&
+  if (!recorded_mode && !_options.pass2_shadow_only &&
+      _options.max_visual_passes == 2 &&
       _options.landmark_elimination ==
           UpdaterOptions::LandmarkElimination::SCHUR) {
     update_event.baseline_preflight_attempted = true;
@@ -3451,6 +3651,451 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     ordinary_completed_passes = 1;
     ordinary_selected_pass = 1;
   }
+
+  // Shadow mode deliberately starts from the already accepted, byte-exact
+  // legacy one-pass preview above. Every calculation in this block owns only
+  // frozen-prior values and detached feature copies. No oracle failure can
+  // veto that valid live proposal, and the common legacy commit path below is
+  // the only mutation boundary.
+  if (!recorded_mode && _options.pass2_shadow_only) {
+    ordinary_attempted_passes = 1;
+    ordinary_completed_passes = 1;
+    ordinary_selected_pass = 1;
+    shadow_oracle_selected_pass = 0;
+    shadow_oracle_reason = "not_attempted";
+
+    bool pass_one_oracle_valid = false;
+    try {
+    MSCKFTwoPassFailure pass_one_failure =
+        MSCKFTwoPassFailure::kSnapshot;
+    std::size_t pass_one_failure_feature = 0U;
+    std::vector<MSCKFUpdatePreviewBlock> pass_one_layout;
+    MSCKFPriorSupportFactor prior_factor;
+    MSCKFRectangularMean pass_one_mean;
+    MSCKFTwoPassCost pass_one_cost;
+    double pass_one_processing_ms =
+        std::numeric_limits<double>::quiet_NaN();
+
+    try {
+      if (!ordinary_two_pass_visual_contract_supported) {
+        shadow_oracle_reason = "unsupported_contract";
+      } else if (!msckf_preview_layout_from_order(
+                     Hx_order_big, pass_one_layout)) {
+        pass_one_failure = MSCKFTwoPassFailure::kJacobian;
+        shadow_oracle_reason =
+            msckf_two_pass_failure_name(pass_one_failure);
+      } else {
+        prior_factor =
+            msckf_factor_prior_support(prior_snapshot.covariance);
+        if (!prior_factor.valid) {
+          pass_one_failure = MSCKFTwoPassFailure::kPriorSupport;
+          shadow_oracle_reason =
+              msckf_two_pass_failure_name(pass_one_failure);
+        } else {
+          pass_one_mean = msckf_compute_rectangular_mean(
+              prior_snapshot, prior_factor, pass_one_layout, Hx_big,
+              res_big, _options.sigma_pix);
+          if (!pass_one_mean.valid) {
+            pass_one_failure = MSCKFTwoPassFailure::kMean;
+            shadow_oracle_reason =
+                msckf_two_pass_failure_name(pass_one_failure);
+          } else {
+            pass_one_cost = msckf_evaluate_true_cost(
+                ordinary_state_options, ordinary_prior,
+                pass_one_mean.dx,
+                ordinary_feature_batch->CloneActive(), initializer_feat,
+                _options, prior_factor);
+            if (!pass_one_cost.valid) {
+              pass_one_failure = pass_one_cost.failure;
+              pass_one_failure_feature = pass_one_cost.feature_id;
+              shadow_oracle_reason =
+                  msckf_two_pass_failure_name(pass_one_failure);
+            } else {
+              pass_one_failure = MSCKFTwoPassFailure::kNone;
+              pass_one_oracle_valid = true;
+            }
+          }
+        }
+      }
+    } catch (...) {
+      pass_one_failure = MSCKFTwoPassFailure::kException;
+      shadow_oracle_reason =
+          msckf_two_pass_failure_name(pass_one_failure);
+    }
+
+    if (!pass_one_oracle_valid) {
+      PRINT_DEBUG(
+          "[MSCKF-ITER]: timestamp=%.17g shadow_only=1 "
+          "requested_passes=2 attempted_passes=1 completed_passes=1 "
+          "oracle_attempted_passes=%d oracle_completed_passes=0 "
+          "oracle_pass=1 status=invalid reason=%s feature=%zu "
+          "live_selected_pass=1 oracle_effect_on_live=0\n",
+          ordinary_prior.timestamp,
+          ordinary_two_pass_visual_contract_supported ? 1 : 0,
+          shadow_oracle_reason,
+          pass_one_failure_feature);
+    } else {
+      const boost::posix_time::ptime pass_one_iteration_end =
+          boost::posix_time::microsec_clock::local_time();
+      pass_one_processing_ms =
+          (pass_one_iteration_end - rT0).total_microseconds() * 1.0e-3;
+      ordinary_completed_passes = 1;
+      shadow_oracle_selected_pass = 1;
+      shadow_oracle_reason = "pass2_not_attempted";
+
+      MSCKFPassOneCausalDiagnostics causal;
+      bool causal_available = false;
+      try {
+        const Eigen::Index imu_id =
+            state && state->_imu ? state->_imu->id() : -1;
+        const Eigen::Index imu_size =
+            state && state->_imu ? state->_imu->size() : 0;
+        causal = msckf_pass_one_causal_diagnostics(
+            ordinary_prior, imu_id, imu_size, pass_one_mean.dx,
+            pass_one_mean.nis, res_big.rows(), ct_meas, retained_gamma,
+            retained_gamma_available, pass_one_cost,
+            shadow_pass_one_minimum_schur_ratio,
+            shadow_pass_one_minimum_schur_ratio_available,
+            proposal_feature_vec);
+        causal_available = true;
+      } catch (...) {
+        causal.accepted_tracks = proposal_feature_vec.size();
+        causal.compressed_rows = res_big.rows();
+      }
+
+      // This record is finalized before ordinary_attempted_passes becomes 2
+      // and before any Pass-2 working state or geometry is constructed.
+      PRINT_DEBUG(
+          "[MSCKF-SHADOW-CAUSAL]: timestamp=%.17g shadow_only=1 "
+          "finalized_before_pass2=1 diagnostics_available=%d "
+          "accepted_tracks_pass1=%zu pass1_compressed_rows=%d "
+          "pass1_compressed_nis_per_row_available=%d "
+          "pass1_compressed_nis_per_row=%.17g "
+          "pass1_reduced_whitened_residual_rms_available=%d "
+          "pass1_reduced_whitened_residual_rms=%.17g "
+          "pass1_prior_whitened_correction_norm_available=%d "
+          "pass1_prior_whitened_correction_norm=%.17g "
+          "pass1_imu_block_norms_available=%d "
+          "pass1_orientation_correction_norm=%.17g "
+          "pass1_position_correction_norm=%.17g "
+          "pass1_velocity_correction_norm=%.17g "
+          "pass1_gyro_bias_correction_norm=%.17g "
+          "pass1_accelerometer_bias_correction_norm=%.17g "
+          "pass1_clone_aggregate_correction_norm_available=%d "
+          "pass1_clone_aggregate_correction_norm=%.17g "
+          "pass1_minimum_schur_singular_ratio_available=%d "
+          "pass1_minimum_schur_singular_ratio=%.17g "
+          "pass1_median_track_observations_available=%d "
+          "pass1_median_track_observations=%.17g\n",
+          ordinary_prior.timestamp, causal_available ? 1 : 0,
+          causal.accepted_tracks, (int)causal.compressed_rows,
+          causal.compressed_nis_per_row_available ? 1 : 0,
+          causal.compressed_nis_per_row_available
+              ? causal.compressed_nis_per_row
+              : 0.0,
+          causal.reduced_whitened_residual_rms_available ? 1 : 0,
+          causal.reduced_whitened_residual_rms_available
+              ? causal.reduced_whitened_residual_rms
+              : 0.0,
+          causal.prior_whitened_correction_norm_available ? 1 : 0,
+          causal.prior_whitened_correction_norm_available
+              ? causal.prior_whitened_correction_norm
+              : 0.0,
+          causal.imu_block_norms_available ? 1 : 0,
+          causal.imu_block_norms_available
+              ? causal.orientation_correction_norm
+              : 0.0,
+          causal.imu_block_norms_available
+              ? causal.position_correction_norm
+              : 0.0,
+          causal.imu_block_norms_available
+              ? causal.velocity_correction_norm
+              : 0.0,
+          causal.imu_block_norms_available
+              ? causal.gyro_bias_correction_norm
+              : 0.0,
+          causal.imu_block_norms_available
+              ? causal.accelerometer_bias_correction_norm
+              : 0.0,
+          causal.clone_aggregate_correction_norm_available ? 1 : 0,
+          causal.clone_aggregate_correction_norm_available
+              ? causal.clone_aggregate_correction_norm
+              : 0.0,
+          causal.minimum_schur_singular_ratio_available ? 1 : 0,
+          causal.minimum_schur_singular_ratio_available
+              ? causal.minimum_schur_singular_ratio
+              : 0.0,
+          causal.median_track_observations_available ? 1 : 0,
+          causal.median_track_observations_available
+              ? causal.median_track_observations
+              : 0.0);
+
+      ordinary_attempted_passes = 2;
+      std::uint64_t accepted_set_hash = UINT64_C(1469598103934665603);
+      for (const auto &feature : proposal_feature_vec) {
+        const std::uint64_t id =
+            feature ? static_cast<std::uint64_t>(feature->featid) : 0U;
+        for (unsigned int byte = 0; byte < 8U; ++byte) {
+          accepted_set_hash ^= (id >> (8U * byte)) & UINT64_C(0xff);
+          accepted_set_hash *= UINT64_C(1099511628211);
+        }
+      }
+      PRINT_DEBUG(
+          "[MSCKF-ITER]: timestamp=%.17g shadow_only=1 "
+          "requested_passes=2 attempted_passes=2 completed_passes=1 "
+          "pass=1 status=accepted accepted_features=%zu "
+          "accepted_set_hash=%llu rows=%d global_proposal_nis=%.17g "
+          "max_feature_gate_nis=%.17g "
+          "threshold_at_max_feature_nis=%.17g Cpix=%.17g Cpost=%.17g "
+          "dx_norm=%.17g processing_ms=%.17g "
+          "prior_support_error=%.17g prior_rank=%d "
+          "prior_zero_tolerance=%.17g prior_lambda_min=%.17g "
+          "prior_lambda_max=%.17g\n",
+          ordinary_prior.timestamp, proposal_feature_vec.size(),
+          static_cast<unsigned long long>(accepted_set_hash),
+          (int)res_big.rows(), pass_one_mean.nis,
+          two_pass_one_max_feature_nis,
+          two_pass_one_max_gate_threshold, pass_one_cost.pixel,
+          pass_one_cost.posterior, pass_one_mean.dx.norm(),
+          pass_one_processing_ms, pass_one_cost.support_error,
+          (int)prior_factor.positive_eigenvalues.rows(),
+          prior_factor.zero_tolerance, prior_factor.minimum_eigenvalue,
+          prior_factor.maximum_eigenvalue);
+
+      MSCKFTwoPassLinearization pass_two;
+      MSCKFTwoPassCost pass_two_cost;
+      const boost::posix_time::ptime pass_two_iteration_start =
+          boost::posix_time::microsec_clock::local_time();
+      try {
+        if (ordinary_two_pass_test_fault ==
+            OrdinaryTwoPassTestFault::kPassTwoException) {
+          throw std::runtime_error(
+              "UpdaterMSCKF injected shadow Pass-2 exception");
+        }
+        pass_two = msckf_build_second_pass(
+            ordinary_state_options, ordinary_prior, pass_one_mean.dx,
+            ordinary_feature_batch->CloneActive(), initializer_feat,
+            _options, chi_squared_table, prior_factor);
+        const std::size_t injected_feature_id =
+            proposal_feature_vec.empty() ||
+                    !proposal_feature_vec.front()
+                ? 0U
+                : proposal_feature_vec.front()->featid;
+        if (ordinary_two_pass_test_fault ==
+                OrdinaryTwoPassTestFault::kPassTwoNonfinite &&
+            pass_two.valid && pass_two.H.size() > 0) {
+          pass_two.H(0, 0) =
+              std::numeric_limits<double>::quiet_NaN();
+        }
+        if (ordinary_two_pass_test_fault ==
+            OrdinaryTwoPassTestFault::kPassTwoGeometryFailure) {
+          pass_two = MSCKFTwoPassLinearization();
+          pass_two.failure = MSCKFTwoPassFailure::kGeometry;
+          pass_two.feature_id = injected_feature_id;
+        } else if (ordinary_two_pass_test_fault ==
+                   OrdinaryTwoPassTestFault::
+                       kPassTwoSchurRankDeficient) {
+          pass_two = MSCKFTwoPassLinearization();
+          pass_two.failure = MSCKFTwoPassFailure::kSchur;
+          pass_two.feature_id = injected_feature_id;
+          pass_two.schur_status =
+              SchurReductionStatus::kRankDeficient;
+          pass_two.schur_stage =
+              SchurReductionStage::kNumericalRank;
+          pass_two.singular_values_available = true;
+          pass_two.singular_ratio_available = true;
+          pass_two.singular_values =
+              Eigen::Vector3d(1.0, 0.5, 0.0);
+          pass_two.singular_ratio = 0.0;
+        } else if (pass_two.valid &&
+                   (!pass_two.H.allFinite() ||
+                    !pass_two.residual.allFinite() ||
+                    !pass_two.mean.dx.allFinite() ||
+                    !std::isfinite(pass_two.mean.nis))) {
+          pass_two = MSCKFTwoPassLinearization();
+          pass_two.failure = MSCKFTwoPassFailure::kJacobian;
+          pass_two.feature_id = injected_feature_id;
+        }
+        if (pass_two.valid) {
+          pass_two_cost = msckf_evaluate_true_cost(
+              ordinary_state_options, ordinary_prior,
+              pass_two.mean.dx,
+              ordinary_feature_batch->CloneActive(), initializer_feat,
+              _options, prior_factor);
+        } else {
+          pass_two_cost.failure = pass_two.failure;
+          pass_two_cost.feature_id = pass_two.feature_id;
+        }
+      } catch (...) {
+        pass_two = MSCKFTwoPassLinearization();
+        pass_two.failure = MSCKFTwoPassFailure::kException;
+        pass_two_cost = MSCKFTwoPassCost();
+        pass_two_cost.failure = MSCKFTwoPassFailure::kException;
+      }
+      const boost::posix_time::ptime pass_two_iteration_end =
+          boost::posix_time::microsec_clock::local_time();
+      const double pass_two_processing_ms =
+          (pass_two_iteration_end - pass_two_iteration_start)
+              .total_microseconds() *
+          1.0e-3;
+
+      double pixel_tolerance =
+          1.0e-9 * std::max(1.0, std::abs(pass_one_cost.pixel));
+      double posterior_tolerance =
+          1.0e-9 * std::max(1.0, std::abs(pass_one_cost.posterior));
+      shadow_oracle_selected_pass = 1;
+      shadow_oracle_reason = "pass2_invalid";
+      if (pass_two.valid && pass_two_cost.valid) {
+        const bool pixel_accepted =
+            pass_two_cost.pixel <=
+            pass_one_cost.pixel + pixel_tolerance;
+        const bool posterior_accepted =
+            pass_two_cost.posterior <=
+            pass_one_cost.posterior + posterior_tolerance;
+        if (pixel_accepted && posterior_accepted) {
+          shadow_oracle_selected_pass = 2;
+          shadow_oracle_reason = "dual_cost_accepted";
+        } else if (!pixel_accepted && !posterior_accepted) {
+          shadow_oracle_reason = "both_costs_harmful";
+        } else if (!pixel_accepted) {
+          shadow_oracle_reason = "pixel_cost_harmful";
+        } else {
+          shadow_oracle_reason = "posterior_cost_harmful";
+        }
+      } else if (!pass_two.valid) {
+        shadow_oracle_reason =
+            msckf_two_pass_failure_name(pass_two.failure);
+      } else {
+        shadow_oracle_reason =
+            msckf_two_pass_failure_name(pass_two_cost.failure);
+      }
+      ordinary_completed_passes =
+          pass_two.valid && pass_two_cost.valid ? 2 : 1;
+
+      if (pass_two.valid && pass_two_cost.valid) {
+        PRINT_DEBUG(
+            "[MSCKF-ITER]: timestamp=%.17g shadow_only=1 "
+            "requested_passes=2 attempted_passes=2 "
+            "completed_passes=2 pass=2 status=accepted "
+            "accepted_features=%zu raw_rows=%d rows=%d "
+            "max_feature_nis=%.17g "
+            "threshold_at_max_feature_nis=%.17g "
+            "affine_correction_norm=%.17g Cpix=%.17g Cpost=%.17g "
+            "dx_norm=%.17g processing_ms=%.17g repairs=%zu\n",
+            ordinary_prior.timestamp, proposal_feature_vec.size(),
+            (int)pass_two.raw_rows, (int)pass_two.reduced_rows,
+            pass_two.maximum_feature_nis,
+            pass_two.maximum_gate_threshold,
+            pass_two.affine_correction_norm, pass_two_cost.pixel,
+            pass_two_cost.posterior, pass_two.mean.dx.norm(),
+            pass_two_processing_ms,
+            pass_two.numerical_repair_count);
+      } else {
+        const MSCKFTwoPassFailure failure =
+            pass_two.valid ? pass_two_cost.failure : pass_two.failure;
+        const std::size_t feature_id =
+            pass_two.valid ? pass_two_cost.feature_id
+                           : pass_two.feature_id;
+        if (failure == MSCKFTwoPassFailure::kSchur) {
+          PRINT_DEBUG(
+              "[MSCKF-ITER]: timestamp=%.17g shadow_only=1 "
+              "requested_passes=2 attempted_passes=2 "
+              "completed_passes=1 pass=2 status=invalid reason=%s "
+              "feature=%zu accepted_features=%zu schur_status=%s "
+              "schur_stage=%s singular_values_available=%d "
+              "singular_values=[%.17g,%.17g,%.17g] "
+              "singular_ratio_available=%d singular_ratio=%.17g "
+              "processing_ms=%.17g\n",
+              ordinary_prior.timestamp,
+              msckf_two_pass_failure_name(failure), feature_id,
+              proposal_feature_vec.size(),
+              schur_reduction_status_name(pass_two.schur_status),
+              schur_reduction_stage_name(pass_two.schur_stage),
+              pass_two.singular_values_available ? 1 : 0,
+              pass_two.singular_values_available
+                  ? pass_two.singular_values(0)
+                  : 0.0,
+              pass_two.singular_values_available
+                  ? pass_two.singular_values(1)
+                  : 0.0,
+              pass_two.singular_values_available
+                  ? pass_two.singular_values(2)
+                  : 0.0,
+              pass_two.singular_ratio_available ? 1 : 0,
+              pass_two.singular_ratio_available
+                  ? pass_two.singular_ratio
+                  : 0.0,
+              pass_two_processing_ms);
+        } else {
+          PRINT_DEBUG(
+              "[MSCKF-ITER]: timestamp=%.17g shadow_only=1 "
+              "requested_passes=2 attempted_passes=2 "
+              "completed_passes=1 pass=2 status=invalid reason=%s "
+              "feature=%zu accepted_features=%zu "
+              "gate_diagnostics_available=%d feature_nis=%.17g "
+              "threshold_at_feature_nis=%.17g processing_ms=%.17g\n",
+              ordinary_prior.timestamp,
+              msckf_two_pass_failure_name(failure), feature_id,
+              proposal_feature_vec.size(),
+              std::isfinite(pass_two.maximum_feature_nis) &&
+                      std::isfinite(pass_two.maximum_gate_threshold)
+                  ? 1
+                  : 0,
+              std::isfinite(pass_two.maximum_feature_nis)
+                  ? pass_two.maximum_feature_nis
+                  : 0.0,
+              std::isfinite(pass_two.maximum_gate_threshold)
+                  ? pass_two.maximum_gate_threshold
+                  : 0.0,
+              pass_two_processing_ms);
+        }
+      }
+
+      PRINT_DEBUG(
+          "[MSCKF-ITER]: timestamp=%.17g shadow_only=1 "
+          "requested_passes=2 attempted_passes=2 completed_passes=%d "
+          "selected_pass=1 oracle_selected_pass=%d oracle_reason=%s "
+          "accepted_features=%zu cost_difference_available=%d "
+          "pixel_difference=%.17g posterior_difference=%.17g "
+          "pixel_tolerance=%.17g posterior_tolerance=%.17g "
+          "oracle_effect_on_live=0\n",
+          ordinary_prior.timestamp, ordinary_completed_passes,
+          shadow_oracle_selected_pass, shadow_oracle_reason,
+          proposal_feature_vec.size(), pass_two_cost.valid ? 1 : 0,
+          pass_two_cost.valid
+              ? pass_one_cost.pixel - pass_two_cost.pixel
+              : 0.0,
+          pass_two_cost.valid
+              ? pass_one_cost.posterior - pass_two_cost.posterior
+              : 0.0,
+          pixel_tolerance, posterior_tolerance);
+    }
+
+    if (!pass_one_oracle_valid) {
+      PRINT_DEBUG(
+          "[MSCKF-ITER]: timestamp=%.17g shadow_only=1 "
+          "requested_passes=2 attempted_passes=%d completed_passes=%d "
+          "selected_pass=1 oracle_selected_pass=0 oracle_reason=%s "
+          "oracle_effect_on_live=0\n",
+          ordinary_prior.timestamp, ordinary_attempted_passes,
+          ordinary_completed_passes, shadow_oracle_reason);
+    }
+    } catch (...) {
+      ordinary_selected_pass = 1;
+      ordinary_completed_passes = 1;
+      shadow_oracle_selected_pass = pass_one_oracle_valid ? 1 : 0;
+      shadow_oracle_reason = "exception";
+      PRINT_WARNING(
+          YELLOW
+          "[MSCKF-ITER]: timestamp=%.17g shadow_only=1 "
+          "requested_passes=2 attempted_passes=%d completed_passes=%d "
+          "selected_pass=1 oracle_selected_pass=%d "
+          "oracle_reason=exception oracle_effect_on_live=0\n"
+          RESET,
+          ordinary_prior.timestamp, ordinary_attempted_passes,
+          ordinary_completed_passes, shadow_oracle_selected_pass);
+    }
+  }
   update_event.baseline_preflight_accepted = true;
   if (update_event.shadow_evidence_available) {
     update_event.shadow.baseline_preview_available = true;
@@ -3515,19 +4160,37 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     update_event.baseline_commit_occurred = true;
     rT5 = boost::posix_time::microsec_clock::local_time();
     notify_observer(update_event, true);
-    PRINT_DEBUG(
-        "[MSCKF-ITER]: timestamp=%.17g terminal=1 requested_passes=1 "
-        "attempted_passes=1 completed_passes=1 selected_pass=1 "
-        "accepted_features=%zu status=committed pass2_attempts=0 "
-        "global_proposal_nis=unavailable Cpix=unavailable "
-        "Cpost=unavailable dx_norm=%.17g processing_ms=%.17g "
-        "mean_commits=%zu covariance_commits=%zu "
-        "feature_finalizations=%zu\n",
-        ordinary_prior.timestamp, proposal_feature_vec.size(),
-        preview.dx.norm(),
-        (rT5 - rT0).total_microseconds() * 1.0e-3,
-        ordinary_mean_commit_count, ordinary_covariance_commit_count,
-        ordinary_feature_finalization_count);
+    if (_options.pass2_shadow_only) {
+      PRINT_DEBUG(
+          "[MSCKF-ITER]: timestamp=%.17g terminal=1 shadow_only=1 "
+          "requested_passes=2 attempted_passes=%d completed_passes=%d "
+          "selected_pass=1 oracle_selected_pass=%d oracle_reason=%s "
+          "accepted_features=%zu status=committed pass2_attempts=%d "
+          "dx_norm=%.17g processing_ms=%.17g "
+          "mean_commits=%zu covariance_commits=%zu "
+          "feature_finalizations=%zu\n",
+          ordinary_prior.timestamp, ordinary_attempted_passes,
+          ordinary_completed_passes, shadow_oracle_selected_pass,
+          shadow_oracle_reason, proposal_feature_vec.size(),
+          ordinary_attempted_passes >= 2 ? 1 : 0, preview.dx.norm(),
+          (rT5 - rT0).total_microseconds() * 1.0e-3,
+          ordinary_mean_commit_count, ordinary_covariance_commit_count,
+          ordinary_feature_finalization_count);
+    } else {
+      PRINT_DEBUG(
+          "[MSCKF-ITER]: timestamp=%.17g terminal=1 requested_passes=1 "
+          "attempted_passes=1 completed_passes=1 selected_pass=1 "
+          "accepted_features=%zu status=committed pass2_attempts=0 "
+          "global_proposal_nis=unavailable Cpix=unavailable "
+          "Cpost=unavailable dx_norm=%.17g processing_ms=%.17g "
+          "mean_commits=%zu covariance_commits=%zu "
+          "feature_finalizations=%zu\n",
+          ordinary_prior.timestamp, proposal_feature_vec.size(),
+          preview.dx.norm(),
+          (rT5 - rT0).total_microseconds() * 1.0e-3,
+          ordinary_mean_commit_count, ordinary_covariance_commit_count,
+          ordinary_feature_finalization_count);
+    }
     ordinary_iteration_terminal_logged = true;
 
     // Debug print timing information

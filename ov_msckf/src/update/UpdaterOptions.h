@@ -55,6 +55,9 @@ struct UpdaterOptions {
   /// Fixed maximum number of visual update passes (one or two).
   int max_visual_passes = 1;
 
+  /// Evaluate the fixed two-pass oracle while committing exact one-pass output.
+  bool pass2_shadow_only = false;
+
   /// Whether a landmark-elimination enum is one of the two public modes.
   static bool landmark_elimination_is_supported(LandmarkElimination mode) noexcept {
     return mode == LandmarkElimination::NULLSPACE || mode == LandmarkElimination::SCHUR;

@@ -190,6 +190,13 @@ struct VioManagerOptions {
     msckf_options.max_visual_passes = configured_count;
   }
 
+  /// Load the optional Pass-2 counterfactual shadow selector.
+  void load_msckf_pass2_shadow_only(const std::shared_ptr<ov_core::YamlParser> &parser) {
+    if (parser != nullptr) {
+      parser->parse_config("up_msckf_pass2_shadow_only", msckf_options.pass2_shadow_only, false);
+    }
+  }
+
   /**
    * @brief Validate and materialize the global MSCKF update configuration.
    *
@@ -212,6 +219,13 @@ struct VioManagerOptions {
     if (!UpdaterOptions::visual_pass_combination_is_supported(msckf_options.max_visual_passes,
                                                                msckf_options.landmark_elimination)) {
       PRINT_ERROR(RED "up_msckf_max_visual_passes=2 requires up_msckf_landmark_elimination=schur\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
+    if (msckf_options.pass2_shadow_only &&
+        (msckf_options.max_visual_passes != 2 ||
+         msckf_options.landmark_elimination != UpdaterOptions::LandmarkElimination::SCHUR)) {
+      PRINT_ERROR(RED "up_msckf_pass2_shadow_only=true requires "
+                      "up_msckf_max_visual_passes=2 and up_msckf_landmark_elimination=schur\n" RESET);
       std::exit(EXIT_FAILURE);
     }
     if (!std::isfinite(msckf_options.sigma_pix) || !(msckf_options.sigma_pix > 0.0)) {
@@ -247,6 +261,7 @@ struct VioManagerOptions {
       parser->parse_config("up_msckf_chi2_multipler", msckf_options.chi2_multipler);
       load_msckf_landmark_elimination(parser);
       load_msckf_max_visual_passes_or_exit(parser);
+      load_msckf_pass2_shadow_only(parser);
     }
     validate_msckf_update_configuration_or_exit();
   }
@@ -282,6 +297,7 @@ struct VioManagerOptions {
     PRINT_DEBUG("    - landmark_elimination: %s\n",
                 UpdaterOptions::landmark_elimination_as_string(msckf_options.landmark_elimination).c_str());
     PRINT_DEBUG("    - max_visual_passes: %d\n", msckf_options.max_visual_passes);
+    PRINT_DEBUG("    - pass2_shadow_only: %d\n", (int)msckf_options.pass2_shadow_only);
     PRINT_DEBUG("  Updater SLAM Feats:\n");
     slam_options.print();
     PRINT_DEBUG("  Updater ARUCO Tags:\n");
