@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "profile": "FROZEN_GATE_D_PROFILE",
+  "repository": {
+    "url": "https://github.com/MokshTrehan/schur-vio-lite.git",
+    "evaluation_commit": "a4463d8f839e6a283632464b8023f788ab72b60a",
+    "final_test_only_commit": "82504db63fafda40dcf44b8e66cbd29609743a1d",
+    "evaluation_final_head_distinction": "The final commit changes only the randomized property test; all accepted EuRoC runs used the evaluation commit."
+  },
+  "configs": [
+    {
+      "path": "config/euroc_mav/estimator_config_gate_d_schur_one_pass.yaml",
+      "sha256": "39279fd929ae91dc1ec63c44f17ff66c369dcd4c9f094ffbf7b95acae07f6d33",
+      "passes": 1,
+      "elimination": "schur"
+    },
+    {
+      "path": "config/euroc_mav/estimator_config_gate_d_schur_two_pass.yaml",
+      "sha256": "7d00c36197d21b934f5f555c6a47b3735033963a9acaf2d79199e7b035a35b0d",
+      "passes": 2,
+      "elimination": "schur"
+    }
+  ],
+  "effective_runtime_profile": {
+    "use_fej": true,
+    "calib_cam_extrinsics": false,
+    "calib_cam_intrinsics": false,
+    "calib_cam_timeoffset": false,
+    "yaml_camera_calibration_values_overridden": true,
+    "feat_rep_msckf": "GLOBAL_3D",
+    "max_clones": 11,
+    "max_slam": 50,
+    "max_slam_in_update": 25,
+    "max_msckf_in_update": 40,
+    "use_stereo": true,
+    "max_cameras": 2,
+    "use_klt": true,
+    "num_pts": 200,
+    "track_frequency_hz": 21.0,
+    "num_opencv_threads": 0,
+    "multi_threading_pubs": false,
+    "multi_threading_subs": false,
+    "bag_start_s": 0.0,
+    "bag_duration": "full"
+  },
+  "runtime_overrides": {
+    "artifact": "algorithm_freeze/phase4/gate_d_serial.launch",
+    "sha256": "baf7afbeb53596c1a609dc570f19db778fd7cba7fef97d7fafe3856245394867",
+    "parser_precedence": "ROS parameter before YAML",
+    "run_log_confirmation": "Each inspected full run logs ROS overrides and effective StateOptions calibration values of zero."
+  },
+  "infrastructure": {
+    "runner": {
+      "artifact": "algorithm_freeze/run_serial.sh",
+      "sha256": "daa55b06941525eb1e476412712d9fb2e68a9e072365ab83db774e2f1b34f8cb"
+    },
+    "launcher": {
+      "artifact": "algorithm_freeze/phase4/gate_d_serial.launch",
+      "sha256": "baf7afbeb53596c1a609dc570f19db778fd7cba7fef97d7fafe3856245394867"
+    },
+    "summarizer": {
+      "artifact": "algorithm_freeze/phase4/summarize_gate_d.py",
+      "sha256": "156fcb3c6e89992c2472d0ca784d3ddeea0affbf3442e21428ad169a286d7c59"
+    },
+    "converter": {
+      "path": "scripts/cp0/openvins_to_tum.py",
+      "sha256": "1d09172e88f152dea3490496030df12d8f80abf9ee528d7b412222940e45b5e4"
+    },
+    "evaluation_binary": {
+      "artifact": "algorithm_freeze/build/catkin_ws/devel/.private/ov_msckf/lib/ov_msckf/ros1_serial_msckf",
+      "sha256": "e8a5ded9ef09d03cf4f70c4960725564044edc34f8a21e3cf2b9c0d8e6f3f458"
+    },
+    "evo_version": "v1.31.1",
+    "evo_ape_script_sha256": "6bee25dc5bfdab0ead8988ab4014a72511339e94697ec61699f66f68f5f24d15",
+    "evo_rpe_script_sha256": "9e07d0bd4566aa680d5e39e58589176a286f4f8a22ba9107a5834ddb278e2bd1",
+    "evo_hash_provenance": "Recomputed from the current executable scripts during reconciliation; the historical run artifact preserved commands/version but not evaluator executable hashes."
+  },
+  "evaluation_commands": {
+    "replay": "timeout --foreground --kill-after=30s 1900s bash RUN_ROOT/run_serial.sh RUN_DIR PORT CONFIG BAG 0.0 -1 1800",
+    "conversion": "timeout --foreground --kill-after=30s 300s /usr/bin/python3 scripts/cp0/openvins_to_tum.py state_estimate.txt trajectory.tum",
+    "ate": "evo_ape tum GT trajectory.tum --t_max_diff 0.01 --pose_relation trans_part --align --save_results evo_ape_translation.zip --no_warnings",
+    "translation_rpe": "evo_rpe tum GT trajectory.tum --t_max_diff 0.01 --pose_relation trans_part --delta 1.0 --delta_unit m --all_pairs --pairs_from_reference --align --save_results evo_rpe_translation_1m.zip --no_warnings",
+    "rotation_rpe": "evo_rpe tum GT trajectory.tum --t_max_diff 0.01 --pose_relation angle_deg --delta 1.0 --delta_unit m --all_pairs --pairs_from_reference --align --save_results evo_rpe_rotation_1m_deg.zip --no_warnings"
+  },
+  "datasets": [
+    {"sequence":"MH_01_easy","bag_sha256":"57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9","ground_truth_sha256":"ab1579de35a047d241e2d0d1a4f4306b4fa51d99c6f11bcdebf336ab2b784df9"},
+    {"sequence":"MH_02_easy","bag_sha256":"b5b2178bf0602d56dcb6372f3463aa70be1ff95e8c8d3a4a059747c270d45575","ground_truth_sha256":"3ba9123b1914631c1f192c6a00741c8f92d4177950f0fa6894603f013393aabc"},
+    {"sequence":"MH_03_medium","bag_sha256":"c51b0064681dfb287b6653f5fd54e6c56af5d9151c866e17574fdbc527db2311","ground_truth_sha256":"8c7c9873f5cb102eda2b68d665134f144eed9d5778f0dbdc82bbf8e8fdbd558e"},
+    {"sequence":"MH_04_difficult","bag_sha256":"4d28ea2883327774fd28477c8e73200237350c0e3b407d20eb6358b2f72124b9","ground_truth_sha256":"552cb6fa2ce3de0a15a5a9caeea3ae1afe7e084e8604251b661a4fcc32a87b13"},
+    {"sequence":"MH_05_difficult","bag_sha256":"0a56ceb1a4618176fde985a93aab71b546bee805a6ca054cc64e76a804c17c03","ground_truth_sha256":"b207efc0ad53cdba7adca75b2a9ee79f8b7ab8b5a0221b77ebe73f0bba211cb2"},
+    {"sequence":"V1_01_easy","bag_sha256":"6dc6192fac63dd0a05ba745548b41fe8cae14724168a98865a81d37e681bbc81","ground_truth_sha256":"6d2f961334ff3069105be0aacf118d3c7e82bf3ab0e238acd5f40f1d897573d1"},
+    {"sequence":"V1_02_medium","bag_sha256":"16bf6781505aa16fe8ab9047696c881621824d19cf50adf053ccaa0eb885f9ff","ground_truth_sha256":"264eaeaab03e145ba47195678faeb38eda0b5e6b26fa0b188a3eb9a08e681911"},
+    {"sequence":"V1_03_difficult","bag_sha256":"d36fc630d34d2f6863c2e62c5d79ce1cbab4228c9ef55c5034772922ea376f56","ground_truth_sha256":"e08f8cb4cbc3b771f392a95dd4380a9d30634c3c8fc1f23a0fe9dbd3f5f60762"},
+    {"sequence":"V2_01_easy","bag_sha256":"d4a4c07aa599008479d5a7a0c10435588d28e0194ef1de67e7385fe4294c73c7","ground_truth_sha256":"5b1c66ce6fce43b26a0971b5c5d92e62d790c46e5552e1a4ddd1134233b37e32"},
+    {"sequence":"V2_02_medium","bag_sha256":"fa020a53ef21d4e7002a0892feea41295fcd49ece383d7e3107c61c1018e3318","ground_truth_sha256":"9e18da3f96828a80b1a020dd5731c6013d61ce3cb6d11c361f0f00230e1ed1e7"},
+    {"sequence":"V2_03_difficult","bag_sha256":"3c765fe04aa4f7f4caa4ffd29e38fd045e8121b8a97eb40a2e9bb296c0311f7b","ground_truth_sha256":"c371bc389ec6a8beb3dee9e75cb3a03b3d0779db84e20654d1752c79905ab731"}
+  ],
+  "dataset_locations_and_hash_provenance": {
+    "bag_roots_at_reconciliation": [
+      "/home/moksh/Downloads/machine_hall",
+      "/home/moksh/Downloads/vicon_room1",
+      "/home/moksh/Downloads/vicon_room2"
+    ],
+    "bag_relative_pattern": "SEQUENCE/SEQUENCE.bag",
+    "ground_truth_relative_pattern": "ov_data/euroc_mav/SEQUENCE.txt",
+    "note": "Hashes were recomputed from the current files during reconciliation. The historical Gate-D artifact preserved the paths and run outputs but not bag hashes, so unchanged bag identity at evaluation is not independently proven by that artifact."
+  },
+  "key_artifacts": [
+    {"artifact":"algorithm_freeze/MORNING_REPORT.md","sha256":"2a2853ac956d0a5961b9362b5866c371cfac548a736e79645d9fa4e751f6c32d"},
+    {"artifact":"algorithm_freeze/ALGORITHM_FREEZE_REPORT.md","sha256":"3b1846b90d63e93f60dd563d0ad8c43c7e4509040957ffab9c448b56a00b4f66"},
+    {"artifact":"algorithm_freeze/METRICS.csv","sha256":"7920f2876a9ea3acfe01a22d6eec75b53c2cb9f3492f347c4bb1b1f659c18176"},
+    {"artifact":"algorithm_freeze/REPRODUCIBILITY_SHA256.csv","sha256":"e21bebc7d6062f89ab50e208ae654e4aca9deb4e8f1bfdc7a9dc0ee6aeda7d79"},
+    {"artifact":"algorithm_freeze/TEST_RESULTS.txt","sha256":"a722e26422bd3629c7e516973cc1b032cb54ba37992a8e4f5f8d07583a233465"}
+  ],
+  "known_process_record_limitations": [
+    "Per-run config, source, and exact-command sidecars were not preserved.",
+    "METRICS.csv was finalized after the 66-run batch rather than incrementally.",
+    "STATUS.txt was not updated after every sequence pair.",
+    "COMMANDS.log summarizes some mechanically repeated commands.",
+    "The two smoke runs are not rows in METRICS.csv.",
+    "The immutable launch and run logs are required to reconstruct effective ROS-overridden values; YAML hashes alone are insufficient."
+  ]
+}
