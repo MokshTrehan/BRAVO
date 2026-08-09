@@ -27,6 +27,7 @@
 #include <Eigen/Core>
 
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <vector>
@@ -147,6 +148,90 @@ struct MSCKFUpdatePreviewSnapshot {
   std::vector<MSCKFUpdatePreviewBlock> state_blocks;
 };
 
+/// Owning current/FEJ values for one active error-state block.
+struct MSCKFUpdatePriorNominalBlock {
+  Eigen::Index covariance_id = -1;
+  Eigen::Index size = 0;
+  Eigen::MatrixXd value;
+  Eigen::MatrixXd fej;
+};
+
+/// Owning clone-to-covariance binding needed by visual linearization.
+struct MSCKFUpdatePriorCloneBinding {
+  double timestamp = 0.0;
+  Eigen::Index covariance_id = -1;
+};
+
+enum class MSCKFUpdatePriorCameraModel {
+  kUnknown,
+  kRadtan,
+  kEquidistant,
+};
+
+/// Owning camera calibration and projection-cache values at updater entry.
+struct MSCKFUpdatePriorCamera {
+  std::size_t camera_id = 0;
+  Eigen::Index extrinsic_id = -1;
+  Eigen::Index intrinsic_id = -1;
+  Eigen::MatrixXd extrinsic_value;
+  Eigen::MatrixXd extrinsic_fej;
+  Eigen::MatrixXd intrinsic_value;
+  Eigen::MatrixXd intrinsic_fej;
+  Eigen::MatrixXd cache_value;
+  int width = 0;
+  int height = 0;
+  MSCKFUpdatePriorCameraModel model =
+      MSCKFUpdatePriorCameraModel::kUnknown;
+};
+
+/**
+ * Owning predicted-prior boundary for one ordinary MSCKF invocation.
+ *
+ * In addition to the covariance/layout consumed by the numerical preview, it
+ * freezes every active nominal and FEJ value plus the fixed camera quantities
+ * read by visual linearization. It contains no live State or Type pointer.
+ */
+struct MSCKFUpdatePriorSnapshot {
+  MSCKFUpdatePreviewSnapshot filter;
+  double timestamp = 0.0;
+  std::vector<MSCKFUpdatePriorNominalBlock> nominal_blocks;
+  std::vector<MSCKFUpdatePriorCloneBinding> clone_bindings;
+  std::vector<MSCKFUpdatePriorCamera> cameras;
+  bool do_fej = false;
+  bool calibrate_camera_pose = false;
+  bool calibrate_camera_intrinsics = false;
+  bool calibrate_camera_timeoffset = false;
+  int feature_representation = -1;
+};
+
+/// Exact reason an entry prior no longer matches the serialized live state.
+enum class MSCKFUpdatePriorMatchStatus {
+  kAccepted,
+  kInvalidState,
+  kCovarianceLayout,
+  kCloneLayout,
+  kCameraLayout,
+  kOptions,
+  kTimestamp,
+  kCovariance,
+  kNominal,
+  kFej,
+  kCameraValue,
+};
+
+struct MSCKFUpdatePriorMatchResult {
+  MSCKFUpdatePriorMatchStatus status =
+      MSCKFUpdatePriorMatchStatus::kInvalidState;
+  Eigen::Index offending_index = -1;
+
+  bool accepted() const noexcept {
+    return status == MSCKFUpdatePriorMatchStatus::kAccepted;
+  }
+};
+
+const char *msckf_update_prior_match_status_name(
+    MSCKFUpdatePriorMatchStatus status) noexcept;
+
 /**
  * @brief Read-only preview of StateHelper::EKFUpdate for an MSCKF system.
  *
@@ -170,6 +255,15 @@ public:
    * External serialization of State access is required, as for Compute().
    */
   static MSCKFUpdatePreviewSnapshot CaptureSnapshot(const std::shared_ptr<State> &state);
+
+  /// Capture covariance/layout, nominal, FEJ, clone, and camera values once.
+  static MSCKFUpdatePriorSnapshot CapturePrior(
+      const std::shared_ptr<State> &state);
+
+  /// Exact, read-only validation that the live prior is still the entry prior.
+  static MSCKFUpdatePriorMatchResult MatchPrior(
+      const std::shared_ptr<State> &state,
+      const MSCKFUpdatePriorSnapshot &snapshot);
 
   /**
    * @brief Compute a read-only proposal from owning value inputs only.

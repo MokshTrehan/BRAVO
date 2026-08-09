@@ -30,6 +30,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -43,6 +44,8 @@ using ov_core::FeatureInitializer;
 using ov_core::FeatureInitializerOptions;
 using ov_msckf::MSCKFUpdatePreviewBlock;
 using ov_msckf::MSCKFUpdatePreviewSnapshot;
+using ov_msckf::MSCKFUpdatePriorMatchStatus;
+using ov_msckf::MSCKFUpdatePriorSnapshot;
 using ov_msckf::SchurReductionResult;
 using ov_msckf::State;
 using ov_msckf::StateHelper;
@@ -81,6 +84,31 @@ const std::array<double, 39> kExpectedIncrement = {{
     2.1631117283029831e-06,  5.4713850238138913e-06,
     -9.7356198631762872e-07}};
 
+class InspectingCamRadtan : public ov_core::CamRadtan {
+public:
+  InspectingCamRadtan(int width, int height)
+      : ov_core::CamRadtan(width, height) {}
+
+  Eigen::Vector2f distort_f(const Eigen::Vector2f &uv_norm) override {
+    if (inspection) {
+      inspection();
+    }
+    return ov_core::CamRadtan::distort_f(uv_norm);
+  }
+
+  void compute_distort_jacobian(const Eigen::Vector2d &uv_norm,
+                                Eigen::MatrixXd &H_dz_dzn,
+                                Eigen::MatrixXd &H_dz_dzeta) override {
+    if (inspection) {
+      inspection();
+    }
+    ov_core::CamRadtan::compute_distort_jacobian(
+        uv_norm, H_dz_dzn, H_dz_dzeta);
+  }
+
+  std::function<void()> inspection;
+};
+
 Eigen::Matrix<double, 7, 1> pose_value(const Eigen::Matrix3d &rotation,
                                        const Eigen::Vector3d &position) {
   Eigen::Matrix<double, 7, 1> value;
@@ -116,11 +144,64 @@ void expect_same_layout(const std::vector<MSCKFUpdatePreviewBlock> &actual,
   }
 }
 
+void expect_same_feature_observations(const Feature &actual,
+                                      const Feature &expected) {
+  EXPECT_EQ(actual.featid, expected.featid);
+  EXPECT_EQ(actual.to_delete, expected.to_delete);
+  EXPECT_EQ(actual.anchor_cam_id, expected.anchor_cam_id);
+  EXPECT_EQ(std::memcmp(&actual.anchor_clone_timestamp,
+                        &expected.anchor_clone_timestamp, sizeof(double)),
+            0);
+  EXPECT_EQ(std::memcmp(actual.p_FinA.data(), expected.p_FinA.data(),
+                        3U * sizeof(double)),
+            0);
+  EXPECT_EQ(std::memcmp(actual.p_FinG.data(), expected.p_FinG.data(),
+                        3U * sizeof(double)),
+            0);
+  ASSERT_EQ(actual.timestamps.size(), expected.timestamps.size());
+  ASSERT_EQ(actual.uvs.size(), expected.uvs.size());
+  ASSERT_EQ(actual.uvs_norm.size(), expected.uvs_norm.size());
+  for (const auto &camera : expected.timestamps) {
+    const auto actual_times = actual.timestamps.find(camera.first);
+    const auto actual_uvs = actual.uvs.find(camera.first);
+    const auto actual_norm = actual.uvs_norm.find(camera.first);
+    ASSERT_NE(actual_times, actual.timestamps.end());
+    ASSERT_NE(actual_uvs, actual.uvs.end());
+    ASSERT_NE(actual_norm, actual.uvs_norm.end());
+    ASSERT_EQ(actual_times->second.size(), camera.second.size());
+    ASSERT_EQ(actual_uvs->second.size(), expected.uvs.at(camera.first).size());
+    ASSERT_EQ(actual_norm->second.size(),
+              expected.uvs_norm.at(camera.first).size());
+    for (std::size_t index = 0; index < camera.second.size(); ++index) {
+      EXPECT_EQ(std::memcmp(&actual_times->second[index], &camera.second[index],
+                            sizeof(double)),
+                0);
+      const auto &actual_uv = actual_uvs->second[index];
+      const auto &expected_uv = expected.uvs.at(camera.first)[index];
+      ASSERT_EQ(actual_uv.size(), expected_uv.size());
+      EXPECT_EQ(std::memcmp(actual_uv.data(), expected_uv.data(),
+                            static_cast<std::size_t>(actual_uv.size()) *
+                                sizeof(float)),
+                0);
+      const auto &actual_normalized = actual_norm->second[index];
+      const auto &expected_normalized =
+          expected.uvs_norm.at(camera.first)[index];
+      ASSERT_EQ(actual_normalized.size(), expected_normalized.size());
+      EXPECT_EQ(std::memcmp(actual_normalized.data(),
+                            expected_normalized.data(),
+                            static_cast<std::size_t>(actual_normalized.size()) *
+                                sizeof(float)),
+                0);
+    }
+  }
+}
+
 struct Fixture {
   std::shared_ptr<State> state;
   std::vector<std::shared_ptr<Type>> state_order;
   std::shared_ptr<Feature> accepted_feature;
   std::shared_ptr<Feature> rejected_feature;
+  std::shared_ptr<InspectingCamRadtan> camera;
   UpdaterOptions updater_options;
   FeatureInitializerOptions initializer_options;
 };
@@ -143,9 +224,9 @@ Fixture make_fixture() {
   intrinsics << 420.0, 415.0, 320.0, 240.0, 0.0, 0.0, 0.0, 0.0;
   fixture.state->_cam_intrinsics.at(0)->set_value(intrinsics);
   fixture.state->_cam_intrinsics.at(0)->set_fej(intrinsics);
-  auto camera = std::make_shared<ov_core::CamRadtan>(640, 480);
-  camera->set_value(intrinsics);
-  fixture.state->_cam_intrinsics_cameras[0] = camera;
+  fixture.camera = std::make_shared<InspectingCamRadtan>(640, 480);
+  fixture.camera->set_value(intrinsics);
+  fixture.state->_cam_intrinsics_cameras[0] = fixture.camera;
 
   const Eigen::Matrix<double, 7, 1> identity_calibration =
       pose_value(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
@@ -217,6 +298,9 @@ Fixture make_fixture() {
   fixture.accepted_feature = std::make_shared<Feature>();
   fixture.accepted_feature->featid = kAcceptedFeatureId;
   fixture.accepted_feature->to_delete = false;
+  fixture.accepted_feature->anchor_clone_timestamp = -1.0;
+  fixture.accepted_feature->p_FinA.setZero();
+  fixture.accepted_feature->p_FinG.setZero();
   const Eigen::Vector3d feature_global(1.15, 0.24, 5.2);
   const std::array<Eigen::Vector2d, 4> pixel_offsets = {{
       Eigen::Vector2d(0.035, -0.020), Eigen::Vector2d(-0.025, 0.018),
@@ -227,7 +311,7 @@ Fixture make_fixture() {
         clone->Rot() * (feature_global - clone->pos());
     const Eigen::Vector2d normalized(point_camera(0) / point_camera(2),
                                      point_camera(1) / point_camera(2));
-    const Eigen::Vector2d measured = camera->distort_d(normalized) +
+    const Eigen::Vector2d measured = fixture.camera->distort_d(normalized) +
                                      pixel_offsets[index];
     Eigen::VectorXf measured_float(2);
     measured_float = measured.cast<float>();
@@ -243,6 +327,9 @@ Fixture make_fixture() {
   fixture.rejected_feature = std::make_shared<Feature>();
   fixture.rejected_feature->featid = kRejectedFeatureId;
   fixture.rejected_feature->to_delete = false;
+  fixture.rejected_feature->anchor_clone_timestamp = -1.0;
+  fixture.rejected_feature->p_FinA.setZero();
+  fixture.rejected_feature->p_FinG.setZero();
   for (int index = 0; index < 2; ++index) {
     Eigen::VectorXf measured(2);
     measured << 300.0f + static_cast<float>(index),
@@ -292,6 +379,16 @@ TEST(CP1OnePassRegression,
   const Eigen::MatrixXd prior = StateHelper::get_full_covariance(fixture.state);
   ASSERT_EQ(prior.rows(), 39);
   ASSERT_TRUE(prior.allFinite());
+  const MSCKFUpdatePriorSnapshot entry_prior =
+      UpdaterMSCKFPreview::CapturePrior(fixture.state);
+  const auto entry_match =
+      UpdaterMSCKFPreview::MatchPrior(fixture.state, entry_prior);
+  ASSERT_TRUE(entry_match.accepted())
+      << ov_msckf::msckf_update_prior_match_status_name(entry_match.status);
+  EXPECT_EQ(entry_match.status, MSCKFUpdatePriorMatchStatus::kAccepted);
+
+  const Feature accepted_input = *fixture.accepted_feature;
+  const Feature rejected_input = *fixture.rejected_feature;
 
   std::vector<Eigen::MatrixXd> prior_values;
   std::vector<Eigen::MatrixXd> prior_fej;
@@ -414,6 +511,12 @@ TEST(CP1OnePassRegression,
     expect_same_bytes(fixture.state_order[index]->value(), prior_values[index]);
     expect_same_bytes(fixture.state_order[index]->fej(), prior_fej[index]);
   }
+  const auto proposal_match =
+      UpdaterMSCKFPreview::MatchPrior(fixture.state, entry_prior);
+  ASSERT_TRUE(proposal_match.accepted())
+      << ov_msckf::msckf_update_prior_match_status_name(proposal_match.status);
+  expect_same_feature_observations(*fixture.accepted_feature, accepted_input);
+  expect_same_feature_observations(*fixture.rejected_feature, rejected_input);
 
   ASSERT_TRUE(preview.accepted())
       << ov_msckf::msckf_update_preview_status_name(
@@ -496,12 +599,59 @@ TEST(CP1OnePassRegression,
         reference_increment.segment(variable->id(), variable->size()));
   }
 
+  // The mutation-only seam must commit the exact accepted preview without
+  // repeating the Kalman solve and without changing FEJ values.
+  Fixture commit_fixture = make_fixture();
+  std::vector<Eigen::MatrixXd> commit_prior_fej;
+  for (const auto &variable : commit_fixture.state_order) {
+    commit_prior_fej.push_back(variable->fej());
+  }
+  ASSERT_TRUE(StateHelper::CommitPrecomputedUpdate(
+      commit_fixture.state, preview.dx, preview.P_plus));
+  expect_same_bytes(StateHelper::get_full_covariance(commit_fixture.state),
+                    preview.P_plus);
+  for (std::size_t index = 0; index < commit_fixture.state_order.size();
+       ++index) {
+    EXPECT_LE((commit_fixture.state_order[index]->value() -
+               expected_variables[index]->value())
+                  .norm(),
+              schurvio_cp1::mixed_tolerance(
+                  1.0e-12, 1.0e-10,
+                  expected_variables[index]->value().norm()));
+    expect_same_bytes(commit_fixture.state_order[index]->fej(),
+                      commit_prior_fej[index]);
+  }
+
   std::vector<std::shared_ptr<Feature>> feature_vector = {
       fixture.accepted_feature, fixture.rejected_feature};
+  const Eigen::MatrixXd camera_cache_before =
+      fixture.camera->get_value();
+  std::size_t proposal_observation_count = 0U;
+  fixture.camera->inspection = [&]() {
+    ++proposal_observation_count;
+    expect_same_bytes(StateHelper::get_full_covariance(fixture.state), prior);
+    for (std::size_t index = 0; index < fixture.state_order.size(); ++index) {
+      expect_same_bytes(fixture.state_order[index]->value(),
+                        prior_values[index]);
+      expect_same_bytes(fixture.state_order[index]->fej(), prior_fej[index]);
+    }
+    expect_same_feature_observations(*fixture.accepted_feature,
+                                     accepted_input);
+    expect_same_feature_observations(*fixture.rejected_feature,
+                                     rejected_input);
+    expect_same_bytes(fixture.camera->get_value(), camera_cache_before);
+    EXPECT_EQ(feature_vector.size(), 2U);
+    if (feature_vector.size() == 2U) {
+      EXPECT_EQ(feature_vector[0], fixture.accepted_feature);
+      EXPECT_EQ(feature_vector[1], fixture.rejected_feature);
+    }
+  };
   UpdaterMSCKF updater(fixture.updater_options,
                        fixture.initializer_options);
   updater.update(fixture.state, feature_vector);
+  fixture.camera->inspection = {};
 
+  EXPECT_GT(proposal_observation_count, 0U);
   ASSERT_EQ(feature_vector.size(), 1U);
   EXPECT_EQ(feature_vector.front(), fixture.accepted_feature);
   EXPECT_EQ(feature_vector.front()->featid, kAcceptedFeatureId);
@@ -576,6 +726,137 @@ TEST(CP1OnePassRegression,
             << " covariance_trace=" << posterior.trace()
             << " covariance_squared_norm=" << posterior.squaredNorm()
             << std::endl;
+}
+
+TEST(CP1OnePassRegression,
+     PriorMismatchAndInvalidPrecomputedCommitHaveZeroWrites) {
+  Fixture fixture = make_fixture();
+  const MSCKFUpdatePriorSnapshot snapshot =
+      UpdaterMSCKFPreview::CapturePrior(fixture.state);
+  const Eigen::MatrixXd covariance_before =
+      StateHelper::get_full_covariance(fixture.state);
+  std::vector<Eigen::MatrixXd> values_before;
+  std::vector<Eigen::MatrixXd> fej_before;
+  for (const auto &variable : fixture.state_order) {
+    values_before.push_back(variable->value());
+    fej_before.push_back(variable->fej());
+  }
+
+  Eigen::VectorXd invalid_dx =
+      Eigen::VectorXd::Zero(covariance_before.rows() - 1);
+  EXPECT_FALSE(StateHelper::CommitPrecomputedUpdate(
+      fixture.state, invalid_dx, covariance_before));
+  expect_same_bytes(StateHelper::get_full_covariance(fixture.state),
+                    covariance_before);
+  for (std::size_t index = 0; index < fixture.state_order.size(); ++index) {
+    expect_same_bytes(fixture.state_order[index]->value(), values_before[index]);
+    expect_same_bytes(fixture.state_order[index]->fej(), fej_before[index]);
+  }
+
+  Eigen::MatrixXd changed_imu = fixture.state->_imu->value();
+  changed_imu(7) += 1.0e-6;
+  fixture.state->_imu->set_value(changed_imu);
+  const auto mismatch =
+      UpdaterMSCKFPreview::MatchPrior(fixture.state, snapshot);
+  EXPECT_FALSE(mismatch.accepted());
+  EXPECT_EQ(mismatch.status, MSCKFUpdatePriorMatchStatus::kNominal);
+  expect_same_bytes(StateHelper::get_full_covariance(fixture.state),
+                    covariance_before);
+  for (std::size_t index = 0; index < fixture.state_order.size(); ++index) {
+    expect_same_bytes(fixture.state_order[index]->fej(), fej_before[index]);
+  }
+
+  // PoseJPL exposes child storage that the visual Jacobian reads directly.
+  // A child-only mutation must not hide behind an unchanged parent cache.
+  Fixture nested_fixture = make_fixture();
+  const MSCKFUpdatePriorSnapshot nested_snapshot =
+      UpdaterMSCKFPreview::CapturePrior(nested_fixture.state);
+  const auto nested_clone = nested_fixture.state->_clones_IMU.begin()->second;
+  const Eigen::MatrixXd nested_parent_before = nested_clone->value();
+  Eigen::MatrixXd changed_position = nested_clone->p()->value();
+  changed_position(0) += 1.0e-6;
+  nested_clone->p()->set_value(changed_position);
+  expect_same_bytes(nested_clone->value(), nested_parent_before);
+  const auto nested_mismatch =
+      UpdaterMSCKFPreview::MatchPrior(nested_fixture.state, nested_snapshot);
+  EXPECT_FALSE(nested_mismatch.accepted());
+  EXPECT_EQ(nested_mismatch.status, MSCKFUpdatePriorMatchStatus::kNominal);
+}
+
+TEST(CP1OnePassRegression,
+     CleaningOnlyRejectionPreservesZeroStateCommitDisposition) {
+  Fixture fixture = make_fixture();
+  const Eigen::MatrixXd covariance_before =
+      StateHelper::get_full_covariance(fixture.state);
+  std::vector<Eigen::MatrixXd> values_before;
+  std::vector<Eigen::MatrixXd> fej_before;
+  for (const auto &variable : fixture.state_order) {
+    values_before.push_back(variable->value());
+    fej_before.push_back(variable->fej());
+  }
+
+  std::vector<std::shared_ptr<Feature>> features = {
+      fixture.rejected_feature};
+  UpdaterMSCKF updater(fixture.updater_options,
+                       fixture.initializer_options);
+  updater.update(fixture.state, features);
+
+  EXPECT_TRUE(features.empty());
+  EXPECT_TRUE(fixture.rejected_feature->to_delete);
+  expect_same_bytes(StateHelper::get_full_covariance(fixture.state),
+                    covariance_before);
+  for (std::size_t index = 0; index < fixture.state_order.size(); ++index) {
+    expect_same_bytes(fixture.state_order[index]->value(), values_before[index]);
+    expect_same_bytes(fixture.state_order[index]->fej(), fej_before[index]);
+  }
+}
+
+TEST(CP1OnePassRegression,
+     UpdaterNestedPoseMismatchRollsBackCallerVectorAndSkipsCommit) {
+  Fixture fixture = make_fixture();
+  const Eigen::MatrixXd covariance_before =
+      StateHelper::get_full_covariance(fixture.state);
+  std::vector<Eigen::MatrixXd> values_before;
+  std::vector<Eigen::MatrixXd> fej_before;
+  for (const auto &variable : fixture.state_order) {
+    values_before.push_back(variable->value());
+    fej_before.push_back(variable->fej());
+  }
+  const Feature accepted_before = *fixture.accepted_feature;
+  const Feature rejected_before = *fixture.rejected_feature;
+  std::vector<std::shared_ptr<Feature>> features = {
+      fixture.accepted_feature, fixture.rejected_feature};
+
+  const auto changed_clone = fixture.state->_clones_IMU.begin()->second;
+  Eigen::MatrixXd changed_clone_position = changed_clone->p()->value();
+  changed_clone_position(0) += 0.25;
+  bool changed_nested_pose = false;
+  fixture.camera->inspection = [&]() {
+    if (!changed_nested_pose) {
+      changed_clone->p()->set_value(changed_clone_position);
+      changed_nested_pose = true;
+    }
+  };
+  UpdaterMSCKF updater(fixture.updater_options,
+                       fixture.initializer_options);
+  updater.update(fixture.state, features);
+  fixture.camera->inspection = {};
+
+  EXPECT_TRUE(changed_nested_pose);
+  EXPECT_TRUE(features.empty());
+  expect_same_bytes(changed_clone->p()->value(), changed_clone_position);
+  expect_same_feature_observations(*fixture.accepted_feature,
+                                   accepted_before);
+  expect_same_feature_observations(*fixture.rejected_feature,
+                                   rejected_before);
+  expect_same_bytes(StateHelper::get_full_covariance(fixture.state),
+                    covariance_before);
+  for (std::size_t index = 0; index < fixture.state_order.size(); ++index) {
+    expect_same_bytes(fixture.state_order[index]->value(),
+                      values_before[index]);
+    expect_same_bytes(fixture.state_order[index]->fej(),
+                      fej_before[index]);
+  }
 }
 
 } // namespace

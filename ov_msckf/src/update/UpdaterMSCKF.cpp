@@ -47,6 +47,7 @@
 
 #include <Eigen/Cholesky>
 
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
@@ -54,13 +55,99 @@
 #include <exception>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 using namespace ov_core;
 using namespace ov_type;
 using namespace ov_msckf;
 
 namespace {
+
+/**
+ * Ordinary-mode feature transaction. Raw entry copies remain immutable while
+ * the existing updater pipeline mutates independent working copies. The live
+ * objects and caller vector are updated only by FinalizePrepared() after the
+ * terminal proposal decision.
+ */
+class MSCKFDetachedFeatureBatch {
+public:
+  explicit MSCKFDetachedFeatureBatch(
+      const std::vector<std::shared_ptr<Feature>> &features) {
+    entries_.reserve(features.size());
+    active_.reserve(features.size());
+    working_index_.reserve(features.size());
+    for (const auto &feature : features) {
+      if (!feature) {
+        throw std::invalid_argument(
+            "UpdaterMSCKF received a null feature pointer");
+      }
+      Entry entry;
+      entry.live = feature;
+      entry.raw = std::make_shared<Feature>(*feature);
+      entry.working = std::make_shared<Feature>(*entry.raw);
+      const std::size_t index = entries_.size();
+      working_index_.emplace(entry.working.get(), index);
+      active_.push_back(entry.working);
+      entries_.push_back(std::move(entry));
+    }
+  }
+
+  std::vector<std::shared_ptr<Feature>> &active() noexcept { return active_; }
+
+  void PrepareFinalization() {
+    if (prepared_) {
+      return;
+    }
+    if (finalized_) {
+      throw std::logic_error(
+          "UpdaterMSCKF feature transaction finalized more than once");
+    }
+
+    final_active_.reserve(active_.size());
+    for (const auto &working : active_) {
+      const auto source = working_index_.find(working.get());
+      if (source == working_index_.end() || source->second >= entries_.size()) {
+        throw std::logic_error(
+            "UpdaterMSCKF detached feature mapping is incomplete");
+      }
+      final_active_.push_back(entries_[source->second].live);
+    }
+    prepared_ = true;
+  }
+
+  void FinalizePrepared(
+      std::vector<std::shared_ptr<Feature>> &features) noexcept {
+    assert(prepared_);
+    assert(!finalized_);
+    // Keep every rejected working copy alive until this boundary so cleaning,
+    // partial initializer geometry, and delete flags match the direct path.
+    for (auto &entry : entries_) {
+      *entry.live = std::move(*entry.working);
+    }
+    features.swap(final_active_);
+    finalized_ = true;
+  }
+
+private:
+  struct Entry {
+    std::shared_ptr<Feature> live;
+    std::shared_ptr<Feature> raw;
+    std::shared_ptr<Feature> working;
+  };
+
+  std::vector<Entry> entries_;
+  std::vector<std::shared_ptr<Feature>> active_;
+  std::vector<std::shared_ptr<Feature>> final_active_;
+  std::unordered_map<const Feature *, std::size_t> working_index_;
+  bool prepared_ = false;
+  bool finalized_ = false;
+};
+
+static_assert(std::is_nothrow_move_assignable<Feature>::value,
+              "Feature finalization must not throw after state commit");
 
 bool capture_cp2_duration_ns(const CP2SteadyClockEndpoint &start,
                              const CP2SteadyClockEndpoint &end,
@@ -756,6 +843,42 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   boost::posix_time::ptime rT0, rT1, rT2, rT3, rT4, rT5;
   rT0 = boost::posix_time::microsec_clock::local_time();
 
+  // Ordinary mode freezes the complete predicted prior before any feature
+  // cleanup or geometry write, and performs all feature work on detached
+  // copies. Recorded mode retains its existing live-feature lifecycle.
+  MSCKFUpdatePriorSnapshot ordinary_prior;
+  std::unique_ptr<MSCKFDetachedFeatureBatch> ordinary_feature_batch;
+  std::vector<std::shared_ptr<Feature>> *proposal_features = &feature_vec;
+  if (!recorded_mode) {
+    ordinary_prior = UpdaterMSCKFPreview::CapturePrior(state);
+    const MSCKFUpdatePriorMatchResult entry_match =
+        UpdaterMSCKFPreview::MatchPrior(state, ordinary_prior);
+    if (!entry_match.accepted()) {
+      PRINT_WARNING(YELLOW
+                    "[MSCKF-PRIOR]: status=%s stage=entry index=%d live_writes=0\n" RESET,
+                    msckf_update_prior_match_status_name(entry_match.status),
+                    (int)entry_match.offending_index);
+      // The ordinary caller interprets every returned pointer as a consumed
+      // MSCKF track. An empty output is therefore the rollback signal that
+      // preserves the untouched database objects for a later update.
+      feature_vec.clear();
+      finish_update(CP2UpdateTerminalStatus::kInternalFailure,
+                    CP2UpdateTerminalSubreason::kSnapshotMismatch);
+      return;
+    }
+    ordinary_feature_batch.reset(
+        new MSCKFDetachedFeatureBatch(feature_vec));
+    proposal_features = &ordinary_feature_batch->active();
+  }
+  std::vector<std::shared_ptr<Feature>> &proposal_feature_vec =
+      *proposal_features;
+  const auto finalize_ordinary_features = [&]() {
+    if (ordinary_feature_batch) {
+      ordinary_feature_batch->PrepareFinalization();
+      ordinary_feature_batch->FinalizePrepared(feature_vec);
+    }
+  };
+
   // 0. Get all timestamps our clones are at (and thus valid measurement times)
   std::vector<double> clonetimes;
   for (const auto &clone_imu : state->_clones_IMU) {
@@ -763,8 +886,8 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   }
 
   // 1. Clean all feature measurements and make sure they all have valid clone times
-  auto it0 = feature_vec.begin();
-  while (it0 != feature_vec.end()) {
+  auto it0 = proposal_feature_vec.begin();
+  while (it0 != proposal_feature_vec.end()) {
 
     // Clean the feature
     (*it0)->clean_old_measurements(clonetimes);
@@ -793,13 +916,13 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     // Remove if we don't have enough
     if (feature_measurement_count < 2U) {
       (*it0)->to_delete = true;
-      it0 = feature_vec.erase(it0);
+      it0 = proposal_feature_vec.erase(it0);
     } else {
       it0++;
     }
   }
   rT1 = boost::posix_time::microsec_clock::local_time();
-  const bool features_after_cleaning = !feature_vec.empty();
+  const bool features_after_cleaning = !proposal_feature_vec.empty();
 
   // 2. Create vector of cloned *CAMERA* poses at each of our clone timesteps
   std::unordered_map<size_t, std::unordered_map<double, FeatureInitializer::ClonePose>> clones_cam;
@@ -822,8 +945,8 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   }
 
   // 3. Try to triangulate all MSCKF or new SLAM features that have measurements
-  auto it1 = feature_vec.begin();
-  while (it1 != feature_vec.end()) {
+  auto it1 = proposal_feature_vec.begin();
+  while (it1 != proposal_feature_vec.end()) {
 
     // Triangulate the feature and remove if it fails
     bool success_tri = true;
@@ -842,22 +965,22 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     // Remove the feature if not a success
     if (!success_tri || !success_refine) {
       (*it1)->to_delete = true;
-      it1 = feature_vec.erase(it1);
+      it1 = proposal_feature_vec.erase(it1);
       continue;
     }
     it1++;
   }
   rT2 = boost::posix_time::microsec_clock::local_time();
-  const bool features_after_triangulation = !feature_vec.empty();
+  const bool features_after_triangulation = !proposal_feature_vec.empty();
 
   // Calculate the max possible measurement size with checked schema arithmetic.
   std::uint64_t max_meas_size_u64 = 0U;
-  for (std::size_t i = 0; i < feature_vec.size(); ++i) {
-    for (const auto &pair : feature_vec.at(i)->timestamps) {
+  for (std::size_t i = 0; i < proposal_feature_vec.size(); ++i) {
+    for (const auto &pair : proposal_feature_vec.at(i)->timestamps) {
       std::uint64_t observation_count = 0U;
       std::uint64_t scalar_row_count = 0U;
       std::uint64_t updated_maximum = 0U;
-      if (!cp2_size_to_u64(feature_vec.at(i)->timestamps[pair.first].size(),
+      if (!cp2_size_to_u64(proposal_feature_vec.at(i)->timestamps[pair.first].size(),
                            observation_count) ||
           !cp2_checked_multiply_u64(2U, observation_count, scalar_row_count) ||
           !cp2_checked_add_u64(max_meas_size_u64, scalar_row_count,
@@ -939,7 +1062,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
 #if defined(OV_MSCKF_CP2_TESTING)
     cp2_test_note_stage(CP2UpdaterTestStage::kLivePreviewCapture);
 #endif
-    prior_snapshot = UpdaterMSCKFPreview::CaptureSnapshot(state);
+    prior_snapshot = ordinary_prior.filter;
   }
   bool phase0_promoted = false;
   std::vector<std::uint8_t> phase0_payload;
@@ -1100,8 +1223,8 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
       };
 
   // 4. Compute linear system for each feature, nullspace project, and reject
-  auto it2 = feature_vec.begin();
-  while (it2 != feature_vec.end()) {
+  auto it2 = proposal_feature_vec.begin();
+  while (it2 != proposal_feature_vec.end()) {
 
     // Convert our feature into our current format
     UpdaterHelper::UpdaterHelperFeature feat;
@@ -1241,7 +1364,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
                         reduction.regularization_count, reduction.fallback_count);
         }
         (*it2)->to_delete = true;
-        it2 = feature_vec.erase(it2);
+        it2 = proposal_feature_vec.erase(it2);
         continue;
       }
       H_x = std::move(reduction.H_reduced);
@@ -1266,6 +1389,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
         finish_recorded_noncommit(CP2UpdateTerminalStatus::kInternalFailure,
                                   CP2UpdateTerminalSubreason::kInvalidLiveMode);
       } else {
+        feature_vec.clear();
         finish_update(CP2UpdateTerminalStatus::kInternalFailure,
                       CP2UpdateTerminalSubreason::kInvalidLiveMode);
       }
@@ -1287,7 +1411,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
       PRINT_WARNING(YELLOW "[MSCKF-GATE]: feature=%zu pass=1 rows=%d status=rejected stage=%s\n" RESET,
                     feat.featid, (int)res.rows(), cp2_feature_gate_stage_name(gate.stage));
       (*it2)->to_delete = true;
-      it2 = feature_vec.erase(it2);
+      it2 = proposal_feature_vec.erase(it2);
       continue;
     }
     std::uint64_t accepted_feature_id = 0U;
@@ -1470,8 +1594,8 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
 
   // We have appended all features to our Hx_big, res_big
   // Delete it so we do not reuse information
-  for (size_t f = 0; f < feature_vec.size(); f++) {
-    feature_vec[f]->to_delete = true;
+  for (size_t f = 0; f < proposal_feature_vec.size(); f++) {
+    proposal_feature_vec[f]->to_delete = true;
   }
 
   if (update_event.raw_system_count > 0) {
@@ -1521,6 +1645,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
                                   terminal_subreason);
       }
     } else {
+      finalize_ordinary_features();
       finish_update(CP2UpdateTerminalStatus::kAllRejected, terminal_subreason);
     }
     return;
@@ -1556,6 +1681,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
           CP2UpdateTerminalStatus::kEmptyAfterCompression,
           CP2UpdateTerminalSubreason::kMeasurementCompressionEmpty);
     } else {
+      finalize_ordinary_features();
       finish_update(CP2UpdateTerminalStatus::kEmptyAfterCompression,
                     CP2UpdateTerminalSubreason::kMeasurementCompressionEmpty);
     }
@@ -1626,6 +1752,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
           CP2UpdateTerminalStatus::kPreflightRejected,
           CP2UpdateTerminalSubreason::kBaselinePreflightRejected);
     } else {
+      finalize_ordinary_features();
       finish_update(CP2UpdateTerminalStatus::kPreflightRejected,
                     CP2UpdateTerminalSubreason::kBaselinePreflightRejected);
     }
@@ -1638,18 +1765,46 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     update_event.shadow.baseline_commit_planned = true;
   }
 
+  if (!recorded_mode) {
+    // Complete every allocation and pointer-map check before the first live
+    // state write. FinalizePrepared is then a no-throw move/swap boundary.
+    ordinary_feature_batch->PrepareFinalization();
+    const MSCKFUpdatePriorMatchResult prior_match =
+        UpdaterMSCKFPreview::MatchPrior(state, ordinary_prior);
+    if (!prior_match.accepted()) {
+      PRINT_WARNING(YELLOW
+                    "[MSCKF-PRIOR]: status=%s stage=precommit index=%d live_writes=0\n" RESET,
+                    msckf_update_prior_match_status_name(prior_match.status),
+                    (int)prior_match.offending_index);
+      feature_vec.clear();
+      finish_update(CP2UpdateTerminalStatus::kInternalFailure,
+                    CP2UpdateTerminalSubreason::kSnapshotMismatch);
+      return;
+    }
+  }
+
   PRINT_ALL("[MSCKF-REDUCTION]: mode=%s accepted_gamma=%.17g compressed_rows=%d\n",
             UpdaterOptions::landmark_elimination_as_string(_options.landmark_elimination).c_str(), retained_gamma,
             (int)res_big.rows());
 
   if (!recorded_mode) {
-    // Ordinary OpenVINS/diagnostic mode retains the single direct commit and
-    // carries no composite or authoritative-sink overhead.
+    // Commit the already validated proposal once. No Kalman solve or candidate
+    // injection is repeated at this boundary.
     live_commit_started = true;
 #if defined(OV_MSCKF_CP2_TESTING)
     cp2_test_note_stage(CP2UpdaterTestStage::kEKFUpdateEntered);
 #endif
-    StateHelper::EKFUpdate(state, Hx_order_big, Hx_big, res_big, R_big);
+    if (!StateHelper::CommitPrecomputedUpdate(state, preview.dx,
+                                               preview.P_plus)) {
+      live_commit_started = false;
+      PRINT_WARNING(YELLOW
+                    "[MSCKF-COMMIT]: status=invalid_precomputed_update live_writes=0\n" RESET);
+      feature_vec.clear();
+      finish_update(CP2UpdateTerminalStatus::kInternalFailure,
+                    CP2UpdateTerminalSubreason::kTraceInvariantFailure);
+      return;
+    }
+    finalize_ordinary_features();
     const CP2SteadyClockEndpoint cp2_update_end =
         cp2_steady_clock_now();
 #if defined(OV_MSCKF_CP2_TESTING)
@@ -1674,7 +1829,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
               (rT2 - rT1).total_microseconds() * 1e-6);
     PRINT_ALL("[MSCKF-UP]: %.4f seconds create system (%d features)\n",
               (rT3 - rT2).total_microseconds() * 1e-6,
-              (int)feature_vec.size());
+              (int)proposal_feature_vec.size());
     PRINT_ALL("[MSCKF-UP]: %.4f seconds compress system\n",
               (rT4 - rT3).total_microseconds() * 1e-6);
     PRINT_ALL("[MSCKF-UP]: %.4f seconds update state (%d size)\n",
@@ -2007,6 +2162,9 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     }
     PRINT_WARNING(YELLOW "[MSCKF-CP2]: status=internal_failure subreason=trace_invariant_failure detail=%s\n" RESET,
                   exception.what());
+    if (!recorded_mode) {
+      feature_vec.clear();
+    }
     finish_update(CP2UpdateTerminalStatus::kInternalFailure,
                   CP2UpdateTerminalSubreason::kTraceInvariantFailure);
   } catch (const std::exception &exception) {
@@ -2025,6 +2183,9 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     }
     PRINT_WARNING(YELLOW "[MSCKF-CP2]: status=internal_failure subreason=trace_invariant_failure detail=%s\n" RESET,
                   exception.what());
+    if (!recorded_mode) {
+      feature_vec.clear();
+    }
     finish_update(CP2UpdateTerminalStatus::kInternalFailure,
                   CP2UpdateTerminalSubreason::kTraceInvariantFailure);
   } catch (...) {
@@ -2043,6 +2204,9 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     }
     PRINT_WARNING(YELLOW
                   "[MSCKF-CP2]: status=internal_failure subreason=trace_invariant_failure detail=unknown\n" RESET);
+    if (!recorded_mode) {
+      feature_vec.clear();
+    }
     finish_update(CP2UpdateTerminalStatus::kInternalFailure,
                   CP2UpdateTerminalSubreason::kTraceInvariantFailure);
   }

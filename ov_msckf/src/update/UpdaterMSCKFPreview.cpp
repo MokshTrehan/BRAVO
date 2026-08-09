@@ -23,15 +23,92 @@
 
 #include "UpdaterMSCKFPreview.h"
 
+#include "cam/CamEqui.h"
+#include "cam/CamRadtan.h"
 #include "state/State.h"
+#include "types/IMU.h"
+#include "types/PoseJPL.h"
 #include "types/Type.h"
 
 #include <Eigen/Cholesky>
 
+#include <algorithm>
 #include <cstddef>
+#include <cstring>
+#include <utility>
 #include <vector>
 
 namespace ov_msckf {
+
+namespace {
+
+template <typename LeftDerived, typename RightDerived>
+bool matrix_binary_equal(const Eigen::MatrixBase<LeftDerived> &left,
+                         const Eigen::MatrixBase<RightDerived> &right) noexcept {
+  if (left.rows() != right.rows() || left.cols() != right.cols()) {
+    return false;
+  }
+  return left.size() == 0 ||
+         std::memcmp(left.derived().data(), right.derived().data(),
+                     static_cast<std::size_t>(left.size()) * sizeof(double)) ==
+             0;
+}
+
+bool pose_storage_consistent(const ov_type::PoseJPL &pose,
+                             bool fej) noexcept {
+  Eigen::Matrix<double, 7, 1> effective;
+  if (fej) {
+    effective.block(0, 0, 4, 1) = pose.quat_fej();
+    effective.block(4, 0, 3, 1) = pose.pos_fej();
+    return matrix_binary_equal(pose.fej(), effective);
+  }
+  effective.block(0, 0, 4, 1) = pose.quat();
+  effective.block(4, 0, 3, 1) = pose.pos();
+  return matrix_binary_equal(pose.value(), effective);
+}
+
+bool imu_storage_consistent(const ov_type::IMU &imu, bool fej) noexcept {
+  Eigen::Matrix<double, 16, 1> effective;
+  if (fej) {
+    effective.block(0, 0, 4, 1) = imu.quat_fej();
+    effective.block(4, 0, 3, 1) = imu.pos_fej();
+    effective.block(7, 0, 3, 1) = imu.vel_fej();
+    effective.block(10, 0, 3, 1) = imu.bias_g_fej();
+    effective.block(13, 0, 3, 1) = imu.bias_a_fej();
+    return matrix_binary_equal(imu.fej(), effective);
+  }
+  effective.block(0, 0, 4, 1) = imu.quat();
+  effective.block(4, 0, 3, 1) = imu.pos();
+  effective.block(7, 0, 3, 1) = imu.vel();
+  effective.block(10, 0, 3, 1) = imu.bias_g();
+  effective.block(13, 0, 3, 1) = imu.bias_a();
+  return matrix_binary_equal(imu.value(), effective);
+}
+
+bool type_storage_consistent(const std::shared_ptr<ov_type::Type> &variable,
+                             bool fej) noexcept {
+  if (const auto *imu = dynamic_cast<const ov_type::IMU *>(variable.get())) {
+    return imu_storage_consistent(*imu, fej);
+  }
+  if (const auto *pose =
+          dynamic_cast<const ov_type::PoseJPL *>(variable.get())) {
+    return pose_storage_consistent(*pose, fej);
+  }
+  return true;
+}
+
+MSCKFUpdatePriorCameraModel
+camera_model(const std::shared_ptr<ov_core::CamBase> &camera) noexcept {
+  if (dynamic_cast<ov_core::CamRadtan *>(camera.get()) != nullptr) {
+    return MSCKFUpdatePriorCameraModel::kRadtan;
+  }
+  if (dynamic_cast<ov_core::CamEqui *>(camera.get()) != nullptr) {
+    return MSCKFUpdatePriorCameraModel::kEquidistant;
+  }
+  return MSCKFUpdatePriorCameraModel::kUnknown;
+}
+
+} // namespace
 
 const char *msckf_update_preview_status_name(MSCKFUpdatePreviewStatus status) noexcept {
   switch (status) {
@@ -79,6 +156,35 @@ const char *msckf_update_preview_stage_name(MSCKFUpdatePreviewStage stage) noexc
     return "state_increment";
   case MSCKFUpdatePreviewStage::kAccepted:
     return "accepted";
+  }
+  return "unknown";
+}
+
+const char *msckf_update_prior_match_status_name(
+    MSCKFUpdatePriorMatchStatus status) noexcept {
+  switch (status) {
+  case MSCKFUpdatePriorMatchStatus::kAccepted:
+    return "accepted";
+  case MSCKFUpdatePriorMatchStatus::kInvalidState:
+    return "invalid_state";
+  case MSCKFUpdatePriorMatchStatus::kCovarianceLayout:
+    return "covariance_layout";
+  case MSCKFUpdatePriorMatchStatus::kCloneLayout:
+    return "clone_layout";
+  case MSCKFUpdatePriorMatchStatus::kCameraLayout:
+    return "camera_layout";
+  case MSCKFUpdatePriorMatchStatus::kOptions:
+    return "options";
+  case MSCKFUpdatePriorMatchStatus::kTimestamp:
+    return "timestamp";
+  case MSCKFUpdatePriorMatchStatus::kCovariance:
+    return "covariance";
+  case MSCKFUpdatePriorMatchStatus::kNominal:
+    return "nominal";
+  case MSCKFUpdatePriorMatchStatus::kFej:
+    return "fej";
+  case MSCKFUpdatePriorMatchStatus::kCameraValue:
+    return "camera_value";
   }
   return "unknown";
 }
@@ -133,6 +239,220 @@ UpdaterMSCKFPreview::CaptureSnapshot(const std::shared_ptr<State> &state) {
     snapshot.state_blocks.push_back({variable->id(), variable->size(), variable->id()});
   }
   return snapshot;
+}
+
+MSCKFUpdatePriorSnapshot
+UpdaterMSCKFPreview::CapturePrior(const std::shared_ptr<State> &state) {
+  MSCKFUpdatePriorSnapshot snapshot;
+  if (!state) {
+    return snapshot;
+  }
+
+  snapshot.filter = CaptureSnapshot(state);
+  snapshot.timestamp = state->_timestamp;
+  snapshot.do_fej = state->_options.do_fej;
+  snapshot.calibrate_camera_pose =
+      state->_options.do_calib_camera_pose;
+  snapshot.calibrate_camera_intrinsics =
+      state->_options.do_calib_camera_intrinsics;
+  snapshot.calibrate_camera_timeoffset =
+      state->_options.do_calib_camera_timeoffset;
+  snapshot.feature_representation =
+      static_cast<int>(state->_options.feat_rep_msckf);
+  snapshot.nominal_blocks.reserve(state->_variables.size());
+  for (const auto &variable : state->_variables) {
+    MSCKFUpdatePriorNominalBlock block;
+    if (variable) {
+      block.covariance_id = variable->id();
+      block.size = variable->size();
+      block.value = variable->value();
+      block.fej = variable->fej();
+    }
+    snapshot.nominal_blocks.push_back(std::move(block));
+  }
+
+  snapshot.clone_bindings.reserve(state->_clones_IMU.size());
+  for (const auto &clone : state->_clones_IMU) {
+    snapshot.clone_bindings.push_back(
+        {clone.first, clone.second ? clone.second->id() : -1});
+  }
+
+  snapshot.cameras.reserve(state->_calib_IMUtoCAM.size());
+  for (const auto &calibration : state->_calib_IMUtoCAM) {
+    MSCKFUpdatePriorCamera camera;
+    camera.camera_id = calibration.first;
+    const auto intrinsic = state->_cam_intrinsics.find(calibration.first);
+    const auto cache = state->_cam_intrinsics_cameras.find(calibration.first);
+    if (calibration.second) {
+      camera.extrinsic_id = calibration.second->id();
+      camera.extrinsic_value = calibration.second->value();
+      camera.extrinsic_fej = calibration.second->fej();
+    }
+    if (intrinsic != state->_cam_intrinsics.end() && intrinsic->second) {
+      camera.intrinsic_id = intrinsic->second->id();
+      camera.intrinsic_value = intrinsic->second->value();
+      camera.intrinsic_fej = intrinsic->second->fej();
+    }
+    if (cache != state->_cam_intrinsics_cameras.end() && cache->second) {
+      camera.cache_value = cache->second->get_value();
+      camera.width = cache->second->w();
+      camera.height = cache->second->h();
+      camera.model = camera_model(cache->second);
+    }
+    snapshot.cameras.push_back(std::move(camera));
+  }
+  std::sort(snapshot.cameras.begin(), snapshot.cameras.end(),
+            [](const MSCKFUpdatePriorCamera &left,
+               const MSCKFUpdatePriorCamera &right) {
+              return left.camera_id < right.camera_id;
+            });
+  return snapshot;
+}
+
+MSCKFUpdatePriorMatchResult UpdaterMSCKFPreview::MatchPrior(
+    const std::shared_ptr<State> &state,
+    const MSCKFUpdatePriorSnapshot &snapshot) {
+  MSCKFUpdatePriorMatchResult result;
+  if (!state || snapshot.filter.covariance.rows() <= 0 ||
+      snapshot.filter.covariance.cols() != snapshot.filter.covariance.rows()) {
+    return result;
+  }
+
+  if (state->_Cov.rows() != snapshot.filter.covariance.rows() ||
+      state->_Cov.cols() != snapshot.filter.covariance.cols() ||
+      state->_variables.size() != snapshot.filter.state_blocks.size() ||
+      state->_variables.size() != snapshot.nominal_blocks.size()) {
+    result.status = MSCKFUpdatePriorMatchStatus::kCovarianceLayout;
+    return result;
+  }
+  for (std::size_t index = 0; index < state->_variables.size(); ++index) {
+    const auto &variable = state->_variables[index];
+    const auto &layout = snapshot.filter.state_blocks[index];
+    const auto &nominal = snapshot.nominal_blocks[index];
+    if (!variable || variable->id() != layout.covariance_id ||
+        variable->size() != layout.size || layout.offset != layout.covariance_id ||
+        nominal.covariance_id != layout.covariance_id ||
+        nominal.size != layout.size) {
+      result.status = MSCKFUpdatePriorMatchStatus::kCovarianceLayout;
+      result.offending_index = static_cast<Eigen::Index>(index);
+      return result;
+    }
+    if (!type_storage_consistent(variable, false)) {
+      result.status = MSCKFUpdatePriorMatchStatus::kNominal;
+      result.offending_index = static_cast<Eigen::Index>(index);
+      return result;
+    }
+    if (!type_storage_consistent(variable, true)) {
+      result.status = MSCKFUpdatePriorMatchStatus::kFej;
+      result.offending_index = static_cast<Eigen::Index>(index);
+      return result;
+    }
+  }
+
+  if (state->_clones_IMU.size() != snapshot.clone_bindings.size()) {
+    result.status = MSCKFUpdatePriorMatchStatus::kCloneLayout;
+    return result;
+  }
+  std::size_t clone_index = 0;
+  for (const auto &clone : state->_clones_IMU) {
+    const auto &binding = snapshot.clone_bindings[clone_index];
+    if (!clone.second || clone.first != binding.timestamp ||
+        clone.second->id() != binding.covariance_id ||
+        !pose_storage_consistent(*clone.second, false) ||
+        !pose_storage_consistent(*clone.second, true)) {
+      result.status = MSCKFUpdatePriorMatchStatus::kCloneLayout;
+      result.offending_index = static_cast<Eigen::Index>(clone_index);
+      return result;
+    }
+    ++clone_index;
+  }
+
+  if (state->_calib_IMUtoCAM.size() != snapshot.cameras.size() ||
+      state->_cam_intrinsics.size() != snapshot.cameras.size() ||
+      state->_cam_intrinsics_cameras.size() != snapshot.cameras.size()) {
+    result.status = MSCKFUpdatePriorMatchStatus::kCameraLayout;
+    return result;
+  }
+  if (state->_options.do_fej != snapshot.do_fej ||
+      state->_options.do_calib_camera_pose !=
+          snapshot.calibrate_camera_pose ||
+      state->_options.do_calib_camera_intrinsics !=
+          snapshot.calibrate_camera_intrinsics ||
+      state->_options.do_calib_camera_timeoffset !=
+          snapshot.calibrate_camera_timeoffset ||
+      static_cast<int>(state->_options.feat_rep_msckf) !=
+          snapshot.feature_representation) {
+    result.status = MSCKFUpdatePriorMatchStatus::kOptions;
+    return result;
+  }
+  if (state->_timestamp != snapshot.timestamp) {
+    result.status = MSCKFUpdatePriorMatchStatus::kTimestamp;
+    return result;
+  }
+  if (!matrix_binary_equal(state->_Cov, snapshot.filter.covariance)) {
+    result.status = MSCKFUpdatePriorMatchStatus::kCovariance;
+    return result;
+  }
+  for (std::size_t index = 0; index < state->_variables.size(); ++index) {
+    if (!matrix_binary_equal(state->_variables[index]->value(),
+                             snapshot.nominal_blocks[index].value)) {
+      result.status = MSCKFUpdatePriorMatchStatus::kNominal;
+      result.offending_index = static_cast<Eigen::Index>(index);
+      return result;
+    }
+    if (!matrix_binary_equal(state->_variables[index]->fej(),
+                             snapshot.nominal_blocks[index].fej)) {
+      result.status = MSCKFUpdatePriorMatchStatus::kFej;
+      result.offending_index = static_cast<Eigen::Index>(index);
+      return result;
+    }
+  }
+
+  for (std::size_t index = 0; index < snapshot.cameras.size(); ++index) {
+    const auto &expected = snapshot.cameras[index];
+    const auto extrinsic = state->_calib_IMUtoCAM.find(expected.camera_id);
+    const auto intrinsic = state->_cam_intrinsics.find(expected.camera_id);
+    const auto cache = state->_cam_intrinsics_cameras.find(expected.camera_id);
+    if (extrinsic == state->_calib_IMUtoCAM.end() || !extrinsic->second ||
+        intrinsic == state->_cam_intrinsics.end() || !intrinsic->second ||
+        cache == state->_cam_intrinsics_cameras.end() || !cache->second ||
+        extrinsic->second->id() != expected.extrinsic_id ||
+        intrinsic->second->id() != expected.intrinsic_id) {
+      result.status = MSCKFUpdatePriorMatchStatus::kCameraLayout;
+      result.offending_index = static_cast<Eigen::Index>(index);
+      return result;
+    }
+    if (!pose_storage_consistent(*extrinsic->second, false)) {
+      result.status = MSCKFUpdatePriorMatchStatus::kNominal;
+      result.offending_index = static_cast<Eigen::Index>(index);
+      return result;
+    }
+    if (!pose_storage_consistent(*extrinsic->second, true)) {
+      result.status = MSCKFUpdatePriorMatchStatus::kFej;
+      result.offending_index = static_cast<Eigen::Index>(index);
+      return result;
+    }
+    if (!matrix_binary_equal(extrinsic->second->value(),
+                             expected.extrinsic_value) ||
+        !matrix_binary_equal(extrinsic->second->fej(),
+                             expected.extrinsic_fej) ||
+        !matrix_binary_equal(intrinsic->second->value(),
+                             expected.intrinsic_value) ||
+        !matrix_binary_equal(intrinsic->second->fej(),
+                             expected.intrinsic_fej) ||
+        !matrix_binary_equal(cache->second->get_value(),
+                             expected.cache_value) ||
+        cache->second->w() != expected.width ||
+        cache->second->h() != expected.height ||
+        camera_model(cache->second) != expected.model) {
+      result.status = MSCKFUpdatePriorMatchStatus::kCameraValue;
+      result.offending_index = static_cast<Eigen::Index>(index);
+      return result;
+    }
+  }
+
+  result.status = MSCKFUpdatePriorMatchStatus::kAccepted;
+  return result;
 }
 
 MSCKFUpdatePreviewResult UpdaterMSCKFPreview::ComputeFromSnapshot(

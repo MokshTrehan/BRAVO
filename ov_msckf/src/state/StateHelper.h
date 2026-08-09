@@ -89,6 +89,23 @@ public:
                         const Eigen::VectorXd &res, const Eigen::MatrixXd &R);
 
   /**
+   * @brief Commit one already validated EKF correction and covariance.
+   *
+   * This is the mutation-only tail of EKFUpdate. It performs no Kalman solve,
+   * reset transport, repair, regularization, clamping, or fallback. All input
+   * validation completes before the first live write. The existing production
+   * Type/cache mutation contract is assumed not to throw; an exception after
+   * that boundary propagates as a potentially partial fatal commit rather than
+   * attempting an unsafe rollback.
+   *
+   * @return true after exactly one covariance write and one nominal injection;
+   * false with no live writes when the supplied result is invalid.
+   */
+  static bool CommitPrecomputedUpdate(std::shared_ptr<State> state,
+                                      const Eigen::VectorXd &dx,
+                                      const Eigen::MatrixXd &posterior_covariance);
+
+  /**
    * @brief This will set the initial covaraince of the specified state elements.
    * Will also ensure that proper cross-covariances are inserted.
    * @param state Pointer to state
