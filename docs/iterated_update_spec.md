@@ -1,14 +1,17 @@
 # Reduced and iterated visual update specification
 
-Status: **CP1 passed; one-pass production implementation authorized**
+Status: **CP1 passed; one-pass and narrow fixed-two-pass implementation authorized**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 Frozen rank threshold: `1e-6` relative singular-value ratio
 Primary reset policy through CP3: identity, for OpenVINS covariance parity
 
-This document is normative for the SchurVIO-Lite one-pass update and records
-the still-blocked fixed-two-pass candidate. The post-review CP1 evidence and
-fresh signoff authorize one-pass production integration. They do not authorize
-fixed-two-pass implementation.
+This document is normative for the SchurVIO-Lite one-pass update and the
+reviewed fixed-two-pass affine-FEJ contract. The post-review CP1 evidence
+authorizes one-pass production integration. The 2026-08-09 project-author
+approval and deterministic golden at commit
+`e5441605e1da2072fec578ed7d4b649a83f5307a` additionally authorize the narrow
+fixed-two-pass implementation defined here and in
+`docs/two_pass_fej_contract_review.md`.
 
 ## 1. Symbols and scope
 
@@ -310,16 +313,18 @@ This identity policy is a deliberate baseline-parity approximation and must be
 used by both compared one-pass paths. Chart-consistent first-order covariance
 transport is reserved for a separately named ablation after CP3.
 
-## 8. Fixed two-pass candidate — blocked
+## 8. Fixed two-pass affine-FEJ contract — accepted
 
 The primary EuRoC configuration uses a mixed FEJ Jacobian: its residual is
 evaluated at current values while parts of its projection Jacobian use frozen
 FEJ geometry. That matrix is not, in general, the derivative of the current
 residual function. Consequently the rules below define an affine FEJ
-surrogate candidate; they are not a Taylor/Newton derivation of the current
-pixel objective. Fixed-two-pass production work is blocked until an FEJ-on
-golden fixture freezes this surrogate and a later review accepts its objective
-and differential chart-covariance interpretation.
+surrogate; they are not a Taylor/Newton derivation of the current pixel
+objective. The FEJ-on golden at commit
+`e5441605e1da2072fec578ed7d4b649a83f5307a` and the 2026-08-09 project-author
+review accept this contract for the ordinary Schur `GLOBAL_3D`/`CamRadtan`
+path with a configured maximum of one or two passes and inherited `G=I`
+reset. They do not accept a differential chart-covariance interpretation.
 
 Before pass 1, snapshot `x^-`, `P^-`, every clone FEJ value, raw observations,
 feature IDs/order, configuration, and the predicted prior factor. A pass uses
@@ -367,7 +372,11 @@ tolerance.
   explicit `m-3` degrees of freedom.
 - Freeze accepted feature IDs, raw measurements, order, gate decisions, and
   unit weights.
-- Pass 2 may not admit a feature, drop one independently, or re-gate.
+- Pass 2 may not admit a feature, drop one independently, or revise a pass-1
+  gate decision. For every locked feature it recomputes the production NIS
+  against the same `P^-`, with `q=m-3` and the inherited strict-`>` threshold,
+  solely as a whole-proposal validity check. Any such failure invalidates all
+  of pass 2; it does not change membership in the locked set.
 - Clone FEJ values stay frozen. Each transient feature's pass-local FEJ point
   is reset to that pass's triangulation, matching upstream construction.
 - Preserve the upstream mixed FEJ behavior: residuals and `uv_norm` are
@@ -508,13 +517,20 @@ The automated gate must cover at least:
    systems, proving `Lambda/eta` preservation and accounting for the strictly
    positive discarded contribution to `gamma`.
 
-An FEJ-on golden fixture is required for CP2 parity because the mixed FEJ
-Jacobian is intentionally not the finite-difference derivative of a single
-current residual function.
+The required FEJ-on golden is frozen by commit
+`e5441605e1da2072fec578ed7d4b649a83f5307a`. Target
+`test_cp1_one_pass_regression` protects it with
+`CP1MixedFejGolden.ProductionRawSchurAndPreviewMatchFixedChartIndependentOracle`,
+`CP1MixedFejGolden.ActualTwoPassUsesSamePriorEvaluatesTrueCostsAndCommitsOnce`,
+and `CP1MixedFejGolden.FixedTwoPassDecisionCasesAThroughF`. The mixed-FEJ
+Jacobian remains an affine algorithmic surrogate, not the finite-difference
+derivative of a single current residual function.
 
-## 11. Review lock
+## 11. Fixed-two-pass review lock — accepted
 
-Fresh human signoff on the replacement addendum commit must explicitly approve:
+The project-author approval supplied for the 2026-08-08--2026-08-09 review
+window became effective after the golden and associated Release tests passed.
+It explicitly approves:
 
 - runtime residual, continuous-model derivative, mixed-FEJ surrogate, positive
   update sign, and exact JPL chart;
@@ -523,8 +539,8 @@ Fresh human signoff on the replacement addendum commit must explicitly approve:
 - rectangular-factor handling of exact clone-augmented PSD priors;
 - pre-compression `gamma`, the 95% chi-square quantile, configured multiplier,
   `m-3` DoF, and strict-`>` rejection boundary;
-- the fact that mixed-FEJ fixed-two-pass work remains blocked and is specified
-  only as an affine surrogate candidate;
+- the narrow mixed-FEJ fixed-two-pass algorithm as an affine surrogate, with
+  no Taylor/Newton derivative claim;
 - the separate `C_pix/C_post` objectives and tolerances, invalid-pass-1
   rejection, pass-2 fallback rule, selected-covariance failure behavior, and
   sufficient linear-idempotence invariants;
@@ -533,5 +549,21 @@ Fresh human signoff on the replacement addendum commit must explicitly approve:
 - identity reset as a baseline-parity policy, and differential
   chart-consistent first-order covariance transport as a separate ablation.
 
-Reviewer, date, reviewed commit, and exceptions are recorded in
-`docs/conventions.md` and `project/checkpoints.yaml`.
+The authorization is limited to ordinary Schur, transient `GLOBAL_3D`,
+`CamRadtan`, a configured maximum of one or two passes, one frozen `x^-` and
+`P^-`, a pass-1-locked feature set, pass-2 same-`P^-` NIS as a whole-proposal
+validity check, independently tolerated `C_pix` and `C_post`, selected-only
+covariance construction, exactly one final commit, and inherited `G=I`
+OpenVINS parity. It excludes `CamEqui`, adaptive scheduling, more than two
+passes, and chart-consistent covariance claims.
+
+- Reviewer: Moksh Trehan
+- Reviewer relationship: project-author self-review
+- Review window: 2026-08-08--2026-08-09
+- Approval date: 2026-08-09
+- Golden commit:
+  `e5441605e1da2072fec578ed7d4b649a83f5307a`
+- Golden result: all five CP1 Release binaries passed 14/14 tests, with no
+  disabled or skipped tests
+- Technical review: `docs/two_pass_fej_contract_review.md`
+- Exceptions: none

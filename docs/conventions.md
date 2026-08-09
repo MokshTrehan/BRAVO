@@ -1,15 +1,18 @@
 # Estimator conventions
 
-Status: **CP1 passed; one-pass production implementation authorized**
+Status: **CP1 passed; one-pass and narrow fixed-two-pass implementation authorized**
 Pinned upstream: `69488123ed9362dd44b6f28e7f4680abbff1442b`
 Prior human reviewer: **Moksh Trehan (project-author self-review)**
 Prior signoff date: **2026-07-27 (date-only attestation; superseded for authorization)**
 
 The replacement mathematical contract and evidence received fresh,
-commit-specific signoff on 2026-08-01. Production implementation is permitted
-only for the one-pass path; fixed two-pass remains blocked behind its separate
-CP2/CP3 protecting tests and review. Each decision cites the defining source
-file/function and the test or later parity gate that protects it.
+commit-specific signoff on 2026-08-01. The fixed-two-pass affine-FEJ contract
+received its separate project-author approval on 2026-08-09 after the
+deterministic golden at commit
+`e5441605e1da2072fec578ed7d4b649a83f5307a` passed. Implementation is
+authorized only within the narrow scope recorded in
+`docs/two_pass_fej_contract_review.md`. Each decision cites the defining
+source file/function and the test or later parity gate that protects it.
 
 ## Frames and transforms
 
@@ -176,13 +179,18 @@ file/function and the test or later parity gate that protects it.
   until a separately tested ablation changes it.
 - Mathematical scope: this mixed-FEJ matrix is not generally the derivative
   of the current residual function. One-pass Schur/nullspace equivalence only
-  requires both paths to consume the same matrix. A Taylor/Newton claim for a
-  second pass is blocked pending an FEJ-on golden fixture and separate review
-  of the explicitly defined affine surrogate.
+  requires both paths to consume the same matrix. The FEJ-on golden at commit
+  `e5441605e1da2072fec578ed7d4b649a83f5307a` freezes the fixed-two-pass rule as
+  an explicitly defined affine surrogate. The 2026-08-09 review authorizes
+  that algorithmic contract; it does not authorize a Taylor, Newton, or
+  chart-consistent covariance claim.
 - Evidence: `ov_core/src/types/Type.h`, `PoseJPL.h`,
   `ov_msckf/src/state/Propagator.cpp`,
   `ov_msckf/src/update/UpdaterHelper.cpp`, and `UpdaterMSCKF.cpp`.
-- Protecting test: planned FEJ one-pass regression fixture at CP2.
+- Protecting tests: `test_cp1_one_pass_regression`, specifically
+  `CP1MixedFejGolden.ProductionRawSchurAndPreviewMatchFixedChartIndependentOracle`,
+  `CP1MixedFejGolden.ActualTwoPassUsesSamePriorEvaluatesTrueCostsAndCommitsOnce`,
+  and `CP1MixedFejGolden.FixedTwoPassDecisionCasesAThroughF`.
 
 ## Covariance and manifold reset
 
@@ -216,14 +224,16 @@ file/function and the test or later parity gate that protects it.
   `update` methods.
 - Protecting test: CP1 full/nullspace/Schur covariance tests and
   `CP1Prior.SemidefiniteCloneAugmentationMatchesInnovationUpdate`; iterated
-  final-covariance/reset tests remain blocked behind the fixed-two-pass gate.
+  final-covariance/reset tests remain required before the fixed-two-pass
+  production and EuRoC gates can pass.
 
-## Fixed-two-pass candidate invariants — implementation blocked
+## Fixed-two-pass affine-FEJ invariants — narrow implementation authorized
 
-These rules freeze a candidate affine surrogate and transaction policy. They
-do not establish that the mixed-FEJ matrix is a Taylor derivative, and they do
-not permit fixed-two-pass implementation before the FEJ-on and differential
-chart-transport review gates in `docs/iterated_update_spec.md` are satisfied.
+These rules freeze the reviewed affine surrogate and transaction policy. The
+FEJ-on golden and project-author review gate are satisfied as recorded in
+`docs/two_pass_fej_contract_review.md`. They permit an ordinary Schur update
+with at most two passes only for the reviewed `GLOBAL_3D`/`CamRadtan` path.
+They do not establish that the mixed-FEJ matrix is a Taylor derivative.
 
 - Frozen predicted prior: snapshot `x^-`, `P^-`, FEJ values, observations,
   feature order, and configuration before pass 1. Both proposals are absolute
@@ -236,15 +246,19 @@ chart-transport review gates in `docs/iterated_update_spec.md` are satisfied.
   fixed-chart Jacobian/right-hand-side correction defined in
   `docs/iterated_update_spec.md`.
 - Cross-pass policy: robust weights remain one; feature IDs, measurements,
-  order, gate decisions, weights, and clone FEJ values are frozen. Any
-  pass-2 feature failure rejects the complete second pass.
+  order, pass-1 gate decisions, weights, and clone FEJ values are frozen.
+  Pass 2 applies the same production NIS rule against `P^-` only as a
+  whole-proposal validity check; it never adds, drops, or independently
+  re-gates a feature. Any pass-2 feature failure rejects the complete second
+  pass.
 - Final commit: select pass 1 or pass 2 using the same-set pixel cost and
   frozen-prior objective, compute only the selected covariance from `P^-`, and
   commit mean and covariance exactly once. A selected-covariance symmetry/PSD
   failure rejects the update without computing the alternative covariance.
-- Reset: use `G=I` only when measuring OpenVINS parity. A chart-consistent local
-  covariance claim uses the exact differential reset Jacobian and
-  `T(delta) P T(delta)^T` within the EKF's first-order covariance model.
+- Reset: use `G=I`. This authorization is for inherited OpenVINS parity only.
+  Differential reset transport remains a separate, unimplemented ablation;
+  this implementation and its results may not make a chart-consistent local
+  covariance claim.
 - Evidence: `docs/iterated_update_spec.md`.
 - Protecting tests: CP1 Schur/retraction tests and CP3 exactly-once/fallback
   integration tests.
@@ -302,3 +316,22 @@ mean that the proposed algorithm or paper claim is accepted in advance.
   952771e955fe3459f2fd43122a9c6f8ce57d1799, including the review-lock scope
   in docs/iterated_update_spec.md; no exceptions."
 - Fresh exceptions: none
+
+## Fixed-two-pass FEJ contract approval
+
+- Reviewer: Moksh Trehan
+- Reviewer relationship: project-author self-review
+- Review window: 2026-08-08--2026-08-09
+- Approval date: 2026-08-09
+- Golden commit:
+  `e5441605e1da2072fec578ed7d4b649a83f5307a`
+- Golden target: `test_cp1_one_pass_regression`
+- Automated result: Release builds of all five CP1 binaries passed 14/14
+  tests with no disabled or skipped tests
+- Accepted scope: ordinary Schur, transient `GLOBAL_3D`, `CamRadtan`, and a
+  configured maximum of one or two visual passes using the inherited mixed-FEJ
+  affine surrogate and `G=I` reset convention
+- Excluded claims and modes: Taylor/Newton derivation, chart-consistent
+  covariance, `CamEqui`, adaptive pass scheduling, and more than two passes
+- Review record: `docs/two_pass_fej_contract_review.md`
+- Exceptions: none
