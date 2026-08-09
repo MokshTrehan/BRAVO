@@ -116,6 +116,25 @@ struct MSCKFUpdatePreviewResult {
 };
 
 /**
+ * @brief Read-only same-prior mean proposal without a posterior covariance.
+ *
+ * This is the fixed-two-pass numerical seam. It follows the same layout,
+ * innovation, inverse, Kalman-gain, and increment operation order as
+ * ComputeFromSnapshot(), but deliberately stops before forming P-plus. The
+ * innovation statistic is evaluated from the same accepted innovation
+ * inverse. No input or live estimator object is mutated.
+ */
+struct MSCKFUpdateMeanResult {
+  MSCKFUpdatePreviewDiagnostics diagnostics;
+  Eigen::VectorXd dx;
+  double nis = std::numeric_limits<double>::quiet_NaN();
+
+  bool accepted() const noexcept {
+    return diagnostics.status == MSCKFUpdatePreviewStatus::kAccepted;
+  }
+};
+
+/**
  * @brief One value-only block in an MSCKF update snapshot or Jacobian layout.
  *
  * For a snapshot state block, @p covariance_id and @p offset are both the
@@ -286,6 +305,21 @@ public:
                       const std::vector<MSCKFUpdatePreviewBlock> &jacobian_layout,
                       const Eigen::MatrixXd &H, const Eigen::VectorXd &residual,
                       const Eigen::MatrixXd &R);
+
+  /**
+   * @brief Compute only the absolute mean proposal and NIS from one frozen
+   * prior.
+   *
+   * Unlike ComputeFromSnapshot(), this method never allocates or evaluates a
+   * posterior covariance. It is therefore safe to call for both visual passes
+   * before the selected pass is known.
+   */
+  static MSCKFUpdateMeanResult
+  ComputeMeanFromSnapshot(
+      const MSCKFUpdatePreviewSnapshot &snapshot,
+      const std::vector<MSCKFUpdatePreviewBlock> &jacobian_layout,
+      const Eigen::MatrixXd &H, const Eigen::VectorXd &residual,
+      const Eigen::MatrixXd &R);
 
   /**
    * @param state State whose covariance is read without mutation.

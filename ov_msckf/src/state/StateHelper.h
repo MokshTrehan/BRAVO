@@ -45,6 +45,14 @@ class State;
 class StateHelper {
 
 public:
+  /// Covariance acceptance policy at the mutation-only commit boundary.
+  enum class PrecomputedCovariancePolicy {
+    /// Frozen one-pass behavior: reject every negative diagonal entry.
+    LEGACY_NONNEGATIVE_DIAGONAL,
+    /// Fixed-two-pass contract: raw symmetry, then scaled numerical PSD.
+    NUMERICAL_PSD
+  };
+
   /**
    * @brief Performs EKF propagation of the state covariance.
    *
@@ -103,7 +111,9 @@ public:
    */
   static bool CommitPrecomputedUpdate(std::shared_ptr<State> state,
                                       const Eigen::VectorXd &dx,
-                                      const Eigen::MatrixXd &posterior_covariance);
+                                      const Eigen::MatrixXd &posterior_covariance,
+                                      PrecomputedCovariancePolicy covariance_policy =
+                                          PrecomputedCovariancePolicy::LEGACY_NONNEGATIVE_DIAGONAL);
 
   /**
    * @brief This will set the initial covaraince of the specified state elements.

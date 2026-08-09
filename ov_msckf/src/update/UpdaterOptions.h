@@ -52,9 +52,21 @@ struct UpdaterOptions {
   /// How transient MSCKF landmarks should be eliminated.
   LandmarkElimination landmark_elimination = LandmarkElimination::NULLSPACE;
 
+  /// Fixed maximum number of visual update passes (one or two).
+  int max_visual_passes = 1;
+
   /// Whether a landmark-elimination enum is one of the two public modes.
   static bool landmark_elimination_is_supported(LandmarkElimination mode) noexcept {
     return mode == LandmarkElimination::NULLSPACE || mode == LandmarkElimination::SCHUR;
+  }
+
+  /// Whether the configured fixed visual-pass count is public and supported.
+  static bool max_visual_passes_is_supported(int count) noexcept { return count == 1 || count == 2; }
+
+  /// Whether the reducer supports the configured fixed pass count.
+  static bool visual_pass_combination_is_supported(int count, LandmarkElimination mode) noexcept {
+    return landmark_elimination_is_supported(mode) && max_visual_passes_is_supported(count) &&
+           (count == 1 || mode == LandmarkElimination::SCHUR);
   }
 
   /// Return the configuration spelling for a landmark-elimination mode.

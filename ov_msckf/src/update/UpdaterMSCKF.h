@@ -51,6 +51,7 @@ class FeatureInitializer;
 namespace ov_msckf {
 
 class State;
+class UpdaterMSCKFOrdinaryTestAccess;
 
 #if defined(OV_MSCKF_CP2_TESTING)
 enum class CP2UpdaterTestFault : std::uint8_t {
@@ -405,6 +406,19 @@ protected:
       CP2TraceFatalReason::kNone};
 
 private:
+  enum class OrdinaryTwoPassTestFault : std::uint8_t {
+    kNone,
+    kPassTwoGeometryFailure,
+    kPassTwoSchurRankDeficient,
+    kPassTwoNonfinite,
+    kPassTwoException,
+    kSecondFeatureFinalization,
+  };
+
+  friend class UpdaterMSCKFOrdinaryTestAccess;
+  OrdinaryTwoPassTestFault ordinary_two_pass_test_fault =
+      OrdinaryTwoPassTestFault::kNone;
+
   [[noreturn]] void latch_cp2_trace_fatal(CP2TraceFatalReason reason,
                                           const char *message);
 #if defined(OV_MSCKF_CP2_TESTING)

@@ -24,6 +24,8 @@
 
 #include <Eigen/Eigen>
 #include <boost/filesystem.hpp>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <opencv2/opencv.hpp>
 
@@ -96,6 +98,65 @@ public:
   void set_node(std::shared_ptr<rclcpp::Node> &node_) { this->node = node_; }
 #endif
 
+  /// Outcome of parsing an optional integer without scalar coercion.
+  enum class OptionalExactIntStatus { MISSING, ACCEPTED, WRONG_TYPE, READ_ERROR };
+
+  /// Source selected by the normal ROS-over-YAML precedence rule.
+  enum class OptionalExactIntSource { NONE, YAML, ROS };
+
+  /// Classification returned by parse_optional_exact_int().
+  struct OptionalExactIntResult {
+    OptionalExactIntStatus status;
+    OptionalExactIntSource source;
+  };
+
+#if ROS_AVAILABLE == 1
+  /**
+   * @brief Decode a ROS1 parameter only when its XML-RPC type is exactly int.
+   *
+   * This pure decoder is public so configuration tests can cover malformed ROS
+   * values without requiring a running ROS master. The destination is changed
+   * only on success.
+   */
+  static OptionalExactIntStatus decode_ros_optional_exact_int(const XmlRpc::XmlRpcValue &raw_value,
+                                                               int &node_result) noexcept {
+    if (raw_value.getType() != XmlRpc::XmlRpcValue::TypeInt) {
+      return OptionalExactIntStatus::WRONG_TYPE;
+    }
+    try {
+      const int parsed_value = static_cast<const int &>(raw_value);
+      node_result = parsed_value;
+      return OptionalExactIntStatus::ACCEPTED;
+    } catch (...) {
+      return OptionalExactIntStatus::READ_ERROR;
+    }
+  }
+#elif ROS_AVAILABLE == 2
+  /**
+   * @brief Decode a ROS2 parameter only when its type is exactly integer.
+   *
+   * ROS2 integer parameters are int64_t, so values outside the destination
+   * range are rejected instead of being narrowed.
+   */
+  static OptionalExactIntStatus decode_ros_optional_exact_int(const rclcpp::Parameter &raw_value,
+                                                               int &node_result) noexcept {
+    if (raw_value.get_type() != rclcpp::ParameterType::PARAMETER_INTEGER) {
+      return OptionalExactIntStatus::WRONG_TYPE;
+    }
+    try {
+      const std::int64_t parsed_value = raw_value.as_int();
+      if (parsed_value < static_cast<std::int64_t>(std::numeric_limits<int>::min()) ||
+          parsed_value > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
+        return OptionalExactIntStatus::READ_ERROR;
+      }
+      node_result = static_cast<int>(parsed_value);
+      return OptionalExactIntStatus::ACCEPTED;
+    } catch (...) {
+      return OptionalExactIntStatus::READ_ERROR;
+    }
+  }
+#endif
+
   /**
    * @brief Will get the folder this config file is in
    * @return Config folder
@@ -107,6 +168,52 @@ public:
    * @return True if we found all parameters
    */
   bool successful() const { return all_params_found_successfully; }
+
+  /**
+   * @brief Parse an optional integer with exact scalar typing.
+   *
+   * A present ROS value has priority over YAML even when it is malformed. This
+   * prevents a wrong-typed override from silently falling back to a valid YAML
+   * value. YAML values are accepted only when OpenCV classifies the node as an
+   * integer; strings, reals, booleans, sequences, and maps are never coerced.
+   * The destination is changed only when ACCEPTED is returned.
+   */
+  OptionalExactIntResult parse_optional_exact_int(const std::string &node_name, int &node_result) {
+
+#if ROS_AVAILABLE == 1
+    if (nh != nullptr && nh->hasParam(node_name)) {
+      XmlRpc::XmlRpcValue raw_value;
+      if (!nh->getParam(node_name, raw_value)) {
+        return {OptionalExactIntStatus::READ_ERROR, OptionalExactIntSource::ROS};
+      }
+      return {decode_ros_optional_exact_int(raw_value, node_result), OptionalExactIntSource::ROS};
+    }
+#elif ROS_AVAILABLE == 2
+    if (node != nullptr && node->has_parameter(node_name)) {
+      rclcpp::Parameter raw_value;
+      if (!node->get_parameter(node_name, raw_value)) {
+        return {OptionalExactIntStatus::READ_ERROR, OptionalExactIntSource::ROS};
+      }
+      return {decode_ros_optional_exact_int(raw_value, node_result), OptionalExactIntSource::ROS};
+    }
+#endif
+
+    if (config == nullptr || !node_found(config->root(), node_name)) {
+      return {OptionalExactIntStatus::MISSING, OptionalExactIntSource::NONE};
+    }
+
+    try {
+      const cv::FileNode raw_value = (*config)[node_name];
+      if (!raw_value.isInt()) {
+        return {OptionalExactIntStatus::WRONG_TYPE, OptionalExactIntSource::YAML};
+      }
+      const int parsed_value = static_cast<int>(raw_value);
+      node_result = parsed_value;
+      return {OptionalExactIntStatus::ACCEPTED, OptionalExactIntSource::YAML};
+    } catch (...) {
+      return {OptionalExactIntStatus::READ_ERROR, OptionalExactIntSource::YAML};
+    }
+  }
 
   /**
    * @brief Custom parser for the ESTIMATOR parameters.

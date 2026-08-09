@@ -239,13 +239,17 @@ if (CATKIN_ENABLE_TESTING)
     catkin_add_gtest(test_cp1_one_pass_regression
             test/cp1/gtest_main.cpp
             test/cp1/test_one_pass_regression.cpp)
+    catkin_add_gtest(test_cp1_visual_pass_config
+            test/cp1/gtest_main.cpp
+            test/cp1/test_visual_pass_config.cpp)
 
     set(CP1_TEST_TARGETS
             test_cp1_schur_equivalence
             test_cp1_rank_rejection
             test_cp1_projection_jacobian
             test_cp1_prior_and_compression
-            test_cp1_one_pass_regression)
+            test_cp1_one_pass_regression
+            test_cp1_visual_pass_config)
     foreach (CP1_TEST_TARGET ${CP1_TEST_TARGETS})
         if (TARGET ${CP1_TEST_TARGET})
             target_link_libraries(${CP1_TEST_TARGET} ov_msckf_lib ${thirdparty_libraries})

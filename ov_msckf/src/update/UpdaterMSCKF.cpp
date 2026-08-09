@@ -33,6 +33,7 @@
 #include "UpdaterHelper.h"
 #include "UpdaterMSCKFPreview.h"
 
+#include "cam/CamRadtan.h"
 #include "feat/Feature.h"
 #include "feat/FeatureInitializer.h"
 #include "state/State.h"
@@ -46,7 +47,9 @@
 #include <boost/math/distributions/chi_squared.hpp>
 
 #include <Eigen/Cholesky>
+#include <Eigen/Eigenvalues>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
@@ -65,6 +68,59 @@ using namespace ov_type;
 using namespace ov_msckf;
 
 namespace {
+
+struct MSCKFDetachedFeatureSet {
+  std::vector<std::shared_ptr<Feature>> features;
+  std::vector<std::size_t> source_indices;
+};
+
+bool msckf_feature_observations_equal(const Feature &left,
+                                      const Feature &right) noexcept {
+  if (left.featid != right.featid ||
+      left.timestamps.size() != right.timestamps.size() ||
+      left.uvs.size() != right.uvs.size() ||
+      left.uvs_norm.size() != right.uvs_norm.size()) {
+    return false;
+  }
+  for (const auto &camera : left.timestamps) {
+    const auto match = right.timestamps.find(camera.first);
+    if (match == right.timestamps.end() ||
+        camera.second.size() != match->second.size() ||
+        (!camera.second.empty() &&
+         std::memcmp(camera.second.data(), match->second.data(),
+                     camera.second.size() * sizeof(double)) != 0)) {
+      return false;
+    }
+  }
+  const auto vectors_equal = [](
+      const std::unordered_map<size_t,
+                               std::vector<Eigen::VectorXf>> &left_map,
+      const std::unordered_map<size_t,
+                               std::vector<Eigen::VectorXf>> &right_map) {
+    for (const auto &camera : left_map) {
+      const auto match = right_map.find(camera.first);
+      if (match == right_map.end() ||
+          camera.second.size() != match->second.size()) {
+        return false;
+      }
+      for (std::size_t index = 0; index < camera.second.size(); ++index) {
+        const Eigen::VectorXf &left_value = camera.second[index];
+        const Eigen::VectorXf &right_value = match->second[index];
+        if (left_value.rows() != right_value.rows() ||
+            left_value.cols() != right_value.cols() ||
+            (left_value.size() > 0 &&
+             std::memcmp(left_value.data(), right_value.data(),
+                         static_cast<std::size_t>(left_value.size()) *
+                             sizeof(float)) != 0)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+  return vectors_equal(left.uvs, right.uvs) &&
+         vectors_equal(left.uvs_norm, right.uvs_norm);
+}
 
 /**
  * Ordinary-mode feature transaction. Raw entry copies remain immutable while
@@ -96,6 +152,49 @@ public:
   }
 
   std::vector<std::shared_ptr<Feature>> &active() noexcept { return active_; }
+
+  MSCKFDetachedFeatureSet CloneActive() const {
+    MSCKFDetachedFeatureSet clone;
+    clone.features.reserve(active_.size());
+    clone.source_indices.reserve(active_.size());
+    for (const auto &working : active_) {
+      const auto source = working_index_.find(working.get());
+      if (!working || source == working_index_.end() ||
+          source->second >= entries_.size()) {
+        throw std::logic_error(
+            "UpdaterMSCKF detached feature mapping is incomplete");
+      }
+      clone.features.push_back(std::make_shared<Feature>(*working));
+      clone.source_indices.push_back(source->second);
+    }
+    return clone;
+  }
+
+  void AdoptGeometry(const MSCKFDetachedFeatureSet &selected) {
+    if (selected.features.size() != active_.size() ||
+        selected.source_indices.size() != active_.size()) {
+      throw std::logic_error(
+          "UpdaterMSCKF selected feature geometry has invalid size");
+    }
+    for (std::size_t index = 0; index < active_.size(); ++index) {
+      const auto source = working_index_.find(active_[index].get());
+      if (!selected.features[index] || source == working_index_.end() ||
+          source->second != selected.source_indices[index] ||
+          source->second >= entries_.size() ||
+          !msckf_feature_observations_equal(*selected.features[index],
+                                            *active_[index])) {
+        throw std::logic_error(
+            "UpdaterMSCKF selected feature geometry changed the locked set");
+      }
+      Feature &destination = *entries_[source->second].working;
+      const Feature &candidate = *selected.features[index];
+      destination.anchor_cam_id = candidate.anchor_cam_id;
+      destination.anchor_clone_timestamp =
+          candidate.anchor_clone_timestamp;
+      destination.p_FinA = candidate.p_FinA;
+      destination.p_FinG = candidate.p_FinG;
+    }
+  }
 
   void PrepareFinalization() {
     if (prepared_) {
@@ -148,6 +247,991 @@ private:
 
 static_assert(std::is_nothrow_move_assignable<Feature>::value,
               "Feature finalization must not throw after state commit");
+
+enum class MSCKFTwoPassFailure {
+  kNone,
+  kSnapshot,
+  kCameraModel,
+  kGeometry,
+  kJacobian,
+  kSchur,
+  kGate,
+  kCompression,
+  kMean,
+  kPriorSupport,
+  kCost,
+  kCovariance,
+  kException,
+};
+
+const char *msckf_two_pass_failure_name(
+    MSCKFTwoPassFailure failure) noexcept {
+  switch (failure) {
+  case MSCKFTwoPassFailure::kNone:
+    return "none";
+  case MSCKFTwoPassFailure::kSnapshot:
+    return "snapshot";
+  case MSCKFTwoPassFailure::kCameraModel:
+    return "camera_model";
+  case MSCKFTwoPassFailure::kGeometry:
+    return "geometry";
+  case MSCKFTwoPassFailure::kJacobian:
+    return "jacobian";
+  case MSCKFTwoPassFailure::kSchur:
+    return "schur";
+  case MSCKFTwoPassFailure::kGate:
+    return "gate";
+  case MSCKFTwoPassFailure::kCompression:
+    return "compression";
+  case MSCKFTwoPassFailure::kMean:
+    return "mean";
+  case MSCKFTwoPassFailure::kPriorSupport:
+    return "prior_support";
+  case MSCKFTwoPassFailure::kCost:
+    return "cost";
+  case MSCKFTwoPassFailure::kCovariance:
+    return "covariance";
+  case MSCKFTwoPassFailure::kException:
+    return "exception";
+  }
+  return "unknown";
+}
+
+double msckf_matrix_inf_norm(const Eigen::MatrixXd &matrix) {
+  if (matrix.size() == 0) {
+    return 0.0;
+  }
+  return matrix.cwiseAbs().rowwise().sum().maxCoeff();
+}
+
+const MSCKFUpdatePriorNominalBlock *msckf_prior_block(
+    const MSCKFUpdatePriorSnapshot &prior, Eigen::Index covariance_id,
+    Eigen::Index size) noexcept {
+  for (const MSCKFUpdatePriorNominalBlock &block :
+       prior.nominal_blocks) {
+    if (block.covariance_id == covariance_id && block.size == size) {
+      return &block;
+    }
+  }
+  return nullptr;
+}
+
+bool msckf_apply_absolute_delta(
+    const std::shared_ptr<Type> &variable,
+    const Eigen::VectorXd &absolute_delta) {
+  if (!variable) {
+    return false;
+  }
+  if (variable->id() < 0) {
+    return true;
+  }
+  if (variable->size() <= 0 ||
+      variable->id() > absolute_delta.rows() - variable->size()) {
+    return false;
+  }
+  variable->update(
+      absolute_delta.segment(variable->id(), variable->size()));
+  return variable->value().allFinite();
+}
+
+struct MSCKFVisualWorkingState {
+  std::shared_ptr<State> state;
+  MSCKFTwoPassFailure failure = MSCKFTwoPassFailure::kSnapshot;
+
+  bool accepted() const noexcept {
+    return failure == MSCKFTwoPassFailure::kNone && state;
+  }
+};
+
+MSCKFVisualWorkingState msckf_build_visual_working_state(
+    const StateOptions &entry_options,
+    const MSCKFUpdatePriorSnapshot &prior,
+    const Eigen::VectorXd &absolute_delta) {
+  MSCKFVisualWorkingState result;
+  const Eigen::Index state_dimension = prior.filter.covariance.rows();
+  if (state_dimension <= 0 || prior.filter.covariance.cols() != state_dimension ||
+      absolute_delta.rows() != state_dimension ||
+      !absolute_delta.allFinite() ||
+      static_cast<int>(entry_options.feat_rep_msckf) !=
+          prior.feature_representation ||
+      entry_options.do_fej != prior.do_fej ||
+      entry_options.do_calib_camera_pose != prior.calibrate_camera_pose ||
+      entry_options.do_calib_camera_intrinsics !=
+          prior.calibrate_camera_intrinsics ||
+      entry_options.do_calib_camera_timeoffset !=
+          prior.calibrate_camera_timeoffset) {
+    return result;
+  }
+
+  StateOptions working_options = entry_options;
+  std::shared_ptr<State> working =
+      std::make_shared<State>(working_options);
+  working->_timestamp = prior.timestamp;
+  if (working->_calib_IMUtoCAM.size() != prior.cameras.size() ||
+      working->_cam_intrinsics.size() != prior.cameras.size()) {
+    return result;
+  }
+  working->_cam_intrinsics_cameras.clear();
+
+  for (const MSCKFUpdatePriorCamera &camera : prior.cameras) {
+    const auto extrinsic =
+        working->_calib_IMUtoCAM.find(camera.camera_id);
+    const auto intrinsic =
+        working->_cam_intrinsics.find(camera.camera_id);
+    if (camera.model != MSCKFUpdatePriorCameraModel::kRadtan) {
+      result.failure = MSCKFTwoPassFailure::kCameraModel;
+      return result;
+    }
+    if (extrinsic == working->_calib_IMUtoCAM.end() ||
+        intrinsic == working->_cam_intrinsics.end() || !extrinsic->second ||
+        !intrinsic->second || camera.extrinsic_value.rows() != 7 ||
+        camera.extrinsic_value.cols() != 1 ||
+        camera.extrinsic_fej.rows() != 7 || camera.extrinsic_fej.cols() != 1 ||
+        camera.intrinsic_value.rows() != 8 ||
+        camera.intrinsic_value.cols() != 1 ||
+        camera.intrinsic_fej.rows() != 8 || camera.intrinsic_fej.cols() != 1 ||
+        camera.cache_value.rows() != 8 || camera.cache_value.cols() != 1 ||
+        !camera.extrinsic_value.allFinite() ||
+        !camera.extrinsic_fej.allFinite() ||
+        !camera.intrinsic_value.allFinite() ||
+        !camera.intrinsic_fej.allFinite() ||
+        !camera.cache_value.allFinite() || camera.width <= 0 ||
+        camera.height <= 0 ||
+        !(camera.cache_value.array() == camera.intrinsic_value.array()).all()) {
+      return result;
+    }
+
+    extrinsic->second->set_local_id(camera.extrinsic_id);
+    extrinsic->second->set_value(camera.extrinsic_value);
+    extrinsic->second->set_fej(camera.extrinsic_fej);
+    intrinsic->second->set_local_id(camera.intrinsic_id);
+    intrinsic->second->set_value(camera.intrinsic_value);
+    intrinsic->second->set_fej(camera.intrinsic_fej);
+    if (!msckf_apply_absolute_delta(extrinsic->second, absolute_delta) ||
+        !msckf_apply_absolute_delta(intrinsic->second, absolute_delta)) {
+      return result;
+    }
+    std::shared_ptr<CamRadtan> cache =
+        std::make_shared<CamRadtan>(camera.width, camera.height);
+    cache->set_value(intrinsic->second->value());
+    working->_cam_intrinsics_cameras.emplace(camera.camera_id,
+                                              std::move(cache));
+  }
+
+  working->_clones_IMU.clear();
+  for (const MSCKFUpdatePriorCloneBinding &binding :
+       prior.clone_bindings) {
+    const MSCKFUpdatePriorNominalBlock *block =
+        msckf_prior_block(prior, binding.covariance_id, 6);
+    if (!block || block->value.rows() != 7 || block->value.cols() != 1 ||
+        block->fej.rows() != 7 || block->fej.cols() != 1 ||
+        !block->value.allFinite() || !block->fej.allFinite() ||
+        !std::isfinite(binding.timestamp) ||
+        working->_clones_IMU.find(binding.timestamp) !=
+            working->_clones_IMU.end()) {
+      return result;
+    }
+    std::shared_ptr<PoseJPL> clone = std::make_shared<PoseJPL>();
+    clone->set_local_id(binding.covariance_id);
+    clone->set_value(block->value);
+    clone->set_fej(block->fej);
+    if (!msckf_apply_absolute_delta(clone, absolute_delta)) {
+      return result;
+    }
+    working->_clones_IMU.emplace(binding.timestamp, std::move(clone));
+  }
+
+  result.state = std::move(working);
+  result.failure = MSCKFTwoPassFailure::kNone;
+  return result;
+}
+
+std::unordered_map<
+    size_t,
+    std::unordered_map<double, FeatureInitializer::ClonePose>>
+msckf_camera_clone_map(const std::shared_ptr<State> &state) {
+  std::unordered_map<
+      size_t,
+      std::unordered_map<double, FeatureInitializer::ClonePose>> result;
+  for (const auto &calibration : state->_calib_IMUtoCAM) {
+    std::unordered_map<double, FeatureInitializer::ClonePose> camera_poses;
+    for (const auto &clone : state->_clones_IMU) {
+      const Eigen::Matrix3d rotation =
+          calibration.second->Rot() * clone.second->Rot();
+      const Eigen::Vector3d position =
+          clone.second->pos() -
+          rotation.transpose() * calibration.second->pos();
+      camera_poses.emplace(
+          clone.first, FeatureInitializer::ClonePose(rotation, position));
+    }
+    result.emplace(calibration.first, std::move(camera_poses));
+  }
+  return result;
+}
+
+UpdaterHelper::UpdaterHelperFeature msckf_helper_feature(
+    const std::shared_ptr<State> &state, const Feature &feature) {
+  UpdaterHelper::UpdaterHelperFeature helper;
+  helper.featid = feature.featid;
+  helper.uvs = feature.uvs;
+  helper.uvs_norm = feature.uvs_norm;
+  helper.timestamps = feature.timestamps;
+  helper.feat_representation = state->_options.feat_rep_msckf;
+  if (helper.feat_representation ==
+      LandmarkRepresentation::Representation::ANCHORED_INVERSE_DEPTH_SINGLE) {
+    helper.feat_representation = LandmarkRepresentation::Representation::
+        ANCHORED_MSCKF_INVERSE_DEPTH;
+  }
+  if (LandmarkRepresentation::is_relative_representation(
+          helper.feat_representation)) {
+    helper.anchor_cam_id = feature.anchor_cam_id;
+    helper.anchor_clone_timestamp = feature.anchor_clone_timestamp;
+    helper.p_FinA = feature.p_FinA;
+    helper.p_FinA_fej = feature.p_FinA;
+  } else {
+    helper.p_FinG = feature.p_FinG;
+    helper.p_FinG_fej = feature.p_FinG;
+  }
+  return helper;
+}
+
+bool msckf_fixed_chart_system(
+    const std::vector<std::shared_ptr<Type>> &order,
+    const Eigen::VectorXd &absolute_delta, const Eigen::MatrixXd &H_x,
+    const Eigen::VectorXd &residual, Eigen::MatrixXd &fixed_H,
+    Eigen::VectorXd &corrected_residual, double &correction_norm,
+    std::vector<MSCKFUpdatePreviewBlock> &layout) {
+  if (H_x.rows() != residual.rows() || H_x.cols() <= 0 ||
+      !H_x.allFinite() || !residual.allFinite()) {
+    return false;
+  }
+  Eigen::VectorXd local_delta = Eigen::VectorXd::Zero(H_x.cols());
+  Eigen::MatrixXd chart =
+      Eigen::MatrixXd::Identity(H_x.cols(), H_x.cols());
+  layout.clear();
+  layout.reserve(order.size());
+  Eigen::Index offset = 0;
+  for (const auto &variable : order) {
+    if (!variable || variable->id() < 0 || variable->size() <= 0 ||
+        offset > H_x.cols() - variable->size() ||
+        variable->id() > absolute_delta.rows() - variable->size()) {
+      return false;
+    }
+    local_delta.segment(offset, variable->size()) =
+        absolute_delta.segment(variable->id(), variable->size());
+    if (std::dynamic_pointer_cast<PoseJPL>(variable)) {
+      const Eigen::Vector3d orientation_delta =
+          absolute_delta.segment<3>(variable->id());
+      chart.block<3, 3>(offset, offset) =
+          (Eigen::Matrix3d::Identity() -
+           0.5 * skew_x(orientation_delta)) /
+          (1.0 + 0.25 * orientation_delta.squaredNorm());
+    }
+    layout.push_back(
+        {variable->id(), variable->size(), offset});
+    offset += variable->size();
+  }
+  if (offset != H_x.cols()) {
+    return false;
+  }
+  fixed_H = H_x * chart;
+  const Eigen::VectorXd correction = fixed_H * local_delta;
+  corrected_residual = residual + correction;
+  correction_norm = correction.norm();
+  return fixed_H.allFinite() && corrected_residual.allFinite() &&
+         std::isfinite(correction_norm);
+}
+
+struct MSCKFPriorSupportFactor {
+  bool valid = false;
+  Eigen::MatrixXd basis;
+  Eigen::VectorXd positive_eigenvalues;
+  double zero_tolerance = std::numeric_limits<double>::quiet_NaN();
+  double minimum_eigenvalue = std::numeric_limits<double>::quiet_NaN();
+  double maximum_eigenvalue = std::numeric_limits<double>::quiet_NaN();
+
+  bool Evaluate(const Eigen::VectorXd &delta, double &cost,
+                double &support_error) const {
+    if (!valid || delta.rows() != basis.rows() || !delta.allFinite()) {
+      return false;
+    }
+    const Eigen::VectorXd projected = basis.transpose() * delta;
+    const Eigen::VectorXd supported = basis * projected;
+    support_error = (delta - supported).norm();
+    const double support_tolerance =
+        256.0 * static_cast<double>(std::max<Eigen::Index>(1, delta.rows())) *
+        std::numeric_limits<double>::epsilon() *
+        std::max(1.0, delta.norm());
+    if (!std::isfinite(support_error) ||
+        support_error > support_tolerance) {
+      return false;
+    }
+    if (positive_eigenvalues.size() == 0) {
+      cost = 0.0;
+      return true;
+    }
+    const Eigen::VectorXd coordinate =
+        projected.array() / positive_eigenvalues.array().sqrt();
+    cost = 0.5 * coordinate.squaredNorm();
+    return coordinate.allFinite() && std::isfinite(cost);
+  }
+};
+
+MSCKFPriorSupportFactor msckf_factor_prior_support(
+    const Eigen::MatrixXd &prior) {
+  MSCKFPriorSupportFactor result;
+  if (prior.rows() <= 0 || prior.cols() != prior.rows() ||
+      !prior.allFinite()) {
+    return result;
+  }
+  const double symmetry_error =
+      msckf_matrix_inf_norm(prior - prior.transpose());
+  const double prior_scale =
+      std::max(1.0, msckf_matrix_inf_norm(prior));
+  if (!std::isfinite(symmetry_error) ||
+      symmetry_error > 1.0e-10 * prior_scale) {
+    return result;
+  }
+  const Eigen::MatrixXd symmetric =
+      0.5 * (prior + prior.transpose());
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigensolver(symmetric);
+  if (eigensolver.info() != Eigen::Success ||
+      !eigensolver.eigenvalues().allFinite() ||
+      !eigensolver.eigenvectors().allFinite()) {
+    return result;
+  }
+  const Eigen::VectorXd &eigenvalues = eigensolver.eigenvalues();
+  result.minimum_eigenvalue = eigenvalues.minCoeff();
+  result.maximum_eigenvalue = eigenvalues.maxCoeff();
+  const double spectral_scale =
+      std::max(1.0, result.maximum_eigenvalue);
+  result.zero_tolerance =
+      256.0 * static_cast<double>(prior.rows()) *
+      std::numeric_limits<double>::epsilon() * spectral_scale;
+  if (!std::isfinite(result.zero_tolerance) ||
+      result.minimum_eigenvalue < -result.zero_tolerance) {
+    return result;
+  }
+  Eigen::Index first_positive = 0;
+  while (first_positive < eigenvalues.rows() &&
+         !(eigenvalues(first_positive) > result.zero_tolerance)) {
+    ++first_positive;
+  }
+  const Eigen::Index rank = eigenvalues.rows() - first_positive;
+  if (rank > 0) {
+    result.basis = eigensolver.eigenvectors().rightCols(rank);
+    result.positive_eigenvalues = eigenvalues.tail(rank);
+  } else {
+    result.basis = Eigen::MatrixXd(prior.rows(), 0);
+    result.positive_eigenvalues = Eigen::VectorXd(0);
+  }
+  result.valid = result.basis.allFinite() &&
+                 result.positive_eigenvalues.allFinite();
+  return result;
+}
+
+struct MSCKFRectangularMean {
+  bool valid = false;
+  Eigen::VectorXd dx;
+  double nis = std::numeric_limits<double>::quiet_NaN();
+};
+
+MSCKFRectangularMean msckf_compute_rectangular_mean(
+    const MSCKFUpdatePreviewSnapshot &prior,
+    const MSCKFPriorSupportFactor &prior_factor,
+    const std::vector<MSCKFUpdatePreviewBlock> &layout,
+    const Eigen::MatrixXd &H, const Eigen::VectorXd &residual,
+    double sigma_pix) {
+  MSCKFRectangularMean result;
+  const Eigen::Index state_dimension = prior.covariance.rows();
+  if (!prior_factor.valid || prior_factor.basis.rows() != state_dimension ||
+      state_dimension <= 0 || prior.covariance.cols() != state_dimension ||
+      H.rows() <= 0 || H.rows() != residual.rows() || H.cols() <= 0 ||
+      layout.empty() || !H.allFinite() || !residual.allFinite() ||
+      !std::isfinite(sigma_pix) || !(sigma_pix > 0.0)) {
+    return result;
+  }
+  Eigen::MatrixXd full_H =
+      Eigen::MatrixXd::Zero(H.rows(), state_dimension);
+  Eigen::Index expected_offset = 0;
+  std::vector<unsigned char> covered(
+      static_cast<std::size_t>(state_dimension), 0);
+  for (const MSCKFUpdatePreviewBlock &block : layout) {
+    if (block.covariance_id < 0 || block.size <= 0 ||
+        block.offset != expected_offset ||
+        block.offset > H.cols() - block.size ||
+        block.covariance_id > state_dimension - block.size) {
+      return result;
+    }
+    for (Eigen::Index index = 0; index < block.size; ++index) {
+      const std::size_t coordinate = static_cast<std::size_t>(
+          block.covariance_id + index);
+      if (covered[coordinate] != 0) {
+        return result;
+      }
+      covered[coordinate] = 1;
+    }
+    full_H.block(0, block.covariance_id, H.rows(), block.size) =
+        H.block(0, block.offset, H.rows(), block.size);
+    expected_offset += block.size;
+  }
+  if (expected_offset != H.cols() || !full_H.allFinite()) {
+    return result;
+  }
+  const Eigen::Index rank = prior_factor.positive_eigenvalues.rows();
+  if (rank == 0) {
+    const Eigen::VectorXd whitened_residual = residual.array() / sigma_pix;
+    result.dx = Eigen::VectorXd::Zero(state_dimension);
+    result.nis = whitened_residual.squaredNorm();
+    result.valid = whitened_residual.allFinite() &&
+                   std::isfinite(result.nis);
+    return result;
+  }
+  const Eigen::MatrixXd L =
+      prior_factor.basis *
+      prior_factor.positive_eigenvalues.cwiseSqrt().asDiagonal();
+  const Eigen::MatrixXd W = (full_H * L).array() / sigma_pix;
+  const Eigen::VectorXd whitened_residual = residual.array() / sigma_pix;
+  const Eigen::MatrixXd J =
+      Eigen::MatrixXd::Identity(rank, rank) + W.transpose() * W;
+  if (!L.allFinite() || !W.allFinite() ||
+      !whitened_residual.allFinite() || !J.allFinite()) {
+    return result;
+  }
+  Eigen::LLT<Eigen::MatrixXd> factor(J);
+  if (factor.info() != Eigen::Success) {
+    return result;
+  }
+  const Eigen::VectorXd reduced_rhs = W.transpose() * whitened_residual;
+  const Eigen::VectorXd reduced_solution = factor.solve(reduced_rhs);
+  result.dx = L * reduced_solution;
+  result.nis = whitened_residual.squaredNorm() -
+               reduced_rhs.dot(reduced_solution);
+  result.valid = factor.info() == Eigen::Success &&
+                 reduced_rhs.allFinite() &&
+                 reduced_solution.allFinite() && result.dx.allFinite() &&
+                 std::isfinite(result.nis);
+  return result;
+}
+
+bool msckf_preview_layout_from_order(
+    const std::vector<std::shared_ptr<Type>> &order,
+    std::vector<MSCKFUpdatePreviewBlock> &layout) {
+  layout.clear();
+  layout.reserve(order.size());
+  Eigen::Index offset = 0;
+  for (const auto &variable : order) {
+    if (!variable || variable->id() < 0 || variable->size() <= 0 ||
+        offset > std::numeric_limits<Eigen::Index>::max() -
+                     variable->size()) {
+      return false;
+    }
+    layout.push_back({variable->id(), variable->size(), offset});
+    offset += variable->size();
+  }
+  return !layout.empty();
+}
+
+struct MSCKFTwoPassFeatureSystem {
+  Eigen::MatrixXd H;
+  Eigen::VectorXd residual;
+  std::vector<MSCKFUpdatePreviewBlock> layout;
+};
+
+std::vector<CP2FeatureGateLayoutBlock>
+capture_cp2_feature_layout(
+    const std::vector<std::shared_ptr<Type>> &order);
+
+struct MSCKFTwoPassLinearization {
+  bool valid = false;
+  MSCKFTwoPassFailure failure = MSCKFTwoPassFailure::kSnapshot;
+  std::size_t feature_id = 0;
+  MSCKFDetachedFeatureSet geometry;
+  Eigen::MatrixXd H;
+  Eigen::VectorXd residual;
+  std::vector<MSCKFUpdatePreviewBlock> layout;
+  MSCKFRectangularMean mean;
+  Eigen::Index raw_rows = 0;
+  Eigen::Index reduced_rows = 0;
+  double maximum_feature_nis =
+      std::numeric_limits<double>::quiet_NaN();
+  double maximum_gate_threshold =
+      std::numeric_limits<double>::quiet_NaN();
+  double affine_correction_norm = 0.0;
+  std::size_t numerical_repair_count = 0;
+  SchurReductionStatus schur_status =
+      SchurReductionStatus::kAccepted;
+  SchurReductionStage schur_stage = SchurReductionStage::kAccepted;
+  bool singular_values_available = false;
+  bool singular_ratio_available = false;
+  Eigen::Vector3d singular_values = Eigen::Vector3d::Constant(
+      std::numeric_limits<double>::quiet_NaN());
+  double singular_ratio = std::numeric_limits<double>::quiet_NaN();
+};
+
+MSCKFTwoPassLinearization msckf_build_second_pass(
+    const StateOptions &entry_options,
+    const MSCKFUpdatePriorSnapshot &prior,
+    const Eigen::VectorXd &linearization_delta,
+    MSCKFDetachedFeatureSet geometry,
+    const std::shared_ptr<FeatureInitializer> &initializer,
+    const UpdaterOptions &options,
+    const std::map<int, double> &chi_squared_table,
+    const MSCKFPriorSupportFactor &prior_factor) {
+  MSCKFTwoPassLinearization result;
+  result.geometry = std::move(geometry);
+  if (!initializer || result.geometry.features.empty() ||
+      result.geometry.features.size() !=
+          result.geometry.source_indices.size()) {
+    return result;
+  }
+  const MSCKFVisualWorkingState visual =
+      msckf_build_visual_working_state(entry_options, prior,
+                                       linearization_delta);
+  if (!visual.accepted()) {
+    result.failure = visual.failure;
+    return result;
+  }
+  auto clones_camera = msckf_camera_clone_map(visual.state);
+
+  std::vector<MSCKFTwoPassFeatureSystem> feature_systems;
+  feature_systems.reserve(result.geometry.features.size());
+  std::unordered_map<Eigen::Index, std::size_t> global_block_index;
+  Eigen::Index global_columns = 0;
+  Eigen::Index global_rows = 0;
+
+  for (const auto &feature : result.geometry.features) {
+    if (!feature) {
+      result.failure = MSCKFTwoPassFailure::kSnapshot;
+      return result;
+    }
+    result.feature_id = feature->featid;
+    bool triangulated = false;
+    if (initializer->config().triangulate_1d) {
+      triangulated =
+          initializer->single_triangulation_1d(feature, clones_camera);
+    } else {
+      triangulated =
+          initializer->single_triangulation(feature, clones_camera);
+    }
+    const bool refined =
+        !initializer->config().refine_features ||
+        initializer->single_gaussnewton(feature, clones_camera);
+    if (!triangulated || !refined || !feature->p_FinG.allFinite() ||
+        !feature->p_FinA.allFinite()) {
+      result.failure = MSCKFTwoPassFailure::kGeometry;
+      return result;
+    }
+
+    UpdaterHelper::UpdaterHelperFeature helper =
+        msckf_helper_feature(visual.state, *feature);
+    Eigen::MatrixXd H_f;
+    Eigen::MatrixXd H_x;
+    Eigen::VectorXd raw_residual;
+    std::vector<std::shared_ptr<Type>> order;
+    UpdaterHelper::get_feature_jacobian_full(
+        visual.state, helper, H_f, H_x, raw_residual, order);
+    Eigen::MatrixXd fixed_H;
+    Eigen::VectorXd corrected_residual;
+    double correction_norm = 0.0;
+    std::vector<MSCKFUpdatePreviewBlock> local_layout;
+    if (H_f.cols() != 3 || H_f.rows() != H_x.rows() ||
+        !H_f.allFinite() ||
+        !msckf_fixed_chart_system(order, linearization_delta, H_x,
+                                  raw_residual, fixed_H,
+                                  corrected_residual, correction_norm,
+                                  local_layout)) {
+      result.failure = MSCKFTwoPassFailure::kJacobian;
+      return result;
+    }
+    result.affine_correction_norm += correction_norm;
+
+    SchurReductionResult reduction = SchurUpdate::Reduce(
+        fixed_H, H_f, corrected_residual, options.sigma_pix);
+    result.schur_status = reduction.status;
+    result.schur_stage = reduction.stage;
+    result.singular_values_available =
+        reduction.singular_values_available;
+    result.singular_ratio_available = reduction.singular_ratio_available;
+    result.singular_values = reduction.singular_values;
+    result.singular_ratio = reduction.singular_ratio;
+    result.raw_rows += reduction.raw_rows;
+    result.numerical_repair_count +=
+        reduction.jitter_count + reduction.clamp_count +
+        reduction.regularization_count + reduction.fallback_count;
+    if (!reduction.accepted()) {
+      result.failure = MSCKFTwoPassFailure::kSchur;
+      return result;
+    }
+
+    const CP2FeatureGateResult feature_gate = CP2FeatureGate::Evaluate(
+        CP2FeatureGateInput(
+            reduction.H_reduced, reduction.residual_reduced,
+            prior.filter.covariance, capture_cp2_feature_layout(order),
+            options.sigma_pix_sq, options.chi2_multipler),
+        chi_squared_table);
+    if (!feature_gate.chi2_available ||
+        !feature_gate.threshold_available ||
+        !feature_gate.evidence_decision_available ||
+        !std::isfinite(feature_gate.chi2) ||
+        !std::isfinite(feature_gate.threshold)) {
+      result.failure = MSCKFTwoPassFailure::kGate;
+      return result;
+    }
+    if (!std::isfinite(result.maximum_feature_nis) ||
+        feature_gate.chi2 > result.maximum_feature_nis) {
+      result.maximum_feature_nis = feature_gate.chi2;
+      result.maximum_gate_threshold = feature_gate.threshold;
+    }
+    if (!feature_gate.lifecycle_accept || !feature_gate.evidence_accept) {
+      result.failure = MSCKFTwoPassFailure::kGate;
+      return result;
+    }
+
+    MSCKFTwoPassFeatureSystem system;
+    system.H = std::move(reduction.H_reduced);
+    system.residual = std::move(reduction.residual_reduced);
+    system.layout = std::move(local_layout);
+    if (system.H.rows() <= 0 || system.H.rows() != system.residual.rows() ||
+        global_rows > std::numeric_limits<Eigen::Index>::max() -
+                          system.H.rows()) {
+      result.failure = MSCKFTwoPassFailure::kJacobian;
+      return result;
+    }
+    global_rows += system.H.rows();
+    for (const MSCKFUpdatePreviewBlock &block : system.layout) {
+      const auto existing = global_block_index.find(block.covariance_id);
+      if (existing != global_block_index.end()) {
+        if (result.layout[existing->second].size != block.size) {
+          result.failure = MSCKFTwoPassFailure::kJacobian;
+          return result;
+        }
+        continue;
+      }
+      for (const MSCKFUpdatePreviewBlock &global_block : result.layout) {
+        const Eigen::Index block_end = block.covariance_id + block.size;
+        const Eigen::Index global_end =
+            global_block.covariance_id + global_block.size;
+        if (block.covariance_id < global_end &&
+            global_block.covariance_id < block_end) {
+          result.failure = MSCKFTwoPassFailure::kJacobian;
+          return result;
+        }
+      }
+      if (global_columns > std::numeric_limits<Eigen::Index>::max() -
+                               block.size) {
+        result.failure = MSCKFTwoPassFailure::kJacobian;
+        return result;
+      }
+      global_block_index.emplace(block.covariance_id,
+                                 result.layout.size());
+      result.layout.push_back(
+          {block.covariance_id, block.size, global_columns});
+      global_columns += block.size;
+    }
+    feature_systems.push_back(std::move(system));
+  }
+
+  if (global_rows <= 0 || global_columns <= 0 || result.layout.empty()) {
+    result.failure = MSCKFTwoPassFailure::kCompression;
+    return result;
+  }
+  result.H = Eigen::MatrixXd::Zero(global_rows, global_columns);
+  result.residual = Eigen::VectorXd::Zero(global_rows);
+  Eigen::Index row_offset = 0;
+  for (const MSCKFTwoPassFeatureSystem &system : feature_systems) {
+    for (const MSCKFUpdatePreviewBlock &local_block : system.layout) {
+      const auto global = global_block_index.find(local_block.covariance_id);
+      if (global == global_block_index.end()) {
+        result.failure = MSCKFTwoPassFailure::kJacobian;
+        return result;
+      }
+      const MSCKFUpdatePreviewBlock &global_block =
+          result.layout[global->second];
+      result.H.block(row_offset, global_block.offset, system.H.rows(),
+                     local_block.size) =
+          system.H.block(0, local_block.offset, system.H.rows(),
+                         local_block.size);
+    }
+    result.residual.segment(row_offset, system.residual.rows()) =
+        system.residual;
+    row_offset += system.residual.rows();
+  }
+  if (row_offset != global_rows || !result.H.allFinite() ||
+      !result.residual.allFinite()) {
+    result.failure = MSCKFTwoPassFailure::kJacobian;
+    return result;
+  }
+  UpdaterHelper::measurement_compress_inplace(result.H, result.residual);
+  result.reduced_rows = result.residual.rows();
+  if (result.H.rows() <= 0 || result.H.rows() != result.residual.rows() ||
+      result.H.cols() != global_columns || !result.H.allFinite() ||
+      !result.residual.allFinite()) {
+    result.failure = MSCKFTwoPassFailure::kCompression;
+    return result;
+  }
+  result.mean = msckf_compute_rectangular_mean(
+      prior.filter, prior_factor, result.layout, result.H,
+      result.residual, options.sigma_pix);
+  if (!result.mean.valid) {
+    result.failure = MSCKFTwoPassFailure::kMean;
+    return result;
+  }
+  result.failure = MSCKFTwoPassFailure::kNone;
+  result.valid = true;
+  return result;
+}
+
+struct MSCKFTwoPassCost {
+  bool valid = false;
+  MSCKFTwoPassFailure failure = MSCKFTwoPassFailure::kCost;
+  std::size_t feature_id = 0;
+  double pixel = std::numeric_limits<double>::quiet_NaN();
+  double posterior = std::numeric_limits<double>::quiet_NaN();
+  double prior = std::numeric_limits<double>::quiet_NaN();
+  double support_error = std::numeric_limits<double>::quiet_NaN();
+  MSCKFDetachedFeatureSet geometry;
+};
+
+MSCKFTwoPassCost msckf_evaluate_true_cost(
+    const StateOptions &entry_options,
+    const MSCKFUpdatePriorSnapshot &prior,
+    const Eigen::VectorXd &candidate_delta,
+    MSCKFDetachedFeatureSet geometry,
+    const std::shared_ptr<FeatureInitializer> &initializer,
+    const UpdaterOptions &options,
+    const MSCKFPriorSupportFactor &prior_factor) {
+  MSCKFTwoPassCost result;
+  result.geometry = std::move(geometry);
+  if (!initializer || !prior_factor.valid || result.geometry.features.empty() ||
+      result.geometry.features.size() !=
+          result.geometry.source_indices.size()) {
+    result.failure = MSCKFTwoPassFailure::kPriorSupport;
+    return result;
+  }
+  const MSCKFVisualWorkingState visual =
+      msckf_build_visual_working_state(entry_options, prior,
+                                       candidate_delta);
+  if (!visual.accepted()) {
+    result.failure = visual.failure;
+    return result;
+  }
+  auto clones_camera = msckf_camera_clone_map(visual.state);
+  double pixel_cost = 0.0;
+  for (const auto &feature : result.geometry.features) {
+    if (!feature) {
+      result.failure = MSCKFTwoPassFailure::kSnapshot;
+      return result;
+    }
+    result.feature_id = feature->featid;
+    bool triangulated = false;
+    if (initializer->config().triangulate_1d) {
+      triangulated =
+          initializer->single_triangulation_1d(feature, clones_camera);
+    } else {
+      triangulated =
+          initializer->single_triangulation(feature, clones_camera);
+    }
+    const bool refined =
+        !initializer->config().refine_features ||
+        initializer->single_gaussnewton(feature, clones_camera);
+    if (!triangulated || !refined || !feature->p_FinG.allFinite() ||
+        !feature->p_FinA.allFinite()) {
+      result.failure = MSCKFTwoPassFailure::kGeometry;
+      return result;
+    }
+    UpdaterHelper::UpdaterHelperFeature helper =
+        msckf_helper_feature(visual.state, *feature);
+    Eigen::MatrixXd H_f;
+    Eigen::MatrixXd H_x;
+    Eigen::VectorXd residual;
+    std::vector<std::shared_ptr<Type>> order;
+    UpdaterHelper::get_feature_jacobian_full(
+        visual.state, helper, H_f, H_x, residual, order);
+    const double feature_cost = residual.squaredNorm();
+    const double updated_cost = pixel_cost + feature_cost;
+    if (residual.rows() <= 0 || !residual.allFinite() ||
+        !std::isfinite(feature_cost) || !std::isfinite(updated_cost)) {
+      result.failure = MSCKFTwoPassFailure::kCost;
+      return result;
+    }
+    pixel_cost = updated_cost;
+  }
+  double prior_cost = std::numeric_limits<double>::quiet_NaN();
+  double support_error = std::numeric_limits<double>::quiet_NaN();
+  if (!prior_factor.Evaluate(candidate_delta, prior_cost, support_error)) {
+    result.failure = MSCKFTwoPassFailure::kPriorSupport;
+    return result;
+  }
+  const double posterior =
+      prior_cost + 0.5 * pixel_cost / options.sigma_pix_sq;
+  if (!std::isfinite(pixel_cost) || !std::isfinite(posterior)) {
+    result.failure = MSCKFTwoPassFailure::kCost;
+    return result;
+  }
+  result.pixel = pixel_cost;
+  result.posterior = posterior;
+  result.prior = prior_cost;
+  result.support_error = support_error;
+  result.failure = MSCKFTwoPassFailure::kNone;
+  result.valid = true;
+  return result;
+}
+
+struct MSCKFPosteriorValidation {
+  bool valid = false;
+  double symmetry_error = std::numeric_limits<double>::quiet_NaN();
+  double symmetry_bound = std::numeric_limits<double>::quiet_NaN();
+  double minimum_eigenvalue = std::numeric_limits<double>::quiet_NaN();
+  double maximum_eigenvalue = std::numeric_limits<double>::quiet_NaN();
+  double psd_bound = std::numeric_limits<double>::quiet_NaN();
+  double maximum_diagonal = std::numeric_limits<double>::quiet_NaN();
+};
+
+MSCKFPosteriorValidation msckf_validate_posterior(
+    const Eigen::MatrixXd &posterior) {
+  MSCKFPosteriorValidation result;
+  if (posterior.rows() <= 0 || posterior.cols() != posterior.rows() ||
+      !posterior.allFinite()) {
+    return result;
+  }
+  result.symmetry_error =
+      msckf_matrix_inf_norm(posterior - posterior.transpose());
+  result.symmetry_bound =
+      1.0e-10 * std::max(1.0, msckf_matrix_inf_norm(posterior));
+  result.maximum_diagonal = posterior.diagonal().maxCoeff();
+  if (!std::isfinite(result.symmetry_error) ||
+      result.symmetry_error > result.symmetry_bound) {
+    return result;
+  }
+  const Eigen::MatrixXd symmetric =
+      0.5 * (posterior + posterior.transpose());
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigensolver(symmetric);
+  if (eigensolver.info() != Eigen::Success ||
+      !eigensolver.eigenvalues().allFinite()) {
+    return result;
+  }
+  result.minimum_eigenvalue = eigensolver.eigenvalues().minCoeff();
+  result.maximum_eigenvalue = eigensolver.eigenvalues().maxCoeff();
+  result.psd_bound =
+      -1.0e-10 * std::max(1.0, result.maximum_eigenvalue);
+  result.valid = std::isfinite(result.minimum_eigenvalue) &&
+                 std::isfinite(result.maximum_eigenvalue) &&
+                 result.minimum_eigenvalue >= result.psd_bound;
+  return result;
+}
+
+struct MSCKFSelectedCovariance {
+  bool valid = false;
+  MSCKFTwoPassFailure failure = MSCKFTwoPassFailure::kCovariance;
+  Eigen::VectorXd dx;
+  Eigen::MatrixXd posterior;
+  MSCKFPosteriorValidation validation;
+};
+
+MSCKFSelectedCovariance msckf_compute_selected_covariance(
+    const MSCKFUpdatePreviewSnapshot &prior,
+    const MSCKFPriorSupportFactor &prior_factor,
+    const std::vector<MSCKFUpdatePreviewBlock> &layout,
+    const Eigen::MatrixXd &H, const Eigen::VectorXd &residual,
+    double sigma_pix) {
+  MSCKFSelectedCovariance result;
+  const Eigen::Index state_dimension = prior.covariance.rows();
+  if (!prior_factor.valid || prior_factor.basis.rows() != state_dimension ||
+      state_dimension <= 0 || prior.covariance.cols() != state_dimension ||
+      H.rows() <= 0 || H.rows() != residual.rows() || H.cols() <= 0 ||
+      layout.empty() || !H.allFinite() || !residual.allFinite() ||
+      !std::isfinite(sigma_pix) || !(sigma_pix > 0.0)) {
+    return result;
+  }
+  Eigen::MatrixXd full_H =
+      Eigen::MatrixXd::Zero(H.rows(), state_dimension);
+  Eigen::Index expected_offset = 0;
+  std::vector<unsigned char> covered(
+      static_cast<std::size_t>(state_dimension), 0);
+  for (const MSCKFUpdatePreviewBlock &block : layout) {
+    if (block.covariance_id < 0 || block.size <= 0 ||
+        block.offset != expected_offset ||
+        block.offset > H.cols() - block.size ||
+        block.covariance_id > state_dimension - block.size) {
+      return result;
+    }
+    for (Eigen::Index index = 0; index < block.size; ++index) {
+      const std::size_t coordinate = static_cast<std::size_t>(
+          block.covariance_id + index);
+      if (covered[coordinate] != 0) {
+        return result;
+      }
+      covered[coordinate] = 1;
+    }
+    full_H.block(0, block.covariance_id, H.rows(), block.size) =
+        H.block(0, block.offset, H.rows(), block.size);
+    expected_offset += block.size;
+  }
+  if (expected_offset != H.cols() || !full_H.allFinite()) {
+    return result;
+  }
+
+  const Eigen::Index rank = prior_factor.positive_eigenvalues.rows();
+  Eigen::MatrixXd L(state_dimension, rank);
+  if (rank > 0) {
+    L = prior_factor.basis *
+        prior_factor.positive_eigenvalues.cwiseSqrt().asDiagonal();
+  }
+  if (!L.allFinite()) {
+    return result;
+  }
+  if (rank == 0) {
+    result.dx = Eigen::VectorXd::Zero(state_dimension);
+    const Eigen::MatrixXd raw_posterior =
+        Eigen::MatrixXd::Zero(state_dimension, state_dimension);
+    result.validation = msckf_validate_posterior(raw_posterior);
+    result.posterior = raw_posterior;
+    result.valid = result.validation.valid;
+    result.failure = result.valid ? MSCKFTwoPassFailure::kNone
+                                  : MSCKFTwoPassFailure::kCovariance;
+    return result;
+  }
+
+  const Eigen::MatrixXd W = (full_H * L).array() / sigma_pix;
+  const Eigen::VectorXd whitened_residual = residual.array() / sigma_pix;
+  const Eigen::MatrixXd J =
+      Eigen::MatrixXd::Identity(rank, rank) + W.transpose() * W;
+  if (!W.allFinite() || !whitened_residual.allFinite() || !J.allFinite()) {
+    return result;
+  }
+  Eigen::LLT<Eigen::MatrixXd> factor(J);
+  if (factor.info() != Eigen::Success) {
+    result.failure = MSCKFTwoPassFailure::kMean;
+    return result;
+  }
+  const Eigen::VectorXd y =
+      factor.solve(W.transpose() * whitened_residual);
+  const Eigen::MatrixXd solved_factor_transpose =
+      factor.solve(L.transpose());
+  if (factor.info() != Eigen::Success || !y.allFinite() ||
+      !solved_factor_transpose.allFinite()) {
+    result.failure = MSCKFTwoPassFailure::kMean;
+    return result;
+  }
+  result.dx = L * y;
+  const Eigen::MatrixXd raw_posterior = L * solved_factor_transpose;
+  if (!result.dx.allFinite() || !raw_posterior.allFinite()) {
+    return result;
+  }
+  result.validation = msckf_validate_posterior(raw_posterior);
+  if (!result.validation.valid) {
+    return result;
+  }
+  result.posterior =
+      0.5 * (raw_posterior + raw_posterior.transpose());
+  if (!result.posterior.allFinite()) {
+    return result;
+  }
+  result.failure = MSCKFTwoPassFailure::kNone;
+  result.valid = true;
+  return result;
+}
 
 bool capture_cp2_duration_ns(const CP2SteadyClockEndpoint &start,
                              const CP2SteadyClockEndpoint &end,
@@ -446,13 +1530,18 @@ UpdaterMSCKF::UpdaterMSCKF(UpdaterOptions &options, ov_core::FeatureInitializerO
   // exact variance used by every gate and update must remain finite and >0.
   const double sigma_pix_sq = _options.sigma_pix * _options.sigma_pix;
   if (!UpdaterOptions::landmark_elimination_is_supported(_options.landmark_elimination) ||
+      !UpdaterOptions::max_visual_passes_is_supported(
+          _options.max_visual_passes) ||
+      !UpdaterOptions::visual_pass_combination_is_supported(
+          _options.max_visual_passes, _options.landmark_elimination) ||
       !std::isfinite(_options.sigma_pix) || !(_options.sigma_pix > 0.0) || !std::isfinite(sigma_pix_sq) ||
       !(sigma_pix_sq > 0.0) || !std::isfinite(_options.chi2_multipler)) {
     PRINT_ERROR(RED
                 "invalid MSCKF updater configuration: mode=%s sigma_px=%.17g sigma_px_sq=%.17g "
-                "chi2_multiplier=%.17g\n" RESET,
+                "chi2_multiplier=%.17g max_visual_passes=%d\n" RESET,
                 UpdaterOptions::landmark_elimination_as_string(_options.landmark_elimination).c_str(), _options.sigma_pix,
-                sigma_pix_sq, _options.chi2_multipler);
+                sigma_pix_sq, _options.chi2_multipler,
+                _options.max_visual_passes);
     std::exit(EXIT_FAILURE);
   }
   _options.sigma_pix_sq = sigma_pix_sq;
@@ -774,8 +1863,23 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
                     immutable_record->update.baseline_commit_occurred);
   };
 
+  std::size_t ordinary_mean_commit_count = 0;
+  std::size_t ordinary_covariance_commit_count = 0;
+  std::size_t ordinary_feature_finalization_count = 0;
+  int ordinary_attempted_passes = 0;
+  int ordinary_completed_passes = 0;
+  int ordinary_selected_pass = 0;
+  bool ordinary_iteration_terminal_logged = false;
+
   const auto finish_update = [this, &notify_observer, &update_event,
-                              &cp2_update_start](CP2UpdateTerminalStatus status,
+                              &cp2_update_start, &state, &recorded_mode,
+                              &ordinary_mean_commit_count,
+                              &ordinary_covariance_commit_count,
+                              &ordinary_feature_finalization_count,
+                              &ordinary_attempted_passes,
+                              &ordinary_completed_passes,
+                              &ordinary_selected_pass,
+                              &ordinary_iteration_terminal_logged](CP2UpdateTerminalStatus status,
                                                  CP2UpdateTerminalSubreason terminal_subreason) {
     const CP2SteadyClockEndpoint cp2_update_end =
         cp2_steady_clock_now();
@@ -788,6 +1892,21 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     update_event.terminal_status = duration_valid ? status : CP2UpdateTerminalStatus::kInternalFailure;
     update_event.terminal_subreason =
         duration_valid ? terminal_subreason : CP2UpdateTerminalSubreason::kTraceInvariantFailure;
+    if (!recorded_mode && !ordinary_iteration_terminal_logged) {
+      PRINT_DEBUG(
+          "[MSCKF-ITER]: timestamp=%.17g terminal=1 requested_passes=%d "
+          "attempted_passes=%d completed_passes=%d selected_pass=%d "
+          "status=%s reason=%s mean_commits=%zu covariance_commits=%zu "
+          "feature_finalizations=%zu\n",
+          state ? state->_timestamp : 0.0, _options.max_visual_passes,
+          ordinary_attempted_passes, ordinary_completed_passes,
+          ordinary_selected_pass,
+          cp2_update_terminal_status_name(update_event.terminal_status),
+          cp2_update_terminal_subreason_name(update_event.terminal_subreason),
+          ordinary_mean_commit_count, ordinary_covariance_commit_count,
+          ordinary_feature_finalization_count);
+      ordinary_iteration_terminal_logged = true;
+    }
     notify_observer(update_event, false);
   };
 
@@ -847,9 +1966,11 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   // cleanup or geometry write, and performs all feature work on detached
   // copies. Recorded mode retains its existing live-feature lifecycle.
   MSCKFUpdatePriorSnapshot ordinary_prior;
+  StateOptions ordinary_state_options;
   std::unique_ptr<MSCKFDetachedFeatureBatch> ordinary_feature_batch;
   std::vector<std::shared_ptr<Feature>> *proposal_features = &feature_vec;
   if (!recorded_mode) {
+    ordinary_state_options = state->_options;
     ordinary_prior = UpdaterMSCKFPreview::CapturePrior(state);
     const MSCKFUpdatePriorMatchResult entry_match =
         UpdaterMSCKFPreview::MatchPrior(state, ordinary_prior);
@@ -862,9 +1983,50 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
       // MSCKF track. An empty output is therefore the rollback signal that
       // preserves the untouched database objects for a later update.
       feature_vec.clear();
+      PRINT_WARNING(
+          YELLOW
+          "[MSCKF-ITER]: timestamp=%.17g terminal=1 requested_passes=%d "
+          "attempted_passes=0 completed_passes=0 selected_pass=0 "
+          "status=prior_mismatch reason=snapshot mean_commits=0 "
+          "covariance_commits=0 feature_finalizations=0\n"
+          RESET,
+          ordinary_prior.timestamp, _options.max_visual_passes);
+      ordinary_iteration_terminal_logged = true;
       finish_update(CP2UpdateTerminalStatus::kInternalFailure,
                     CP2UpdateTerminalSubreason::kSnapshotMismatch);
       return;
+    }
+    if (_options.max_visual_passes == 2) {
+      bool visual_contract_supported =
+          _options.landmark_elimination ==
+              UpdaterOptions::LandmarkElimination::SCHUR &&
+          ordinary_prior.do_fej &&
+          ordinary_prior.feature_representation ==
+              static_cast<int>(
+                  LandmarkRepresentation::Representation::GLOBAL_3D) &&
+          !ordinary_prior.cameras.empty();
+      for (const MSCKFUpdatePriorCamera &camera : ordinary_prior.cameras) {
+        visual_contract_supported =
+            visual_contract_supported &&
+            camera.model == MSCKFUpdatePriorCameraModel::kRadtan;
+      }
+      if (!visual_contract_supported) {
+        PRINT_WARNING(
+            YELLOW
+            "[MSCKF-ITER]: timestamp=%.17g terminal=1 requested_passes=2 "
+            "attempted_passes=0 completed_passes=0 selected_pass=0 "
+            "status=unsupported_contract reason=unsupported_contract "
+            "requires=schur,fej_on,global_3d,camera_radtan "
+            "mean_commits=0 covariance_commits=0 feature_finalizations=0 "
+            "live_writes=0\n"
+            RESET,
+            ordinary_prior.timestamp);
+        ordinary_iteration_terminal_logged = true;
+        feature_vec.clear();
+        finish_update(CP2UpdateTerminalStatus::kInternalFailure,
+                      CP2UpdateTerminalSubreason::kInvalidLiveMode);
+        return;
+      }
     }
     ordinary_feature_batch.reset(
         new MSCKFDetachedFeatureBatch(feature_vec));
@@ -872,12 +2034,33 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   }
   std::vector<std::shared_ptr<Feature>> &proposal_feature_vec =
       *proposal_features;
+  ordinary_attempted_passes = 1;
   const auto finalize_ordinary_features = [&]() {
     if (ordinary_feature_batch) {
+      if (ordinary_feature_finalization_count != 0) {
+        throw std::logic_error(
+            "UpdaterMSCKF ordinary feature finalization attempted twice");
+      }
       ordinary_feature_batch->PrepareFinalization();
       ordinary_feature_batch->FinalizePrepared(feature_vec);
+      ++ordinary_feature_finalization_count;
     }
   };
+  const auto commit_ordinary_update =
+      [&](const Eigen::VectorXd &dx, const Eigen::MatrixXd &covariance,
+          StateHelper::PrecomputedCovariancePolicy covariance_policy) {
+        if (!ordinary_feature_batch || ordinary_mean_commit_count != 0 ||
+            ordinary_covariance_commit_count != 0) {
+          return false;
+        }
+        if (!StateHelper::CommitPrecomputedUpdate(
+                state, dx, covariance, covariance_policy)) {
+          return false;
+        }
+        ++ordinary_mean_commit_count;
+        ++ordinary_covariance_commit_count;
+        return true;
+      };
 
   // 0. Get all timestamps our clones are at (and thus valid measurement times)
   std::vector<double> clonetimes;
@@ -1044,6 +2227,10 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   Eigen::Index ct_meas = 0;
   double retained_gamma = 0.0;
   bool retained_gamma_available = true;
+  double two_pass_one_max_feature_nis =
+      std::numeric_limits<double>::quiet_NaN();
+  double two_pass_one_max_gate_threshold =
+      std::numeric_limits<double>::quiet_NaN();
 
   // Recorded mode takes exactly one tentative full composite at this existing
   // post-triangulation/pre-raw immutable-prior boundary. It is not validated or
@@ -1414,6 +2601,15 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
       it2 = proposal_feature_vec.erase(it2);
       continue;
     }
+    if (!recorded_mode && _options.max_visual_passes == 2 &&
+        gate.chi2_available && gate.threshold_available &&
+        std::isfinite(gate.chi2) && std::isfinite(gate.threshold)) {
+      if (!std::isfinite(two_pass_one_max_feature_nis) ||
+          gate.chi2 > two_pass_one_max_feature_nis) {
+        two_pass_one_max_feature_nis = gate.chi2;
+        two_pass_one_max_gate_threshold = gate.threshold;
+      }
+    }
     std::uint64_t accepted_feature_id = 0U;
     if (!cp2_size_to_u64(feat.featid, accepted_feature_id)) {
       throw std::overflow_error("UpdaterMSCKF accepted feature ID exceeds u64");
@@ -1693,6 +2889,499 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   // Our noise is isotropic, so make it here after our compression
   Eigen::MatrixXd R_big = _options.sigma_pix_sq * Eigen::MatrixXd::Identity(res_big.rows(), res_big.rows());
 
+  // The fixed two-pass estimator is an ordinary-mode, Schur-only branch. The
+  // complete max=1/nullspace/recorded path below remains the established
+  // one-pass implementation.
+  if (!recorded_mode && _options.max_visual_passes == 2 &&
+      _options.landmark_elimination ==
+          UpdaterOptions::LandmarkElimination::SCHUR) {
+    update_event.baseline_preflight_attempted = true;
+    const auto reject_two_pass =
+        [&](MSCKFTwoPassFailure failure, std::size_t feature_id,
+            const char *stage, int attempted_passes,
+            int completed_passes) {
+          finalize_ordinary_features();
+          PRINT_WARNING(
+              YELLOW
+              "[MSCKF-ITER]: timestamp=%.17g terminal=1 "
+              "requested_passes=2 attempted_passes=%d completed_passes=%d "
+              "selected_pass=0 status=rejected stage=%s reason=%s "
+              "feature=%zu mean_commits=%zu covariance_commits=%zu "
+              "feature_finalizations=%zu\n"
+              RESET,
+              ordinary_prior.timestamp, attempted_passes, completed_passes,
+              stage, msckf_two_pass_failure_name(failure), feature_id,
+              ordinary_mean_commit_count, ordinary_covariance_commit_count,
+              ordinary_feature_finalization_count);
+          ordinary_iteration_terminal_logged = true;
+          finish_update(CP2UpdateTerminalStatus::kPreflightRejected,
+                        CP2UpdateTerminalSubreason::
+                            kBaselinePreflightRejected);
+        };
+
+    std::vector<MSCKFUpdatePreviewBlock> pass_one_layout;
+    if (!msckf_preview_layout_from_order(Hx_order_big,
+                                         pass_one_layout)) {
+      reject_two_pass(MSCKFTwoPassFailure::kJacobian, 0,
+                      "pass1_layout", 1, 0);
+      return;
+    }
+    const MSCKFPriorSupportFactor prior_factor =
+        msckf_factor_prior_support(prior_snapshot.covariance);
+    if (!prior_factor.valid) {
+      reject_two_pass(MSCKFTwoPassFailure::kPriorSupport, 0,
+                      "prior_factor", 1, 0);
+      return;
+    }
+    const MSCKFRectangularMean pass_one_mean =
+        msckf_compute_rectangular_mean(
+            prior_snapshot, prior_factor, pass_one_layout, Hx_big,
+            res_big, _options.sigma_pix);
+    if (!pass_one_mean.valid) {
+      reject_two_pass(MSCKFTwoPassFailure::kMean, 0, "pass1_mean", 1, 0);
+      return;
+    }
+
+    const MSCKFTwoPassCost pass_one_cost = msckf_evaluate_true_cost(
+        ordinary_state_options, ordinary_prior, pass_one_mean.dx,
+        ordinary_feature_batch->CloneActive(), initializer_feat, _options,
+        prior_factor);
+    if (!pass_one_cost.valid) {
+      reject_two_pass(pass_one_cost.failure, pass_one_cost.feature_id,
+                      "pass1_cost", 1, 0);
+      return;
+    }
+    const boost::posix_time::ptime pass_one_iteration_end =
+        boost::posix_time::microsec_clock::local_time();
+    ordinary_completed_passes = 1;
+    const double pass_one_processing_ms =
+        (pass_one_iteration_end - rT0).total_microseconds() * 1.0e-3;
+
+    MSCKFTwoPassLinearization pass_two;
+    MSCKFTwoPassCost pass_two_cost;
+    double pass_two_processing_ms =
+        std::numeric_limits<double>::quiet_NaN();
+    ordinary_attempted_passes = 2;
+    try {
+      const boost::posix_time::ptime pass_two_iteration_start =
+          boost::posix_time::microsec_clock::local_time();
+      if (ordinary_two_pass_test_fault ==
+          OrdinaryTwoPassTestFault::kPassTwoException) {
+        throw std::runtime_error(
+            "UpdaterMSCKF injected ordinary Pass-2 exception");
+      }
+      pass_two = msckf_build_second_pass(
+          ordinary_state_options, ordinary_prior, pass_one_mean.dx,
+          ordinary_feature_batch->CloneActive(), initializer_feat, _options,
+          chi_squared_table, prior_factor);
+      const std::size_t injected_feature_id =
+          proposal_feature_vec.empty() || !proposal_feature_vec.front()
+              ? 0U
+              : proposal_feature_vec.front()->featid;
+      if (ordinary_two_pass_test_fault ==
+              OrdinaryTwoPassTestFault::kPassTwoNonfinite &&
+          pass_two.valid && pass_two.H.size() > 0) {
+        pass_two.H(0, 0) =
+            std::numeric_limits<double>::quiet_NaN();
+      }
+      if (ordinary_two_pass_test_fault ==
+          OrdinaryTwoPassTestFault::kPassTwoGeometryFailure) {
+        pass_two = MSCKFTwoPassLinearization();
+        pass_two.failure = MSCKFTwoPassFailure::kGeometry;
+        pass_two.feature_id = injected_feature_id;
+      } else if (ordinary_two_pass_test_fault ==
+                 OrdinaryTwoPassTestFault::kPassTwoSchurRankDeficient) {
+        pass_two = MSCKFTwoPassLinearization();
+        pass_two.failure = MSCKFTwoPassFailure::kSchur;
+        pass_two.feature_id = injected_feature_id;
+        pass_two.schur_status =
+            SchurReductionStatus::kRankDeficient;
+        pass_two.schur_stage = SchurReductionStage::kNumericalRank;
+        pass_two.singular_values_available = true;
+        pass_two.singular_ratio_available = true;
+        pass_two.singular_values = Eigen::Vector3d(1.0, 0.5, 0.0);
+        pass_two.singular_ratio = 0.0;
+      } else if (pass_two.valid &&
+                 (!pass_two.H.allFinite() ||
+                  !pass_two.residual.allFinite() ||
+                  !pass_two.mean.dx.allFinite() ||
+                  !std::isfinite(pass_two.mean.nis))) {
+        pass_two = MSCKFTwoPassLinearization();
+        pass_two.failure = MSCKFTwoPassFailure::kJacobian;
+        pass_two.feature_id = injected_feature_id;
+      }
+      if (pass_two.valid) {
+        pass_two_cost = msckf_evaluate_true_cost(
+            ordinary_state_options, ordinary_prior, pass_two.mean.dx,
+            ordinary_feature_batch->CloneActive(), initializer_feat,
+            _options, prior_factor);
+      } else {
+        pass_two_cost.failure = pass_two.failure;
+        pass_two_cost.feature_id = pass_two.feature_id;
+      }
+      const boost::posix_time::ptime pass_two_iteration_end =
+          boost::posix_time::microsec_clock::local_time();
+      pass_two_processing_ms =
+          (pass_two_iteration_end - pass_two_iteration_start)
+              .total_microseconds() *
+          1.0e-3;
+    } catch (...) {
+      pass_two = MSCKFTwoPassLinearization();
+      pass_two.failure = MSCKFTwoPassFailure::kException;
+      pass_two_cost = MSCKFTwoPassCost();
+      pass_two_cost.failure = MSCKFTwoPassFailure::kException;
+    }
+
+    int selected_pass = 1;
+    const char *selection_reason = "pass2_invalid";
+    double pixel_tolerance =
+        1.0e-9 * std::max(1.0, std::abs(pass_one_cost.pixel));
+    double posterior_tolerance =
+        1.0e-9 * std::max(1.0, std::abs(pass_one_cost.posterior));
+    if (pass_two.valid && pass_two_cost.valid) {
+      const bool pixel_accepted =
+          pass_two_cost.pixel <= pass_one_cost.pixel + pixel_tolerance;
+      const bool posterior_accepted =
+          pass_two_cost.posterior <=
+          pass_one_cost.posterior + posterior_tolerance;
+      if (pixel_accepted && posterior_accepted) {
+        selected_pass = 2;
+        selection_reason = "dual_cost_accepted";
+      } else if (!pixel_accepted && !posterior_accepted) {
+        selection_reason = "both_costs_harmful";
+      } else if (!pixel_accepted) {
+        selection_reason = "pixel_cost_harmful";
+      } else {
+        selection_reason = "posterior_cost_harmful";
+      }
+    } else if (!pass_two.valid) {
+      selection_reason = msckf_two_pass_failure_name(pass_two.failure);
+    } else {
+      selection_reason =
+          msckf_two_pass_failure_name(pass_two_cost.failure);
+    }
+    const int completed_passes =
+        pass_two.valid && pass_two_cost.valid ? 2 : 1;
+    ordinary_completed_passes = completed_passes;
+    ordinary_selected_pass = selected_pass;
+
+    const Eigen::MatrixXd *selected_H = &Hx_big;
+    const Eigen::VectorXd *selected_residual = &res_big;
+    const std::vector<MSCKFUpdatePreviewBlock> *selected_layout =
+        &pass_one_layout;
+    const MSCKFRectangularMean *selected_mean = &pass_one_mean;
+    const MSCKFTwoPassCost *selected_cost = &pass_one_cost;
+    if (selected_pass == 2) {
+      selected_H = &pass_two.H;
+      selected_residual = &pass_two.residual;
+      selected_layout = &pass_two.layout;
+      selected_mean = &pass_two.mean;
+      selected_cost = &pass_two_cost;
+    }
+
+    const MSCKFSelectedCovariance selected_covariance =
+        msckf_compute_selected_covariance(
+            prior_snapshot, prior_factor, *selected_layout, *selected_H,
+            *selected_residual, _options.sigma_pix);
+    if (!selected_covariance.valid) {
+      PRINT_WARNING(
+          YELLOW
+          "[MSCKF-ITER]: timestamp=%.17g requested_passes=2 "
+          "attempted_passes=2 selected_pass=%d status=rejected "
+          "stage=selected_covariance reason=%s symmetry_error=%.17g "
+          "symmetry_bound=%.17g lambda_min=%.17g lambda_max=%.17g "
+          "psd_bound=%.17g max_diagonal=%.17g "
+          "covariance_diagnostics_available=%d "
+          "alternative_covariances=0 mean_commits=0 "
+          "covariance_commits=0\n"
+          RESET,
+          ordinary_prior.timestamp, selected_pass,
+          msckf_two_pass_failure_name(selected_covariance.failure),
+          std::isfinite(selected_covariance.validation.symmetry_error)
+              ? selected_covariance.validation.symmetry_error
+              : 0.0,
+          std::isfinite(selected_covariance.validation.symmetry_bound)
+              ? selected_covariance.validation.symmetry_bound
+              : 0.0,
+          std::isfinite(selected_covariance.validation.minimum_eigenvalue)
+              ? selected_covariance.validation.minimum_eigenvalue
+              : 0.0,
+          std::isfinite(selected_covariance.validation.maximum_eigenvalue)
+              ? selected_covariance.validation.maximum_eigenvalue
+              : 0.0,
+          std::isfinite(selected_covariance.validation.psd_bound)
+              ? selected_covariance.validation.psd_bound
+              : 0.0,
+          std::isfinite(selected_covariance.validation.maximum_diagonal)
+              ? selected_covariance.validation.maximum_diagonal
+              : 0.0,
+          std::isfinite(selected_covariance.validation.symmetry_error) &&
+                  std::isfinite(selected_covariance.validation.symmetry_bound) &&
+                  std::isfinite(selected_covariance.validation.minimum_eigenvalue) &&
+                  std::isfinite(selected_covariance.validation.maximum_eigenvalue) &&
+                  std::isfinite(selected_covariance.validation.psd_bound) &&
+                  std::isfinite(selected_covariance.validation.maximum_diagonal)
+              ? 1
+              : 0);
+      reject_two_pass(selected_covariance.failure, 0,
+                      "selected_covariance", 2, completed_passes);
+      return;
+    }
+    const double selected_mean_error =
+        (selected_covariance.dx - selected_mean->dx).norm();
+    const double selected_mean_bound =
+        1.0e-12 + 1.0e-10 * selected_mean->dx.norm();
+    if (!std::isfinite(selected_mean_error) ||
+        selected_mean_error > selected_mean_bound) {
+      reject_two_pass(MSCKFTwoPassFailure::kMean, 0,
+                      "selected_mean_parity", 2, completed_passes);
+      return;
+    }
+    const MSCKFPosteriorValidation &posterior_validation =
+        selected_covariance.validation;
+
+    ordinary_feature_batch->AdoptGeometry(selected_cost->geometry);
+    ordinary_feature_batch->PrepareFinalization();
+    const MSCKFUpdatePriorMatchResult prior_match =
+        UpdaterMSCKFPreview::MatchPrior(state, ordinary_prior);
+    if (!prior_match.accepted()) {
+      PRINT_WARNING(
+          YELLOW
+          "[MSCKF-PRIOR]: status=%s stage=precommit index=%d "
+          "live_writes=0\n"
+          RESET,
+          msckf_update_prior_match_status_name(prior_match.status),
+          (int)prior_match.offending_index);
+      feature_vec.clear();
+      PRINT_WARNING(
+          YELLOW
+          "[MSCKF-ITER]: timestamp=%.17g terminal=1 requested_passes=2 "
+          "attempted_passes=2 completed_passes=%d selected_pass=0 "
+          "status=prior_mismatch reason=snapshot mean_commits=0 "
+          "covariance_commits=0 feature_finalizations=0\n"
+          RESET,
+          ordinary_prior.timestamp, completed_passes);
+      ordinary_iteration_terminal_logged = true;
+      finish_update(CP2UpdateTerminalStatus::kInternalFailure,
+                    CP2UpdateTerminalSubreason::kSnapshotMismatch);
+      return;
+    }
+
+    std::uint64_t accepted_set_hash = UINT64_C(1469598103934665603);
+    for (const auto &feature : proposal_feature_vec) {
+      const std::uint64_t id =
+          feature ? static_cast<std::uint64_t>(feature->featid) : 0U;
+      for (unsigned int byte = 0; byte < 8U; ++byte) {
+        accepted_set_hash ^=
+            (id >> (8U * byte)) & UINT64_C(0xff);
+        accepted_set_hash *= UINT64_C(1099511628211);
+      }
+    }
+    PRINT_DEBUG(
+        "[MSCKF-ITER]: timestamp=%.17g requested_passes=2 "
+        "attempted_passes=2 completed_passes=%d pass=1 "
+        "status=accepted accepted_features=%zu accepted_set_hash=%llu "
+        "rows=%d global_proposal_nis=%.17g max_feature_gate_nis=%.17g "
+        "threshold_at_max_feature_nis=%.17g Cpix=%.17g Cpost=%.17g "
+        "dx_norm=%.17g processing_ms=%.17g "
+        "prior_support_error=%.17g prior_rank=%d "
+        "prior_zero_tolerance=%.17g prior_lambda_min=%.17g "
+        "prior_lambda_max=%.17g\n",
+        ordinary_prior.timestamp, completed_passes,
+        proposal_feature_vec.size(),
+        static_cast<unsigned long long>(accepted_set_hash),
+        (int)res_big.rows(), pass_one_mean.nis,
+        two_pass_one_max_feature_nis,
+        two_pass_one_max_gate_threshold, pass_one_cost.pixel,
+        pass_one_cost.posterior, pass_one_mean.dx.norm(),
+        pass_one_processing_ms, pass_one_cost.support_error,
+        (int)prior_factor.positive_eigenvalues.rows(),
+        prior_factor.zero_tolerance, prior_factor.minimum_eigenvalue,
+        prior_factor.maximum_eigenvalue);
+    if (pass_two.valid && pass_two_cost.valid) {
+      PRINT_DEBUG(
+          "[MSCKF-ITER]: timestamp=%.17g requested_passes=2 "
+          "attempted_passes=2 completed_passes=2 pass=2 "
+          "status=accepted accepted_features=%zu "
+          "raw_rows=%d rows=%d max_feature_nis=%.17g "
+          "threshold_at_max_feature_nis=%.17g "
+          "affine_correction_norm=%.17g "
+          "Cpix=%.17g Cpost=%.17g dx_norm=%.17g processing_ms=%.17g "
+          "repairs=%zu\n",
+          ordinary_prior.timestamp, proposal_feature_vec.size(),
+          (int)pass_two.raw_rows,
+          (int)pass_two.reduced_rows, pass_two.maximum_feature_nis,
+          pass_two.maximum_gate_threshold,
+          pass_two.affine_correction_norm, pass_two_cost.pixel,
+          pass_two_cost.posterior, pass_two.mean.dx.norm(),
+          pass_two_processing_ms, pass_two.numerical_repair_count);
+    } else {
+      const MSCKFTwoPassFailure failure =
+          pass_two.valid ? pass_two_cost.failure : pass_two.failure;
+      const std::size_t feature_id =
+          pass_two.valid ? pass_two_cost.feature_id : pass_two.feature_id;
+      if (failure == MSCKFTwoPassFailure::kSchur) {
+        PRINT_DEBUG(
+            "[MSCKF-ITER]: timestamp=%.17g requested_passes=2 "
+            "attempted_passes=2 completed_passes=1 pass=2 "
+            "status=invalid reason=%s feature=%zu accepted_features=%zu "
+            "schur_status=%s schur_stage=%s singular_values_available=%d "
+            "singular_values=[%.17g,%.17g,%.17g] "
+            "singular_ratio_available=%d singular_ratio=%.17g "
+            "processing_ms=%.17g\n",
+            ordinary_prior.timestamp,
+            msckf_two_pass_failure_name(failure), feature_id,
+            proposal_feature_vec.size(),
+            schur_reduction_status_name(pass_two.schur_status),
+            schur_reduction_stage_name(pass_two.schur_stage),
+            pass_two.singular_values_available ? 1 : 0,
+            pass_two.singular_values_available ? pass_two.singular_values(0)
+                                               : 0.0,
+            pass_two.singular_values_available ? pass_two.singular_values(1)
+                                               : 0.0,
+            pass_two.singular_values_available ? pass_two.singular_values(2)
+                                               : 0.0,
+            pass_two.singular_ratio_available ? 1 : 0,
+            pass_two.singular_ratio_available ? pass_two.singular_ratio : 0.0,
+            pass_two_processing_ms);
+      } else {
+        PRINT_DEBUG(
+            "[MSCKF-ITER]: timestamp=%.17g requested_passes=2 "
+            "attempted_passes=2 completed_passes=1 pass=2 "
+            "status=invalid reason=%s feature=%zu accepted_features=%zu "
+            "gate_diagnostics_available=%d feature_nis=%.17g "
+            "threshold_at_feature_nis=%.17g processing_ms=%.17g\n",
+            ordinary_prior.timestamp,
+            msckf_two_pass_failure_name(failure), feature_id,
+            proposal_feature_vec.size(),
+            std::isfinite(pass_two.maximum_feature_nis) &&
+                    std::isfinite(pass_two.maximum_gate_threshold)
+                ? 1
+                : 0,
+            std::isfinite(pass_two.maximum_feature_nis)
+                ? pass_two.maximum_feature_nis
+                : 0.0,
+            std::isfinite(pass_two.maximum_gate_threshold)
+                ? pass_two.maximum_gate_threshold
+                : 0.0,
+            pass_two_processing_ms);
+      }
+    }
+    PRINT_DEBUG(
+        "[MSCKF-ITER]: timestamp=%.17g requested_passes=2 "
+        "attempted_passes=2 completed_passes=%d selected_pass=%d "
+        "accepted_features=%zu reason=%s "
+        "cost_difference_available=%d "
+        "pixel_difference=%.17g posterior_difference=%.17g "
+        "pixel_tolerance=%.17g posterior_tolerance=%.17g "
+        "covariance_symmetry_error=%.17g covariance_symmetry_bound=%.17g "
+        "covariance_lambda_min=%.17g covariance_lambda_max=%.17g "
+        "covariance_psd_bound=%.17g covariance_max_diagonal=%.17g "
+        "planned_mean_commits=1 planned_covariance_commits=1 "
+        "mean_commits=%zu covariance_commits=%zu "
+        "alternative_covariances=0\n",
+        ordinary_prior.timestamp, completed_passes, selected_pass,
+        proposal_feature_vec.size(), selection_reason,
+        pass_two_cost.valid ? 1 : 0,
+        pass_two_cost.valid
+            ? pass_one_cost.pixel - pass_two_cost.pixel
+            : 0.0,
+        pass_two_cost.valid
+            ? pass_one_cost.posterior - pass_two_cost.posterior
+            : 0.0,
+        pixel_tolerance, posterior_tolerance,
+        posterior_validation.symmetry_error,
+        posterior_validation.symmetry_bound,
+        posterior_validation.minimum_eigenvalue,
+        posterior_validation.maximum_eigenvalue,
+        posterior_validation.psd_bound,
+        posterior_validation.maximum_diagonal,
+        ordinary_mean_commit_count, ordinary_covariance_commit_count);
+    PRINT_ALL(
+        "[MSCKF-REDUCTION]: mode=schur accepted_gamma=%.17g "
+        "compressed_rows=%d\n",
+        retained_gamma, (int)selected_residual->rows());
+
+    update_event.baseline_preflight_accepted = true;
+    live_commit_started = true;
+#if defined(OV_MSCKF_CP2_TESTING)
+    cp2_test_note_stage(CP2UpdaterTestStage::kEKFUpdateEntered);
+#endif
+    if (!commit_ordinary_update(
+            selected_covariance.dx, selected_covariance.posterior,
+            StateHelper::PrecomputedCovariancePolicy::NUMERICAL_PSD)) {
+      live_commit_started = false;
+      PRINT_WARNING(
+          YELLOW
+          "[MSCKF-COMMIT]: status=invalid_precomputed_update "
+          "live_writes=0\n"
+          RESET);
+      PRINT_WARNING(
+          YELLOW
+          "[MSCKF-ITER]: timestamp=%.17g requested_passes=2 "
+          "attempted_passes=2 completed_passes=%d selected_pass=%d "
+          "terminal=1 status=commit_rejected accepted_features=%zu "
+          "mean_commits=%zu covariance_commits=%zu "
+          "feature_finalizations=%zu\n"
+          RESET,
+          ordinary_prior.timestamp, completed_passes, selected_pass,
+          proposal_feature_vec.size(), ordinary_mean_commit_count,
+          ordinary_covariance_commit_count,
+          ordinary_feature_finalization_count);
+      ordinary_iteration_terminal_logged = true;
+      feature_vec.clear();
+      finish_update(CP2UpdateTerminalStatus::kInternalFailure,
+                    CP2UpdateTerminalSubreason::kTraceInvariantFailure);
+      return;
+    }
+    finalize_ordinary_features();
+    if (ordinary_two_pass_test_fault ==
+        OrdinaryTwoPassTestFault::kSecondFeatureFinalization) {
+      finalize_ordinary_features();
+    }
+    const CP2SteadyClockEndpoint cp2_update_end = cp2_steady_clock_now();
+#if defined(OV_MSCKF_CP2_TESTING)
+    cp2_test_note_timing_end();
+#endif
+    const bool duration_valid = capture_cp2_duration_ns(
+        cp2_update_start, cp2_update_end, update_event);
+    update_event.terminal_status =
+        duration_valid ? CP2UpdateTerminalStatus::kCommittedCounted
+                       : CP2UpdateTerminalStatus::kInternalFailure;
+    update_event.terminal_subreason =
+        duration_valid ? CP2UpdateTerminalSubreason::kNone
+                       : CP2UpdateTerminalSubreason::kTraceInvariantFailure;
+    update_event.baseline_commit_occurred = true;
+    rT5 = boost::posix_time::microsec_clock::local_time();
+    notify_observer(update_event, true);
+    PRINT_DEBUG(
+        "[MSCKF-ITER]: timestamp=%.17g terminal=1 requested_passes=2 "
+        "attempted_passes=2 completed_passes=%d selected_pass=%d "
+        "status=committed accepted_features=%zu reason=%s "
+        "mean_commits=%zu covariance_commits=%zu feature_finalizations=%zu\n",
+        ordinary_prior.timestamp, completed_passes, selected_pass,
+        proposal_feature_vec.size(), selection_reason,
+        ordinary_mean_commit_count, ordinary_covariance_commit_count,
+        ordinary_feature_finalization_count);
+    ordinary_iteration_terminal_logged = true;
+
+    PRINT_ALL("[MSCKF-UP]: %.4f seconds to clean\n",
+              (rT1 - rT0).total_microseconds() * 1e-6);
+    PRINT_ALL("[MSCKF-UP]: %.4f seconds to triangulate\n",
+              (rT2 - rT1).total_microseconds() * 1e-6);
+    PRINT_ALL("[MSCKF-UP]: %.4f seconds create system (%d features)\n",
+              (rT3 - rT2).total_microseconds() * 1e-6,
+              (int)proposal_feature_vec.size());
+    PRINT_ALL("[MSCKF-UP]: %.4f seconds compress system\n",
+              (rT4 - rT3).total_microseconds() * 1e-6);
+    PRINT_ALL("[MSCKF-UP]: %.4f seconds update state (%d size)\n",
+              (rT5 - rT4).total_microseconds() * 1e-6,
+              (int)selected_residual->rows());
+    PRINT_ALL("[MSCKF-UP]: %.4f seconds total\n",
+              (rT5 - rT1).total_microseconds() * 1e-6);
+    return;
+  }
+
   // Shared, read-only failure preflight. It is identical in both modes and
   // guarantees invalid global proposals have zero live-state writes.
   update_event.baseline_preflight_attempted = true;
@@ -1758,6 +3447,10 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     }
     return;
   }
+  if (!recorded_mode) {
+    ordinary_completed_passes = 1;
+    ordinary_selected_pass = 1;
+  }
   update_event.baseline_preflight_accepted = true;
   if (update_event.shadow_evidence_available) {
     update_event.shadow.baseline_preview_available = true;
@@ -1794,8 +3487,9 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
 #if defined(OV_MSCKF_CP2_TESTING)
     cp2_test_note_stage(CP2UpdaterTestStage::kEKFUpdateEntered);
 #endif
-    if (!StateHelper::CommitPrecomputedUpdate(state, preview.dx,
-                                               preview.P_plus)) {
+    if (!commit_ordinary_update(
+            preview.dx, preview.P_plus,
+            StateHelper::PrecomputedCovariancePolicy::LEGACY_NONNEGATIVE_DIAGONAL)) {
       live_commit_started = false;
       PRINT_WARNING(YELLOW
                     "[MSCKF-COMMIT]: status=invalid_precomputed_update live_writes=0\n" RESET);
@@ -1821,6 +3515,20 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     update_event.baseline_commit_occurred = true;
     rT5 = boost::posix_time::microsec_clock::local_time();
     notify_observer(update_event, true);
+    PRINT_DEBUG(
+        "[MSCKF-ITER]: timestamp=%.17g terminal=1 requested_passes=1 "
+        "attempted_passes=1 completed_passes=1 selected_pass=1 "
+        "accepted_features=%zu status=committed pass2_attempts=0 "
+        "global_proposal_nis=unavailable Cpix=unavailable "
+        "Cpost=unavailable dx_norm=%.17g processing_ms=%.17g "
+        "mean_commits=%zu covariance_commits=%zu "
+        "feature_finalizations=%zu\n",
+        ordinary_prior.timestamp, proposal_feature_vec.size(),
+        preview.dx.norm(),
+        (rT5 - rT0).total_microseconds() * 1.0e-3,
+        ordinary_mean_commit_count, ordinary_covariance_commit_count,
+        ordinary_feature_finalization_count);
+    ordinary_iteration_terminal_logged = true;
 
     // Debug print timing information
     PRINT_ALL("[MSCKF-UP]: %.4f seconds to clean\n",

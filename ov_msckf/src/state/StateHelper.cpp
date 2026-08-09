@@ -30,6 +30,7 @@
 #include <boost/math/distributions/chi_squared.hpp>
 
 #include <algorithm>
+#include <cmath>
 
 using namespace ov_core;
 using namespace ov_type;
@@ -200,7 +201,8 @@ void StateHelper::EKFUpdate(std::shared_ptr<State> state, const std::vector<std:
 
 bool StateHelper::CommitPrecomputedUpdate(
     std::shared_ptr<State> state, const Eigen::VectorXd &dx,
-    const Eigen::MatrixXd &posterior_covariance) {
+    const Eigen::MatrixXd &posterior_covariance,
+    PrecomputedCovariancePolicy covariance_policy) {
   if (!state) {
     return false;
   }
@@ -221,15 +223,46 @@ bool StateHelper::CommitPrecomputedUpdate(
     }
     expected_id += variable->size();
   }
-  const double covariance_scale =
-      std::max(1.0, posterior_covariance.cwiseAbs().maxCoeff());
   const double symmetry_error =
       (posterior_covariance - posterior_covariance.transpose())
           .cwiseAbs()
           .maxCoeff();
-  if (expected_id != state_dimension ||
-      (posterior_covariance.diagonal().array() < 0.0).any() ||
-      symmetry_error > 1.0e-10 * covariance_scale) {
+  if (expected_id != state_dimension) {
+    return false;
+  }
+  if (covariance_policy ==
+      PrecomputedCovariancePolicy::LEGACY_NONNEGATIVE_DIAGONAL) {
+    const double legacy_covariance_scale =
+        std::max(1.0, posterior_covariance.cwiseAbs().maxCoeff());
+    if (symmetry_error > 1.0e-10 * legacy_covariance_scale ||
+        (posterior_covariance.diagonal().array() < 0.0).any()) {
+      return false;
+    }
+  } else if (covariance_policy ==
+             PrecomputedCovariancePolicy::NUMERICAL_PSD) {
+    const double covariance_inf_norm =
+        posterior_covariance.cwiseAbs().rowwise().sum().maxCoeff();
+    if (!std::isfinite(covariance_inf_norm) ||
+        symmetry_error >
+            1.0e-10 * std::max(1.0, covariance_inf_norm)) {
+      return false;
+    }
+    const Eigen::MatrixXd symmetric =
+        0.5 * (posterior_covariance + posterior_covariance.transpose());
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigensolver(symmetric);
+    if (eigensolver.info() != Eigen::Success ||
+        !eigensolver.eigenvalues().allFinite()) {
+      return false;
+    }
+    const double minimum_eigenvalue =
+        eigensolver.eigenvalues().minCoeff();
+    const double maximum_eigenvalue =
+        eigensolver.eigenvalues().maxCoeff();
+    if (minimum_eigenvalue <
+        -1.0e-10 * std::max(1.0, maximum_eigenvalue)) {
+      return false;
+    }
+  } else {
     return false;
   }
   if (state->_options.do_calib_camera_intrinsics) {

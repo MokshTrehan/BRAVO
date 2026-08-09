@@ -455,6 +455,222 @@ MSCKFUpdatePriorMatchResult UpdaterMSCKFPreview::MatchPrior(
   return result;
 }
 
+MSCKFUpdateMeanResult UpdaterMSCKFPreview::ComputeMeanFromSnapshot(
+    const MSCKFUpdatePreviewSnapshot &snapshot,
+    const std::vector<MSCKFUpdatePreviewBlock> &jacobian_layout,
+    const Eigen::MatrixXd &H, const Eigen::VectorXd &residual,
+    const Eigen::MatrixXd &R) {
+  MSCKFUpdateMeanResult result;
+  result.diagnostics.measurement_dimension = residual.rows();
+  result.diagnostics.jacobian_dimension = H.cols();
+
+  const Eigen::MatrixXd &P = snapshot.covariance;
+  result.diagnostics.state_dimension = P.rows();
+
+  const Eigen::Index n = P.rows();
+  const Eigen::Index m = residual.rows();
+  if (n <= 0 || m <= 0 || P.cols() != n || H.rows() != m || H.cols() <= 0 ||
+      R.rows() != m || R.cols() != m || jacobian_layout.empty()) {
+    result.diagnostics.status = MSCKFUpdatePreviewStatus::kInvalidInput;
+    result.diagnostics.stage = MSCKFUpdatePreviewStage::kInputDimensions;
+    return result;
+  }
+
+  if (snapshot.state_blocks.empty()) {
+    result.diagnostics.offending_order_index = 0;
+    result.diagnostics.status = MSCKFUpdatePreviewStatus::kInvalidInput;
+    result.diagnostics.stage = MSCKFUpdatePreviewStage::kStateOrder;
+    return result;
+  }
+  Eigen::Index expected_state_offset = 0;
+  Eigen::Index previous_covariance_id = -1;
+  for (std::size_t block_index = 0;
+       block_index < snapshot.state_blocks.size(); ++block_index) {
+    const MSCKFUpdatePreviewBlock &block = snapshot.state_blocks[block_index];
+    const bool invalid_range =
+        block.covariance_id < 0 || block.size <= 0 || block.offset < 0 ||
+        block.offset > n - block.size ||
+        block.covariance_id != block.offset;
+    const bool invalid_order =
+        block.offset != expected_state_offset ||
+        (block_index > 0 &&
+         block.covariance_id <= previous_covariance_id);
+    if (invalid_range || invalid_order) {
+      result.diagnostics.offending_order_index =
+          static_cast<Eigen::Index>(block_index);
+      result.diagnostics.status = MSCKFUpdatePreviewStatus::kInvalidInput;
+      result.diagnostics.stage = MSCKFUpdatePreviewStage::kStateOrder;
+      return result;
+    }
+    expected_state_offset += block.size;
+    previous_covariance_id = block.covariance_id;
+  }
+  if (expected_state_offset != n) {
+    result.diagnostics.offending_order_index =
+        static_cast<Eigen::Index>(snapshot.state_blocks.size());
+    result.diagnostics.status = MSCKFUpdatePreviewStatus::kInvalidInput;
+    result.diagnostics.stage = MSCKFUpdatePreviewStage::kStateOrder;
+    return result;
+  }
+
+  Eigen::Index ordered_column = 0;
+  std::vector<unsigned char> covered(static_cast<std::size_t>(n), 0);
+  for (std::size_t order_index = 0;
+       order_index < jacobian_layout.size(); ++order_index) {
+    const MSCKFUpdatePreviewBlock &block = jacobian_layout[order_index];
+    if (block.covariance_id < 0 || block.size <= 0 ||
+        block.offset != ordered_column ||
+        block.covariance_id > n - block.size ||
+        block.offset > H.cols() - block.size) {
+      result.diagnostics.offending_order_index =
+          static_cast<Eigen::Index>(order_index);
+      result.diagnostics.status = MSCKFUpdatePreviewStatus::kInvalidInput;
+      result.diagnostics.stage = MSCKFUpdatePreviewStage::kStateOrder;
+      return result;
+    }
+
+    bool contained_by_state_block = false;
+    for (const MSCKFUpdatePreviewBlock &state_block :
+         snapshot.state_blocks) {
+      if (block.covariance_id >= state_block.offset &&
+          block.covariance_id <=
+              state_block.offset + state_block.size - block.size) {
+        contained_by_state_block = true;
+        break;
+      }
+    }
+    if (!contained_by_state_block) {
+      result.diagnostics.offending_order_index =
+          static_cast<Eigen::Index>(order_index);
+      result.diagnostics.status = MSCKFUpdatePreviewStatus::kInvalidInput;
+      result.diagnostics.stage = MSCKFUpdatePreviewStage::kStateOrder;
+      return result;
+    }
+
+    for (Eigen::Index covariance_offset = 0;
+         covariance_offset < block.size; ++covariance_offset) {
+      const std::size_t covariance_index = static_cast<std::size_t>(
+          block.covariance_id + covariance_offset);
+      if (covered[covariance_index] != 0) {
+        result.diagnostics.offending_order_index =
+            static_cast<Eigen::Index>(order_index);
+        result.diagnostics.status = MSCKFUpdatePreviewStatus::kInvalidInput;
+        result.diagnostics.stage = MSCKFUpdatePreviewStage::kStateOrder;
+        return result;
+      }
+      covered[covariance_index] = 1;
+    }
+    ordered_column += block.size;
+  }
+  result.diagnostics.ordered_jacobian_dimension = ordered_column;
+  if (ordered_column != H.cols()) {
+    result.diagnostics.status = MSCKFUpdatePreviewStatus::kInvalidInput;
+    result.diagnostics.stage = MSCKFUpdatePreviewStage::kInputDimensions;
+    return result;
+  }
+
+  if (!P.allFinite() || !H.allFinite() || !residual.allFinite() ||
+      !R.allFinite()) {
+    result.diagnostics.status = MSCKFUpdatePreviewStatus::kNonfinite;
+    result.diagnostics.stage = MSCKFUpdatePreviewStage::kRawInputs;
+    return result;
+  }
+
+  Eigen::MatrixXd M = Eigen::MatrixXd::Zero(n, m);
+  for (const MSCKFUpdatePreviewBlock &state_block :
+       snapshot.state_blocks) {
+    Eigen::MatrixXd M_block =
+        Eigen::MatrixXd::Zero(state_block.size, m);
+    for (const MSCKFUpdatePreviewBlock &measurement_block :
+         jacobian_layout) {
+      M_block.noalias() +=
+          P.block(state_block.offset, measurement_block.covariance_id,
+                  state_block.size, measurement_block.size) *
+          H.block(0, measurement_block.offset, m,
+                  measurement_block.size)
+              .transpose();
+    }
+    M.block(state_block.offset, 0, state_block.size, m) = M_block;
+  }
+  if (!M.allFinite()) {
+    result.diagnostics.status = MSCKFUpdatePreviewStatus::kNonfinite;
+    result.diagnostics.stage = MSCKFUpdatePreviewStage::kCrossCovariance;
+    return result;
+  }
+
+  Eigen::MatrixXd P_small(H.cols(), H.cols());
+  Eigen::Index row = 0;
+  for (const MSCKFUpdatePreviewBlock &row_block : jacobian_layout) {
+    Eigen::Index col = 0;
+    for (const MSCKFUpdatePreviewBlock &column_block : jacobian_layout) {
+      P_small.block(row, col, row_block.size, column_block.size) =
+          P.block(row_block.covariance_id,
+                  column_block.covariance_id, row_block.size,
+                  column_block.size);
+      col += column_block.size;
+    }
+    row += row_block.size;
+  }
+  if (!P_small.allFinite()) {
+    result.diagnostics.status = MSCKFUpdatePreviewStatus::kNonfinite;
+    result.diagnostics.stage = MSCKFUpdatePreviewStage::kMarginalCovariance;
+    return result;
+  }
+
+  Eigen::MatrixXd S(m, m);
+  S.triangularView<Eigen::Upper>() = H * P_small * H.transpose();
+  S.triangularView<Eigen::Upper>() += R;
+  if (!S.triangularView<Eigen::Upper>().toDenseMatrix().allFinite()) {
+    result.diagnostics.status = MSCKFUpdatePreviewStatus::kNonfinite;
+    result.diagnostics.stage = MSCKFUpdatePreviewStage::kInnovation;
+    return result;
+  }
+
+  Eigen::LLT<Eigen::MatrixXd, Eigen::Upper> innovation_llt(S);
+  if (innovation_llt.info() != Eigen::Success) {
+    result.diagnostics.status =
+        MSCKFUpdatePreviewStatus::kFactorizationFailed;
+    result.diagnostics.stage =
+        MSCKFUpdatePreviewStage::kInnovationFactorization;
+    return result;
+  }
+
+  Eigen::MatrixXd Sinv = Eigen::MatrixXd::Identity(m, m);
+  innovation_llt.solveInPlace(Sinv);
+  if (innovation_llt.info() != Eigen::Success || !Sinv.allFinite()) {
+    result.diagnostics.status =
+        innovation_llt.info() == Eigen::Success
+            ? MSCKFUpdatePreviewStatus::kNonfinite
+            : MSCKFUpdatePreviewStatus::kFactorizationFailed;
+    result.diagnostics.stage = MSCKFUpdatePreviewStage::kInnovationInverse;
+    return result;
+  }
+
+  const Eigen::MatrixXd K = M * Sinv.selfadjointView<Eigen::Upper>();
+  if (!K.allFinite()) {
+    result.diagnostics.status = MSCKFUpdatePreviewStatus::kNonfinite;
+    result.diagnostics.stage = MSCKFUpdatePreviewStage::kKalmanGain;
+    return result;
+  }
+
+  const Eigen::VectorXd dx = K * residual;
+  const Eigen::VectorXd solved_residual =
+      Sinv.selfadjointView<Eigen::Upper>() * residual;
+  const double nis = residual.dot(solved_residual);
+  if (!dx.allFinite() || !solved_residual.allFinite() ||
+      !std::isfinite(nis)) {
+    result.diagnostics.status = MSCKFUpdatePreviewStatus::kNonfinite;
+    result.diagnostics.stage = MSCKFUpdatePreviewStage::kStateIncrement;
+    return result;
+  }
+
+  result.dx = dx;
+  result.nis = nis;
+  result.diagnostics.status = MSCKFUpdatePreviewStatus::kAccepted;
+  result.diagnostics.stage = MSCKFUpdatePreviewStage::kAccepted;
+  return result;
+}
+
 MSCKFUpdatePreviewResult UpdaterMSCKFPreview::ComputeFromSnapshot(
     const MSCKFUpdatePreviewSnapshot &snapshot,
     const std::vector<MSCKFUpdatePreviewBlock> &jacobian_layout,

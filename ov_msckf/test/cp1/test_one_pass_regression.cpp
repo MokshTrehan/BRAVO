@@ -18,6 +18,7 @@
 #include "update/UpdaterHelper.h"
 #include "update/UpdaterMSCKF.h"
 #include "update/UpdaterMSCKFPreview.h"
+#include "utils/print.h"
 #include "utils/quat_ops.h"
 
 #include <Eigen/Cholesky>
@@ -29,6 +30,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <iomanip>
@@ -37,6 +39,51 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
+
+namespace ov_msckf {
+
+class UpdaterMSCKFOrdinaryTestAccess {
+public:
+  enum class Fault {
+    kNone,
+    kPassTwoGeometryFailure,
+    kPassTwoSchurRankDeficient,
+    kPassTwoNonfinite,
+    kPassTwoException,
+    kSecondFeatureFinalization,
+  };
+
+  static void SetFault(UpdaterMSCKF &updater, Fault fault) {
+    switch (fault) {
+    case Fault::kNone:
+      updater.ordinary_two_pass_test_fault =
+          UpdaterMSCKF::OrdinaryTwoPassTestFault::kNone;
+      return;
+    case Fault::kPassTwoGeometryFailure:
+      updater.ordinary_two_pass_test_fault = UpdaterMSCKF::
+          OrdinaryTwoPassTestFault::kPassTwoGeometryFailure;
+      return;
+    case Fault::kPassTwoSchurRankDeficient:
+      updater.ordinary_two_pass_test_fault = UpdaterMSCKF::
+          OrdinaryTwoPassTestFault::kPassTwoSchurRankDeficient;
+      return;
+    case Fault::kPassTwoNonfinite:
+      updater.ordinary_two_pass_test_fault =
+          UpdaterMSCKF::OrdinaryTwoPassTestFault::kPassTwoNonfinite;
+      return;
+    case Fault::kPassTwoException:
+      updater.ordinary_two_pass_test_fault =
+          UpdaterMSCKF::OrdinaryTwoPassTestFault::kPassTwoException;
+      return;
+    case Fault::kSecondFeatureFinalization:
+      updater.ordinary_two_pass_test_fault = UpdaterMSCKF::
+          OrdinaryTwoPassTestFault::kSecondFeatureFinalization;
+      return;
+    }
+  }
+};
+
+} // namespace ov_msckf
 
 namespace {
 
@@ -53,6 +100,7 @@ using ov_msckf::StateHelper;
 using ov_msckf::StateOptions;
 using ov_msckf::UpdaterHelper;
 using ov_msckf::UpdaterMSCKF;
+using ov_msckf::UpdaterMSCKFOrdinaryTestAccess;
 using ov_msckf::UpdaterMSCKFPreview;
 using ov_msckf::UpdaterOptions;
 using ov_type::Type;
@@ -943,6 +991,7 @@ struct GoldenTrueCosts {
   bool valid = false;
   double pixel = std::numeric_limits<double>::quiet_NaN();
   double posterior = std::numeric_limits<double>::quiet_NaN();
+  std::shared_ptr<Feature> geometry;
 };
 
 GoldenTrueCosts evaluate_golden_true_costs(
@@ -993,7 +1042,268 @@ GoldenTrueCosts evaluate_golden_true_costs(
           fixture.updater_options.sigma_pix_sq;
   result.valid = std::isfinite(result.pixel) &&
                  std::isfinite(result.posterior);
+  if (result.valid) {
+    result.geometry = std::move(detached_feature);
+  }
   return result;
+}
+
+struct GoldenSelectedOracle {
+  bool valid = false;
+  Eigen::VectorXd increment;
+  Eigen::MatrixXd covariance;
+};
+
+GoldenSelectedOracle build_golden_selected_oracle(
+    const MSCKFUpdatePriorSnapshot &prior,
+    const GoldenMeanOnlyPass &selected, double sigma_pix_sq) {
+  GoldenSelectedOracle result;
+  if (!selected.valid || selected.H.rows() <= 0 ||
+      selected.residual.rows() != selected.H.rows() ||
+      !std::isfinite(sigma_pix_sq) || !(sigma_pix_sq > 0.0)) {
+    return result;
+  }
+  Eigen::MatrixXd full_H = Eigen::MatrixXd::Zero(
+      selected.H.rows(), prior.filter.covariance.rows());
+  for (const MSCKFUpdatePreviewBlock &block : selected.layout) {
+    if (block.covariance_id < 0 || block.size <= 0 ||
+        block.offset < 0 ||
+        block.offset > selected.H.cols() - block.size ||
+        block.covariance_id > full_H.cols() - block.size) {
+      return result;
+    }
+    full_H.block(0, block.covariance_id, selected.H.rows(), block.size) =
+        selected.H.block(0, block.offset, selected.H.rows(), block.size);
+  }
+  const Eigen::MatrixXd cross =
+      prior.filter.covariance * full_H.transpose();
+  const Eigen::MatrixXd innovation =
+      full_H * cross +
+      sigma_pix_sq * Eigen::MatrixXd::Identity(selected.H.rows(),
+                                                selected.H.rows());
+  Eigen::LDLT<Eigen::MatrixXd> factor(innovation);
+  if (factor.info() != Eigen::Success || !factor.isPositive()) {
+    return result;
+  }
+  const Eigen::VectorXd solved_residual =
+      factor.solve(selected.residual);
+  const Eigen::MatrixXd raw_covariance =
+      prior.filter.covariance -
+      cross * factor.solve(cross.transpose());
+  result.increment = cross * solved_residual;
+  result.covariance =
+      0.5 * (raw_covariance + raw_covariance.transpose());
+  result.valid = factor.info() == Eigen::Success &&
+                 result.increment.allFinite() &&
+                 result.covariance.allFinite();
+  return result;
+}
+
+struct GoldenTwoPassReference {
+  bool valid = false;
+  MSCKFUpdatePriorSnapshot prior;
+  GoldenMeanOnlyPass pass_one;
+  GoldenMeanOnlyPass pass_two;
+  GoldenTrueCosts pass_one_cost;
+  GoldenTrueCosts pass_two_cost;
+  GoldenDecision decision;
+  GoldenSelectedOracle selected;
+};
+
+GoldenTwoPassReference build_golden_two_pass_reference(
+    double chi2_multiplier, double sigma_pix = 1.0) {
+  GoldenTwoPassReference result;
+  Fixture entry = make_mixed_fej_fixture();
+  entry.updater_options.chi2_multipler = chi2_multiplier;
+  entry.updater_options.sigma_pix = sigma_pix;
+  entry.updater_options.sigma_pix_sq = sigma_pix * sigma_pix;
+  result.prior = UpdaterMSCKFPreview::CapturePrior(entry.state);
+
+  Fixture pass_one_fixture = make_mixed_fej_fixture();
+  pass_one_fixture.updater_options.sigma_pix = sigma_pix;
+  pass_one_fixture.updater_options.sigma_pix_sq = sigma_pix * sigma_pix;
+  result.pass_one = build_golden_mean_only_pass(
+      pass_one_fixture, Eigen::VectorXd::Zero(47),
+      result.prior.filter.covariance);
+  if (!result.pass_one.valid) {
+    return result;
+  }
+  Fixture pass_two_fixture = make_mixed_fej_fixture();
+  pass_two_fixture.updater_options.sigma_pix = sigma_pix;
+  pass_two_fixture.updater_options.sigma_pix_sq = sigma_pix * sigma_pix;
+  result.pass_two = build_golden_mean_only_pass(
+      pass_two_fixture, result.pass_one.delta,
+      result.prior.filter.covariance);
+  if (!result.pass_two.valid) {
+    return result;
+  }
+  Fixture pass_one_cost_fixture = make_mixed_fej_fixture();
+  Fixture pass_two_cost_fixture = make_mixed_fej_fixture();
+  pass_one_cost_fixture.updater_options.sigma_pix = sigma_pix;
+  pass_one_cost_fixture.updater_options.sigma_pix_sq =
+      sigma_pix * sigma_pix;
+  pass_two_cost_fixture.updater_options.sigma_pix = sigma_pix;
+  pass_two_cost_fixture.updater_options.sigma_pix_sq =
+      sigma_pix * sigma_pix;
+  result.pass_one_cost = evaluate_golden_true_costs(
+      pass_one_cost_fixture, result.pass_one.delta,
+      result.prior.filter.covariance);
+  result.pass_two_cost = evaluate_golden_true_costs(
+      pass_two_cost_fixture, result.pass_two.delta,
+      result.prior.filter.covariance);
+  if (!result.pass_one_cost.valid || !result.pass_two_cost.valid) {
+    return result;
+  }
+
+  const boost::math::chi_squared distribution(5.0);
+  const double gate_threshold =
+      chi2_multiplier * boost::math::quantile(distribution, 0.95);
+  const bool pass_one_gate = result.pass_one.nis <= gate_threshold;
+  const bool pass_two_gate = result.pass_two.nis <= gate_threshold;
+  const GoldenCandidate pass_one_candidate{
+      pass_one_gate, result.pass_one_cost.pixel,
+      result.pass_one_cost.posterior,
+      pass_one_gate ? GoldenCandidateFailure::kNone
+                    : GoldenCandidateFailure::kProductionGate};
+  const GoldenCandidate pass_two_candidate{
+      pass_two_gate, result.pass_two_cost.pixel,
+      result.pass_two_cost.posterior,
+      pass_two_gate ? GoldenCandidateFailure::kNone
+                    : GoldenCandidateFailure::kProductionGate};
+  result.decision =
+      select_golden_candidate(pass_one_candidate, pass_two_candidate);
+  if (result.decision.selected_pass == 0) {
+    return result;
+  }
+  const GoldenMeanOnlyPass &selected_pass =
+      result.decision.selected_pass == 2 ? result.pass_two
+                                         : result.pass_one;
+  result.selected = build_golden_selected_oracle(
+      result.prior, selected_pass, entry.updater_options.sigma_pix_sq);
+  result.valid = result.selected.valid;
+  return result;
+}
+
+class ScopedDebugPrint {
+public:
+  ScopedDebugPrint()
+      : previous_(ov_core::Printer::current_print_level) {
+    ov_core::Printer::setPrintLevel(ov_core::Printer::PrintLevel::DEBUG);
+  }
+  ~ScopedDebugPrint() { ov_core::Printer::setPrintLevel(previous_); }
+
+private:
+  ov_core::Printer::PrintLevel previous_;
+};
+
+void expect_live_pass_two_fault_falls_back_to_pass_one(
+    UpdaterMSCKFOrdinaryTestAccess::Fault fault,
+    const std::string &reason, bool expect_schur_rank_diagnostics) {
+  SCOPED_TRACE(reason);
+  const GoldenTwoPassReference reference =
+      build_golden_two_pass_reference(1.0);
+  ASSERT_TRUE(reference.valid);
+  ASSERT_EQ(reference.decision.selected_pass, 1);
+  ASSERT_TRUE(reference.pass_one_cost.geometry);
+
+  Fixture expected = make_mixed_fej_fixture();
+  ASSERT_TRUE(StateHelper::CommitPrecomputedUpdate(
+      expected.state, reference.selected.increment,
+      reference.selected.covariance));
+
+  Fixture actual = make_mixed_fej_fixture();
+  actual.updater_options.max_visual_passes = 2;
+  const Feature feature_before = *actual.accepted_feature;
+  Feature *const accepted_pointer = actual.accepted_feature.get();
+  std::vector<Eigen::MatrixXd> fej_before;
+  for (const auto &variable : actual.state_order) {
+    fej_before.push_back(variable->fej());
+  }
+  std::vector<std::shared_ptr<Feature>> features = {
+      actual.accepted_feature};
+  UpdaterMSCKF updater(actual.updater_options,
+                       actual.initializer_options);
+  UpdaterMSCKFOrdinaryTestAccess::SetFault(updater, fault);
+
+  std::string output;
+  {
+    ScopedDebugPrint debug_print;
+    testing::internal::CaptureStdout();
+    updater.update(actual.state, features);
+    output = testing::internal::GetCapturedStdout();
+  }
+
+  ASSERT_EQ(features.size(), 1U);
+  EXPECT_EQ(features.front().get(), accepted_pointer);
+  EXPECT_EQ(features.front(), actual.accepted_feature);
+  EXPECT_EQ(features.front()->featid, feature_before.featid);
+  EXPECT_NE(output.find("attempted_passes=2"), std::string::npos);
+  EXPECT_NE(output.find("completed_passes=1"), std::string::npos);
+  EXPECT_NE(output.find("pass=1 status=accepted"), std::string::npos);
+  EXPECT_NE(output.find("pass=2 status=invalid reason=" + reason),
+            std::string::npos);
+  EXPECT_NE(output.find("selected_pass=1"), std::string::npos);
+  EXPECT_NE(output.find("reason=" + reason), std::string::npos);
+  EXPECT_NE(output.find("status=committed"), std::string::npos);
+  EXPECT_NE(output.find("mean_commits=1 covariance_commits=1 "),
+            std::string::npos);
+  EXPECT_NE(output.find("feature_finalizations=1"), std::string::npos);
+  if (expect_schur_rank_diagnostics) {
+    EXPECT_NE(output.find("schur_status=rank_deficient"),
+              std::string::npos);
+    EXPECT_NE(output.find("schur_stage=numerical_rank"),
+              std::string::npos);
+    EXPECT_NE(output.find("singular_values_available=1"),
+              std::string::npos);
+    EXPECT_NE(output.find("singular_ratio_available=1"),
+              std::string::npos);
+  }
+
+  const Eigen::MatrixXd actual_covariance =
+      StateHelper::get_full_covariance(actual.state);
+  EXPECT_LE((actual_covariance - reference.selected.covariance).norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-12, 1.0e-10,
+                reference.selected.covariance.norm()));
+  ASSERT_EQ(actual.state_order.size(), expected.state_order.size());
+  for (std::size_t index = 0; index < actual.state_order.size(); ++index) {
+    EXPECT_LE((actual.state_order[index]->value() -
+               expected.state_order[index]->value())
+                  .norm(),
+              schurvio_cp1::mixed_tolerance(
+                  1.0e-12, 1.0e-10,
+                  expected.state_order[index]->value().norm()));
+    expect_same_bytes(actual.state_order[index]->fej(),
+                      fej_before[index]);
+  }
+  EXPECT_LE((actual.camera->get_value() - expected.camera->get_value()).norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-12, 1.0e-10,
+                expected.camera->get_value().norm()));
+
+  Feature raw_expected = feature_before;
+  raw_expected.to_delete = actual.accepted_feature->to_delete;
+  raw_expected.anchor_cam_id = actual.accepted_feature->anchor_cam_id;
+  raw_expected.anchor_clone_timestamp =
+      actual.accepted_feature->anchor_clone_timestamp;
+  raw_expected.p_FinA = actual.accepted_feature->p_FinA;
+  raw_expected.p_FinG = actual.accepted_feature->p_FinG;
+  expect_same_feature_observations(*actual.accepted_feature,
+                                   raw_expected);
+  EXPECT_TRUE(actual.accepted_feature->to_delete);
+  EXPECT_LE((actual.accepted_feature->p_FinA -
+             reference.pass_one_cost.geometry->p_FinA)
+                .norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-11, 1.0e-9,
+                reference.pass_one_cost.geometry->p_FinA.norm()));
+  EXPECT_LE((actual.accepted_feature->p_FinG -
+             reference.pass_one_cost.geometry->p_FinG)
+                .norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-11, 1.0e-9,
+                reference.pass_one_cost.geometry->p_FinG.norm()));
+  EXPECT_TRUE(actual_covariance.allFinite());
 }
 
 TEST(CP1MixedFejGolden,
@@ -1301,6 +1611,23 @@ TEST(CP1MixedFejGolden,
   EXPECT_LE(pass_one.raw_landmark_jacobian_error, 1.0e-8);
   EXPECT_EQ(production_preview_count, 0);
   EXPECT_EQ(selected_covariance_count, 0);
+  const Eigen::MatrixXd pass_one_measurement_covariance =
+      entry.updater_options.sigma_pix_sq *
+      Eigen::MatrixXd::Identity(pass_one.residual.rows(),
+                                pass_one.residual.rows());
+  const ov_msckf::MSCKFUpdateMeanResult production_pass_one_mean =
+      UpdaterMSCKFPreview::ComputeMeanFromSnapshot(
+          entry_snapshot.filter, pass_one.layout, pass_one.H,
+          pass_one.residual, pass_one_measurement_covariance);
+  ASSERT_TRUE(production_pass_one_mean.accepted());
+  EXPECT_LE((production_pass_one_mean.dx - pass_one.delta).norm(),
+            schurvio_cp1::mixed_tolerance(1.0e-12, 1.0e-10,
+                                          pass_one.delta.norm()));
+  EXPECT_LE(std::abs(production_pass_one_mean.nis - pass_one.nis),
+            schurvio_cp1::mixed_tolerance(1.0e-12, 1.0e-10,
+                                          std::abs(pass_one.nis)));
+  EXPECT_EQ(production_pass_one_mean.diagnostics.repair_count, 0U);
+  EXPECT_EQ(production_pass_one_mean.diagnostics.fallback_count, 0U);
 
   Fixture pass_two_fixture = make_mixed_fej_fixture();
   const GoldenMeanOnlyPass pass_two = build_golden_mean_only_pass(
@@ -1318,6 +1645,23 @@ TEST(CP1MixedFejGolden,
   EXPECT_LE(pass_two.raw_landmark_jacobian_error, 1.0e-8);
   EXPECT_EQ(production_preview_count, 0);
   EXPECT_EQ(selected_covariance_count, 0);
+  const Eigen::MatrixXd pass_two_measurement_covariance =
+      entry.updater_options.sigma_pix_sq *
+      Eigen::MatrixXd::Identity(pass_two.residual.rows(),
+                                pass_two.residual.rows());
+  const ov_msckf::MSCKFUpdateMeanResult production_pass_two_mean =
+      UpdaterMSCKFPreview::ComputeMeanFromSnapshot(
+          entry_snapshot.filter, pass_two.layout, pass_two.H,
+          pass_two.residual, pass_two_measurement_covariance);
+  ASSERT_TRUE(production_pass_two_mean.accepted());
+  EXPECT_LE((production_pass_two_mean.dx - pass_two.delta).norm(),
+            schurvio_cp1::mixed_tolerance(1.0e-12, 1.0e-10,
+                                          pass_two.delta.norm()));
+  EXPECT_LE(std::abs(production_pass_two_mean.nis - pass_two.nis),
+            schurvio_cp1::mixed_tolerance(1.0e-12, 1.0e-10,
+                                          std::abs(pass_two.nis)));
+  EXPECT_EQ(production_pass_two_mean.diagnostics.repair_count, 0U);
+  EXPECT_EQ(production_pass_two_mean.diagnostics.fallback_count, 0U);
 
   const boost::math::chi_squared gate_distribution(5.0);
   const double gate_threshold =
@@ -1474,6 +1818,762 @@ TEST(CP1MixedFejGolden,
             << " preview_count=" << production_preview_count
             << " covariance_count=" << selected_covariance_count
             << " commit_count=" << live_commit_count << std::endl;
+}
+
+TEST(CP1MixedFejGolden,
+     ProductionUpdaterFixedTwoPassMatchesIndependentSelectedOracle) {
+  const GoldenTwoPassReference reference =
+      build_golden_two_pass_reference(1.0);
+  ASSERT_TRUE(reference.valid);
+  ASSERT_EQ(reference.decision.selected_pass, 1);
+  ASSERT_TRUE(reference.pass_one_cost.geometry);
+  ASSERT_TRUE(reference.pass_two_cost.geometry);
+  EXPECT_GT((reference.pass_one_cost.geometry->p_FinG -
+             reference.pass_two_cost.geometry->p_FinG)
+                .norm(),
+            1.0e-10);
+
+  Fixture expected = make_mixed_fej_fixture();
+  ASSERT_TRUE(StateHelper::CommitPrecomputedUpdate(
+      expected.state, reference.selected.increment,
+      reference.selected.covariance));
+
+  Fixture actual = make_mixed_fej_fixture();
+  actual.updater_options.max_visual_passes = 2;
+  const Feature feature_before = *actual.accepted_feature;
+  Feature *const accepted_pointer = actual.accepted_feature.get();
+  std::vector<Eigen::MatrixXd> fej_before;
+  for (const auto &variable : actual.state_order) {
+    fej_before.push_back(variable->fej());
+  }
+  std::vector<std::shared_ptr<Feature>> features = {
+      actual.accepted_feature};
+  UpdaterMSCKF updater(actual.updater_options,
+                       actual.initializer_options);
+
+  std::string output;
+  {
+    ScopedDebugPrint debug_print;
+    testing::internal::CaptureStdout();
+    updater.update(actual.state, features);
+    output = testing::internal::GetCapturedStdout();
+  }
+
+  ASSERT_EQ(features.size(), 1U);
+  EXPECT_EQ(features.front().get(), accepted_pointer);
+  EXPECT_EQ(features.front(), actual.accepted_feature);
+  EXPECT_EQ(features.front()->featid, feature_before.featid);
+  EXPECT_NE(output.find("requested_passes=2"), std::string::npos);
+  EXPECT_NE(output.find("attempted_passes=2"), std::string::npos);
+  EXPECT_NE(output.find("selected_pass=1"), std::string::npos);
+  EXPECT_NE(output.find("reason=posterior_cost_harmful"),
+            std::string::npos);
+  EXPECT_NE(output.find("status=committed"), std::string::npos);
+  EXPECT_NE(output.find("mean_commits=1 covariance_commits=1 "),
+            std::string::npos);
+  EXPECT_NE(output.find("feature_finalizations=1"), std::string::npos);
+
+  const Eigen::MatrixXd actual_covariance =
+      StateHelper::get_full_covariance(actual.state);
+  const double covariance_error =
+      (actual_covariance - reference.selected.covariance).norm();
+  EXPECT_LE(covariance_error,
+            schurvio_cp1::mixed_tolerance(
+                1.0e-12, 1.0e-10,
+                reference.selected.covariance.norm()));
+  ASSERT_EQ(actual.state_order.size(), expected.state_order.size());
+  for (std::size_t index = 0; index < actual.state_order.size(); ++index) {
+    const double value_error =
+        (actual.state_order[index]->value() -
+         expected.state_order[index]->value())
+            .norm();
+    EXPECT_LE(value_error,
+              schurvio_cp1::mixed_tolerance(
+                  1.0e-12, 1.0e-10,
+                  expected.state_order[index]->value().norm()));
+    expect_same_bytes(actual.state_order[index]->fej(),
+                      fej_before[index]);
+  }
+  EXPECT_LE((actual.camera->get_value() - expected.camera->get_value()).norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-12, 1.0e-10,
+                expected.camera->get_value().norm()));
+
+  Feature raw_expected = feature_before;
+  raw_expected.to_delete = actual.accepted_feature->to_delete;
+  raw_expected.anchor_cam_id = actual.accepted_feature->anchor_cam_id;
+  raw_expected.anchor_clone_timestamp =
+      actual.accepted_feature->anchor_clone_timestamp;
+  raw_expected.p_FinA = actual.accepted_feature->p_FinA;
+  raw_expected.p_FinG = actual.accepted_feature->p_FinG;
+  expect_same_feature_observations(*actual.accepted_feature,
+                                   raw_expected);
+  EXPECT_TRUE(actual.accepted_feature->to_delete);
+  EXPECT_LE((actual.accepted_feature->p_FinA -
+             reference.pass_one_cost.geometry->p_FinA)
+                .norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-11, 1.0e-9,
+                reference.pass_one_cost.geometry->p_FinA.norm()));
+  EXPECT_LE((actual.accepted_feature->p_FinG -
+             reference.pass_one_cost.geometry->p_FinG)
+                .norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-11, 1.0e-9,
+                reference.pass_one_cost.geometry->p_FinG.norm()));
+
+  EXPECT_TRUE(actual_covariance.allFinite());
+  const double symmetry_error = schurvio_cp1::matrix_inf_norm(
+      actual_covariance - actual_covariance.transpose());
+  const double covariance_scale =
+      std::max(1.0,
+               schurvio_cp1::matrix_inf_norm(actual_covariance));
+  EXPECT_LE(symmetry_error, 1.0e-10 * covariance_scale);
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigensolver(
+      0.5 * (actual_covariance + actual_covariance.transpose()));
+  ASSERT_EQ(eigensolver.info(), Eigen::Success);
+  EXPECT_GE(eigensolver.eigenvalues().minCoeff(),
+            -1.0e-10 *
+                std::max(1.0,
+                         eigensolver.eigenvalues().maxCoeff()));
+}
+
+TEST(CP1MixedFejGolden,
+     ProductionUpdaterNonzeroPriorSelectsSecondPassAgainstIndependentOracle) {
+  constexpr double kSigmaPix = 0.5;
+  const GoldenTwoPassReference reference =
+      build_golden_two_pass_reference(100.0, kSigmaPix);
+  ASSERT_TRUE(reference.valid);
+  ASSERT_EQ(reference.decision.selected_pass, 2);
+  ASSERT_TRUE(reference.pass_one_cost.geometry);
+  ASSERT_TRUE(reference.pass_two_cost.geometry);
+  EXPECT_GT(reference.selected.increment.norm(), 1.0e-12);
+  EXPECT_LT(reference.pass_two_cost.pixel,
+            reference.pass_one_cost.pixel);
+  EXPECT_LT(reference.pass_two_cost.posterior,
+            reference.pass_one_cost.posterior);
+  EXPECT_GT((reference.pass_one_cost.geometry->p_FinG -
+             reference.pass_two_cost.geometry->p_FinG)
+                .norm(),
+            1.0e-10);
+
+  Fixture expected = make_mixed_fej_fixture();
+  expected.updater_options.sigma_pix = kSigmaPix;
+  expected.updater_options.sigma_pix_sq = kSigmaPix * kSigmaPix;
+  ASSERT_TRUE(StateHelper::CommitPrecomputedUpdate(
+      expected.state, reference.selected.increment,
+      reference.selected.covariance));
+
+  Fixture actual = make_mixed_fej_fixture();
+  actual.updater_options.max_visual_passes = 2;
+  actual.updater_options.chi2_multipler = 100.0;
+  actual.updater_options.sigma_pix = kSigmaPix;
+  actual.updater_options.sigma_pix_sq = kSigmaPix * kSigmaPix;
+  const Feature feature_before = *actual.accepted_feature;
+  Feature *const accepted_pointer = actual.accepted_feature.get();
+  std::vector<Eigen::MatrixXd> fej_before;
+  for (const auto &variable : actual.state_order) {
+    fej_before.push_back(variable->fej());
+  }
+  std::vector<std::shared_ptr<Feature>> features = {
+      actual.accepted_feature};
+  UpdaterMSCKF updater(actual.updater_options,
+                       actual.initializer_options);
+
+  std::string output;
+  {
+    ScopedDebugPrint debug_print;
+    testing::internal::CaptureStdout();
+    updater.update(actual.state, features);
+    output = testing::internal::GetCapturedStdout();
+  }
+
+  ASSERT_EQ(features.size(), 1U);
+  EXPECT_EQ(features.front().get(), accepted_pointer);
+  EXPECT_EQ(features.front(), actual.accepted_feature);
+  EXPECT_EQ(features.front()->featid, feature_before.featid);
+  EXPECT_NE(output.find("requested_passes=2"), std::string::npos);
+  EXPECT_NE(output.find("attempted_passes=2"), std::string::npos);
+  EXPECT_NE(output.find("completed_passes=2"), std::string::npos);
+  EXPECT_NE(output.find("pass=1 status=accepted"), std::string::npos);
+  EXPECT_NE(output.find("pass=2 status=accepted"), std::string::npos);
+  EXPECT_NE(output.find("prior_rank=47"), std::string::npos);
+  EXPECT_NE(output.find("selected_pass=2"), std::string::npos);
+  EXPECT_NE(output.find("reason=dual_cost_accepted"),
+            std::string::npos);
+  EXPECT_NE(output.find("status=committed"), std::string::npos);
+  EXPECT_NE(output.find("mean_commits=1 covariance_commits=1 "),
+            std::string::npos);
+  EXPECT_NE(output.find("feature_finalizations=1"), std::string::npos);
+
+  const Eigen::MatrixXd actual_covariance =
+      StateHelper::get_full_covariance(actual.state);
+  EXPECT_LE((actual_covariance - reference.selected.covariance).norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-12, 1.0e-10,
+                reference.selected.covariance.norm()));
+  ASSERT_EQ(actual.state_order.size(), expected.state_order.size());
+  for (std::size_t index = 0; index < actual.state_order.size(); ++index) {
+    EXPECT_LE((actual.state_order[index]->value() -
+               expected.state_order[index]->value())
+                  .norm(),
+              schurvio_cp1::mixed_tolerance(
+                  1.0e-12, 1.0e-10,
+                  expected.state_order[index]->value().norm()));
+    expect_same_bytes(actual.state_order[index]->fej(),
+                      fej_before[index]);
+  }
+  EXPECT_LE((actual.camera->get_value() - expected.camera->get_value()).norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-12, 1.0e-10,
+                expected.camera->get_value().norm()));
+
+  Feature raw_expected = feature_before;
+  raw_expected.to_delete = actual.accepted_feature->to_delete;
+  raw_expected.anchor_cam_id = actual.accepted_feature->anchor_cam_id;
+  raw_expected.anchor_clone_timestamp =
+      actual.accepted_feature->anchor_clone_timestamp;
+  raw_expected.p_FinA = actual.accepted_feature->p_FinA;
+  raw_expected.p_FinG = actual.accepted_feature->p_FinG;
+  expect_same_feature_observations(*actual.accepted_feature,
+                                   raw_expected);
+  EXPECT_TRUE(actual.accepted_feature->to_delete);
+  EXPECT_LE((actual.accepted_feature->p_FinA -
+             reference.pass_two_cost.geometry->p_FinA)
+                .norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-11, 1.0e-9,
+                reference.pass_two_cost.geometry->p_FinA.norm()));
+  EXPECT_LE((actual.accepted_feature->p_FinG -
+             reference.pass_two_cost.geometry->p_FinG)
+                .norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-11, 1.0e-9,
+                reference.pass_two_cost.geometry->p_FinG.norm()));
+
+  EXPECT_TRUE(actual_covariance.allFinite());
+  const double symmetry_error = schurvio_cp1::matrix_inf_norm(
+      actual_covariance - actual_covariance.transpose());
+  const double covariance_scale =
+      std::max(1.0,
+               schurvio_cp1::matrix_inf_norm(actual_covariance));
+  EXPECT_LE(symmetry_error, 1.0e-10 * covariance_scale);
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigensolver(
+      0.5 * (actual_covariance + actual_covariance.transpose()));
+  ASSERT_EQ(eigensolver.info(), Eigen::Success);
+  EXPECT_GE(eigensolver.eigenvalues().minCoeff(),
+            -1.0e-10 *
+                std::max(1.0,
+                         eigensolver.eigenvalues().maxCoeff()));
+}
+
+TEST(CP1MixedFejGolden,
+     ProductionUpdaterRankZeroPriorSelectsEqualSecondPass) {
+  Fixture actual = make_mixed_fej_fixture();
+  actual.updater_options.max_visual_passes = 2;
+  const Eigen::Index state_dimension =
+      StateHelper::get_full_covariance(actual.state).rows();
+  const Eigen::MatrixXd zero_prior =
+      Eigen::MatrixXd::Zero(state_dimension, state_dimension);
+  StateHelper::set_initial_covariance(actual.state, zero_prior,
+                                      actual.state_order);
+  expect_same_bytes(StateHelper::get_full_covariance(actual.state),
+                    zero_prior);
+
+  const Feature feature_before = *actual.accepted_feature;
+  Feature *const accepted_pointer = actual.accepted_feature.get();
+  const Eigen::MatrixXd camera_cache_before = actual.camera->get_value();
+  std::vector<Eigen::MatrixXd> values_before;
+  std::vector<Eigen::MatrixXd> fej_before;
+  for (const auto &variable : actual.state_order) {
+    values_before.push_back(variable->value());
+    fej_before.push_back(variable->fej());
+  }
+  std::vector<std::shared_ptr<Feature>> features = {
+      actual.accepted_feature};
+  UpdaterMSCKF updater(actual.updater_options,
+                       actual.initializer_options);
+
+  std::string output;
+  {
+    ScopedDebugPrint debug_print;
+    testing::internal::CaptureStdout();
+    updater.update(actual.state, features);
+    output = testing::internal::GetCapturedStdout();
+  }
+
+  ASSERT_EQ(features.size(), 1U);
+  EXPECT_EQ(features.front().get(), accepted_pointer);
+  EXPECT_EQ(features.front(), actual.accepted_feature);
+  EXPECT_NE(output.find("requested_passes=2"), std::string::npos);
+  EXPECT_NE(output.find("attempted_passes=2"), std::string::npos);
+  EXPECT_NE(output.find("completed_passes=2"), std::string::npos);
+  EXPECT_NE(output.find("pass=1 status=accepted"), std::string::npos);
+  EXPECT_NE(output.find("pass=2 status=accepted"), std::string::npos);
+  EXPECT_NE(output.find("prior_rank=0"), std::string::npos);
+  EXPECT_NE(output.find("selected_pass=2"), std::string::npos);
+  EXPECT_NE(output.find("reason=dual_cost_accepted"),
+            std::string::npos);
+  EXPECT_NE(output.find("status=committed"), std::string::npos);
+  EXPECT_NE(output.find("mean_commits=1 covariance_commits=1 "),
+            std::string::npos);
+  EXPECT_NE(output.find("feature_finalizations=1"), std::string::npos);
+
+  expect_same_bytes(StateHelper::get_full_covariance(actual.state),
+                    zero_prior);
+  ASSERT_EQ(actual.state_order.size(), values_before.size());
+  for (std::size_t index = 0; index < actual.state_order.size(); ++index) {
+    expect_same_bytes(actual.state_order[index]->value(),
+                      values_before[index]);
+    expect_same_bytes(actual.state_order[index]->fej(),
+                      fej_before[index]);
+  }
+  expect_same_bytes(actual.camera->get_value(), camera_cache_before);
+
+  Feature raw_expected = feature_before;
+  raw_expected.to_delete = actual.accepted_feature->to_delete;
+  raw_expected.anchor_cam_id = actual.accepted_feature->anchor_cam_id;
+  raw_expected.anchor_clone_timestamp =
+      actual.accepted_feature->anchor_clone_timestamp;
+  raw_expected.p_FinA = actual.accepted_feature->p_FinA;
+  raw_expected.p_FinG = actual.accepted_feature->p_FinG;
+  expect_same_feature_observations(*actual.accepted_feature,
+                                   raw_expected);
+  EXPECT_TRUE(actual.accepted_feature->to_delete);
+  EXPECT_TRUE(actual.accepted_feature->p_FinA.allFinite());
+  EXPECT_TRUE(actual.accepted_feature->p_FinG.allFinite());
+}
+
+TEST(CP1MixedFejGolden,
+     LinearPrincipalPointSingularPriorMatchesOneAndTwoPassUpdates) {
+  Fixture one_pass = make_mixed_fej_fixture();
+  Fixture two_pass = make_mixed_fej_fixture();
+  const Eigen::Index state_dimension =
+      StateHelper::get_full_covariance(one_pass.state).rows();
+  ASSERT_EQ(state_dimension,
+            StateHelper::get_full_covariance(two_pass.state).rows());
+  const Eigen::Index intrinsics_id =
+      one_pass.state->_cam_intrinsics.at(0)->id();
+  ASSERT_EQ(intrinsics_id,
+            two_pass.state->_cam_intrinsics.at(0)->id());
+  const Eigen::Index cx_id = intrinsics_id + 2;
+  const Eigen::Index cy_id = intrinsics_id + 3;
+  Eigen::MatrixXd singular_prior =
+      Eigen::MatrixXd::Zero(state_dimension, state_dimension);
+  singular_prior(cx_id, cx_id) = 4.0e-2;
+  singular_prior(cy_id, cy_id) = 9.0e-2;
+  StateHelper::set_initial_covariance(one_pass.state, singular_prior,
+                                      one_pass.state_order);
+  StateHelper::set_initial_covariance(two_pass.state, singular_prior,
+                                      two_pass.state_order);
+  expect_same_bytes(StateHelper::get_full_covariance(one_pass.state),
+                    singular_prior);
+  expect_same_bytes(StateHelper::get_full_covariance(two_pass.state),
+                    singular_prior);
+
+  one_pass.updater_options.max_visual_passes = 1;
+  two_pass.updater_options.max_visual_passes = 2;
+  one_pass.updater_options.chi2_multipler = 100.0;
+  two_pass.updater_options.chi2_multipler = 100.0;
+  const Feature one_feature_before = *one_pass.accepted_feature;
+  const Feature two_feature_before = *two_pass.accepted_feature;
+  Feature *const one_pointer = one_pass.accepted_feature.get();
+  Feature *const two_pointer = two_pass.accepted_feature.get();
+  const Eigen::Vector2d principal_point_before =
+      one_pass.state->_cam_intrinsics.at(0)->value().block<2, 1>(2, 0);
+  std::vector<Eigen::MatrixXd> one_fej_before;
+  std::vector<Eigen::MatrixXd> two_fej_before;
+  for (const auto &variable : one_pass.state_order) {
+    one_fej_before.push_back(variable->fej());
+  }
+  for (const auto &variable : two_pass.state_order) {
+    two_fej_before.push_back(variable->fej());
+  }
+
+  std::vector<std::shared_ptr<Feature>> one_features = {
+      one_pass.accepted_feature};
+  std::vector<std::shared_ptr<Feature>> two_features = {
+      two_pass.accepted_feature};
+  UpdaterMSCKF one_updater(one_pass.updater_options,
+                           one_pass.initializer_options);
+  UpdaterMSCKF two_updater(two_pass.updater_options,
+                           two_pass.initializer_options);
+  std::string one_output;
+  std::string two_output;
+  {
+    ScopedDebugPrint debug_print;
+    testing::internal::CaptureStdout();
+    one_updater.update(one_pass.state, one_features);
+    one_output = testing::internal::GetCapturedStdout();
+  }
+  {
+    ScopedDebugPrint debug_print;
+    testing::internal::CaptureStdout();
+    two_updater.update(two_pass.state, two_features);
+    two_output = testing::internal::GetCapturedStdout();
+  }
+
+  ASSERT_EQ(one_features.size(), 1U);
+  ASSERT_EQ(two_features.size(), 1U);
+  EXPECT_EQ(one_features.front().get(), one_pointer);
+  EXPECT_EQ(two_features.front().get(), two_pointer);
+  EXPECT_EQ(one_features.front(), one_pass.accepted_feature);
+  EXPECT_EQ(two_features.front(), two_pass.accepted_feature);
+  EXPECT_NE(one_output.find("requested_passes=1"), std::string::npos);
+  EXPECT_NE(one_output.find("attempted_passes=1"), std::string::npos);
+  EXPECT_NE(one_output.find("completed_passes=1"), std::string::npos);
+  EXPECT_NE(one_output.find("selected_pass=1"), std::string::npos);
+  EXPECT_NE(one_output.find("pass2_attempts=0"), std::string::npos);
+  EXPECT_NE(one_output.find("mean_commits=1 covariance_commits=1 "),
+            std::string::npos);
+  EXPECT_NE(one_output.find("feature_finalizations=1"),
+            std::string::npos);
+  EXPECT_NE(two_output.find("requested_passes=2"), std::string::npos);
+  EXPECT_NE(two_output.find("attempted_passes=2"), std::string::npos);
+  EXPECT_NE(two_output.find("completed_passes=2"), std::string::npos);
+  EXPECT_NE(two_output.find("pass=1 status=accepted"),
+            std::string::npos);
+  EXPECT_NE(two_output.find("pass=2 status=accepted"),
+            std::string::npos);
+  EXPECT_NE(two_output.find("prior_rank=2"), std::string::npos);
+  EXPECT_NE(two_output.find("selected_pass=2"), std::string::npos);
+  EXPECT_NE(two_output.find("reason=dual_cost_accepted"),
+            std::string::npos);
+  EXPECT_NE(two_output.find("mean_commits=1 covariance_commits=1 "),
+            std::string::npos);
+  EXPECT_NE(two_output.find("feature_finalizations=1"),
+            std::string::npos);
+
+  const Eigen::Vector2d one_increment =
+      one_pass.state->_cam_intrinsics.at(0)->value().block<2, 1>(2, 0) -
+      principal_point_before;
+  const Eigen::Vector2d two_increment =
+      two_pass.state->_cam_intrinsics.at(0)->value().block<2, 1>(2, 0) -
+      principal_point_before;
+  EXPECT_GT(one_increment.norm(), 1.0e-12);
+  EXPECT_GT(two_increment.norm(), 1.0e-12);
+  // CamRadtan returns float-quantized pixels.  The cx/cy model and Jacobian
+  // are otherwise exactly affine, so compare the two committed nominal
+  // principal points at the nominal-state scale rather than magnifying the
+  // inherited pixel quantization by scaling against the small increment.
+  EXPECT_LE((one_increment - two_increment).norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-12, 1.0e-10, principal_point_before.norm()));
+
+  ASSERT_EQ(one_pass.state_order.size(), two_pass.state_order.size());
+  for (std::size_t index = 0; index < one_pass.state_order.size(); ++index) {
+    EXPECT_LE((one_pass.state_order[index]->value() -
+               two_pass.state_order[index]->value())
+                  .norm(),
+              schurvio_cp1::mixed_tolerance(
+                  1.0e-12, 1.0e-10,
+                  one_pass.state_order[index]->value().norm()));
+    expect_same_bytes(one_pass.state_order[index]->fej(),
+                      one_fej_before[index]);
+    expect_same_bytes(two_pass.state_order[index]->fej(),
+                      two_fej_before[index]);
+  }
+  EXPECT_LE((one_pass.camera->get_value() - two_pass.camera->get_value())
+                .norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-12, 1.0e-10,
+                one_pass.camera->get_value().norm()));
+
+  const Eigen::MatrixXd one_covariance =
+      StateHelper::get_full_covariance(one_pass.state);
+  const Eigen::MatrixXd two_covariance =
+      StateHelper::get_full_covariance(two_pass.state);
+  EXPECT_LE((one_covariance - two_covariance).norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-12, 1.0e-10, one_covariance.norm()));
+  EXPECT_GT((one_covariance.block<2, 2>(cx_id, cx_id).norm()), 0.0);
+  EXPECT_GT((two_covariance.block<2, 2>(cx_id, cx_id).norm()), 0.0);
+  for (Eigen::Index row = 0; row < state_dimension; ++row) {
+    for (Eigen::Index column = 0; column < state_dimension; ++column) {
+      const bool in_principal_point_support =
+          (row == cx_id || row == cy_id) &&
+          (column == cx_id || column == cy_id);
+      if (!in_principal_point_support) {
+        EXPECT_EQ(one_covariance(row, column), 0.0);
+        EXPECT_EQ(two_covariance(row, column), 0.0);
+      }
+    }
+  }
+
+  Feature one_raw_expected = one_feature_before;
+  one_raw_expected.to_delete = one_pass.accepted_feature->to_delete;
+  one_raw_expected.anchor_cam_id =
+      one_pass.accepted_feature->anchor_cam_id;
+  one_raw_expected.anchor_clone_timestamp =
+      one_pass.accepted_feature->anchor_clone_timestamp;
+  one_raw_expected.p_FinA = one_pass.accepted_feature->p_FinA;
+  one_raw_expected.p_FinG = one_pass.accepted_feature->p_FinG;
+  expect_same_feature_observations(*one_pass.accepted_feature,
+                                   one_raw_expected);
+  Feature two_raw_expected = two_feature_before;
+  two_raw_expected.to_delete = two_pass.accepted_feature->to_delete;
+  two_raw_expected.anchor_cam_id =
+      two_pass.accepted_feature->anchor_cam_id;
+  two_raw_expected.anchor_clone_timestamp =
+      two_pass.accepted_feature->anchor_clone_timestamp;
+  two_raw_expected.p_FinA = two_pass.accepted_feature->p_FinA;
+  two_raw_expected.p_FinG = two_pass.accepted_feature->p_FinG;
+  expect_same_feature_observations(*two_pass.accepted_feature,
+                                   two_raw_expected);
+  EXPECT_TRUE(one_pass.accepted_feature->to_delete);
+  EXPECT_TRUE(two_pass.accepted_feature->to_delete);
+  EXPECT_LE((one_pass.accepted_feature->p_FinG -
+             two_pass.accepted_feature->p_FinG)
+                .norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-11, 1.0e-9,
+                one_pass.accepted_feature->p_FinG.norm()));
+}
+
+TEST(CP1MixedFejGolden,
+     ProductionUpdaterPassTwoGateFailureFallsBackWholeProposal) {
+  const GoldenTwoPassReference baseline =
+      build_golden_two_pass_reference(1.0);
+  ASSERT_TRUE(baseline.valid);
+  ASSERT_LT(baseline.pass_one.nis, baseline.pass_two.nis);
+  const boost::math::chi_squared distribution(5.0);
+  const double quantile = boost::math::quantile(distribution, 0.95);
+  const double separating_threshold =
+      0.5 * (baseline.pass_one.nis + baseline.pass_two.nis);
+  const double gate_multiplier = separating_threshold / quantile;
+  ASSERT_TRUE(std::isfinite(gate_multiplier));
+  ASSERT_GT(gate_multiplier, 0.0);
+
+  const GoldenTwoPassReference reference =
+      build_golden_two_pass_reference(gate_multiplier);
+  ASSERT_TRUE(reference.valid);
+  ASSERT_EQ(reference.decision.selected_pass, 1);
+  ASSERT_EQ(reference.decision.reason,
+            GoldenCandidateFailure::kProductionGate);
+
+  Fixture expected = make_mixed_fej_fixture();
+  ASSERT_TRUE(StateHelper::CommitPrecomputedUpdate(
+      expected.state, reference.selected.increment,
+      reference.selected.covariance));
+
+  Fixture actual = make_mixed_fej_fixture();
+  actual.updater_options.max_visual_passes = 2;
+  actual.updater_options.chi2_multipler = gate_multiplier;
+  const Feature feature_before = *actual.accepted_feature;
+  Feature *const accepted_pointer = actual.accepted_feature.get();
+  std::vector<Eigen::MatrixXd> fej_before;
+  for (const auto &variable : actual.state_order) {
+    fej_before.push_back(variable->fej());
+  }
+  std::vector<std::shared_ptr<Feature>> features = {
+      actual.accepted_feature};
+  UpdaterMSCKF updater(actual.updater_options,
+                       actual.initializer_options);
+
+  std::string output;
+  {
+    ScopedDebugPrint debug_print;
+    testing::internal::CaptureStdout();
+    updater.update(actual.state, features);
+    output = testing::internal::GetCapturedStdout();
+  }
+
+  ASSERT_EQ(features.size(), 1U);
+  EXPECT_EQ(features.front().get(), accepted_pointer);
+  EXPECT_EQ(features.front(), actual.accepted_feature);
+  EXPECT_NE(output.find("attempted_passes=2"), std::string::npos);
+  EXPECT_NE(output.find("completed_passes=1"), std::string::npos);
+  EXPECT_NE(output.find("pass=2 status=invalid reason=gate"),
+            std::string::npos);
+  EXPECT_NE(output.find("selected_pass=1"), std::string::npos);
+  EXPECT_NE(output.find("reason=gate"), std::string::npos);
+  EXPECT_NE(output.find("status=committed"), std::string::npos);
+  EXPECT_NE(output.find("mean_commits=1 covariance_commits=1 "),
+            std::string::npos);
+  EXPECT_NE(output.find("feature_finalizations=1"), std::string::npos);
+
+  const Eigen::MatrixXd actual_covariance =
+      StateHelper::get_full_covariance(actual.state);
+  EXPECT_LE((actual_covariance - reference.selected.covariance).norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-12, 1.0e-10,
+                reference.selected.covariance.norm()));
+  ASSERT_EQ(actual.state_order.size(), expected.state_order.size());
+  for (std::size_t index = 0; index < actual.state_order.size(); ++index) {
+    EXPECT_LE((actual.state_order[index]->value() -
+               expected.state_order[index]->value())
+                  .norm(),
+              schurvio_cp1::mixed_tolerance(
+                  1.0e-12, 1.0e-10,
+                  expected.state_order[index]->value().norm()));
+    expect_same_bytes(actual.state_order[index]->fej(),
+                      fej_before[index]);
+  }
+
+  Feature raw_expected = feature_before;
+  raw_expected.to_delete = actual.accepted_feature->to_delete;
+  raw_expected.anchor_cam_id = actual.accepted_feature->anchor_cam_id;
+  raw_expected.anchor_clone_timestamp =
+      actual.accepted_feature->anchor_clone_timestamp;
+  raw_expected.p_FinA = actual.accepted_feature->p_FinA;
+  raw_expected.p_FinG = actual.accepted_feature->p_FinG;
+  expect_same_feature_observations(*actual.accepted_feature,
+                                   raw_expected);
+  EXPECT_TRUE(actual.accepted_feature->to_delete);
+  EXPECT_LE((actual.accepted_feature->p_FinG -
+             reference.pass_one_cost.geometry->p_FinG)
+                .norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-11, 1.0e-9,
+                reference.pass_one_cost.geometry->p_FinG.norm()));
+}
+
+TEST(CP1MixedFejGolden,
+     ProductionUpdaterPassTwoGeometryFailureFallsBackWholeProposal) {
+  expect_live_pass_two_fault_falls_back_to_pass_one(
+      UpdaterMSCKFOrdinaryTestAccess::Fault::
+          kPassTwoGeometryFailure,
+      "geometry", false);
+}
+
+TEST(CP1MixedFejGolden,
+     ProductionUpdaterPassTwoSchurRankFailureFallsBackWholeProposal) {
+  expect_live_pass_two_fault_falls_back_to_pass_one(
+      UpdaterMSCKFOrdinaryTestAccess::Fault::
+          kPassTwoSchurRankDeficient,
+      "schur", true);
+}
+
+TEST(CP1MixedFejGolden,
+     ProductionUpdaterPassTwoNonfiniteGuardFallsBackWholeProposal) {
+  expect_live_pass_two_fault_falls_back_to_pass_one(
+      UpdaterMSCKFOrdinaryTestAccess::Fault::kPassTwoNonfinite,
+      "jacobian", false);
+}
+
+TEST(CP1MixedFejGolden,
+     ProductionUpdaterPassTwoExceptionFallsBackWholeProposal) {
+  expect_live_pass_two_fault_falls_back_to_pass_one(
+      UpdaterMSCKFOrdinaryTestAccess::Fault::kPassTwoException,
+      "exception", false);
+}
+
+TEST(CP1MixedFejGolden,
+     ProductionUpdaterRejectsSecondFeatureFinalizationBeforeMutation) {
+  constexpr double kSigmaPix = 0.5;
+  const GoldenTwoPassReference reference =
+      build_golden_two_pass_reference(100.0, kSigmaPix);
+  ASSERT_TRUE(reference.valid);
+  ASSERT_EQ(reference.decision.selected_pass, 2);
+  ASSERT_TRUE(reference.pass_two_cost.geometry);
+
+  Fixture expected = make_mixed_fej_fixture();
+  ASSERT_TRUE(StateHelper::CommitPrecomputedUpdate(
+      expected.state, reference.selected.increment,
+      reference.selected.covariance));
+
+  Fixture actual = make_mixed_fej_fixture();
+  actual.updater_options.max_visual_passes = 2;
+  actual.updater_options.chi2_multipler = 100.0;
+  actual.updater_options.sigma_pix = kSigmaPix;
+  actual.updater_options.sigma_pix_sq = kSigmaPix * kSigmaPix;
+  const Feature feature_before = *actual.accepted_feature;
+  Feature *const accepted_pointer = actual.accepted_feature.get();
+  std::vector<Eigen::MatrixXd> fej_before;
+  for (const auto &variable : actual.state_order) {
+    fej_before.push_back(variable->fej());
+  }
+  std::vector<std::shared_ptr<Feature>> features = {
+      actual.accepted_feature};
+  UpdaterMSCKF updater(actual.updater_options,
+                       actual.initializer_options);
+  UpdaterMSCKFOrdinaryTestAccess::SetFault(
+      updater, UpdaterMSCKFOrdinaryTestAccess::Fault::
+                   kSecondFeatureFinalization);
+
+  bool caught_guard = false;
+  std::string exception_message;
+  std::string unexpected_exception;
+  std::string output;
+  {
+    ScopedDebugPrint debug_print;
+    testing::internal::CaptureStdout();
+    try {
+      updater.update(actual.state, features);
+    } catch (const std::logic_error &error) {
+      caught_guard = true;
+      exception_message = error.what();
+    } catch (const std::exception &error) {
+      unexpected_exception = error.what();
+    } catch (...) {
+      unexpected_exception = "unknown";
+    }
+    output = testing::internal::GetCapturedStdout();
+  }
+  ASSERT_TRUE(unexpected_exception.empty()) << unexpected_exception;
+  ASSERT_TRUE(caught_guard);
+  EXPECT_EQ(exception_message,
+            "UpdaterMSCKF ordinary feature finalization attempted twice");
+  EXPECT_NE(output.find("attempted_passes=2"), std::string::npos);
+  EXPECT_NE(output.find("completed_passes=2"), std::string::npos);
+  EXPECT_NE(output.find("selected_pass=2"), std::string::npos);
+  EXPECT_NE(output.find("reason=dual_cost_accepted"),
+            std::string::npos);
+  EXPECT_NE(output.find("planned_mean_commits=1"),
+            std::string::npos);
+  EXPECT_NE(output.find("planned_covariance_commits=1"),
+            std::string::npos);
+  EXPECT_NE(output.find("exception after live commit entry"),
+            std::string::npos);
+
+  ASSERT_EQ(features.size(), 1U);
+  EXPECT_EQ(features.front().get(), accepted_pointer);
+  EXPECT_EQ(features.front(), actual.accepted_feature);
+  EXPECT_EQ(features.front()->featid, feature_before.featid);
+  const Eigen::MatrixXd actual_covariance =
+      StateHelper::get_full_covariance(actual.state);
+  EXPECT_LE((actual_covariance - reference.selected.covariance).norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-12, 1.0e-10,
+                reference.selected.covariance.norm()));
+  ASSERT_EQ(actual.state_order.size(), expected.state_order.size());
+  for (std::size_t index = 0; index < actual.state_order.size(); ++index) {
+    EXPECT_LE((actual.state_order[index]->value() -
+               expected.state_order[index]->value())
+                  .norm(),
+              schurvio_cp1::mixed_tolerance(
+                  1.0e-12, 1.0e-10,
+                  expected.state_order[index]->value().norm()));
+    expect_same_bytes(actual.state_order[index]->fej(),
+                      fej_before[index]);
+  }
+  EXPECT_LE((actual.camera->get_value() - expected.camera->get_value()).norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-12, 1.0e-10,
+                expected.camera->get_value().norm()));
+
+  Feature raw_expected = feature_before;
+  raw_expected.to_delete = actual.accepted_feature->to_delete;
+  raw_expected.anchor_cam_id = actual.accepted_feature->anchor_cam_id;
+  raw_expected.anchor_clone_timestamp =
+      actual.accepted_feature->anchor_clone_timestamp;
+  raw_expected.p_FinA = actual.accepted_feature->p_FinA;
+  raw_expected.p_FinG = actual.accepted_feature->p_FinG;
+  expect_same_feature_observations(*actual.accepted_feature,
+                                   raw_expected);
+  EXPECT_TRUE(actual.accepted_feature->to_delete);
+  EXPECT_LE((actual.accepted_feature->p_FinA -
+             reference.pass_two_cost.geometry->p_FinA)
+                .norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-11, 1.0e-9,
+                reference.pass_two_cost.geometry->p_FinA.norm()));
+  EXPECT_LE((actual.accepted_feature->p_FinG -
+             reference.pass_two_cost.geometry->p_FinG)
+                .norm(),
+            schurvio_cp1::mixed_tolerance(
+                1.0e-11, 1.0e-9,
+                reference.pass_two_cost.geometry->p_FinG.norm()));
 }
 
 TEST(CP1MixedFejGolden, FixedTwoPassDecisionCasesAThroughF) {
@@ -1989,6 +3089,44 @@ TEST(CP1OnePassRegression,
       UpdaterMSCKFPreview::MatchPrior(nested_fixture.state, nested_snapshot);
   EXPECT_FALSE(nested_mismatch.accepted());
   EXPECT_EQ(nested_mismatch.status, MSCKFUpdatePriorMatchStatus::kNominal);
+}
+
+TEST(CP1OnePassRegression,
+     NumericalPsdCommitAcceptsDeclaredRoundoffBandWithoutClamping) {
+  Fixture legacy = make_fixture();
+  const Eigen::Index dimension =
+      StateHelper::get_full_covariance(legacy.state).rows();
+  const Eigen::VectorXd zero_dx = Eigen::VectorXd::Zero(dimension);
+  Eigen::MatrixXd roundoff_psd =
+      1.0e-3 * Eigen::MatrixXd::Identity(dimension, dimension);
+  roundoff_psd(0, 0) = -5.0e-11;
+
+  const Eigen::MatrixXd legacy_before =
+      StateHelper::get_full_covariance(legacy.state);
+  EXPECT_FALSE(StateHelper::CommitPrecomputedUpdate(
+      legacy.state, zero_dx, roundoff_psd));
+  expect_same_bytes(StateHelper::get_full_covariance(legacy.state),
+                    legacy_before);
+
+  Fixture numerical = make_fixture();
+  ASSERT_TRUE(StateHelper::CommitPrecomputedUpdate(
+      numerical.state, zero_dx, roundoff_psd,
+      StateHelper::PrecomputedCovariancePolicy::NUMERICAL_PSD));
+  expect_same_bytes(StateHelper::get_full_covariance(numerical.state),
+                    roundoff_psd);
+  EXPECT_EQ(StateHelper::get_full_covariance(numerical.state)(0, 0),
+            -5.0e-11);
+
+  Fixture rejected = make_fixture();
+  const Eigen::MatrixXd rejected_before =
+      StateHelper::get_full_covariance(rejected.state);
+  Eigen::MatrixXd outside_band = roundoff_psd;
+  outside_band(0, 0) = -2.0e-10;
+  EXPECT_FALSE(StateHelper::CommitPrecomputedUpdate(
+      rejected.state, zero_dx, outside_band,
+      StateHelper::PrecomputedCovariancePolicy::NUMERICAL_PSD));
+  expect_same_bytes(StateHelper::get_full_covariance(rejected.state),
+                    rejected_before);
 }
 
 TEST(CP1OnePassRegression,

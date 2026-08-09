@@ -172,6 +172,24 @@ struct VioManagerOptions {
     msckf_options.landmark_elimination = UpdaterOptions::landmark_elimination_from_string_or_exit(configured_mode);
   }
 
+  /// Load the optional fixed visual-pass count without YAML/ROS scalar coercion.
+  void load_msckf_max_visual_passes_or_exit(const std::shared_ptr<ov_core::YamlParser> &parser) {
+    if (parser == nullptr) {
+      return;
+    }
+
+    int configured_count = msckf_options.max_visual_passes;
+    const ov_core::YamlParser::OptionalExactIntResult parsed =
+        parser->parse_optional_exact_int("up_msckf_max_visual_passes", configured_count);
+    if (parsed.status == ov_core::YamlParser::OptionalExactIntStatus::WRONG_TYPE ||
+        parsed.status == ov_core::YamlParser::OptionalExactIntStatus::READ_ERROR) {
+      const char *source = parsed.source == ov_core::YamlParser::OptionalExactIntSource::ROS ? "ROS" : "YAML";
+      PRINT_ERROR(RED "invalid up_msckf_max_visual_passes value from %s: expected an exact integer scalar\n" RESET, source);
+      std::exit(EXIT_FAILURE);
+    }
+    msckf_options.max_visual_passes = configured_count;
+  }
+
   /**
    * @brief Validate and materialize the global MSCKF update configuration.
    *
@@ -184,6 +202,16 @@ struct VioManagerOptions {
       PRINT_ERROR(RED "invalid MSCKF landmark elimination mode: %s\n" RESET,
                   UpdaterOptions::landmark_elimination_as_string(msckf_options.landmark_elimination).c_str());
       PRINT_ERROR(RED "please select a valid mode: nullspace, schur\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
+    if (!UpdaterOptions::max_visual_passes_is_supported(msckf_options.max_visual_passes)) {
+      PRINT_ERROR(RED "up_msckf_max_visual_passes must be exactly 1 or 2 (got %d)\n" RESET,
+                  msckf_options.max_visual_passes);
+      std::exit(EXIT_FAILURE);
+    }
+    if (!UpdaterOptions::visual_pass_combination_is_supported(msckf_options.max_visual_passes,
+                                                               msckf_options.landmark_elimination)) {
+      PRINT_ERROR(RED "up_msckf_max_visual_passes=2 requires up_msckf_landmark_elimination=schur\n" RESET);
       std::exit(EXIT_FAILURE);
     }
     if (!std::isfinite(msckf_options.sigma_pix) || !(msckf_options.sigma_pix > 0.0)) {
@@ -218,6 +246,7 @@ struct VioManagerOptions {
       parser->parse_config("up_msckf_sigma_px", msckf_options.sigma_pix);
       parser->parse_config("up_msckf_chi2_multipler", msckf_options.chi2_multipler);
       load_msckf_landmark_elimination(parser);
+      load_msckf_max_visual_passes_or_exit(parser);
     }
     validate_msckf_update_configuration_or_exit();
   }
@@ -252,6 +281,7 @@ struct VioManagerOptions {
     msckf_options.print();
     PRINT_DEBUG("    - landmark_elimination: %s\n",
                 UpdaterOptions::landmark_elimination_as_string(msckf_options.landmark_elimination).c_str());
+    PRINT_DEBUG("    - max_visual_passes: %d\n", msckf_options.max_visual_passes);
     PRINT_DEBUG("  Updater SLAM Feats:\n");
     slam_options.print();
     PRINT_DEBUG("  Updater ARUCO Tags:\n");
