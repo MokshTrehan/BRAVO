@@ -10,6 +10,10 @@
     <arg name="timing_path" />
     <arg name="capture" default="false" />
     <arg name="capture_path" default="" />
+    <arg name="capture_update_envelopes_v2" default="false" />
+    <arg name="update_envelope_capture_path" default="" />
+    <arg name="update_envelope_run_id" default="" />
+    <arg name="update_envelope_sequence_id" default="" />
 
     <node name="ov_msckf" pkg="ov_msckf" type="ros1_serial_msckf"
           output="screen" clear_params="true" required="true">
@@ -30,5 +34,18 @@
                value="$(arg capture)" />
         <param name="up_msckf_conditioning_capture_path" type="str"
                value="$(arg capture_path)" />
+
+        <!-- Schema 2 is independent of the preserved Schema-1 capture seam. -->
+        <param if="$(arg capture_update_envelopes_v2)"
+               name="up_msckf_capture_update_envelopes_v2" type="bool" value="true" />
+        <param if="$(arg capture_update_envelopes_v2)"
+               name="up_msckf_update_envelope_capture_path" type="str"
+               value="$(arg update_envelope_capture_path)" />
+        <param if="$(arg capture_update_envelopes_v2)"
+               name="up_msckf_update_envelope_run_id" type="str"
+               value="$(arg update_envelope_run_id)" />
+        <param if="$(arg capture_update_envelopes_v2)"
+               name="up_msckf_update_envelope_sequence_id" type="str"
+               value="$(arg update_envelope_sequence_id)" />
     </node>
 </launch>

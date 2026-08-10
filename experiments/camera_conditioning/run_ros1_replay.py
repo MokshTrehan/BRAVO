@@ -18,18 +18,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Sequence
 
-from verify_replay_profiles import ProfileError, validate_profiles
+from verify_replay_profiles import (
+    SCHEMA2_PROFILE_IDS,
+    ProfileError,
+    validate_profiles,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 LAUNCH_PATH = Path(__file__).resolve().with_name("ros1_conditioning_replay.launch")
 HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
+IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 ESTIMATOR_DIED_PATTERN = re.compile(
     r"\[ov_msckf(?:-\d+)?\]\s+process has died .*?exit code (-?\d+)",
     re.IGNORECASE,
 )
 ESTIMATOR_CLEAN_PATTERN = re.compile(
     r"\[ov_msckf(?:-\d+)?\]\s+process has finished cleanly", re.IGNORECASE
+)
+SCHEMA2_READER = (
+    REPOSITORY_ROOT / "experiments/anytime_information/capture_reader.py"
 )
 
 
@@ -67,6 +75,35 @@ def bounded_sha256(path: Path, timeout_seconds: float) -> str:
     if not HASH_PATTERN.fullmatch(actual):
         raise RunError(f"invalid SHA-256 output for {path}: {result.stdout!r}")
     return actual
+
+
+def validate_schema2_capture(
+    path: Path, timeout_seconds: float
+) -> tuple[bool, Dict[str, Any] | None, str | None]:
+    """Run the strict Schema-2 reader with a finite wall-clock bound."""
+
+    try:
+        result = subprocess.run(
+            ("/usr/bin/python3", str(SCHEMA2_READER), "validate", str(path)),
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_seconds,
+            cwd=str(REPOSITORY_ROOT),
+        )
+    except subprocess.TimeoutExpired:
+        return False, None, f"strict reader timed out after {timeout_seconds}s"
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        return False, None, detail or "strict reader rejected capture"
+    try:
+        summary = json.loads(result.stdout.strip())
+    except json.JSONDecodeError as exc:
+        return False, None, f"strict reader emitted invalid JSON: {exc}"
+    if not isinstance(summary, dict) or summary.get("status") != "valid":
+        return False, None, "strict reader did not report valid status"
+    return True, summary, None
 
 
 def is_within(path: Path, parent: Path) -> bool:
@@ -253,6 +290,21 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="absolute create-new capture file; required with --capture",
     )
+    parser.add_argument(
+        "--capture-update-envelopes-v2",
+        action="store_true",
+        help="enable nonmutating Schema-2 update-envelope capture (default: disabled)",
+    )
+    parser.add_argument(
+        "--update-envelope-capture-path",
+        type=Path,
+        help=(
+            "absolute create-new Schema-2 capture file; required with "
+            "--capture-update-envelopes-v2"
+        ),
+    )
+    parser.add_argument("--update-envelope-run-id")
+    parser.add_argument("--update-envelope-sequence-id")
     parser.add_argument("--bag-start-seconds", type=float, default=0.0)
     parser.add_argument("--bag-duration-seconds", type=float, default=-1.0)
     parser.add_argument("--timeout-seconds", required=True, type=float)
@@ -264,7 +316,9 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def validate_args(args: argparse.Namespace) -> tuple[Path, Path, Path, Path | None]:
+def validate_args(
+    args: argparse.Namespace,
+) -> tuple[Path, Path, Path, Path | None, Path | None]:
     bag = args.bag.resolve()
     config = args.config.resolve()
     output = args.output_dir.resolve()
@@ -291,6 +345,16 @@ def validate_args(args: argparse.Namespace) -> tuple[Path, Path, Path, Path | No
     ):
         raise RunError("--expected-bag-sha256 must be 64 lowercase hexadecimal digits")
 
+    profile_report = validate_profiles(config)
+    if len(profile_report) != 1:
+        raise RunError(f"config did not resolve to exactly one replay profile: {config}")
+    profile_id = next(iter(profile_report))
+    schema2_profile = profile_id in SCHEMA2_PROFILE_IDS
+    if args.capture and args.capture_update_envelopes_v2:
+        raise RunError("Schema-1 and Schema-2 capture modes are mutually exclusive")
+    if args.capture and schema2_profile:
+        raise RunError("--capture requires a declared Schema-1 conditioning profile")
+
     capture_path: Path | None = None
     if args.capture:
         if args.capture_path is None or not args.capture_path.is_absolute():
@@ -305,14 +369,63 @@ def validate_args(args: argparse.Namespace) -> tuple[Path, Path, Path, Path | No
     elif args.capture_path is not None:
         raise RunError("--capture-path is invalid unless --capture is supplied")
 
-    validate_profiles(config)
-    return bag, config, output, capture_path
+    update_envelope_capture_path: Path | None = None
+    if args.capture_update_envelopes_v2:
+        if not schema2_profile:
+            raise RunError(
+                "--capture-update-envelopes-v2 requires a declared Schema-2 profile"
+            )
+        if (
+            args.update_envelope_capture_path is None
+            or not args.update_envelope_capture_path.is_absolute()
+        ):
+            raise RunError(
+                "--capture-update-envelopes-v2 requires an absolute "
+                "--update-envelope-capture-path"
+            )
+        for option, value in (
+            ("--update-envelope-run-id", args.update_envelope_run_id),
+            ("--update-envelope-sequence-id", args.update_envelope_sequence_id),
+        ):
+            if value is None or not IDENTIFIER_PATTERN.fullmatch(value):
+                raise RunError(
+                    f"{option} must match {IDENTIFIER_PATTERN.pattern!r} for Schema-2 capture"
+                )
+        update_envelope_capture_path = args.update_envelope_capture_path.resolve()
+        if update_envelope_capture_path.exists():
+            raise RunError(
+                "refusing to overwrite Schema-2 update-envelope capture file: "
+                f"{update_envelope_capture_path}"
+            )
+        if is_within(update_envelope_capture_path, REPOSITORY_ROOT):
+            raise RunError("Schema-2 capture must remain outside the Git worktree")
+        if (
+            not is_within(update_envelope_capture_path, output)
+            and not update_envelope_capture_path.parent.is_dir()
+        ):
+            raise RunError(
+                "Schema-2 capture parent must exist unless capture is inside --output-dir"
+            )
+    elif any(
+        value is not None
+        for value in (
+            args.update_envelope_capture_path,
+            args.update_envelope_run_id,
+            args.update_envelope_sequence_id,
+        )
+    ):
+        raise RunError(
+            "Schema-2 path/run/sequence options require "
+            "--capture-update-envelopes-v2"
+        )
+
+    return bag, config, output, capture_path, update_envelope_capture_path
 
 
 def run(argv: Iterable[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        bag, config, output, capture_path = validate_args(args)
+        bag, config, output, capture_path, update_envelope_capture_path = validate_args(args)
         setup = args.workspace_setup.resolve()
         estimator = validate_workspace(setup)
         require_free_port(args.ros_master_port)
@@ -328,6 +441,11 @@ def run(argv: Iterable[str] | None = None) -> int:
         output.mkdir(parents=True, exist_ok=False)
         if capture_path is not None and is_within(capture_path, output):
             capture_path.parent.mkdir(parents=True, exist_ok=True)
+        if (
+            update_envelope_capture_path is not None
+            and is_within(update_envelope_capture_path, output)
+        ):
+            update_envelope_capture_path.parent.mkdir(parents=True, exist_ok=True)
         state_path = output / "state_estimate.txt"
         deviation_path = output / "state_deviation.txt"
         trajectory_path = output / "trajectory_tum.txt"
@@ -353,6 +471,13 @@ def run(argv: Iterable[str] | None = None) -> int:
             f"capture:={'true' if args.capture else 'false'}",
             f"capture_path:={capture_path if capture_path is not None else ''}",
         )
+        if args.capture_update_envelopes_v2:
+            launch_args += (
+                "capture_update_envelopes_v2:=true",
+                f"update_envelope_capture_path:={update_envelope_capture_path}",
+                f"update_envelope_run_id:={args.update_envelope_run_id}",
+                f"update_envelope_sequence_id:={args.update_envelope_sequence_id}",
+            )
         command = (
             "/bin/bash",
             "--noprofile",
@@ -420,6 +545,14 @@ def run(argv: Iterable[str] | None = None) -> int:
             "estimator_binary_sha256": sha256(estimator),
             "capture_enabled": args.capture,
             "capture_path": str(capture_path) if capture_path is not None else None,
+            "update_envelope_capture_enabled": args.capture_update_envelopes_v2,
+            "update_envelope_capture_path": (
+                str(update_envelope_capture_path)
+                if update_envelope_capture_path is not None
+                else None
+            ),
+            "update_envelope_run_id": args.update_envelope_run_id,
+            "update_envelope_sequence_id": args.update_envelope_sequence_id,
             "bag_start_seconds": args.bag_start_seconds,
             "bag_duration_seconds": args.bag_duration_seconds,
             "timeout_seconds": args.timeout_seconds,
@@ -484,7 +617,7 @@ def run(argv: Iterable[str] | None = None) -> int:
             trajectory_pose_count = write_tum_trajectory(state_path, trajectory_path)
         required_outputs = (state_path, deviation_path, trajectory_path, timing_path)
         outputs_valid = all(path.is_file() and path.stat().st_size > 0 for path in required_outputs)
-        capture_valid = bool(
+        conditioning_capture_valid = bool(
             not args.capture
             or (
                 capture_path is not None
@@ -492,6 +625,27 @@ def run(argv: Iterable[str] | None = None) -> int:
                 and capture_path.stat().st_size > 0
             )
         )
+        update_envelope_capture_valid = not args.capture_update_envelopes_v2
+        update_envelope_capture_summary: Dict[str, Any] | None = None
+        update_envelope_capture_error: str | None = None
+        if args.capture_update_envelopes_v2:
+            if (
+                update_envelope_capture_path is None
+                or not update_envelope_capture_path.is_file()
+                or update_envelope_capture_path.stat().st_size == 0
+            ):
+                update_envelope_capture_valid = False
+                update_envelope_capture_error = "capture is absent or empty"
+            else:
+                (
+                    update_envelope_capture_valid,
+                    update_envelope_capture_summary,
+                    update_envelope_capture_error,
+                ) = validate_schema2_capture(
+                    update_envelope_capture_path,
+                    args.output_hash_timeout_seconds,
+                )
+        capture_valid = conditioning_capture_valid and update_envelope_capture_valid
         if timed_out:
             effective_exit = 124
         elif interrupted_signal is not None:
@@ -523,6 +677,10 @@ def run(argv: Iterable[str] | None = None) -> int:
             and trajectory_path.stat().st_size > 0,
             "trajectory_pose_count": trajectory_pose_count,
             "capture_output_valid": capture_valid,
+            "conditioning_capture_output_valid": conditioning_capture_valid,
+            "update_envelope_capture_output_valid": update_envelope_capture_valid,
+            "update_envelope_capture_summary": update_envelope_capture_summary,
+            "update_envelope_capture_error": update_envelope_capture_error,
             "output_sha256": output_hashes(output, args.output_hash_timeout_seconds),
         }
         (output / "result.json").write_text(

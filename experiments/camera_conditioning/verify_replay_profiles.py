@@ -34,7 +34,20 @@ PROFILE_SPECS = {
         "schur",
         "equidistant",
     ),
+    "euroc-schema2-schur": (
+        REPOSITORY_ROOT
+        / "config/euroc_mav/estimator_config_anytime_schema2_schur.yaml",
+        "schur",
+        "radtan",
+    ),
+    "tumvi-schema2-schur": (
+        REPOSITORY_ROOT
+        / "config/tum_vi/estimator_config_anytime_schema2_schur.yaml",
+        "schur",
+        "equidistant",
+    ),
 }
+SCHEMA2_PROFILE_IDS = frozenset(("euroc-schema2-schur", "tumvi-schema2-schur"))
 PAIR_IDS = (
     ("euroc-nullspace", "euroc-schur"),
     ("tumvi-nullspace", "tumvi-schur"),
@@ -71,6 +84,13 @@ REQUIRED_VALUES = {
     "up_msckf_max_visual_passes": "1",
     "up_msckf_capture_conditioning_systems": "false",
 }
+SCHEMA2_REQUIRED_VALUES = {
+    "up_msckf_capture_update_envelopes_v2": "false",
+}
+SCHEMA2_BASE_PAIRS = (
+    ("euroc-schur", "euroc-schema2-schur"),
+    ("tumvi-schur", "tumvi-schema2-schur"),
+)
 SCALAR_LINE = re.compile(r"^([A-Za-z][A-Za-z0-9_]*):\s*(.*?)\s*$")
 METHOD_LINE = re.compile(
     rb"(?m)^up_msckf_landmark_elimination:\s*(?:nullspace|schur)\s*$"
@@ -125,6 +145,20 @@ def require_values(path: Path, values: Dict[str, str], expected_method: str) -> 
         raise ProfileError(f"{path}: capture output belongs in a private ROS parameter")
 
 
+def require_schema2_values(path: Path, values: Dict[str, str]) -> None:
+    for key, expected in SCHEMA2_REQUIRED_VALUES.items():
+        actual = values.get(key)
+        if actual != expected:
+            raise ProfileError(f"{path}: {key}={actual!r}, expected {expected!r}")
+    for key in (
+        "up_msckf_update_envelope_capture_path",
+        "up_msckf_update_envelope_run_id",
+        "up_msckf_update_envelope_sequence_id",
+    ):
+        if key in values:
+            raise ProfileError(f"{path}: {key} belongs in a private ROS parameter")
+
+
 def require_existing_settings(path: Path, values: Dict[str, str], profile_id: str) -> None:
     dataset_id = "euroc" if profile_id.startswith("euroc-") else "tumvi"
     base_values = read_scalars(BASE_CONFIGS[dataset_id])
@@ -170,6 +204,20 @@ def require_sole_method_difference(left: Path, right: Path) -> None:
         raise ProfileError(f"profile pair differs beyond the reducer: {left}, {right}")
 
 
+def require_sole_schema2_extension(base_id: str, schema2_id: str) -> None:
+    base_path = PROFILE_SPECS[base_id][0]
+    schema2_path = PROFILE_SPECS[schema2_id][0]
+    base_values = read_scalars(base_path)
+    schema2_values = read_scalars(schema2_path)
+    for key in SCHEMA2_REQUIRED_VALUES:
+        schema2_values.pop(key, None)
+    if schema2_values != base_values:
+        raise ProfileError(
+            f"Schema-2 profile differs from its frozen Schur base beyond the "
+            f"default-off capture selector: {base_path}, {schema2_path}"
+        )
+
+
 def validate_profiles(selected: Path | None = None) -> Dict[str, Dict[str, str]]:
     selected_resolved = selected.resolve() if selected is not None else None
     allowed_paths = {spec[0].resolve() for spec in PROFILE_SPECS.values()}
@@ -178,11 +226,15 @@ def validate_profiles(selected: Path | None = None) -> Dict[str, Dict[str, str]]
 
     for left_id, right_id in PAIR_IDS:
         require_sole_method_difference(PROFILE_SPECS[left_id][0], PROFILE_SPECS[right_id][0])
+    for base_id, schema2_id in SCHEMA2_BASE_PAIRS:
+        require_sole_schema2_extension(base_id, schema2_id)
 
     report: Dict[str, Dict[str, str]] = {}
     for profile_id, (path, method, model) in PROFILE_SPECS.items():
         values = read_scalars(path)
         require_values(path, values, method)
+        if profile_id in SCHEMA2_PROFILE_IDS:
+            require_schema2_values(path, values)
         require_existing_settings(path, values, profile_id)
         calibration = require_native_calibration(path, values, model)
         report[profile_id] = {
