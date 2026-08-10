@@ -269,6 +269,10 @@ def _safety_counts(rows: Sequence[Mapping[str, str]]) -> Dict[str, object]:
         row for row in oracle_safe
         if _bool(row, "accepted") and not _bool(row, "harmful_accepted")
     ]
+    oracle_safe_harmful_accepted = [
+        row for row in oracle_safe
+        if _bool(row, "accepted") and _bool(row, "harmful_accepted")
+    ]
     oracle_safe_rejected = [row for row in oracle_safe if not _bool(row, "accepted")]
     finite_psd = [row for row in accepted if _bool(row, "finite")
                   and not _bool(row, "scaled_psd_failure")]
@@ -279,6 +283,7 @@ def _safety_counts(rows: Sequence[Mapping[str, str]]) -> Dict[str, object]:
         "harmful_accepted": len(harmful_accepted),
         "oracle_safe": len(oracle_safe),
         "oracle_safe_nonharmful_accepted": len(oracle_safe_nonharmful_accepted),
+        "oracle_safe_harmful_accepted": len(oracle_safe_harmful_accepted),
         "oracle_safe_rejected": len(oracle_safe_rejected),
         "finite_psd": len(finite_psd),
         "harmful_acceptance_rate": _percent(len(harmful_accepted), len(accepted)),
@@ -373,6 +378,8 @@ def write_condition_bins(rows: Sequence[Dict[str, str]], output: Path) -> None:
     fields = (
         "dimension", "bin", "method", "total", "accepted", "rejected",
         "safe_accepted", "harmful_accepted", "oracle_safe_opportunities",
+        "oracle_safe_nonharmful_accepted", "oracle_safe_harmful_accepted",
+        "oracle_safe_rejected",
         "harmful_acceptance_rate",
         "useful_information_retention", "oracle_safe_false_rejection_rate",
         "u_ns_hazard_total", "u_ns_hazard_rejected",
@@ -393,6 +400,11 @@ def write_condition_bins(rows: Sequence[Dict[str, str]], output: Path) -> None:
                 "total": safety["total"], "accepted": safety["accepted"],
                 "rejected": safety["rejected"], "safe_accepted": safety["safe_accepted"],
                 "harmful_accepted": safety["harmful_accepted"],
+                "oracle_safe_nonharmful_accepted":
+                    safety["oracle_safe_nonharmful_accepted"],
+                "oracle_safe_harmful_accepted":
+                    safety["oracle_safe_harmful_accepted"],
+                "oracle_safe_rejected": safety["oracle_safe_rejected"],
                 "harmful_acceptance_rate": safety["harmful_acceptance_rate"],
                 "oracle_safe_opportunities": safety["oracle_safe"],
                 "useful_information_retention": safety["useful_retention"],
@@ -444,7 +456,7 @@ def write_report(rows: Sequence[Dict[str, str]], timing: Sequence[Dict[str, str]
         "A harmful accepted output uses the frozen six clauses against FULL_JOINT. "
         "An oracle-safe opportunity requires FULL_JOINT/FULL_U agreement first; its "
         "retained numerator additionally requires that the method accept a nonharmful output.", "",
-        "| method | total | reducer accept / reject | nonharmful accepted | FULL_JOINT-relative harmful accepted | harmful / reducer-accepted | oracle-safe opportunities | nonharmful accepted among oracle-safe | useful retention | oracle-safe false rejection | finite+PSD / accepted |",
+        "| method | total | reducer accept / reject | nonharmful accepted | FULL_JOINT-relative harmful accepted | harmful / reducer-accepted | oracle-safe opportunities | oracle-safe nonharmful accepted / harmful accepted / rejected | useful retention | oracle-safe false rejection | finite+PSD / accepted |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for method in METHODS:
@@ -452,7 +464,8 @@ def write_report(rows: Sequence[Dict[str, str]], timing: Sequence[Dict[str, str]
         lines.append(
             f"| {method} | {item['total']} | {item['accepted']} / {item['rejected']} | "
             f"{item['safe_accepted']} | {item['harmful_accepted']} | {item['harmful_acceptance_rate']} | "
-            f"{item['oracle_safe']} | {item['oracle_safe_nonharmful_accepted']} | "
+            f"{item['oracle_safe']} | {item['oracle_safe_nonharmful_accepted']} / "
+            f"{item['oracle_safe_harmful_accepted']} / {item['oracle_safe_rejected']} | "
             f"{item['useful_retention']} | {item['false_rejection']} | {item['finite_psd_rate']} |"
         )
     lines.extend((
