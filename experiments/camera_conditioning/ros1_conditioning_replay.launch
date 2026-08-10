@@ -1,0 +1,34 @@
+<launch>
+    <!-- Ordinary serial-estimator replay. No CP2 mode or formal pipeline. -->
+    <arg name="config_path" />
+    <arg name="bag" />
+    <arg name="bag_start" default="0.0" />
+    <arg name="bag_duration" default="-1.0" />
+    <arg name="verbosity" default="INFO" />
+    <arg name="state_path" />
+    <arg name="deviation_path" />
+    <arg name="timing_path" />
+    <arg name="capture" default="false" />
+    <arg name="capture_path" default="" />
+
+    <node name="ov_msckf" pkg="ov_msckf" type="ros1_serial_msckf"
+          output="screen" clear_params="true" required="true">
+        <param name="config_path" type="str" value="$(arg config_path)" />
+        <param name="path_bag" type="str" value="$(arg bag)" />
+        <param name="bag_start" type="double" value="$(arg bag_start)" />
+        <param name="bag_durr" type="double" value="$(arg bag_duration)" />
+        <param name="verbosity" type="str" value="$(arg verbosity)" />
+
+        <param name="save_total_state" type="bool" value="true" />
+        <param name="filepath_est" type="str" value="$(arg state_path)" />
+        <param name="filepath_std" type="str" value="$(arg deviation_path)" />
+        <param name="record_timing_information" type="bool" value="true" />
+        <param name="record_timing_filepath" type="str" value="$(arg timing_path)" />
+
+        <!-- These private ROS parameters override the default-off YAML value. -->
+        <param name="up_msckf_capture_conditioning_systems" type="bool"
+               value="$(arg capture)" />
+        <param name="up_msckf_conditioning_capture_path" type="str"
+               value="$(arg capture_path)" />
+    </node>
+</launch>
