@@ -163,6 +163,9 @@ public:
    */
   std::string get_config_folder() { return config_path_.substr(0, config_path_.find_last_of('/')) + "/"; }
 
+  /// Return the exact main configuration path supplied to this parser.
+  const std::string &get_config_path() const noexcept { return config_path_; }
+
   /**
    * @brief Check to see if all parameters were read succesfully
    * @return True if we found all parameters

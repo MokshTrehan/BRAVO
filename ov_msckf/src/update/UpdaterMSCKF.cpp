@@ -1534,6 +1534,11 @@ UpdaterMSCKF::UpdaterMSCKF(UpdaterOptions &options, ov_core::FeatureInitializerO
           _options.max_visual_passes) ||
       !UpdaterOptions::visual_pass_combination_is_supported(
           _options.max_visual_passes, _options.landmark_elimination) ||
+      (_options.capture_conditioning_systems &&
+       (_options.max_visual_passes != 1 ||
+        _options.conditioning_capture_path.empty() ||
+        _options.conditioning_capture_path.front() != '/' ||
+        _options.conditioning_capture_config_path.empty())) ||
       !std::isfinite(_options.sigma_pix) || !(_options.sigma_pix > 0.0) || !std::isfinite(sigma_pix_sq) ||
       !(sigma_pix_sq > 0.0) || !std::isfinite(_options.chi2_multipler)) {
     PRINT_ERROR(RED
@@ -1545,6 +1550,18 @@ UpdaterMSCKF::UpdaterMSCKF(UpdaterOptions &options, ov_core::FeatureInitializerO
     std::exit(EXIT_FAILURE);
   }
   _options.sigma_pix_sq = sigma_pix_sq;
+
+  if (_options.capture_conditioning_systems) {
+    try {
+      conditioning_capture_writer.reset(
+          new ConditioningCaptureWriter(_options));
+    } catch (...) {
+      PRINT_WARNING(
+          YELLOW
+          "[MSCKF-CONDITIONING-CAPTURE]: status=disabled "
+          "reason=owner_allocation estimator_unchanged=1\n" RESET);
+    }
+  }
 
   // Save our feature initializer
   initializer_feat = std::shared_ptr<ov_core::FeatureInitializer>(new ov_core::FeatureInitializer(feat_init_options));
@@ -2497,6 +2514,10 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     // are captured immediately after production assembly and before either
     // reducer can mutate H_f, H_x, or res.
     const std::vector<CP2FeatureGateLayoutBlock> feature_layout = capture_cp2_feature_layout(Hx_order);
+    if (!recorded_mode && conditioning_capture_writer) {
+      conditioning_capture_writer->TryCapture(state, feat, ordinary_prior,
+                                               Hx_order, H_x, H_f, res);
+    }
     if (shadow_enabled) {
       CP2RawFeatureSystem raw;
       if (!cp2_size_to_u64(feat.featid, raw.feature_id)) {

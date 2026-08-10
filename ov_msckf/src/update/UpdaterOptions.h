@@ -55,6 +55,15 @@ struct UpdaterOptions {
   /// Fixed maximum number of visual update passes (one or two).
   int max_visual_passes = 1;
 
+  /// Research-only raw camera-system capture; default-off and one-pass only.
+  bool capture_conditioning_systems = false;
+
+  /// Absolute, create-new destination for the conditioning capture.
+  std::string conditioning_capture_path;
+
+  /// Main estimator configuration whose exact bytes are hashed into the file.
+  std::string conditioning_capture_config_path;
+
   /// Whether a landmark-elimination enum is one of the two public modes.
   static bool landmark_elimination_is_supported(LandmarkElimination mode) noexcept {
     return mode == LandmarkElimination::NULLSPACE || mode == LandmarkElimination::SCHUR;
@@ -115,6 +124,12 @@ struct UpdaterOptions {
   void print() {
     PRINT_DEBUG("    - chi2_multipler: %.1f\n", chi2_multipler);
     PRINT_DEBUG("    - sigma_pix: %.2f\n", sigma_pix);
+    PRINT_DEBUG("    - capture_conditioning_systems: %d\n",
+                (int)capture_conditioning_systems);
+    if (capture_conditioning_systems) {
+      PRINT_DEBUG("    - conditioning_capture_path: %s\n",
+                  conditioning_capture_path.c_str());
+    }
   }
 };
 

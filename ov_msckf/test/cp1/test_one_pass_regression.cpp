@@ -25,6 +25,7 @@
 #include <Eigen/Eigenvalues>
 
 #include <boost/math/distributions/chi_squared.hpp>
+#include <boost/filesystem.hpp>
 
 #include <algorithm>
 #include <array>
@@ -34,6 +35,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -81,6 +83,17 @@ public:
           OrdinaryTwoPassTestFault::kSecondFeatureFinalization;
       return;
     }
+  }
+
+  static std::uint64_t CaptureRecordCount(const UpdaterMSCKF &updater) {
+    return updater.conditioning_capture_writer
+               ? updater.conditioning_capture_writer->record_count()
+               : 0U;
+  }
+
+  static bool CaptureFailed(const UpdaterMSCKF &updater) {
+    return updater.conditioning_capture_writer &&
+           updater.conditioning_capture_writer->failed();
   }
 };
 
@@ -3766,6 +3779,116 @@ TEST(CP1OnePassRegression,
     expect_same_bytes(fixture.state_order[index]->fej(),
                       fej_before[index]);
   }
+}
+
+TEST(CP1OnePassRegression,
+     ConditioningCaptureIsBitwiseNonmutatingAndIoFailureIsFailOpen) {
+  const boost::filesystem::path config_path =
+      boost::filesystem::temp_directory_path() /
+      boost::filesystem::unique_path("schurvio-conditioning-config-%%%%-%%%%.yaml");
+  const boost::filesystem::path capture_path =
+      boost::filesystem::temp_directory_path() /
+      boost::filesystem::unique_path("schurvio-conditioning-capture-%%%%-%%%%.bin");
+  {
+    std::ofstream config(config_path.string(),
+                         std::ios::out | std::ios::trunc | std::ios::binary);
+    ASSERT_TRUE(config.is_open());
+    config << "%YAML:1.0\n---\nup_msckf_max_visual_passes: 1\n";
+    config.close();
+    ASSERT_TRUE(config.good());
+  }
+
+  Fixture capture_off = make_fixture();
+  Fixture capture_on = make_fixture();
+  const Feature off_accepted_before = *capture_off.accepted_feature;
+  const Feature off_rejected_before = *capture_off.rejected_feature;
+  const Feature on_accepted_before = *capture_on.accepted_feature;
+  const Feature on_rejected_before = *capture_on.rejected_feature;
+  std::vector<std::shared_ptr<Feature>> off_features{
+      capture_off.accepted_feature, capture_off.rejected_feature};
+  std::vector<std::shared_ptr<Feature>> on_features{
+      capture_on.accepted_feature, capture_on.rejected_feature};
+
+  capture_on.updater_options.capture_conditioning_systems = true;
+  capture_on.updater_options.conditioning_capture_path = capture_path.string();
+  capture_on.updater_options.conditioning_capture_config_path =
+      config_path.string();
+  {
+    UpdaterMSCKF off_updater(capture_off.updater_options,
+                             capture_off.initializer_options);
+    UpdaterMSCKF on_updater(capture_on.updater_options,
+                            capture_on.initializer_options);
+    off_updater.update(capture_off.state, off_features);
+    on_updater.update(capture_on.state, on_features);
+    EXPECT_EQ(UpdaterMSCKFOrdinaryTestAccess::CaptureRecordCount(off_updater),
+              0U);
+    EXPECT_EQ(UpdaterMSCKFOrdinaryTestAccess::CaptureRecordCount(on_updater),
+              1U);
+    EXPECT_FALSE(UpdaterMSCKFOrdinaryTestAccess::CaptureFailed(on_updater));
+  }
+
+  ASSERT_TRUE(boost::filesystem::is_regular_file(capture_path));
+  EXPECT_GT(boost::filesystem::file_size(capture_path), 128U);
+  expect_same_bytes(StateHelper::get_full_covariance(capture_on.state),
+                    StateHelper::get_full_covariance(capture_off.state));
+  ASSERT_EQ(capture_on.state_order.size(), capture_off.state_order.size());
+  for (std::size_t index = 0; index < capture_on.state_order.size(); ++index) {
+    expect_same_bytes(capture_on.state_order[index]->value(),
+                      capture_off.state_order[index]->value());
+    expect_same_bytes(capture_on.state_order[index]->fej(),
+                      capture_off.state_order[index]->fej());
+  }
+  ASSERT_EQ(on_features.size(), off_features.size());
+  for (std::size_t index = 0; index < on_features.size(); ++index) {
+    EXPECT_EQ(on_features[index]->featid, off_features[index]->featid);
+  }
+  expect_same_feature_observations(*capture_on.accepted_feature,
+                                   *capture_off.accepted_feature);
+  expect_same_feature_observations(*capture_on.rejected_feature,
+                                   *capture_off.rejected_feature);
+  EXPECT_EQ(off_accepted_before.to_delete, false);
+  EXPECT_EQ(off_rejected_before.to_delete, false);
+  EXPECT_EQ(on_accepted_before.to_delete, false);
+  EXPECT_EQ(on_rejected_before.to_delete, false);
+
+  Fixture io_failure = make_fixture();
+  Fixture io_reference = make_fixture();
+  std::vector<std::shared_ptr<Feature>> failed_features{
+      io_failure.accepted_feature, io_failure.rejected_feature};
+  std::vector<std::shared_ptr<Feature>> reference_features{
+      io_reference.accepted_feature, io_reference.rejected_feature};
+  io_failure.updater_options.capture_conditioning_systems = true;
+  io_failure.updater_options.conditioning_capture_path =
+      "/tmp/schurvio-directory-that-must-not-exist/capture.bin";
+  io_failure.updater_options.conditioning_capture_config_path =
+      config_path.string();
+  {
+    UpdaterMSCKF failed_updater(io_failure.updater_options,
+                                io_failure.initializer_options);
+    UpdaterMSCKF reference_updater(io_reference.updater_options,
+                                   io_reference.initializer_options);
+    EXPECT_TRUE(
+        UpdaterMSCKFOrdinaryTestAccess::CaptureFailed(failed_updater));
+    failed_updater.update(io_failure.state, failed_features);
+    reference_updater.update(io_reference.state, reference_features);
+  }
+  expect_same_bytes(StateHelper::get_full_covariance(io_failure.state),
+                    StateHelper::get_full_covariance(io_reference.state));
+  ASSERT_EQ(io_failure.state_order.size(), io_reference.state_order.size());
+  for (std::size_t index = 0; index < io_failure.state_order.size(); ++index) {
+    expect_same_bytes(io_failure.state_order[index]->value(),
+                      io_reference.state_order[index]->value());
+    expect_same_bytes(io_failure.state_order[index]->fej(),
+                      io_reference.state_order[index]->fej());
+  }
+  expect_same_feature_observations(*io_failure.accepted_feature,
+                                   *io_reference.accepted_feature);
+  expect_same_feature_observations(*io_failure.rejected_feature,
+                                   *io_reference.rejected_feature);
+
+  boost::system::error_code ignored;
+  boost::filesystem::remove(capture_path, ignored);
+  boost::filesystem::remove(config_path, ignored);
 }
 
 } // namespace

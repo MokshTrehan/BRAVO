@@ -79,6 +79,7 @@ list(APPEND LIBRARY_SOURCES
         src/update/CP2StateTraceCodec.cpp
         src/update/CP2TraceCodec.cpp
         src/update/CP2TraceJournal.cpp
+        src/update/ConditioningCapture.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
@@ -108,6 +109,7 @@ set_source_files_properties(
         src/update/CP2StateTraceCodec.cpp
         src/update/CP2TraceCodec.cpp
         src/update/CP2TraceJournal.cpp
+        src/update/ConditioningCapture.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
@@ -118,6 +120,18 @@ set_source_files_properties(
 list(APPEND LIBRARY_SOURCES src/ros/ROS2Visualizer.cpp src/ros/ROSVisualizerHelper.cpp)
 file(GLOB_RECURSE LIBRARY_HEADERS "src/*.h")
 add_library(ov_msckf_lib SHARED ${LIBRARY_SOURCES} ${LIBRARY_HEADERS})
+execute_process(
+        COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse HEAD
+        OUTPUT_VARIABLE SCHURVIO_SOURCE_COMMIT_VALUE
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+string(LENGTH "${SCHURVIO_SOURCE_COMMIT_VALUE}" SCHURVIO_SOURCE_COMMIT_LENGTH)
+if (NOT SCHURVIO_SOURCE_COMMIT_LENGTH EQUAL 40 OR
+        NOT SCHURVIO_SOURCE_COMMIT_VALUE MATCHES "^[0-9a-f]+$")
+    set(SCHURVIO_SOURCE_COMMIT_VALUE "unknown")
+endif ()
+target_compile_definitions(ov_msckf_lib PRIVATE
+        SCHURVIO_SOURCE_COMMIT="${SCHURVIO_SOURCE_COMMIT_VALUE}")
 ament_target_dependencies(ov_msckf_lib ${ament_libraries})
 target_link_libraries(ov_msckf_lib ${thirdparty_libraries})
 target_include_directories(ov_msckf_lib PUBLIC src/)

@@ -80,12 +80,61 @@ void expect_yaml_startup_rejection(const std::string &pass_value, const std::str
 TEST(CP1VisualPassConfig, DefaultIsExactlyOneAndOnlyOneOrTwoAreSupported) {
   const UpdaterOptions options;
   EXPECT_EQ(options.max_visual_passes, 1);
+  EXPECT_FALSE(options.capture_conditioning_systems);
+  EXPECT_TRUE(options.conditioning_capture_path.empty());
+  EXPECT_TRUE(options.conditioning_capture_config_path.empty());
   EXPECT_TRUE(UpdaterOptions::max_visual_passes_is_supported(1));
   EXPECT_TRUE(UpdaterOptions::max_visual_passes_is_supported(2));
   EXPECT_FALSE(UpdaterOptions::max_visual_passes_is_supported(0));
   EXPECT_FALSE(UpdaterOptions::max_visual_passes_is_supported(-1));
   EXPECT_FALSE(UpdaterOptions::max_visual_passes_is_supported(3));
   EXPECT_FALSE(UpdaterOptions::max_visual_passes_is_supported(std::numeric_limits<int>::max()));
+}
+
+TEST(CP1VisualPassConfig, ConditioningCaptureParsesOnlyWhenExplicitlyEnabled) {
+  const TemporaryYaml yaml(
+      full_msckf_yaml("1", "nullspace") +
+      "up_msckf_capture_conditioning_systems: true\n"
+      "up_msckf_conditioning_capture_path: /tmp/schurvio-conditioning-test.bin\n");
+  const auto parser = parser_for(yaml);
+  VioManagerOptions options;
+  options.load_and_validate_msckf_update_configuration(parser);
+
+  EXPECT_TRUE(options.msckf_options.capture_conditioning_systems);
+  EXPECT_EQ(options.msckf_options.conditioning_capture_path,
+            "/tmp/schurvio-conditioning-test.bin");
+  EXPECT_EQ(options.msckf_options.conditioning_capture_config_path,
+            yaml.path());
+}
+
+TEST(CP1VisualPassConfig, ConditioningCaptureRejectsTwoPassAndRelativeOutput) {
+  const TemporaryYaml two_pass(
+      full_msckf_yaml("2", "schur") +
+      "up_msckf_capture_conditioning_systems: true\n"
+      "up_msckf_conditioning_capture_path: /tmp/schurvio-conditioning-test.bin\n");
+  EXPECT_EXIT(
+      {
+        (void)::dup2(STDERR_FILENO, STDOUT_FILENO);
+        const auto parser = std::make_shared<YamlParser>(two_pass.path());
+        VioManagerOptions options;
+        options.load_and_validate_msckf_update_configuration(parser);
+        std::exit(EXIT_SUCCESS);
+      },
+      ::testing::ExitedWithCode(EXIT_FAILURE), "supported only.*passes=1");
+
+  const TemporaryYaml relative(
+      full_msckf_yaml("1", "nullspace") +
+      "up_msckf_capture_conditioning_systems: true\n"
+      "up_msckf_conditioning_capture_path: capture.bin\n");
+  EXPECT_EXIT(
+      {
+        (void)::dup2(STDERR_FILENO, STDOUT_FILENO);
+        const auto parser = std::make_shared<YamlParser>(relative.path());
+        VioManagerOptions options;
+        options.load_and_validate_msckf_update_configuration(parser);
+        std::exit(EXIT_SUCCESS);
+      },
+      ::testing::ExitedWithCode(EXIT_FAILURE), "nonempty absolute path");
 }
 
 TEST(CP1VisualPassConfig, MissingOptionalValuePreservesExistingValue) {

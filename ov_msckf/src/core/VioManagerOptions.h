@@ -214,6 +214,24 @@ struct VioManagerOptions {
       PRINT_ERROR(RED "up_msckf_max_visual_passes=2 requires up_msckf_landmark_elimination=schur\n" RESET);
       std::exit(EXIT_FAILURE);
     }
+    if (msckf_options.capture_conditioning_systems &&
+        msckf_options.max_visual_passes != 1) {
+      PRINT_ERROR(RED "up_msckf_capture_conditioning_systems is supported only with "
+                      "up_msckf_max_visual_passes=1\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
+    if (msckf_options.capture_conditioning_systems &&
+        (msckf_options.conditioning_capture_path.empty() ||
+         msckf_options.conditioning_capture_path.front() != '/')) {
+      PRINT_ERROR(RED "up_msckf_conditioning_capture_path must be a nonempty absolute path "
+                      "when conditioning capture is enabled\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
+    if (msckf_options.capture_conditioning_systems &&
+        msckf_options.conditioning_capture_config_path.empty()) {
+      PRINT_ERROR(RED "conditioning capture requires an owning estimator configuration path\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
     if (!std::isfinite(msckf_options.sigma_pix) || !(msckf_options.sigma_pix > 0.0)) {
       PRINT_ERROR(RED "invalid MSCKF pixel sigma: %.17g\n" RESET, msckf_options.sigma_pix);
       PRINT_ERROR(RED "up_msckf_sigma_px must be finite and strictly positive\n" RESET);
@@ -247,6 +265,11 @@ struct VioManagerOptions {
       parser->parse_config("up_msckf_chi2_multipler", msckf_options.chi2_multipler);
       load_msckf_landmark_elimination(parser);
       load_msckf_max_visual_passes_or_exit(parser);
+      parser->parse_config("up_msckf_capture_conditioning_systems",
+                           msckf_options.capture_conditioning_systems, false);
+      parser->parse_config("up_msckf_conditioning_capture_path",
+                           msckf_options.conditioning_capture_path, false);
+      msckf_options.conditioning_capture_config_path = parser->get_config_path();
     }
     validate_msckf_update_configuration_or_exit();
   }

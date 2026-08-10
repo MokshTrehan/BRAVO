@@ -26,6 +26,7 @@
 
 #include "CP2CommitOracle.h"
 #include "CP2ShadowMath.h"
+#include "ConditioningCapture.h"
 
 #include <Eigen/Eigen>
 #include <array>
@@ -376,6 +377,9 @@ protected:
 
   /// Feature initializer class object
   std::shared_ptr<ov_core::FeatureInitializer> initializer_feat;
+
+  /// Default-off, fail-open raw-system writer; never participates in decisions.
+  std::unique_ptr<ConditioningCaptureWriter> conditioning_capture_writer;
 
   /// Chi squared 95th percentile table (lookup would be size of residual)
   std::map<int, double> chi_squared_table;
