@@ -38,8 +38,11 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -95,6 +98,22 @@ public:
     return updater.conditioning_capture_writer &&
            updater.conditioning_capture_writer->failed();
   }
+
+  static std::uint64_t Schema2EnvelopeCount(const UpdaterMSCKF &updater) {
+    return updater.update_envelope_capture_writer
+               ? updater.update_envelope_capture_writer->envelope_count()
+               : 0U;
+  }
+
+  static bool Schema2CaptureFailed(const UpdaterMSCKF &updater) {
+    return updater.update_envelope_capture_writer &&
+           updater.update_envelope_capture_writer->failed();
+  }
+
+  static bool Schema2CallbackActive(const UpdaterMSCKF &updater) {
+    return updater.update_envelope_capture_writer &&
+           updater.update_envelope_capture_writer->callback_active();
+  }
 };
 
 } // namespace ov_msckf
@@ -118,6 +137,83 @@ using ov_msckf::UpdaterMSCKFOrdinaryTestAccess;
 using ov_msckf::UpdaterMSCKFPreview;
 using ov_msckf::UpdaterOptions;
 using ov_type::Type;
+
+class Schema2CaptureFiles {
+public:
+  Schema2CaptureFiles()
+      : config_path_(boost::filesystem::temp_directory_path() /
+                     boost::filesystem::unique_path(
+                         "schurvio-schema2-config-%%%%-%%%%.yaml")),
+        capture_path_(boost::filesystem::temp_directory_path() /
+                      boost::filesystem::unique_path(
+                          "schurvio-schema2-capture-%%%%-%%%%.bin")) {
+    std::ofstream config(config_path_.string(),
+                         std::ios::out | std::ios::trunc | std::ios::binary);
+    if (!config.is_open()) {
+      throw std::runtime_error("unable to create Schema-2 test config");
+    }
+    config << "%YAML:1.0\n---\n"
+              "up_msckf_max_visual_passes: 1\n"
+              "up_msckf_landmark_elimination: schur\n";
+    config.close();
+    if (!config.good()) {
+      throw std::runtime_error("unable to write Schema-2 test config");
+    }
+  }
+
+  ~Schema2CaptureFiles() {
+    boost::system::error_code ignored;
+    boost::filesystem::remove(capture_path_, ignored);
+    boost::filesystem::remove(config_path_, ignored);
+  }
+
+  Schema2CaptureFiles(const Schema2CaptureFiles &) = delete;
+  Schema2CaptureFiles &operator=(const Schema2CaptureFiles &) = delete;
+
+  void Configure(UpdaterOptions &options) const {
+    options.capture_update_envelopes_v2 = true;
+    options.update_envelope_capture_path = capture_path_.string();
+    options.update_envelope_run_id = "unit-run";
+    options.update_envelope_sequence_id = "fixture-sequence";
+    options.update_envelope_capture_config_path = config_path_.string();
+  }
+
+  void CreateOccupiedDestination(const std::string &contents) const {
+    std::ofstream capture(capture_path_.string(),
+                          std::ios::out | std::ios::trunc | std::ios::binary);
+    if (!capture.is_open()) {
+      throw std::runtime_error("unable to create occupied Schema-2 output");
+    }
+    capture << contents;
+    capture.close();
+    if (!capture.good()) {
+      throw std::runtime_error("unable to write occupied Schema-2 output");
+    }
+  }
+
+  std::string ReadCapture() const {
+    std::ifstream capture(capture_path_.string(), std::ios::in | std::ios::binary);
+    if (!capture.is_open()) {
+      throw std::runtime_error("unable to read Schema-2 output");
+    }
+    return std::string(std::istreambuf_iterator<char>(capture),
+                       std::istreambuf_iterator<char>());
+  }
+
+  const boost::filesystem::path &capture_path() const {
+    return capture_path_;
+  }
+
+private:
+  boost::filesystem::path config_path_;
+  boost::filesystem::path capture_path_;
+};
+
+ov_msckf::UpdateEnvelopeCallbackCosts schema2_zero_callback_costs() {
+  ov_msckf::UpdateEnvelopeCallbackCosts costs;
+  costs.stage_timestamps_available = true;
+  return costs;
+}
 
 constexpr std::size_t kAcceptedFeatureId = 4242U;
 constexpr std::size_t kRejectedFeatureId = 9001U;
@@ -3779,6 +3875,185 @@ TEST(CP1OnePassRegression,
     expect_same_bytes(fixture.state_order[index]->fej(),
                       fej_before[index]);
   }
+}
+
+TEST(CP1OnePassRegression,
+     Schema2CaptureIsBitwiseNonmutatingAndRecordsOneCommitEnvelope) {
+  Schema2CaptureFiles files;
+  Fixture capture_off = make_fixture();
+  Fixture capture_on = make_fixture();
+  files.Configure(capture_on.updater_options);
+
+  std::vector<std::shared_ptr<Feature>> off_features{
+      capture_off.accepted_feature, capture_off.rejected_feature};
+  std::vector<std::shared_ptr<Feature>> on_features{
+      capture_on.accepted_feature, capture_on.rejected_feature};
+
+  {
+    UpdaterMSCKF off_updater(capture_off.updater_options,
+                             capture_off.initializer_options);
+    UpdaterMSCKF on_updater(capture_on.updater_options,
+                            capture_on.initializer_options);
+    EXPECT_FALSE(off_updater.schema2_capture_active());
+    ASSERT_TRUE(on_updater.schema2_capture_active());
+
+    on_updater.schema2_begin_callback(capture_on.state,
+                                      capture_on.state->_timestamp);
+    ASSERT_TRUE(
+        UpdaterMSCKFOrdinaryTestAccess::Schema2CallbackActive(on_updater));
+    on_updater.schema2_set_candidates(
+        on_features,
+        {ov_msckf::UpdateEnvelopeCandidateReason::kLost,
+         ov_msckf::UpdateEnvelopeCandidateReason::kMarginal});
+
+    off_updater.update(capture_off.state, off_features);
+    on_updater.update(capture_on.state, on_features);
+    on_updater.schema2_finish_callback(
+        schema2_zero_callback_costs(),
+        ov_msckf::UpdateEnvelopeTerminalStatus::kInternalFailure, 0U);
+
+    // A committed envelope increments only after the writer validates the
+    // production posterior and exactly one mean, covariance, and feature
+    // finalization commit.
+    EXPECT_EQ(
+        UpdaterMSCKFOrdinaryTestAccess::Schema2EnvelopeCount(on_updater),
+        1U);
+    EXPECT_FALSE(
+        UpdaterMSCKFOrdinaryTestAccess::Schema2CaptureFailed(on_updater));
+    EXPECT_FALSE(
+        UpdaterMSCKFOrdinaryTestAccess::Schema2CallbackActive(on_updater));
+    EXPECT_EQ(
+        UpdaterMSCKFOrdinaryTestAccess::Schema2EnvelopeCount(off_updater),
+        0U);
+  }
+
+  ASSERT_TRUE(boost::filesystem::is_regular_file(files.capture_path()));
+  EXPECT_GT(boost::filesystem::file_size(files.capture_path()), 128U);
+  expect_same_bytes(StateHelper::get_full_covariance(capture_on.state),
+                    StateHelper::get_full_covariance(capture_off.state));
+  ASSERT_EQ(capture_on.state_order.size(), capture_off.state_order.size());
+  for (std::size_t index = 0; index < capture_on.state_order.size(); ++index) {
+    expect_same_bytes(capture_on.state_order[index]->value(),
+                      capture_off.state_order[index]->value());
+    expect_same_bytes(capture_on.state_order[index]->fej(),
+                      capture_off.state_order[index]->fej());
+  }
+  expect_same_bytes(capture_on.camera->get_value(),
+                    capture_off.camera->get_value());
+
+  ASSERT_EQ(on_features.size(), off_features.size());
+  ASSERT_EQ(on_features.size(), 1U);
+  EXPECT_EQ(on_features.front()->featid, kAcceptedFeatureId);
+  EXPECT_EQ(off_features.front()->featid, kAcceptedFeatureId);
+  EXPECT_TRUE(capture_on.accepted_feature->to_delete);
+  EXPECT_TRUE(capture_off.accepted_feature->to_delete);
+  EXPECT_TRUE(capture_on.rejected_feature->to_delete);
+  EXPECT_TRUE(capture_off.rejected_feature->to_delete);
+  expect_same_feature_observations(*capture_on.accepted_feature,
+                                   *capture_off.accepted_feature);
+  expect_same_feature_observations(*capture_on.rejected_feature,
+                                   *capture_off.rejected_feature);
+}
+
+TEST(CP1OnePassRegression,
+     Schema2ZeroFeatureEnvelopeAndCreateNewFailureAreFailOpen) {
+  Schema2CaptureFiles zero_files;
+  Fixture zero = make_fixture();
+  zero_files.Configure(zero.updater_options);
+  const Eigen::MatrixXd zero_covariance_before =
+      StateHelper::get_full_covariance(zero.state);
+  std::vector<Eigen::MatrixXd> zero_values_before;
+  std::vector<Eigen::MatrixXd> zero_fej_before;
+  for (const auto &variable : zero.state_order) {
+    zero_values_before.push_back(variable->value());
+    zero_fej_before.push_back(variable->fej());
+  }
+  std::vector<std::shared_ptr<Feature>> zero_features;
+  {
+    UpdaterMSCKF zero_updater(zero.updater_options,
+                              zero.initializer_options);
+    ASSERT_TRUE(zero_updater.schema2_capture_active());
+    zero_updater.schema2_begin_callback(zero.state, zero.state->_timestamp);
+    zero_updater.schema2_set_candidates(zero_features, {});
+    zero_updater.update(zero.state, zero_features);
+    zero_updater.schema2_finish_callback(
+        schema2_zero_callback_costs(),
+        ov_msckf::UpdateEnvelopeTerminalStatus::kInternalFailure, 0U);
+    EXPECT_EQ(
+        UpdaterMSCKFOrdinaryTestAccess::Schema2EnvelopeCount(zero_updater),
+        1U);
+    EXPECT_FALSE(
+        UpdaterMSCKFOrdinaryTestAccess::Schema2CaptureFailed(zero_updater));
+    EXPECT_FALSE(
+        UpdaterMSCKFOrdinaryTestAccess::Schema2CallbackActive(zero_updater));
+  }
+  ASSERT_TRUE(boost::filesystem::is_regular_file(zero_files.capture_path()));
+  EXPECT_GT(boost::filesystem::file_size(zero_files.capture_path()), 128U);
+  EXPECT_TRUE(zero_features.empty());
+  expect_same_bytes(StateHelper::get_full_covariance(zero.state),
+                    zero_covariance_before);
+  for (std::size_t index = 0; index < zero.state_order.size(); ++index) {
+    expect_same_bytes(zero.state_order[index]->value(),
+                      zero_values_before[index]);
+    expect_same_bytes(zero.state_order[index]->fej(),
+                      zero_fej_before[index]);
+  }
+
+  Schema2CaptureFiles occupied_files;
+  const std::string occupied_contents = "schema2-create-new-sentinel\n";
+  occupied_files.CreateOccupiedDestination(occupied_contents);
+  Fixture io_failure = make_fixture();
+  Fixture io_reference = make_fixture();
+  occupied_files.Configure(io_failure.updater_options);
+  std::vector<std::shared_ptr<Feature>> failed_features{
+      io_failure.accepted_feature, io_failure.rejected_feature};
+  std::vector<std::shared_ptr<Feature>> reference_features{
+      io_reference.accepted_feature, io_reference.rejected_feature};
+  {
+    UpdaterMSCKF failed_updater(io_failure.updater_options,
+                                io_failure.initializer_options);
+    UpdaterMSCKF reference_updater(io_reference.updater_options,
+                                   io_reference.initializer_options);
+    EXPECT_FALSE(failed_updater.schema2_capture_active());
+    EXPECT_TRUE(
+        UpdaterMSCKFOrdinaryTestAccess::Schema2CaptureFailed(failed_updater));
+    failed_updater.schema2_begin_callback(io_failure.state,
+                                          io_failure.state->_timestamp);
+    failed_updater.schema2_set_candidates(
+        failed_features,
+        {ov_msckf::UpdateEnvelopeCandidateReason::kLost,
+         ov_msckf::UpdateEnvelopeCandidateReason::kMarginal});
+    failed_updater.update(io_failure.state, failed_features);
+    reference_updater.update(io_reference.state, reference_features);
+    failed_updater.schema2_finish_callback(
+        schema2_zero_callback_costs(),
+        ov_msckf::UpdateEnvelopeTerminalStatus::kInternalFailure, 0U);
+    EXPECT_EQ(
+        UpdaterMSCKFOrdinaryTestAccess::Schema2EnvelopeCount(failed_updater),
+        0U);
+    EXPECT_FALSE(
+        UpdaterMSCKFOrdinaryTestAccess::Schema2CallbackActive(failed_updater));
+  }
+
+  EXPECT_EQ(occupied_files.ReadCapture(), occupied_contents);
+  expect_same_bytes(StateHelper::get_full_covariance(io_failure.state),
+                    StateHelper::get_full_covariance(io_reference.state));
+  ASSERT_EQ(io_failure.state_order.size(), io_reference.state_order.size());
+  for (std::size_t index = 0; index < io_failure.state_order.size(); ++index) {
+    expect_same_bytes(io_failure.state_order[index]->value(),
+                      io_reference.state_order[index]->value());
+    expect_same_bytes(io_failure.state_order[index]->fej(),
+                      io_reference.state_order[index]->fej());
+  }
+  ASSERT_EQ(failed_features.size(), reference_features.size());
+  for (std::size_t index = 0; index < failed_features.size(); ++index) {
+    EXPECT_EQ(failed_features[index]->featid,
+              reference_features[index]->featid);
+  }
+  expect_same_feature_observations(*io_failure.accepted_feature,
+                                   *io_reference.accepted_feature);
+  expect_same_feature_observations(*io_failure.rejected_feature,
+                                   *io_reference.rejected_feature);
 }
 
 TEST(CP1OnePassRegression,

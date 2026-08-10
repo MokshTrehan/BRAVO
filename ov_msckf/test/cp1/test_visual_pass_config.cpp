@@ -83,12 +83,108 @@ TEST(CP1VisualPassConfig, DefaultIsExactlyOneAndOnlyOneOrTwoAreSupported) {
   EXPECT_FALSE(options.capture_conditioning_systems);
   EXPECT_TRUE(options.conditioning_capture_path.empty());
   EXPECT_TRUE(options.conditioning_capture_config_path.empty());
+  EXPECT_FALSE(options.capture_update_envelopes_v2);
+  EXPECT_TRUE(options.update_envelope_capture_path.empty());
+  EXPECT_TRUE(options.update_envelope_run_id.empty());
+  EXPECT_TRUE(options.update_envelope_sequence_id.empty());
+  EXPECT_TRUE(options.update_envelope_capture_config_path.empty());
   EXPECT_TRUE(UpdaterOptions::max_visual_passes_is_supported(1));
   EXPECT_TRUE(UpdaterOptions::max_visual_passes_is_supported(2));
   EXPECT_FALSE(UpdaterOptions::max_visual_passes_is_supported(0));
   EXPECT_FALSE(UpdaterOptions::max_visual_passes_is_supported(-1));
   EXPECT_FALSE(UpdaterOptions::max_visual_passes_is_supported(3));
   EXPECT_FALSE(UpdaterOptions::max_visual_passes_is_supported(std::numeric_limits<int>::max()));
+}
+
+TEST(CP1VisualPassConfig, Schema2CaptureParsesOnlyWhenExplicitlyEnabled) {
+  const TemporaryYaml yaml(
+      full_msckf_yaml("1", "schur") +
+      "up_msckf_capture_update_envelopes_v2: true\n"
+      "up_msckf_update_envelope_capture_path: /tmp/schurvio-schema2-test.bin\n"
+      "up_msckf_update_envelope_run_id: unit-run\n"
+      "up_msckf_update_envelope_sequence_id: fixture-sequence\n");
+  const auto parser = parser_for(yaml);
+  VioManagerOptions options;
+  options.load_and_validate_msckf_update_configuration(parser);
+
+  EXPECT_TRUE(options.msckf_options.capture_update_envelopes_v2);
+  EXPECT_EQ(options.msckf_options.update_envelope_capture_path,
+            "/tmp/schurvio-schema2-test.bin");
+  EXPECT_EQ(options.msckf_options.update_envelope_run_id, "unit-run");
+  EXPECT_EQ(options.msckf_options.update_envelope_sequence_id,
+            "fixture-sequence");
+  EXPECT_EQ(options.msckf_options.update_envelope_capture_config_path,
+            yaml.path());
+}
+
+TEST(CP1VisualPassConfig,
+     Schema2CaptureRejectsUnsupportedOrIncompleteConfigurations) {
+  const TemporaryYaml two_pass(
+      full_msckf_yaml("2", "schur") +
+      "up_msckf_capture_update_envelopes_v2: true\n"
+      "up_msckf_update_envelope_capture_path: /tmp/schurvio-schema2-test.bin\n"
+      "up_msckf_update_envelope_run_id: unit-run\n"
+      "up_msckf_update_envelope_sequence_id: fixture-sequence\n");
+  EXPECT_EXIT(
+      {
+        (void)::dup2(STDERR_FILENO, STDOUT_FILENO);
+        const auto parser = std::make_shared<YamlParser>(two_pass.path());
+        VioManagerOptions options;
+        options.load_and_validate_msckf_update_configuration(parser);
+        std::exit(EXIT_SUCCESS);
+      },
+      ::testing::ExitedWithCode(EXIT_FAILURE), "supported only.*passes=1");
+
+  const TemporaryYaml relative(
+      full_msckf_yaml("1", "schur") +
+      "up_msckf_capture_update_envelopes_v2: true\n"
+      "up_msckf_update_envelope_capture_path: capture.bin\n"
+      "up_msckf_update_envelope_run_id: unit-run\n"
+      "up_msckf_update_envelope_sequence_id: fixture-sequence\n");
+  EXPECT_EXIT(
+      {
+        (void)::dup2(STDERR_FILENO, STDOUT_FILENO);
+        const auto parser = std::make_shared<YamlParser>(relative.path());
+        VioManagerOptions options;
+        options.load_and_validate_msckf_update_configuration(parser);
+        std::exit(EXIT_SUCCESS);
+      },
+      ::testing::ExitedWithCode(EXIT_FAILURE), "nonempty absolute path");
+
+  const TemporaryYaml missing_identity(
+      full_msckf_yaml("1", "schur") +
+      "up_msckf_capture_update_envelopes_v2: true\n"
+      "up_msckf_update_envelope_capture_path: /tmp/schurvio-schema2-test.bin\n");
+  EXPECT_EXIT(
+      {
+        (void)::dup2(STDERR_FILENO, STDOUT_FILENO);
+        const auto parser =
+            std::make_shared<YamlParser>(missing_identity.path());
+        VioManagerOptions options;
+        options.load_and_validate_msckf_update_configuration(parser);
+        std::exit(EXIT_SUCCESS);
+      },
+      ::testing::ExitedWithCode(EXIT_FAILURE),
+      "requires nonempty run and sequence IDs");
+
+  const TemporaryYaml mutually_exclusive(
+      full_msckf_yaml("1", "schur") +
+      "up_msckf_capture_conditioning_systems: true\n"
+      "up_msckf_conditioning_capture_path: /tmp/schurvio-schema1-test.bin\n"
+      "up_msckf_capture_update_envelopes_v2: true\n"
+      "up_msckf_update_envelope_capture_path: /tmp/schurvio-schema2-test.bin\n"
+      "up_msckf_update_envelope_run_id: unit-run\n"
+      "up_msckf_update_envelope_sequence_id: fixture-sequence\n");
+  EXPECT_EXIT(
+      {
+        (void)::dup2(STDERR_FILENO, STDOUT_FILENO);
+        const auto parser =
+            std::make_shared<YamlParser>(mutually_exclusive.path());
+        VioManagerOptions options;
+        options.load_and_validate_msckf_update_configuration(parser);
+        std::exit(EXIT_SUCCESS);
+      },
+      ::testing::ExitedWithCode(EXIT_FAILURE), "mutually exclusive");
 }
 
 TEST(CP1VisualPassConfig, ConditioningCaptureParsesOnlyWhenExplicitlyEnabled) {
