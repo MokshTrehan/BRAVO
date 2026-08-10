@@ -314,7 +314,7 @@ class AnytimePolicyEvaluationTest(unittest.TestCase):
         views = build_candidate_views(envelope)
         model = _fit_model(envelope)
         predictions = _predict_candidate_costs(views, model)
-        context = _prepare_policy_update_context(envelope, reconstruction)
+        context = _prepare_policy_update_context(envelope, reconstruction, views)
         subset_cache = {}
         policy = POLICY_BY_NAME["original_order"]
         ranking = rank_candidates(envelope, views, policy, sequence_id="room4")
@@ -623,6 +623,63 @@ class AnytimePolicyEvaluationTest(unittest.TestCase):
         self.assertTrue(result.covariance_conservative)
         self.assertAlmostEqual(result.measured_cost_fraction, 1.0)
         self.assertEqual(result.selected_feature_ids, (13, 12, 11, 10))
+
+    def test_every_policy_and_full_budget_share_exact_fast_baseline(self) -> None:
+        envelope = _multi_envelope()
+        model = _fit_model(envelope)
+        accepted_ids = frozenset(envelope.accepted_feature_ids)
+
+        for policy in POLICIES:
+            for budget_kind in BudgetKind:
+                with self.subTest(policy=policy.name, budget=budget_kind.value):
+                    result = evaluate_policy_update(
+                        envelope,
+                        policy,
+                        BudgetSpec(budget_kind, 1.0),
+                        model,
+                        dataset_role=DatasetRole.TUM_VI_HELD_OUT,
+                        sequence_id="room4",
+                    )
+                    self.assertEqual(
+                        frozenset(result.selected_feature_ids), accepted_ids
+                    )
+                    self.assertEqual(result.selected_tracks, len(accepted_ids))
+                    self.assertEqual(result.full_state_information_retention, 1.0)
+                    self.assertEqual(
+                        result.full_state_logdet_information_retention, 1.0
+                    )
+                    self.assertEqual(
+                        result.subset_information_trace,
+                        result.full_information_trace,
+                    )
+                    self.assertEqual(
+                        result.subset_information_logdet,
+                        result.full_information_logdet,
+                    )
+                    self.assertEqual(
+                        result.subset_posterior_trace,
+                        result.full_posterior_trace,
+                    )
+                    self.assertEqual(
+                        result.subset_posterior_log_pseudodeterminant,
+                        result.full_posterior_log_pseudodeterminant,
+                    )
+                    self.assertEqual(
+                        result.subset_posterior_effective_rank,
+                        result.full_posterior_effective_rank,
+                    )
+                    self.assertEqual(result.correction_l2, 0.0)
+                    self.assertEqual(result.correction_mahalanobis_distance, 0.0)
+                    self.assertTrue(result.covariance_conservative)
+                    self.assertEqual(
+                        result.covariance_difference_min_eigenvalue, 0.0
+                    )
+                    self.assertTrue(
+                        all(
+                            difference == 0.0
+                            for difference in result.blockwise_correction_l2.values()
+                        )
+                    )
 
     def test_subset_is_conservative_and_cost_classes_charge_sunk_stages(self) -> None:
         envelope = _multi_envelope()

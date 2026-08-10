@@ -1200,19 +1200,6 @@ class _MahalanobisReference:
 
 
 @dataclass(frozen=True)
-class _PolicyUpdateContext:
-    prior: np.ndarray
-    full_information: np.ndarray
-    full_dx: np.ndarray
-    full_p_plus: np.ndarray
-    subspaces: Mapping[str, Tuple[int, ...]]
-    subspace_supports: Mapping[str, _InformationSubspace]
-    full_utilities: Mapping[str, InformationUtility]
-    full_spectrum: PosteriorSpectrum
-    mahalanobis_reference: _MahalanobisReference
-
-
-@dataclass(frozen=True)
 class _SubsetDiagnostics:
     utilities: Mapping[str, InformationUtility]
     full_utility: InformationUtility
@@ -1223,6 +1210,21 @@ class _SubsetDiagnostics:
     covariance_conservative: bool
     covariance_difference_min_eigenvalue: float
     covariance_difference_psd_tolerance: float
+
+
+@dataclass(frozen=True)
+class _PolicyUpdateContext:
+    prior: np.ndarray
+    full_information: np.ndarray
+    full_dx: np.ndarray
+    full_p_plus: np.ndarray
+    accepted_ordinals: Tuple[int, ...]
+    subspaces: Mapping[str, Tuple[int, ...]]
+    subspace_supports: Mapping[str, _InformationSubspace]
+    full_utilities: Mapping[str, InformationUtility]
+    full_spectrum: PosteriorSpectrum
+    mahalanobis_reference: _MahalanobisReference
+    full_subset: _SubsetDiagnostics
 
 
 def _prepare_mahalanobis_reference(covariance: np.ndarray) -> _MahalanobisReference:
@@ -1252,15 +1254,23 @@ def _prepared_mahalanobis_distance(
 
 
 def _prepare_policy_update_context(
-    envelope: UpdateEnvelope, reconstruction: UpdateReconstruction
+    envelope: UpdateEnvelope,
+    reconstruction: UpdateReconstruction,
+    views: Sequence[CandidateView],
 ) -> _PolicyUpdateContext:
     prior = _as_array(envelope.p_minus)
-    if reconstruction.posterior is None:
-        full_dx = np.zeros(prior.shape[0], dtype=np.float64)
-        full_p_plus = prior.copy()
-    else:
-        full_dx = reconstruction.posterior.dx
-        full_p_plus = reconstruction.posterior.independent_p_plus
+    accepted_views = tuple(view for view in views if view.accepted)
+    accepted_feature_ids = tuple(view.feature_id for view in accepted_views)
+    if accepted_feature_ids != reconstruction.accepted_feature_ids:
+        raise PolicyEvaluationError(
+            "candidate views do not preserve the reconstructed accepted-feature order"
+        )
+
+    # Phase 3 remains the strict production-input gate and supplies the exact
+    # selected information matrix.  Phase 5 compares hypothetical subsets,
+    # including the full set, in one internally consistent numerical domain:
+    # the fast covariance-form/Joseph path used by every subset below.
+    full_dx, full_p_plus = _subset_posterior(prior, accepted_views)
     subspaces = _semantic_subspaces(envelope)
     subspace_supports = {
         name: _prepare_information_subspace(prior, indices)
@@ -1271,16 +1281,38 @@ def _prepare_policy_update_context(
         name: _prepared_information_utility(full_information, support)
         for name, support in subspace_supports.items()
     }
+    full_spectrum = _posterior_spectrum(full_p_plus)
+    zero_difference = np.zeros_like(full_p_plus)
+    zero_difference_diagnostics = covariance_diagnostics(zero_difference)
+    full_subset = _SubsetDiagnostics(
+        utilities=full_utilities,
+        full_utility=full_utilities["full_state"],
+        spectrum=full_spectrum,
+        correction_mahalanobis=0.0,
+        correction_l2=0.0,
+        blockwise_correction_l2=_blockwise_correction_differences(
+            envelope, np.zeros(prior.shape[0], dtype=np.float64)
+        ),
+        covariance_conservative=True,
+        covariance_difference_min_eigenvalue=(
+            zero_difference_diagnostics.minimum_eigenvalue
+        ),
+        covariance_difference_psd_tolerance=(
+            zero_difference_diagnostics.psd_tolerance
+        ),
+    )
     return _PolicyUpdateContext(
         prior=prior,
         full_information=full_information,
         full_dx=full_dx,
         full_p_plus=full_p_plus,
+        accepted_ordinals=tuple(view.ordinal for view in accepted_views),
         subspaces=subspaces,
         subspace_supports=subspace_supports,
         full_utilities=full_utilities,
-        full_spectrum=_posterior_spectrum(full_p_plus),
+        full_spectrum=full_spectrum,
         mahalanobis_reference=_prepare_mahalanobis_reference(full_p_plus),
+        full_subset=full_subset,
     )
 
 
@@ -1508,13 +1540,21 @@ def _evaluate_policy_update_prepared(
     by_ordinal = {view.ordinal: view for view in views}
     selected = tuple(by_ordinal[ordinal] for ordinal in selection.selected_ordinals)
     context = evaluation_context or _prepare_policy_update_context(
-        envelope, reconstruction
+        envelope, reconstruction, views
     )
     subset_key = tuple(selection.selected_ordinals)
     if subset_cache is not None and subset_key in subset_cache:
         subset = subset_cache[subset_key]
     else:
-        subset = _prepare_subset_diagnostics(envelope, selected, context)
+        covers_full_set = (
+            len(subset_key) == len(context.accepted_ordinals)
+            and frozenset(subset_key) == frozenset(context.accepted_ordinals)
+        )
+        subset = (
+            context.full_subset
+            if covers_full_set
+            else _prepare_subset_diagnostics(envelope, selected, context)
+        )
         if subset_cache is not None:
             subset_cache[subset_key] = subset
     full_full_utility = context.full_utilities["full_state"]
@@ -2398,7 +2438,7 @@ def evaluate_capture(
             views = build_candidate_views(envelope)
             cost_predictions = _predict_candidate_costs(views, cost_model)
             evaluation_context = _prepare_policy_update_context(
-                envelope, reconstruction
+                envelope, reconstruction, views
             )
             subset_cache: Dict[Tuple[int, ...], _SubsetDiagnostics] = {}
             for policy in policies:
