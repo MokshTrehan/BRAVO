@@ -258,6 +258,13 @@ if (CATKIN_ENABLE_TESTING)
             test/cp1/test_visual_pass_config.cpp)
     add_executable(schur_conditioning_benchmark
             test/conditioning/schur_conditioning_benchmark.cpp)
+    catkin_add_gtest(test_camera_conditioning_comparators
+            test/cp1/gtest_main.cpp
+            test/conditioning/CameraConditioningComparators.cpp
+            test/conditioning/test_camera_conditioning_comparators.cpp)
+    add_executable(camera_conditioning_compare
+            test/conditioning/CameraConditioningComparators.cpp
+            test/conditioning/camera_conditioning_compare.cpp)
     add_test(NAME test_conditioning_capture_reader
             COMMAND /usr/bin/python3
                     ${CMAKE_CURRENT_SOURCE_DIR}/../experiments/camera_conditioning/test_capture_reader.py)
@@ -284,6 +291,24 @@ if (CATKIN_ENABLE_TESTING)
     endforeach ()
     target_link_libraries(schur_conditioning_benchmark ov_msckf_lib ${thirdparty_libraries})
     target_compile_options(schur_conditioning_benchmark PRIVATE
+            -fno-fast-math
+            -ffp-contract=off
+            -fsigned-zeros)
+    if (TARGET test_camera_conditioning_comparators)
+        target_link_libraries(test_camera_conditioning_comparators
+                ov_msckf_lib ${thirdparty_libraries})
+        target_include_directories(test_camera_conditioning_comparators PRIVATE
+                test/conditioning)
+        target_compile_options(test_camera_conditioning_comparators PRIVATE
+                -fno-fast-math
+                -ffp-contract=off
+                -fsigned-zeros)
+    endif ()
+    target_link_libraries(camera_conditioning_compare
+            ov_msckf_lib ${thirdparty_libraries})
+    target_include_directories(camera_conditioning_compare PRIVATE
+            test/conditioning)
+    target_compile_options(camera_conditioning_compare PRIVATE
             -fno-fast-math
             -ffp-contract=off
             -fsigned-zeros)
