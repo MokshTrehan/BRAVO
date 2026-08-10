@@ -40,14 +40,33 @@ PROFILE_SPECS = {
         "schur",
         "radtan",
     ),
+    "euroc-schema2-nullspace": (
+        REPOSITORY_ROOT
+        / "config/euroc_mav/estimator_config_anytime_schema2_nullspace.yaml",
+        "nullspace",
+        "radtan",
+    ),
     "tumvi-schema2-schur": (
         REPOSITORY_ROOT
         / "config/tum_vi/estimator_config_anytime_schema2_schur.yaml",
         "schur",
         "equidistant",
     ),
+    "tumvi-schema2-nullspace": (
+        REPOSITORY_ROOT
+        / "config/tum_vi/estimator_config_anytime_schema2_nullspace.yaml",
+        "nullspace",
+        "equidistant",
+    ),
 }
-SCHEMA2_PROFILE_IDS = frozenset(("euroc-schema2-schur", "tumvi-schema2-schur"))
+SCHEMA2_PROFILE_IDS = frozenset(
+    (
+        "euroc-schema2-nullspace",
+        "euroc-schema2-schur",
+        "tumvi-schema2-nullspace",
+        "tumvi-schema2-schur",
+    )
+)
 PAIR_IDS = (
     ("euroc-nullspace", "euroc-schur"),
     ("tumvi-nullspace", "tumvi-schur"),
@@ -88,7 +107,9 @@ SCHEMA2_REQUIRED_VALUES = {
     "up_msckf_capture_update_envelopes_v2": "false",
 }
 SCHEMA2_BASE_PAIRS = (
+    ("euroc-nullspace", "euroc-schema2-nullspace"),
     ("euroc-schur", "euroc-schema2-schur"),
+    ("tumvi-nullspace", "tumvi-schema2-nullspace"),
     ("tumvi-schur", "tumvi-schema2-schur"),
 )
 SCALAR_LINE = re.compile(r"^([A-Za-z][A-Za-z0-9_]*):\s*(.*?)\s*$")
@@ -213,7 +234,7 @@ def require_sole_schema2_extension(base_id: str, schema2_id: str) -> None:
         schema2_values.pop(key, None)
     if schema2_values != base_values:
         raise ProfileError(
-            f"Schema-2 profile differs from its frozen Schur base beyond the "
+            f"Schema-2 profile differs from its frozen reducer base beyond the "
             f"default-off capture selector: {base_path}, {schema2_path}"
         )
 
