@@ -34,7 +34,11 @@ from experiments.anytime_information.capture_reader import (  # noqa: E402
     UpdateEnvelope,
 )
 from scripts.analysis.anytime_information_study import (  # noqa: E402
+    FULL_JOINT_ABSOLUTE_TOLERANCE,
+    FULL_JOINT_RELATIVE_TOLERANCE,
     ReconstructionError,
+    _posterior_from_system,
+    _prior_support,
     covariance_diagnostics,
     reconstruct_update,
     stage_cost_accounting,
@@ -315,6 +319,7 @@ class AnytimeInformationStudyTest(unittest.TestCase):
         self.assertIsNotNone(result.posterior)
         self.assertIsNotNone(result.full_joint)
         assert result.posterior is not None and result.full_joint is not None
+        self.assertTrue(result.posterior.independent_supported)
         self.assertTrue(result.full_joint.supported)
         np.testing.assert_allclose(result.full_joint.information, expected_information)
         np.testing.assert_allclose(result.full_joint.gradient, expected_gradient)
@@ -322,6 +327,18 @@ class AnytimeInformationStudyTest(unittest.TestCase):
         np.testing.assert_allclose(
             result.full_joint.p_plus, result.posterior.independent_p_plus
         )
+        posterior_checks = {
+            check.name: check
+            for check in result.checks
+            if check.name
+            in (
+                "independent_covariance_P_plus",
+                "full_joint_dx",
+                "full_joint_P_plus",
+            )
+        }
+        self.assertTrue(all(check.applicable for check in posterior_checks.values()))
+        self.assertTrue(all(check.passed for check in posterior_checks.values()))
 
     def test_compressed_scaled_row_preserves_information(self) -> None:
         envelope = _accepted_envelope()
@@ -335,6 +352,52 @@ class AnytimeInformationStudyTest(unittest.TestCase):
             dataclasses.replace(envelope, compressed_system=compressed)
         )
         self.assertTrue(result.passed)
+
+    def test_production_posterior_preserves_block_accumulation_order(self) -> None:
+        # The first cross-covariance row contains an exactly representable
+        # cancellation whose binary64 result changes when the two declared
+        # measurement blocks are collapsed into one full GEMM.
+        prior = np.asarray(
+            (
+                (1.0e16, -1.0e16, 1.0),
+                (-1.0e16, 1.0e16, 0.0),
+                (1.0, 0.0, 1.0),
+            ),
+            dtype=np.float64,
+        )
+        h = np.ones((1, 3), dtype=np.float64)
+        residual = np.ones(1, dtype=np.float64)
+        covariance = np.ones((1, 1), dtype=np.float64)
+        base_block = _accepted_envelope().state_blocks[0]
+        state_blocks = tuple(
+            dataclasses.replace(
+                base_block,
+                ordinal=index,
+                variable_id=index,
+                covariance_id=index,
+                offset=index,
+                dimension=1,
+                current_value=_matrix([0.0]),
+                fej_value=_matrix([0.0]),
+            )
+            for index in range(3)
+        )
+        system = dataclasses.replace(
+            _system(h, residual, covariance),
+            layout=(LayoutBlock(0, 0, 1), LayoutBlock(1, 1, 2)),
+        )
+
+        posterior = _posterior_from_system(prior, state_blocks, system)
+        expected_dx = np.asarray((0.0, 0.0, 0.5), dtype=np.float64)
+        np.testing.assert_array_equal(posterior.dx, expected_dx)
+
+        full_cross = prior @ h.T
+        full_innovation = h @ full_cross + covariance
+        collapsed_dx = full_cross @ np.linalg.solve(full_innovation, residual)
+        tolerance = (
+            1.0e-12 + 1.0e-10 * np.linalg.norm(expected_dx)
+        )
+        self.assertGreater(np.linalg.norm(collapsed_dx - expected_dx), tolerance)
 
     def test_corrupt_production_dx_fails_strict_reconstruction(self) -> None:
         envelope = dataclasses.replace(
@@ -418,6 +481,124 @@ class AnytimeInformationStudyTest(unittest.TestCase):
         assert result.full_joint is not None
         self.assertLess(np.linalg.norm(result.full_joint.information), 1.0e-20)
 
+    def test_ambiguous_landmark_rank_marks_only_posterior_unsupported(self) -> None:
+        envelope = _accepted_envelope()
+        small_singular_value = 1.0e-14
+        h_f = np.asarray(
+            (
+                (1.0, 0.0, 0.0),
+                (0.0, 1.0, 0.0),
+                (0.0, 0.0, small_singular_value),
+                (0.0, 0.0, 0.0),
+            ),
+            dtype=np.float64,
+        )
+        track = dataclasses.replace(
+            envelope.tracks[0],
+            h_f=_matrix(h_f),
+            singular_values=_matrix([1.0, 1.0, small_singular_value]),
+            singular_ratio=small_singular_value,
+        )
+
+        result = reconstruct_update(
+            dataclasses.replace(envelope, tracks=(track,))
+        )
+        self.assertTrue(result.passed)
+        assert result.full_joint is not None
+        self.assertFalse(result.full_joint.supported)
+        self.assertEqual(result.full_joint.reason, "landmark_svd_rank_gap")
+        checks = {check.name: check for check in result.checks}
+        self.assertTrue(checks["full_joint_information"].applicable)
+        self.assertTrue(checks["full_joint_information"].passed)
+        self.assertTrue(checks["full_joint_gradient"].applicable)
+        self.assertTrue(checks["full_joint_gradient"].passed)
+        self.assertFalse(checks["full_joint_dx"].applicable)
+        self.assertFalse(checks["full_joint_P_plus"].applicable)
+        self.assertTrue(checks["independent_covariance_P_plus"].applicable)
+
+    def test_prior_support_retains_resolvable_mode_below_psd_guard(self) -> None:
+        envelope = _accepted_envelope()
+        old_psd_floor = (
+            256.0 * 2.0 * np.finfo(np.float64).eps
+        )
+        small_variance = 0.5 * old_psd_floor
+        prior = np.diag((1.0, small_variance))
+        diagnostics = covariance_diagnostics(prior)
+        self.assertLess(small_variance, diagnostics.psd_tolerance)
+
+        factor, support_diagnostics = _prior_support(prior)
+        self.assertIsNotNone(factor)
+        assert factor is not None
+        self.assertTrue(support_diagnostics.scaled_psd)
+        self.assertEqual(factor.shape, (2, 2))
+        np.testing.assert_allclose(
+            factor @ factor.T,
+            prior,
+            rtol=0.0,
+            atol=8.0 * np.finfo(np.float64).eps,
+        )
+
+        # A measurement scaled to the small mode turns dropping that mode into
+        # a correction error larger than the unchanged full-joint tolerance.
+        scale = 1.0 / np.sqrt(small_variance)
+        reduced_a = np.asarray(((0.0, scale),), dtype=np.float64)
+        reduced_b = np.asarray((1.0,), dtype=np.float64)
+        covariance = np.eye(1, dtype=np.float64)
+        raw_h_x = np.asarray(
+            ((0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, scale)),
+            dtype=np.float64,
+        )
+        track = dataclasses.replace(
+            envelope.tracks[0],
+            h_x=_matrix(raw_h_x),
+            residual=_matrix([0.0, 0.0, 0.0, 1.0]),
+            sigma_px=1.0,
+            noise_variance=1.0,
+            reduced_a=_matrix(reduced_a),
+            reduced_b=_matrix(reduced_b),
+        )
+        selected = _system(reduced_a, reduced_b, covariance, duration_ns=31)
+        dx, p_plus = _production_posterior(
+            prior, reduced_a, reduced_b, covariance
+        )
+        full_joint_tolerance = (
+            FULL_JOINT_ABSOLUTE_TOLERANCE
+            + FULL_JOINT_RELATIVE_TOLERANCE * np.linalg.norm(dx)
+        )
+        self.assertGreater(abs(dx[1]), full_joint_tolerance)
+
+        result = reconstruct_update(
+            dataclasses.replace(
+                envelope,
+                p_minus=_matrix(prior),
+                tracks=(track,),
+                selected_system=selected,
+                compressed_system=dataclasses.replace(selected, duration_ns=37),
+                production_dx=_matrix(dx),
+                p_plus=_matrix(p_plus),
+            )
+        )
+        self.assertTrue(result.passed)
+        assert result.posterior is not None and result.full_joint is not None
+        self.assertFalse(result.posterior.independent_supported)
+        self.assertEqual(
+            result.posterior.independent_reason, "prior_spectral_separation"
+        )
+        self.assertFalse(result.full_joint.supported)
+        self.assertEqual(result.full_joint.reason, "prior_spectral_separation")
+        self.assertIsNone(result.full_joint.dx)
+        checks = {check.name: check for check in result.checks}
+        for name in (
+            "independent_covariance_P_plus",
+            "full_joint_dx",
+            "full_joint_P_plus",
+        ):
+            self.assertFalse(checks[name].passed)
+            self.assertFalse(checks[name].applicable)
+            self.assertEqual(
+                checks[name].unsupported_reason, "prior_spectral_separation"
+            )
+
     def test_zero_track_no_update_is_accounted_without_factorization(self) -> None:
         result = reconstruct_update(_zero_update_envelope())
         self.assertTrue(result.passed)
@@ -497,9 +678,71 @@ class AnytimeInformationStudyTest(unittest.TestCase):
         self.assertEqual(summary.no_update_count, 1)
         self.assertEqual(summary.zero_candidate_count, 1)
         self.assertEqual(summary.accepted_track_count, 1)
+        self.assertEqual(summary.independent_covariance_supported_count, 1)
+        self.assertEqual(summary.independent_covariance_unsupported_count, 0)
         self.assertEqual(summary.full_joint_supported_count, 1)
+        self.assertEqual(summary.full_joint_unsupported_count, 0)
+        self.assertEqual(summary.unsupported_check_count, 0)
+        self.assertEqual(summary.unsupported_update_count, 0)
+        self.assertEqual(summary.unsupported_reasons, ())
         self.assertEqual(summary.capture_record_construction_ns, 94)
         self.assertEqual(summary.capture_serialization_ns, 106)
+
+    def test_capture_summary_reports_unsupported_oracles_without_failure(self) -> None:
+        envelope = _accepted_envelope()
+        prior = np.diag((1.0, 1.0e-14))
+        h = np.asarray(envelope.compressed_system.h.values).reshape(1, 2)
+        residual = np.asarray(envelope.compressed_system.residual.values)
+        covariance = np.asarray(envelope.compressed_system.covariance.values).reshape(
+            1, 1
+        )
+        dx, p_plus = _production_posterior(prior, h, residual, covariance)
+        envelope = dataclasses.replace(
+            envelope,
+            p_minus=_matrix(prior),
+            production_dx=_matrix(dx),
+            p_plus=_matrix(p_plus),
+        )
+
+        class _FakeCapture:
+            header = CaptureHeader(
+                2,
+                1,
+                1,
+                "0123456789abcdef",
+                "ab" * 32,
+                "fixture",
+                "sequence",
+                "schurvio.update_envelope.v2",
+            )
+
+            def __enter__(self) -> "_FakeCapture":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def __iter__(self):
+                return iter((envelope,))
+
+        with mock.patch(
+            "scripts.analysis.anytime_information_study.open_capture",
+            return_value=_FakeCapture(),
+        ):
+            summary = validate_capture_reconstruction("fixture.bin")
+
+        self.assertTrue(summary.strict_validation)
+        self.assertEqual(summary.failed_check_count, 0)
+        self.assertEqual(summary.independent_covariance_supported_count, 0)
+        self.assertEqual(summary.independent_covariance_unsupported_count, 1)
+        self.assertEqual(summary.full_joint_supported_count, 0)
+        self.assertEqual(summary.full_joint_unsupported_count, 1)
+        self.assertEqual(summary.unsupported_check_count, 3)
+        self.assertEqual(summary.unsupported_update_count, 1)
+        self.assertEqual(
+            summary.unsupported_reasons, (("prior_spectral_separation", 1),)
+        )
+        self.assertLess(summary.maximum_check_ratio, 1.0)
 
     def test_empty_capture_is_rejected(self) -> None:
         class _EmptyCapture:

@@ -17,6 +17,7 @@ NumPy and the standard-library Schema-2 reader.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import math
 import os
@@ -37,6 +38,7 @@ from experiments.anytime_information.capture_reader import (  # noqa: E402
     GlobalSystem,
     LayoutBlock,
     Matrix,
+    StateBlock,
     TerminalStatus,
     TrackRecord,
     UpdateEnvelope,
@@ -51,6 +53,7 @@ INFORMATION_RELATIVE_TOLERANCE = 1.0e-8
 FULL_JOINT_ABSOLUTE_TOLERANCE = 1.0e-10
 FULL_JOINT_RELATIVE_TOLERANCE = 1.0e-7
 PSD_TOLERANCE_MULTIPLIER = 256.0
+NUMERICAL_CERTIFICATION_MULTIPLIER = 256.0
 PREVIEW_STATUS_ACCEPTED = 0
 PREVIEW_STAGE_ACCEPTED = 13
 
@@ -67,6 +70,8 @@ class Agreement:
     tolerance: float
     ratio: float
     detail: str = ""
+    applicable: bool = True
+    unsupported_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -98,6 +103,8 @@ class PosteriorReconstruction:
     independent_p_plus: np.ndarray
     nis: float
     innovation: np.ndarray
+    independent_supported: bool
+    independent_reason: str
 
 
 @dataclass(frozen=True)
@@ -168,7 +175,7 @@ class UpdateReconstruction:
 
     @property
     def passed(self) -> bool:
-        return all(check.passed for check in self.checks)
+        return all(check.passed for check in self.checks if check.applicable)
 
 
 @dataclass(frozen=True)
@@ -184,7 +191,13 @@ class CaptureReconstructionSummary:
     accepted_update_count: int
     zero_candidate_count: int
     no_update_count: int
+    independent_covariance_supported_count: int
+    independent_covariance_unsupported_count: int
     full_joint_supported_count: int
+    full_joint_unsupported_count: int
+    unsupported_check_count: int
+    unsupported_update_count: int
+    unsupported_reasons: Tuple[Tuple[str, int], ...]
     failed_check_count: int
     maximum_check_ratio: float
     charged_visual_total_ns: int
@@ -204,7 +217,14 @@ class CaptureReconstructionSummary:
             "charged_visual_total_ns": self.charged_visual_total_ns,
             "config_sha256": self.config_sha256,
             "failed_check_count": self.failed_check_count,
+            "full_joint_unsupported_count": self.full_joint_unsupported_count,
             "full_joint_supported_count": self.full_joint_supported_count,
+            "independent_covariance_supported_count": (
+                self.independent_covariance_supported_count
+            ),
+            "independent_covariance_unsupported_count": (
+                self.independent_covariance_unsupported_count
+            ),
             "maximum_check_ratio": (
                 self.maximum_check_ratio
                 if math.isfinite(self.maximum_check_ratio)
@@ -217,6 +237,9 @@ class CaptureReconstructionSummary:
             "source_commit": self.source_commit,
             "strict_validation": self.strict_validation,
             "update_count": self.update_count,
+            "unsupported_check_count": self.unsupported_check_count,
+            "unsupported_reasons": dict(self.unsupported_reasons),
+            "unsupported_update_count": self.unsupported_update_count,
             "zero_candidate_count": self.zero_candidate_count,
         }
 
@@ -286,9 +309,46 @@ def _boolean_check(name: str, passed: bool, detail: str = "") -> Agreement:
     )
 
 
+def _unsupported_check(name: str, reason: str, detail: str = "") -> Agreement:
+    """Record an intentionally non-applicable oracle comparison."""
+
+    return Agreement(
+        name=name,
+        passed=False,
+        error=math.inf,
+        tolerance=0.0,
+        ratio=math.inf,
+        detail=detail or f"UNSUPPORTED: {reason}",
+        applicable=False,
+        unsupported_reason=reason,
+    )
+
+
 def _upper_self_adjoint(value: np.ndarray) -> np.ndarray:
     upper = np.triu(value)
     return upper + np.triu(value, 1).T
+
+
+def _ordered_matmul(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+    """Multiply binary64 matrices in deterministic scalar inner-dimension order."""
+
+    if left.ndim != 2 or right.ndim != 2 or left.shape[1] != right.shape[0]:
+        raise ReconstructionError("ordered matrix product dimensions are invalid")
+    result = np.zeros((left.shape[0], right.shape[1]), dtype=np.float64)
+    for inner in range(left.shape[1]):
+        result += left[:, inner, None] * right[None, inner, :]
+    return result
+
+
+def _ordered_dot(left: np.ndarray, right: np.ndarray) -> float:
+    """Match Eigen's non-vectorized sequential binary64 dot product."""
+
+    if left.ndim != 1 or right.ndim != 1 or left.shape != right.shape:
+        raise ReconstructionError("ordered dot-product dimensions are invalid")
+    result = 0.0
+    for index in range(left.shape[0]):
+        result += float(left[index]) * float(right[index])
+    return result
 
 
 def _expand_jacobian(
@@ -351,34 +411,124 @@ def _system_information(
 
 
 def _posterior_from_system(
-    prior: np.ndarray, system: GlobalSystem
+    prior: np.ndarray,
+    state_blocks: Sequence[StateBlock],
+    system: GlobalSystem,
 ) -> PosteriorReconstruction:
     if not system.available:
         raise ReconstructionError("production posterior requested without a system")
     local_h = _as_array(system.h)
     residual = _as_array(system.residual).reshape(-1)
     measurement_covariance = _as_array(system.covariance)
-    full_h = _expand_jacobian(local_h, system.layout, prior.shape[0])
-    cross = prior @ full_h.T
-    innovation = _upper_self_adjoint(full_h @ cross + measurement_covariance)
-    solved_residual = _solve_spd(innovation, residual)
-    solved_cross_transpose = _solve_spd(innovation, cross.T)
-    dx = cross @ solved_residual
-    covariance_delta = cross @ solved_cross_transpose
+    state_dimension = prior.shape[0]
+    full_h = _expand_jacobian(local_h, system.layout, state_dimension)
+
+    # Reproduce UpdaterMSCKFPreview::ComputeFromSnapshot field-for-field.  The
+    # frozen C++ path deliberately accumulates M one semantic state block and
+    # one measurement-layout block at a time to match StateHelper::EKFUpdate.
+    # A mathematically equivalent full P @ H.T GEMM has a different binary64
+    # reduction order and can diverge after long, high-dynamic-range runs.
+    expected_offset = 0
+    cross = np.zeros((state_dimension, local_h.shape[0]), dtype=np.float64)
+    for ordinal, state_block in enumerate(state_blocks):
+        if (
+            state_block.ordinal != ordinal
+            or state_block.offset != expected_offset
+            or state_block.covariance_id != state_block.offset
+            or state_block.dimension <= 0
+            or state_block.offset > state_dimension - state_block.dimension
+        ):
+            raise ReconstructionError("production state-block layout is invalid")
+        cross_block = np.zeros(
+            (state_block.dimension, local_h.shape[0]), dtype=np.float64
+        )
+        for measurement_block in system.layout:
+            prior_block = prior[
+                state_block.offset : state_block.offset + state_block.dimension,
+                measurement_block.covariance_column :
+                measurement_block.covariance_column + measurement_block.size,
+            ]
+            jacobian_block = local_h[
+                :,
+                measurement_block.local_column :
+                measurement_block.local_column + measurement_block.size,
+            ]
+            cross_block += _ordered_matmul(prior_block, jacobian_block.T)
+        cross[
+            state_block.offset : state_block.offset + state_block.dimension, :
+        ] = cross_block
+        expected_offset += state_block.dimension
+    if expected_offset != state_dimension:
+        raise ReconstructionError("production state blocks do not tile covariance")
+
+    local_dimension = local_h.shape[1]
+    marginal = np.zeros((local_dimension, local_dimension), dtype=np.float64)
+    expected_local_column = 0
+    for row_block in system.layout:
+        if (
+            row_block.local_column != expected_local_column
+            or row_block.size <= 0
+            or row_block.local_column > local_dimension - row_block.size
+            or row_block.covariance_column
+            > state_dimension - row_block.size
+        ):
+            raise ReconstructionError("production measurement layout is invalid")
+        for column_block in system.layout:
+            marginal[
+                row_block.local_column : row_block.local_column + row_block.size,
+                column_block.local_column :
+                column_block.local_column + column_block.size,
+            ] = prior[
+                row_block.covariance_column :
+                row_block.covariance_column + row_block.size,
+                column_block.covariance_column :
+                column_block.covariance_column + column_block.size,
+            ]
+        expected_local_column += row_block.size
+    if expected_local_column != local_dimension:
+        raise ReconstructionError("production measurement blocks do not tile system")
+
+    # Preserve the scalar inner-product order of Eigen's non-vectorized
+    # production build.  BLAS and even unoptimized einsum use different
+    # reductions for some small state blocks, which becomes measurable on
+    # long, high-dynamic-range sequences.
+    h_times_marginal = _ordered_matmul(local_h, marginal)
+    innovation = _upper_self_adjoint(
+        _ordered_matmul(h_times_marginal, local_h.T) + measurement_covariance
+    )
+    innovation_inverse = _upper_self_adjoint(
+        _solve_spd(
+            innovation,
+            np.eye(innovation.shape[0], dtype=np.float64),
+        )
+    )
+    gain = _ordered_matmul(cross, innovation_inverse)
+    dx = _ordered_matmul(gain, residual[:, None]).reshape(-1)
+    covariance_delta = _ordered_matmul(gain, cross.T)
 
     production_p_plus = prior.copy()
     upper_indices = np.triu_indices(prior.shape[0])
     production_p_plus[upper_indices] -= covariance_delta[upper_indices]
     production_p_plus = _upper_self_adjoint(production_p_plus)
 
-    gain = solved_cross_transpose.T
-    identity_minus_kh = np.eye(prior.shape[0], dtype=np.float64) - gain @ full_h
+    identity_minus_kh = np.eye(state_dimension, dtype=np.float64) - gain @ full_h
     independent_p_plus = (
         identity_minus_kh @ prior @ identity_minus_kh.T
         + gain @ _upper_self_adjoint(measurement_covariance) @ gain.T
     )
     independent_p_plus = 0.5 * (independent_p_plus + independent_p_plus.T)
-    nis = float(residual @ solved_residual)
+    solved_residual = _ordered_matmul(
+        innovation_inverse, residual[:, None]
+    ).reshape(-1)
+    nis = _ordered_dot(residual, solved_residual)
+    prior_factor, prior_diagnostics = _prior_support(prior)
+    independent_supported, independent_reason = _prior_posterior_certification(
+        prior, prior_factor, prior_diagnostics
+    )
+    if independent_supported:
+        independent_supported, independent_reason = _spd_solve_certification(
+            innovation, "innovation_cholesky_stability"
+        )
     if not (
         np.all(np.isfinite(dx))
         and np.all(np.isfinite(production_p_plus))
@@ -392,6 +542,8 @@ def _posterior_from_system(
         independent_p_plus=independent_p_plus,
         nis=nis,
         innovation=innovation,
+        independent_supported=independent_supported,
+        independent_reason=independent_reason,
     )
 
 
@@ -453,11 +605,96 @@ def _prior_support(prior: np.ndarray) -> Tuple[np.ndarray | None, CovarianceDiag
         eigenvalues, eigenvectors = np.linalg.eigh(symmetric)
     except np.linalg.LinAlgError:
         return None, diagnostics
-    positive = eigenvalues > diagnostics.psd_tolerance
+    # The scaled-PSD tolerance is deliberately conservative: it decides
+    # whether a slightly negative eigenvalue is compatible with binary64
+    # roundoff.  Reusing its 256x envelope as a rank cutoff discards resolvable
+    # positive covariance modes and can change the full-joint correction even
+    # when the support-space normal system is exceptionally well conditioned.
+    # Use the ordinary binary64 spectral-resolution floor for support rank;
+    # negative and numerically unresolved modes remain excluded.
+    rank_tolerance = (
+        max(1, prior.shape[0])
+        * np.finfo(np.float64).eps
+        * max(1.0, diagnostics.maximum_absolute_eigenvalue)
+    )
+    positive = eigenvalues > rank_tolerance
     factor = eigenvectors[:, positive] * np.sqrt(eigenvalues[positive])
     if not np.all(np.isfinite(factor)):
         return None, diagnostics
     return factor, diagnostics
+
+
+def _prior_posterior_certification(
+    prior: np.ndarray,
+    factor: np.ndarray | None,
+    diagnostics: CovarianceDiagnostics,
+) -> Tuple[bool, str]:
+    """Certify that retained prior modes are separated for posterior oracles."""
+
+    if factor is None:
+        return False, "prior_not_scaled_psd"
+    if factor.shape[1] == 0:
+        return False, "prior_support_empty"
+    rank_floor = (
+        max(1, prior.shape[0])
+        * np.finfo(np.float64).eps
+        * max(1.0, diagnostics.maximum_absolute_eigenvalue)
+    )
+    certification_floor = NUMERICAL_CERTIFICATION_MULTIPLIER * rank_floor
+    try:
+        eigenvalues = np.linalg.eigvalsh(0.5 * (prior + prior.T))
+    except np.linalg.LinAlgError:
+        return False, "prior_spectral_separation"
+    retained_eigenvalues = eigenvalues[eigenvalues > rank_floor]
+    if retained_eigenvalues.size != factor.shape[1] or (
+        not np.all(np.isfinite(retained_eigenvalues))
+    ) or float(retained_eigenvalues[0]) <= certification_floor:
+        return False, "prior_spectral_separation"
+    return True, "supported"
+
+
+def _svd_rank_certification(
+    singular_values: np.ndarray, rank: int, rank_floor: float
+) -> Tuple[bool, str]:
+    """Require a fixed 256x gap on both sides of an SVD rank decision."""
+
+    if not np.all(np.isfinite(singular_values)) or not math.isfinite(rank_floor):
+        return False, "landmark_svd_nonfinite"
+    if rank == 0 and not np.any(singular_values) and rank_floor == 0.0:
+        return True, "supported"
+    if rank > 0 and float(singular_values[rank - 1]) <= (
+        NUMERICAL_CERTIFICATION_MULTIPLIER * rank_floor
+    ):
+        return False, "landmark_svd_rank_gap"
+    if rank < singular_values.size and float(singular_values[rank]) >= (
+        rank_floor / NUMERICAL_CERTIFICATION_MULTIPLIER
+    ):
+        return False, "landmark_svd_rank_gap"
+    return True, "supported"
+
+
+def _spd_solve_certification(
+    matrix: np.ndarray, reason: str
+) -> Tuple[bool, str]:
+    """Certify an SPD solve with the same fixed scaled 256x guard."""
+
+    symmetric = _upper_self_adjoint(matrix)
+    try:
+        eigenvalues = np.linalg.eigvalsh(symmetric)
+    except np.linalg.LinAlgError:
+        return False, reason
+    if eigenvalues.size == 0 or not np.all(np.isfinite(eigenvalues)):
+        return False, reason
+    scale = max(1.0, float(np.max(np.abs(eigenvalues))))
+    floor = (
+        NUMERICAL_CERTIFICATION_MULTIPLIER
+        * max(1, symmetric.shape[0])
+        * np.finfo(np.float64).eps
+        * scale
+    )
+    if float(eigenvalues[0]) <= floor:
+        return False, reason
+    return True, "supported"
 
 
 def _raw_track_system(
@@ -529,7 +766,7 @@ def _assemble_selected_tracks(
 
 def _pseudoinverse_nullspace_rows(
     matrix: np.ndarray,
-) -> Tuple[np.ndarray, int, float]:
+) -> Tuple[np.ndarray, int, float, np.ndarray]:
     """Return a stable row basis for ``I - matrix @ pinv(matrix)``.
 
     Forming that projector explicitly catastrophically cancels when a raw
@@ -544,7 +781,7 @@ def _pseudoinverse_nullspace_rows(
     floor = max(1, *matrix.shape) * np.finfo(np.float64).eps * largest
     retained = singular_values > floor
     rank = int(np.count_nonzero(retained))
-    return u[:, rank:].T, rank, floor
+    return u[:, rank:].T, rank, floor, singular_values
 
 
 def _full_joint_oracle(
@@ -555,20 +792,9 @@ def _full_joint_oracle(
         return None
     state_dimension = prior.shape[0]
     factor, prior_diagnostics = _prior_support(prior)
-    zero_information = np.zeros((state_dimension, state_dimension), dtype=np.float64)
-    zero_gradient = np.zeros(state_dimension, dtype=np.float64)
-    if factor is None:
-        return FullJointOracle(
-            supported=False,
-            reason="prior_not_scaled_psd",
-            landmark_ranks=(),
-            joint_rank=0,
-            information=zero_information,
-            gradient=zero_gradient,
-            dx=None,
-            p_plus=None,
-            nis=None,
-        )
+    prior_supported, support_reason = _prior_posterior_certification(
+        prior, factor, prior_diagnostics
+    )
 
     raw_systems = [_raw_track_system(track, state_dimension) for track in accepted_tracks]
     information = np.zeros((state_dimension, state_dimension), dtype=np.float64)
@@ -577,7 +803,12 @@ def _full_joint_oracle(
     landmark_ranks: List[int] = []
     for h_x, h_f, residual, variance in raw_systems:
         try:
-            left_nullspace, rank, _ = _pseudoinverse_nullspace_rows(h_f)
+            (
+                left_nullspace,
+                rank,
+                rank_floor,
+                singular_values,
+            ) = _pseudoinverse_nullspace_rows(h_f)
         except np.linalg.LinAlgError:
             return FullJointOracle(
                 supported=False,
@@ -591,6 +822,11 @@ def _full_joint_oracle(
                 nis=None,
             )
         landmark_ranks.append(rank)
+        rank_supported, rank_reason = _svd_rank_certification(
+            singular_values, rank, rank_floor
+        )
+        if support_reason == "supported" and not rank_supported:
+            support_reason = rank_reason
         sigma = math.sqrt(variance)
         projected_h = left_nullspace @ h_x / sigma
         projected_residual = left_nullspace @ residual / sigma
@@ -599,6 +835,8 @@ def _full_joint_oracle(
         projected_gamma += float(projected_residual @ projected_residual)
 
     information = 0.5 * (information + information.T)
+    support_rank = factor.shape[1] if factor is not None else 0
+    joint_rank = support_rank + sum(landmark_ranks)
     if not (
         np.all(np.isfinite(information)) and np.all(np.isfinite(gradient))
     ):
@@ -606,7 +844,7 @@ def _full_joint_oracle(
             supported=False,
             reason="pseudoinverse_information_nonfinite",
             landmark_ranks=tuple(landmark_ranks),
-            joint_rank=0,
+            joint_rank=joint_rank,
             information=information,
             gradient=gradient,
             dx=None,
@@ -614,15 +852,43 @@ def _full_joint_oracle(
             nis=None,
         )
 
+    if not prior_supported or support_reason != "supported":
+        return FullJointOracle(
+            supported=False,
+            reason=support_reason,
+            landmark_ranks=tuple(landmark_ranks),
+            joint_rank=joint_rank,
+            information=information,
+            gradient=gradient,
+            dx=None,
+            p_plus=None,
+            nis=None,
+        )
+    assert factor is not None
+
     # This is the state Schur complement of the augmented full-joint problem
     #   min ||z||^2 + sum_i ||(H_x P^(1/2) z + H_f df_i - r_i)/sigma_i||^2.
     # Each landmark is eliminated only here with an SVD pseudoinverse; no
     # captured reduced row is used by this oracle.
-    support_rank = factor.shape[1]
     normal = np.eye(support_rank, dtype=np.float64)
     normal += factor.T @ information @ factor
     normal = 0.5 * (normal + normal.T)
     rhs = factor.T @ gradient
+    normal_supported, normal_reason = _spd_solve_certification(
+        normal, "full_joint_normal_cholesky_stability"
+    )
+    if not normal_supported:
+        return FullJointOracle(
+            supported=False,
+            reason=normal_reason,
+            landmark_ranks=tuple(landmark_ranks),
+            joint_rank=joint_rank,
+            information=information,
+            gradient=gradient,
+            dx=None,
+            p_plus=None,
+            nis=None,
+        )
     try:
         lower = np.linalg.cholesky(normal)
         solved_rhs = np.linalg.solve(lower.T, np.linalg.solve(lower, rhs))
@@ -634,7 +900,7 @@ def _full_joint_oracle(
             supported=False,
             reason="joint_state_schur_factorization_failed",
             landmark_ranks=tuple(landmark_ranks),
-            joint_rank=0,
+            joint_rank=joint_rank,
             information=information,
             gradient=gradient,
             dx=None,
@@ -645,7 +911,6 @@ def _full_joint_oracle(
     p_plus = factor @ inverse @ factor.T
     p_plus = 0.5 * (p_plus + p_plus.T)
     nis = float(projected_gamma - rhs @ solved_rhs)
-    joint_rank = support_rank + sum(landmark_ranks)
     supported = (
         np.all(np.isfinite(dx))
         and np.all(np.isfinite(p_plus))
@@ -928,7 +1193,9 @@ def reconstruct_update(
     captured_diagnostics: CovarianceDiagnostics | None = None
     independent_diagnostics: CovarianceDiagnostics | None = None
     if envelope.compressed_system.available:
-        posterior = _posterior_from_system(prior, envelope.compressed_system)
+        posterior = _posterior_from_system(
+            prior, envelope.state_blocks, envelope.compressed_system
+        )
         if envelope.global_gate.nis_available:
             checks.append(
                 _agreement(
@@ -974,15 +1241,25 @@ def reconstruct_update(
                         PRODUCTION_ABSOLUTE_TOLERANCE,
                         PRODUCTION_RELATIVE_TOLERANCE,
                     ),
+                )
+            )
+            if posterior.independent_supported:
+                checks.append(
                     _agreement(
                         "independent_covariance_P_plus",
                         posterior.independent_p_plus,
                         captured_p_plus,
                         PRODUCTION_ABSOLUTE_TOLERANCE,
                         PRODUCTION_RELATIVE_TOLERANCE,
-                    ),
+                    )
                 )
-            )
+            else:
+                checks.append(
+                    _unsupported_check(
+                        "independent_covariance_P_plus",
+                        posterior.independent_reason,
+                    )
+                )
             captured_diagnostics = covariance_diagnostics(captured_p_plus)
             independent_diagnostics = covariance_diagnostics(
                 posterior.independent_p_plus
@@ -1050,27 +1327,47 @@ def reconstruct_update(
                 ),
             )
         )
-        if accepted_update and posterior is not None and full_joint.supported:
-            assert full_joint.dx is not None
-            assert full_joint.p_plus is not None
-            checks.extend(
-                (
-                    _agreement(
-                        "full_joint_dx",
-                        full_joint.dx,
-                        posterior.dx,
-                        FULL_JOINT_ABSOLUTE_TOLERANCE,
-                        FULL_JOINT_RELATIVE_TOLERANCE,
-                    ),
-                    _agreement(
-                        "full_joint_P_plus",
-                        full_joint.p_plus,
-                        posterior.independent_p_plus,
-                        FULL_JOINT_ABSOLUTE_TOLERANCE,
-                        FULL_JOINT_RELATIVE_TOLERANCE,
-                    ),
-                )
+        if accepted_update and posterior is not None:
+            posterior_oracles_supported = (
+                full_joint.supported and posterior.independent_supported
             )
+            if posterior_oracles_supported:
+                assert full_joint.dx is not None
+                assert full_joint.p_plus is not None
+                checks.extend(
+                    (
+                        _agreement(
+                            "full_joint_dx",
+                            full_joint.dx,
+                            posterior.dx,
+                            FULL_JOINT_ABSOLUTE_TOLERANCE,
+                            FULL_JOINT_RELATIVE_TOLERANCE,
+                        ),
+                        _agreement(
+                            "full_joint_P_plus",
+                            full_joint.p_plus,
+                            posterior.independent_p_plus,
+                            FULL_JOINT_ABSOLUTE_TOLERANCE,
+                            FULL_JOINT_RELATIVE_TOLERANCE,
+                        ),
+                    )
+                )
+            else:
+                unsupported_reason = (
+                    full_joint.reason
+                    if not full_joint.supported
+                    else posterior.independent_reason
+                )
+                checks.extend(
+                    (
+                        _unsupported_check(
+                            "full_joint_dx", unsupported_reason
+                        ),
+                        _unsupported_check(
+                            "full_joint_P_plus", unsupported_reason
+                        ),
+                    )
+                )
 
     result = UpdateReconstruction(
         update_id=envelope.update_id,
@@ -1094,7 +1391,7 @@ def reconstruct_update(
             f"{check.name}: error={check.error:.17g} "
             f"tolerance={check.tolerance:.17g} {check.detail}".strip()
             for check in result.checks
-            if not check.passed
+            if check.applicable and not check.passed
         )
         raise ReconstructionError(f"update {envelope.update_id}: {failures}")
     return result
@@ -1120,7 +1417,13 @@ def validate_capture_reconstruction(
     accepted_update_count = 0
     zero_candidate_count = 0
     no_update_count = 0
+    independent_covariance_supported_count = 0
+    independent_covariance_unsupported_count = 0
     full_joint_supported_count = 0
+    full_joint_unsupported_count = 0
+    unsupported_check_count = 0
+    unsupported_update_count = 0
+    unsupported_reasons: Counter[str] = Counter()
     failed_check_count = 0
     maximum_check_ratio = 0.0
     charged_visual_total_ns = 0
@@ -1137,16 +1440,51 @@ def validate_capture_reconstruction(
             accepted_update_count += result.accepted_update
             zero_candidate_count += result.candidate_count == 0
             no_update_count += not result.accepted_update
-            full_joint_supported_count += bool(
-                result.full_joint is not None and result.full_joint.supported
+            independent_checks = tuple(
+                check
+                for check in result.checks
+                if check.name == "independent_covariance_P_plus"
             )
-            failed_check_count += sum(not check.passed for check in result.checks)
+            full_joint_checks = tuple(
+                check for check in result.checks if check.name == "full_joint_dx"
+            )
+            independent_covariance_supported_count += sum(
+                check.applicable for check in independent_checks
+            )
+            independent_covariance_unsupported_count += sum(
+                not check.applicable for check in independent_checks
+            )
+            full_joint_supported_count += sum(
+                check.applicable for check in full_joint_checks
+            )
+            full_joint_unsupported_count += sum(
+                not check.applicable for check in full_joint_checks
+            )
+            unsupported_checks = tuple(
+                check for check in result.checks if not check.applicable
+            )
+            unsupported_check_count += len(unsupported_checks)
+            unsupported_update_count += bool(unsupported_checks)
+            unsupported_reasons.update(
+                {
+                    check.unsupported_reason
+                    for check in unsupported_checks
+                    if check.unsupported_reason
+                }
+            )
+            failed_check_count += sum(
+                check.applicable and not check.passed for check in result.checks
+            )
             finite_ratios = [
-                check.ratio for check in result.checks if math.isfinite(check.ratio)
+                check.ratio
+                for check in result.checks
+                if check.applicable and math.isfinite(check.ratio)
             ]
             if finite_ratios:
                 maximum_check_ratio = max(maximum_check_ratio, max(finite_ratios))
-            elif any(not check.passed for check in result.checks):
+            elif any(
+                check.applicable and not check.passed for check in result.checks
+            ):
                 maximum_check_ratio = math.inf
             charged_visual_total_ns += result.costs.charged_visual_total_ns
             capture_record_construction_ns += (
@@ -1170,7 +1508,17 @@ def validate_capture_reconstruction(
         accepted_update_count=accepted_update_count,
         zero_candidate_count=zero_candidate_count,
         no_update_count=no_update_count,
+        independent_covariance_supported_count=(
+            independent_covariance_supported_count
+        ),
+        independent_covariance_unsupported_count=(
+            independent_covariance_unsupported_count
+        ),
         full_joint_supported_count=full_joint_supported_count,
+        full_joint_unsupported_count=full_joint_unsupported_count,
+        unsupported_check_count=unsupported_check_count,
+        unsupported_update_count=unsupported_update_count,
+        unsupported_reasons=tuple(sorted(unsupported_reasons.items())),
         failed_check_count=failed_check_count,
         maximum_check_ratio=maximum_check_ratio,
         charged_visual_total_ns=charged_visual_total_ns,
