@@ -265,8 +265,10 @@ def _safety_counts(rows: Sequence[Mapping[str, str]]) -> Dict[str, object]:
     oracle_safe = [row for row in rows if _bool(row, "oracle_safe_opportunity")]
     safe_accepted = [row for row in accepted if not _bool(row, "harmful_accepted")]
     harmful_accepted = [row for row in accepted if _bool(row, "harmful_accepted")]
-    oracle_safe_accepted = [row for row in oracle_safe
-                            if _bool(row, "accepted") and not _bool(row, "harmful_accepted")]
+    oracle_safe_nonharmful_accepted = [
+        row for row in oracle_safe
+        if _bool(row, "accepted") and not _bool(row, "harmful_accepted")
+    ]
     oracle_safe_rejected = [row for row in oracle_safe if not _bool(row, "accepted")]
     finite_psd = [row for row in accepted if _bool(row, "finite")
                   and not _bool(row, "scaled_psd_failure")]
@@ -276,11 +278,12 @@ def _safety_counts(rows: Sequence[Mapping[str, str]]) -> Dict[str, object]:
         "safe_accepted": len(safe_accepted),
         "harmful_accepted": len(harmful_accepted),
         "oracle_safe": len(oracle_safe),
-        "oracle_safe_accepted": len(oracle_safe_accepted),
+        "oracle_safe_nonharmful_accepted": len(oracle_safe_nonharmful_accepted),
         "oracle_safe_rejected": len(oracle_safe_rejected),
         "finite_psd": len(finite_psd),
         "harmful_acceptance_rate": _percent(len(harmful_accepted), len(accepted)),
-        "useful_retention": _percent(len(oracle_safe_accepted), len(oracle_safe)),
+        "useful_retention": _percent(
+            len(oracle_safe_nonharmful_accepted), len(oracle_safe)),
         "false_rejection": _percent(len(oracle_safe_rejected), len(oracle_safe)),
         "finite_psd_rate": _percent(len(finite_psd), len(accepted)),
     }
@@ -290,15 +293,25 @@ def _guard_counts(rows: Sequence[Mapping[str, str]]) -> Dict[str, object]:
     hazard = [row for row in rows if _bool(row, "unguarded_nullspace_harmful")]
     nonhazard = [row for row in rows if not _bool(row, "unguarded_nullspace_harmful")]
     hazard_rejected = [row for row in hazard if not _bool(row, "accepted")]
-    nonhazard_safe_accepted = [row for row in nonhazard if _bool(row, "accepted")
-                               and not _bool(row, "harmful_accepted")]
+    nonhazard_nonharmful_accepted = [
+        row for row in nonhazard
+        if _bool(row, "accepted") and not _bool(row, "harmful_accepted")
+    ]
+    nonhazard_harmful_accepted = [
+        row for row in nonhazard
+        if _bool(row, "accepted") and _bool(row, "harmful_accepted")
+    ]
+    nonhazard_rejected = [row for row in nonhazard if not _bool(row, "accepted")]
     return {
         "hazard": len(hazard), "hazard_accepted": len(hazard) - len(hazard_rejected),
         "hazard_rejected": len(hazard_rejected), "nonhazard": len(nonhazard),
-        "nonhazard_safe_accepted": len(nonhazard_safe_accepted),
-        "nonhazard_rejected": sum(not _bool(row, "accepted") for row in nonhazard),
-        "harmful_rejection_recall": _percent(len(hazard_rejected), len(hazard)),
-        "nonhazard_safe_retention": _percent(len(nonhazard_safe_accepted), len(nonhazard)),
+        "nonhazard_nonharmful_accepted": len(nonhazard_nonharmful_accepted),
+        "nonhazard_harmful_accepted": len(nonhazard_harmful_accepted),
+        "nonhazard_rejected": len(nonhazard_rejected),
+        "u_ns_hazard_rejection_recall": _percent(
+            len(hazard_rejected), len(hazard)),
+        "nonhazard_nonharmful_output_rate": _percent(
+            len(nonhazard_nonharmful_accepted), len(nonhazard)),
     }
 
 
@@ -361,8 +374,9 @@ def write_condition_bins(rows: Sequence[Dict[str, str]], output: Path) -> None:
         "dimension", "bin", "method", "total", "accepted", "rejected",
         "safe_accepted", "harmful_accepted", "oracle_safe_opportunities",
         "harmful_acceptance_rate",
-        "useful_information_retention", "false_rejection_rate",
-        "u_ns_hazard_total", "u_ns_hazard_rejected", "harmful_rejection_recall",
+        "useful_information_retention", "oracle_safe_false_rejection_rate",
+        "u_ns_hazard_total", "u_ns_hazard_rejected",
+        "u_ns_hazard_rejection_recall",
         "median_supported_subspace_trace", "median_half_logdet_identity_plus_information",
         "median_log_pseudodeterminant", "median_effective_rank",
         "median_correction_norm", "median_nis",
@@ -382,10 +396,11 @@ def write_condition_bins(rows: Sequence[Dict[str, str]], output: Path) -> None:
                 "harmful_acceptance_rate": safety["harmful_acceptance_rate"],
                 "oracle_safe_opportunities": safety["oracle_safe"],
                 "useful_information_retention": safety["useful_retention"],
-                "false_rejection_rate": safety["false_rejection"],
+                "oracle_safe_false_rejection_rate": safety["false_rejection"],
                 "u_ns_hazard_total": guard["hazard"],
                 "u_ns_hazard_rejected": guard["hazard_rejected"],
-                "harmful_rejection_recall": guard["harmful_rejection_recall"],
+                "u_ns_hazard_rejection_recall":
+                    guard["u_ns_hazard_rejection_recall"],
                 "median_supported_subspace_trace": _fmt(_median(
                     _float(row, "supported_subspace_trace") for row in selected
                     if _bool(row, "accepted"))),
@@ -422,34 +437,40 @@ def write_report(rows: Sequence[Dict[str, str]], timing: Sequence[Dict[str, str]
         "# Real camera-conditioning retention and safety report", "",
         f"Validated systems: **{system_count}**; rank/condition-boundary systems: **{boundary_count}**.",
         "", f"Numerical CSV: `{results_path}`", "", f"Separate timing CSV: `{timing_path}`", "",
-        "Safety and guard classification are intentionally not combined into one score.", "",
+        "Safety and guard classification are intentionally not combined into one score. "
+        "Reducer acceptance here is an offline decision at the raw capture seam, before "
+        "the production chi-square gate; it is not a committed estimator update.", "",
         "## Actual-output safety and oracle-safe retention", "",
         "A harmful accepted output uses the frozen six clauses against FULL_JOINT. "
-        "An oracle-safe opportunity requires FULL_JOINT/FULL_U agreement first.", "",
-        "| method | total | accept / reject | safe accepted | harmful accepted | harmful / accepted | oracle-safe | useful retention | false rejection | finite+PSD / accepted |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "An oracle-safe opportunity requires FULL_JOINT/FULL_U agreement first; its "
+        "retained numerator additionally requires that the method accept a nonharmful output.", "",
+        "| method | total | reducer accept / reject | nonharmful accepted | FULL_JOINT-relative harmful accepted | harmful / reducer-accepted | oracle-safe opportunities | nonharmful accepted among oracle-safe | useful retention | oracle-safe false rejection | finite+PSD / accepted |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for method in METHODS:
         item = _safety_counts(by_method[method])
         lines.append(
             f"| {method} | {item['total']} | {item['accepted']} / {item['rejected']} | "
             f"{item['safe_accepted']} | {item['harmful_accepted']} | {item['harmful_acceptance_rate']} | "
-            f"{item['oracle_safe']} | "
+            f"{item['oracle_safe']} | {item['oracle_safe_nonharmful_accepted']} | "
             f"{item['useful_retention']} | {item['false_rejection']} | {item['finite_psd_rate']} |"
         )
     lines.extend((
         "", "## Guard classification against fixed U_NS hazard label", "",
         "The hazard label is whether exact unguarded U_NS is harmful versus FULL_JOINT. "
-        "This table measures guard discrimination; it does not relabel safe rank-aware outputs as harmful.", "",
-        "| method | U_NS-hazard | hazard accepted / rejected | nonhazard | nonhazard safe accepted / rejected | harmful-rejection recall | nonhazard safe retention |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "Accepted/rejected means the listed method's reducer decision, regardless of that "
+        "method's output safety. The nonhazard columns form an explicit partition.", "",
+        "| method | U_NS-hazard | hazard accepted / rejected | U_NS-nonhazard | nonhazard nonharmful accepted | nonhazard harmful accepted | nonhazard rejected | U_NS-hazard rejection recall | nonhazard nonharmful-output rate |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ))
     for method in METHODS:
         item = _guard_counts(by_method[method])
         lines.append(
             f"| {method} | {item['hazard']} | {item['hazard_accepted']} / {item['hazard_rejected']} | "
-            f"{item['nonhazard']} | {item['nonhazard_safe_accepted']} / {item['nonhazard_rejected']} | "
-            f"{item['harmful_rejection_recall']} | {item['nonhazard_safe_retention']} |"
+            f"{item['nonhazard']} | {item['nonhazard_nonharmful_accepted']} | "
+            f"{item['nonhazard_harmful_accepted']} | {item['nonhazard_rejected']} | "
+            f"{item['u_ns_hazard_rejection_recall']} | "
+            f"{item['nonhazard_nonharmful_output_rate']} |"
         )
     lines.extend((
         "", "## Retained-information diagnostics (accepted outputs)", "",
@@ -474,8 +495,9 @@ def write_report(rows: Sequence[Dict[str, str]], timing: Sequence[Dict[str, str]
                      f"{_fmt(_percentile(values, 0.95) / 1000.0)} |")
     lines.extend((
         "", "## Metric definitions", "",
-        "- Useful-information retention: safely accepted outputs divided by all FULL_JOINT/FULL_U-agreed oracle-safe opportunities.",
-        "- Harmful-rejection recall: rejected systems divided by systems where fixed U_NS is harmful versus FULL_JOINT.",
+        "- Useful-information retention: nonharmful accepted outputs among oracle-safe opportunities divided by all FULL_JOINT/FULL_U-agreed oracle-safe opportunities.",
+        "- U_NS-hazard rejection recall: systems rejected by the listed reducer divided by systems where fixed U_NS is harmful versus FULL_JOINT.",
+        "- Harmful-output rates use reducer-accepted outputs as the denominator and do not include the later production chi-square decision.",
         "- Supported trace and `0.5*logdet(I+J)` use the frozen PSD prior support; log-pseudodeterminant, effective rank, correction norm, and NIS remain separate columns.",
         "- Runtime is offline end-to-end comparator runtime (including prior support/posterior diagnostics), not estimator latency.",
         "",
