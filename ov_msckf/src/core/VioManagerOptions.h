@@ -232,6 +232,35 @@ struct VioManagerOptions {
       PRINT_ERROR(RED "conditioning capture requires an owning estimator configuration path\n" RESET);
       std::exit(EXIT_FAILURE);
     }
+    if (msckf_options.capture_conditioning_systems &&
+        msckf_options.capture_update_envelopes_v2) {
+      PRINT_ERROR(RED "Schema-1 and Schema-2 MSCKF captures are mutually exclusive\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
+    if (msckf_options.capture_update_envelopes_v2 &&
+        msckf_options.max_visual_passes != 1) {
+      PRINT_ERROR(RED "up_msckf_capture_update_envelopes_v2 is supported only with "
+                      "up_msckf_max_visual_passes=1\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
+    if (msckf_options.capture_update_envelopes_v2 &&
+        (msckf_options.update_envelope_capture_path.empty() ||
+         msckf_options.update_envelope_capture_path.front() != '/')) {
+      PRINT_ERROR(RED "up_msckf_update_envelope_capture_path must be a nonempty "
+                      "absolute path when Schema 2 is enabled\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
+    if (msckf_options.capture_update_envelopes_v2 &&
+        (msckf_options.update_envelope_run_id.empty() ||
+         msckf_options.update_envelope_sequence_id.empty())) {
+      PRINT_ERROR(RED "Schema-2 capture requires nonempty run and sequence IDs\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
+    if (msckf_options.capture_update_envelopes_v2 &&
+        msckf_options.update_envelope_capture_config_path.empty()) {
+      PRINT_ERROR(RED "Schema-2 capture requires an owning estimator configuration path\n" RESET);
+      std::exit(EXIT_FAILURE);
+    }
     if (!std::isfinite(msckf_options.sigma_pix) || !(msckf_options.sigma_pix > 0.0)) {
       PRINT_ERROR(RED "invalid MSCKF pixel sigma: %.17g\n" RESET, msckf_options.sigma_pix);
       PRINT_ERROR(RED "up_msckf_sigma_px must be finite and strictly positive\n" RESET);
@@ -269,7 +298,17 @@ struct VioManagerOptions {
                            msckf_options.capture_conditioning_systems, false);
       parser->parse_config("up_msckf_conditioning_capture_path",
                            msckf_options.conditioning_capture_path, false);
+      parser->parse_config("up_msckf_capture_update_envelopes_v2",
+                           msckf_options.capture_update_envelopes_v2, false);
+      parser->parse_config("up_msckf_update_envelope_capture_path",
+                           msckf_options.update_envelope_capture_path, false);
+      parser->parse_config("up_msckf_update_envelope_run_id",
+                           msckf_options.update_envelope_run_id, false);
+      parser->parse_config("up_msckf_update_envelope_sequence_id",
+                           msckf_options.update_envelope_sequence_id, false);
       msckf_options.conditioning_capture_config_path = parser->get_config_path();
+      msckf_options.update_envelope_capture_config_path =
+          parser->get_config_path();
     }
     validate_msckf_update_configuration_or_exit();
   }

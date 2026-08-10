@@ -101,6 +101,7 @@ list(APPEND LIBRARY_SOURCES
         src/update/CP2TraceCodec.cpp
         src/update/CP2TraceJournal.cpp
         src/update/ConditioningCapture.cpp
+        src/update/UpdateEnvelopeCapture.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
@@ -134,6 +135,7 @@ set_source_files_properties(
         src/update/CP2TraceCodec.cpp
         src/update/CP2TraceJournal.cpp
         src/update/ConditioningCapture.cpp
+        src/update/UpdateEnvelopeCapture.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
@@ -268,6 +270,9 @@ if (CATKIN_ENABLE_TESTING)
     add_test(NAME test_conditioning_capture_reader
             COMMAND /usr/bin/python3
                     ${CMAKE_CURRENT_SOURCE_DIR}/../experiments/camera_conditioning/test_capture_reader.py)
+    add_test(NAME test_update_envelope_capture_reader
+            COMMAND /usr/bin/python3
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../experiments/anytime_information/test_capture_reader.py)
 
     set(CP1_TEST_TARGETS
             test_cp1_schur_equivalence

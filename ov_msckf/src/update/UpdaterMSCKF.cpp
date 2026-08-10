@@ -51,6 +51,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
@@ -68,6 +69,36 @@ using namespace ov_type;
 using namespace ov_msckf;
 
 namespace {
+
+using Schema2Clock = std::chrono::steady_clock;
+
+std::uint64_t schema2_elapsed_ns(
+    const Schema2Clock::time_point &start,
+    const Schema2Clock::time_point &end) noexcept {
+  const auto elapsed =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(end - start)
+          .count();
+  return elapsed > 0 ? static_cast<std::uint64_t>(elapsed) : 0U;
+}
+
+UpdateEnvelopeTerminalStatus schema2_terminal_status(
+    CP2UpdateTerminalStatus status) noexcept {
+  switch (status) {
+  case CP2UpdateTerminalStatus::kEmptyInput:
+    return UpdateEnvelopeTerminalStatus::kEmptyInput;
+  case CP2UpdateTerminalStatus::kAllRejected:
+    return UpdateEnvelopeTerminalStatus::kAllRejected;
+  case CP2UpdateTerminalStatus::kEmptyAfterCompression:
+    return UpdateEnvelopeTerminalStatus::kEmptyAfterCompression;
+  case CP2UpdateTerminalStatus::kPreflightRejected:
+    return UpdateEnvelopeTerminalStatus::kPreflightRejected;
+  case CP2UpdateTerminalStatus::kCommittedCounted:
+    return UpdateEnvelopeTerminalStatus::kCommitted;
+  case CP2UpdateTerminalStatus::kInternalFailure:
+    return UpdateEnvelopeTerminalStatus::kInternalFailure;
+  }
+  return UpdateEnvelopeTerminalStatus::kInternalFailure;
+}
 
 struct MSCKFDetachedFeatureSet {
   std::vector<std::shared_ptr<Feature>> features;
@@ -1539,6 +1570,14 @@ UpdaterMSCKF::UpdaterMSCKF(UpdaterOptions &options, ov_core::FeatureInitializerO
         _options.conditioning_capture_path.empty() ||
         _options.conditioning_capture_path.front() != '/' ||
         _options.conditioning_capture_config_path.empty())) ||
+      (_options.capture_update_envelopes_v2 &&
+       (_options.capture_conditioning_systems ||
+        _options.max_visual_passes != 1 ||
+        _options.update_envelope_capture_path.empty() ||
+        _options.update_envelope_capture_path.front() != '/' ||
+        _options.update_envelope_run_id.empty() ||
+        _options.update_envelope_sequence_id.empty() ||
+        _options.update_envelope_capture_config_path.empty())) ||
       !std::isfinite(_options.sigma_pix) || !(_options.sigma_pix > 0.0) || !std::isfinite(sigma_pix_sq) ||
       !(sigma_pix_sq > 0.0) || !std::isfinite(_options.chi2_multipler)) {
     PRINT_ERROR(RED
@@ -1563,6 +1602,18 @@ UpdaterMSCKF::UpdaterMSCKF(UpdaterOptions &options, ov_core::FeatureInitializerO
     }
   }
 
+  if (_options.capture_update_envelopes_v2) {
+    try {
+      update_envelope_capture_writer.reset(
+          new UpdateEnvelopeCaptureWriter(_options));
+    } catch (...) {
+      PRINT_WARNING(
+          YELLOW
+          "[MSCKF-UPDATE-ENVELOPE-V2]: status=disabled "
+          "reason=owner_allocation estimator_unchanged=1\n" RESET);
+    }
+  }
+
   // Save our feature initializer
   initializer_feat = std::shared_ptr<ov_core::FeatureInitializer>(new ov_core::FeatureInitializer(feat_init_options));
 
@@ -1577,6 +1628,49 @@ UpdaterMSCKF::UpdaterMSCKF(UpdaterOptions &options, ov_core::FeatureInitializerO
       std::exit(EXIT_FAILURE);
     }
     chi_squared_table.emplace(i, quantile);
+  }
+}
+
+bool UpdaterMSCKF::schema2_capture_active() const noexcept {
+  return update_envelope_capture_writer &&
+         update_envelope_capture_writer->active();
+}
+
+void UpdaterMSCKF::schema2_begin_callback(
+    const std::shared_ptr<State> &state, double camera_timestamp) noexcept {
+  if (update_envelope_capture_writer) {
+    update_envelope_capture_writer->BeginCallback(state, camera_timestamp);
+  }
+}
+
+void UpdaterMSCKF::schema2_set_candidates(
+    const std::vector<std::shared_ptr<Feature>> &features,
+    const std::vector<UpdateEnvelopeCandidateReason> &reasons) noexcept {
+  if (update_envelope_capture_writer) {
+    update_envelope_capture_writer->SetCandidates(features, reasons);
+  }
+}
+
+void UpdaterMSCKF::schema2_add_record_overhead(
+    std::uint64_t duration_ns) noexcept {
+  if (update_envelope_capture_writer) {
+    update_envelope_capture_writer->AddExternalRecordOverhead(duration_ns);
+  }
+}
+
+std::uint64_t UpdaterMSCKF::schema2_record_overhead_ns() const noexcept {
+  return update_envelope_capture_writer
+             ? update_envelope_capture_writer->callback_record_overhead_ns()
+             : 0U;
+}
+
+void UpdaterMSCKF::schema2_finish_callback(
+    const UpdateEnvelopeCallbackCosts &costs,
+    UpdateEnvelopeTerminalStatus fallback_status,
+    std::uint64_t fallback_reason) noexcept {
+  if (update_envelope_capture_writer) {
+    update_envelope_capture_writer->FinishCallback(
+        costs, fallback_status, fallback_reason);
   }
 }
 
@@ -1909,6 +2003,14 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     update_event.terminal_status = duration_valid ? status : CP2UpdateTerminalStatus::kInternalFailure;
     update_event.terminal_subreason =
         duration_valid ? terminal_subreason : CP2UpdateTerminalSubreason::kTraceInvariantFailure;
+    if (update_envelope_capture_writer) {
+      update_envelope_capture_writer->RecordVisualTerminal(
+          schema2_terminal_status(update_event.terminal_status),
+          static_cast<std::uint64_t>(update_event.terminal_subreason),
+          static_cast<std::uint64_t>(ordinary_mean_commit_count),
+          static_cast<std::uint64_t>(ordinary_covariance_commit_count),
+          static_cast<std::uint64_t>(ordinary_feature_finalization_count), 0U);
+    }
     if (!recorded_mode && !ordinary_iteration_terminal_logged) {
       PRINT_DEBUG(
           "[MSCKF-ITER]: timestamp=%.17g terminal=1 requested_passes=%d "
@@ -1960,6 +2062,12 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
         publish_record();
   };
   bool live_commit_started = false;
+
+  if (!recorded_mode && update_envelope_capture_writer) {
+    // VioManager opens the literal callback envelope earlier; this refresh is
+    // the authoritative visual P-minus after any SLAM marginalization.
+    update_envelope_capture_writer->RefreshVisualPrior(state);
+  }
 
   try {
 
@@ -2089,6 +2197,12 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   auto it0 = proposal_feature_vec.begin();
   while (it0 != proposal_feature_vec.end()) {
 
+    const bool capture_prefilter =
+        update_envelope_capture_writer &&
+        update_envelope_capture_writer->callback_active();
+    const Schema2Clock::time_point prefilter_start =
+        capture_prefilter ? Schema2Clock::now() : Schema2Clock::time_point{};
+
     // Clean the feature
     (*it0)->clean_old_measurements(clonetimes);
 
@@ -2113,8 +2227,18 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
       feature_measurement_count = updated_measurement_count;
     }
 
+    // Capture the causal fields only after the production clone-time cleanup
+    // and before any triangulation, residual, whitening, or reduction work.
+    const bool prefilter_accepted = feature_measurement_count >= 2U;
+    if (capture_prefilter) {
+      const Schema2Clock::time_point prefilter_end = Schema2Clock::now();
+      update_envelope_capture_writer->RecordPrefilter(
+          *(*it0), prefilter_accepted,
+          schema2_elapsed_ns(prefilter_start, prefilter_end));
+    }
+
     // Remove if we don't have enough
-    if (feature_measurement_count < 2U) {
+    if (!prefilter_accepted) {
       (*it0)->to_delete = true;
       it0 = proposal_feature_vec.erase(it0);
     } else {
@@ -2148,6 +2272,12 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   auto it1 = proposal_feature_vec.begin();
   while (it1 != proposal_feature_vec.end()) {
 
+    const bool capture_geometry =
+        update_envelope_capture_writer &&
+        update_envelope_capture_writer->callback_active();
+    const Schema2Clock::time_point geometry_start =
+        capture_geometry ? Schema2Clock::now() : Schema2Clock::time_point{};
+
     // Triangulate the feature and remove if it fails
     bool success_tri = true;
     if (initializer_feat->config().triangulate_1d) {
@@ -2160,6 +2290,14 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     bool success_refine = true;
     if (initializer_feat->config().refine_features) {
       success_refine = initializer_feat->single_gaussnewton(*it1, clones_cam);
+    }
+
+    if (capture_geometry) {
+      const Schema2Clock::time_point geometry_end = Schema2Clock::now();
+      update_envelope_capture_writer->RecordGeometry(
+          state, *(*it1), true, success_tri,
+          initializer_feat->config().refine_features, success_refine,
+          schema2_elapsed_ns(geometry_start, geometry_end));
     }
 
     // Remove the feature if not a success
@@ -2502,7 +2640,18 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     }
     ++cp2_test_raw_assembly_calls;
 #endif
+    const bool capture_raw =
+        update_envelope_capture_writer &&
+        update_envelope_capture_writer->callback_active();
+    const Schema2Clock::time_point raw_start =
+        capture_raw ? Schema2Clock::now() : Schema2Clock::time_point{};
     UpdaterHelper::get_feature_jacobian_full(state, feat, H_f, H_x, res, Hx_order);
+    if (capture_raw) {
+      const Schema2Clock::time_point raw_end = Schema2Clock::now();
+      update_envelope_capture_writer->RecordRawFactor(
+          static_cast<std::uint64_t>(feat.featid), Hx_order, H_x, H_f, res,
+          schema2_elapsed_ns(raw_start, raw_end));
+    }
     std::uint64_t incremented_raw_count = 0U;
     if (!cp2_checked_add_u64(update_event.raw_system_count, 1U,
                              incremented_raw_count)) {
@@ -2545,7 +2694,21 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     double feature_gamma = 0.0;
     bool reduction_evidence_available = true;
     if (_options.landmark_elimination == UpdaterOptions::LandmarkElimination::SCHUR) {
+      const bool capture_reduction =
+          update_envelope_capture_writer &&
+          update_envelope_capture_writer->callback_active();
+      const Schema2Clock::time_point reduction_start =
+          capture_reduction ? Schema2Clock::now()
+                            : Schema2Clock::time_point{};
       SchurReductionResult reduction = SchurUpdate::Reduce(H_x, H_f, res, _options.sigma_pix);
+      if (capture_reduction) {
+        const Schema2Clock::time_point reduction_end = Schema2Clock::now();
+        update_envelope_capture_writer->RecordReduction(
+            static_cast<std::uint64_t>(feat.featid),
+            _options.landmark_elimination, &reduction,
+            reduction.H_reduced, reduction.residual_reduced,
+            schema2_elapsed_ns(reduction_start, reduction_end));
+      }
       if (!reduction.accepted()) {
         if (!reduction.singular_values_available) {
           PRINT_WARNING(YELLOW
@@ -2579,7 +2742,20 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
       res = std::move(reduction.residual_reduced);
       feature_gamma = reduction.gamma;
     } else if (_options.landmark_elimination == UpdaterOptions::LandmarkElimination::NULLSPACE) {
+      const bool capture_reduction =
+          update_envelope_capture_writer &&
+          update_envelope_capture_writer->callback_active();
+      const Schema2Clock::time_point reduction_start =
+          capture_reduction ? Schema2Clock::now()
+                            : Schema2Clock::time_point{};
       UpdaterHelper::nullspace_project_inplace(H_f, H_x, res);
+      if (capture_reduction) {
+        const Schema2Clock::time_point reduction_end = Schema2Clock::now();
+        update_envelope_capture_writer->RecordReduction(
+            static_cast<std::uint64_t>(feat.featid),
+            _options.landmark_elimination, nullptr, H_x, res,
+            schema2_elapsed_ns(reduction_start, reduction_end));
+      }
       const Eigen::VectorXd whitened_residual = res.array() / _options.sigma_pix;
       feature_gamma = whitened_residual.squaredNorm();
       reduction_evidence_available = H_x.allFinite() && res.allFinite() && whitened_residual.allFinite() &&
@@ -2614,7 +2790,18 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
             : CP2FeatureGateInput::EmittedEvidenceUnavailable(
                   H_x, res, prior_snapshot.covariance, feature_layout, _options.sigma_pix_sq,
                   _options.chi2_multipler);
+    const bool capture_gate =
+        update_envelope_capture_writer &&
+        update_envelope_capture_writer->callback_active();
+    const Schema2Clock::time_point gate_start =
+        capture_gate ? Schema2Clock::now() : Schema2Clock::time_point{};
     const CP2FeatureGateResult gate = CP2FeatureGate::Evaluate(std::move(gate_input), chi_squared_table);
+    if (capture_gate) {
+      const Schema2Clock::time_point gate_end = Schema2Clock::now();
+      update_envelope_capture_writer->RecordGate(
+          static_cast<std::uint64_t>(feat.featid), gate,
+          schema2_elapsed_ns(gate_start, gate_end));
+    }
     if (!gate.lifecycle_accept) {
       PRINT_WARNING(YELLOW "[MSCKF-GATE]: feature=%zu pass=1 rows=%d status=rejected stage=%s\n" RESET,
                     feat.featid, (int)res.rows(), cp2_feature_gate_stage_name(gate.stage));
@@ -2660,6 +2847,13 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
                     feat.featid, (int)res.rows());
     }
 
+    const bool capture_accumulation =
+        update_envelope_capture_writer &&
+        update_envelope_capture_writer->callback_active();
+    const Schema2Clock::time_point accumulation_start =
+        capture_accumulation ? Schema2Clock::now()
+                             : Schema2Clock::time_point{};
+    const Eigen::Index feature_global_row_start = ct_meas;
     if (H_x.rows() < 0 || H_x.cols() < 0 || res.rows() < 0 ||
         res.cols() != 1 || H_x.rows() != res.rows()) {
       throw std::overflow_error("UpdaterMSCKF accepted reduced-system shape is invalid");
@@ -2715,6 +2909,14 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     // Append our residual and move forward
     res_big.block(ct_meas, 0, res.rows(), 1) = res;
     ct_meas = updated_measurement_rows;
+    if (capture_accumulation) {
+      const Schema2Clock::time_point accumulation_end = Schema2Clock::now();
+      update_envelope_capture_writer->RecordAccumulation(
+          static_cast<std::uint64_t>(feat.featid),
+          static_cast<std::uint64_t>(feature_global_row_start),
+          static_cast<std::uint64_t>(res.rows()),
+          schema2_elapsed_ns(accumulation_start, accumulation_end));
+    }
     it2++;
   }
   rT3 = boost::posix_time::microsec_clock::local_time();
@@ -2872,8 +3074,29 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   res_big.conservativeResize(ct_meas, 1);
   Hx_big.conservativeResize(ct_meas, ct_jacob);
 
+  if (update_envelope_capture_writer &&
+      update_envelope_capture_writer->callback_active()) {
+    const Schema2Clock::time_point selected_noise_start =
+        Schema2Clock::now();
+    const Eigen::MatrixXd selected_R =
+        _options.sigma_pix_sq *
+        Eigen::MatrixXd::Identity(res_big.rows(), res_big.rows());
+    update_envelope_capture_writer->AddExternalRecordOverhead(
+        schema2_elapsed_ns(selected_noise_start, Schema2Clock::now()));
+    update_envelope_capture_writer->RecordSelectedSystem(
+        update_event.baseline_accepted_ids, Hx_order_big, Hx_big, res_big,
+        selected_R, 0U);
+  }
+
   // 5. Perform measurement compression
+  const bool capture_compression =
+      update_envelope_capture_writer &&
+      update_envelope_capture_writer->callback_active();
+  const Schema2Clock::time_point compression_start =
+      capture_compression ? Schema2Clock::now() : Schema2Clock::time_point{};
   UpdaterHelper::measurement_compress_inplace(Hx_big, res_big);
+  const Schema2Clock::time_point compression_end =
+      capture_compression ? Schema2Clock::now() : Schema2Clock::time_point{};
   update_event.baseline_compressed_rows_available = true;
   if (!cp2_checked_eigen_index_to_u64(
           Hx_big.rows(), update_event.baseline_compressed_rows)) {
@@ -2909,6 +3132,11 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
 
   // Our noise is isotropic, so make it here after our compression
   Eigen::MatrixXd R_big = _options.sigma_pix_sq * Eigen::MatrixXd::Identity(res_big.rows(), res_big.rows());
+  if (capture_compression) {
+    update_envelope_capture_writer->RecordCompressedSystem(
+        Hx_order_big, Hx_big, res_big, R_big,
+        schema2_elapsed_ns(compression_start, compression_end));
+  }
 
   // The fixed two-pass estimator is an ordinary-mode, Schur-only branch. The
   // complete max=1/nullspace/recorded path below remains the established
@@ -3418,8 +3646,20 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     }
     throw;
   }
+  const bool capture_preview =
+      update_envelope_capture_writer &&
+      update_envelope_capture_writer->callback_active();
+  const Schema2Clock::time_point preview_start =
+      capture_preview ? Schema2Clock::now() : Schema2Clock::time_point{};
   const MSCKFUpdatePreviewResult preview =
       UpdaterMSCKFPreview::ComputeFromSnapshot(prior_snapshot, baseline_layout, Hx_big, res_big, R_big);
+  if (capture_preview) {
+    const Schema2Clock::time_point preview_end = Schema2Clock::now();
+    // The inherited one-pass branch has no production global NIS gate.
+    update_envelope_capture_writer->RecordPosterior(
+        preview, false, false, 0.0, false,
+        schema2_elapsed_ns(preview_start, preview_end));
+  }
   if (recorded_mode) {
     const CP2GlobalModeResult &shadow_baseline =
         update_event.shadow.result.nullspace;
@@ -3504,6 +3744,11 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   if (!recorded_mode) {
     // Commit the already validated proposal once. No Kalman solve or candidate
     // injection is repeated at this boundary.
+    const bool capture_commit =
+        update_envelope_capture_writer &&
+        update_envelope_capture_writer->callback_active();
+    const Schema2Clock::time_point commit_start =
+        capture_commit ? Schema2Clock::now() : Schema2Clock::time_point{};
     live_commit_started = true;
 #if defined(OV_MSCKF_CP2_TESTING)
     cp2_test_note_stage(CP2UpdaterTestStage::kEKFUpdateEntered);
@@ -3520,6 +3765,8 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
       return;
     }
     finalize_ordinary_features();
+    const Schema2Clock::time_point commit_end =
+        capture_commit ? Schema2Clock::now() : Schema2Clock::time_point{};
     const CP2SteadyClockEndpoint cp2_update_end =
         cp2_steady_clock_now();
 #if defined(OV_MSCKF_CP2_TESTING)
@@ -3534,6 +3781,16 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
         duration_valid ? CP2UpdateTerminalSubreason::kNone
                        : CP2UpdateTerminalSubreason::kTraceInvariantFailure;
     update_event.baseline_commit_occurred = true;
+    if (capture_commit) {
+      update_envelope_capture_writer->RecordVisualTerminal(
+          duration_valid ? UpdateEnvelopeTerminalStatus::kCommitted
+                         : UpdateEnvelopeTerminalStatus::kInternalFailure,
+          static_cast<std::uint64_t>(update_event.terminal_subreason),
+          static_cast<std::uint64_t>(ordinary_mean_commit_count),
+          static_cast<std::uint64_t>(ordinary_covariance_commit_count),
+          static_cast<std::uint64_t>(ordinary_feature_finalization_count),
+          schema2_elapsed_ns(commit_start, commit_end));
+    }
     rT5 = boost::posix_time::microsec_clock::local_time();
     notify_observer(update_event, true);
     PRINT_DEBUG(

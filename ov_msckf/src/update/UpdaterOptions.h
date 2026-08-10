@@ -64,6 +64,21 @@ struct UpdaterOptions {
   /// Main estimator configuration whose exact bytes are hashed into the file.
   std::string conditioning_capture_config_path;
 
+  /// Publication-study update-envelope capture (schema 2); default off.
+  bool capture_update_envelopes_v2 = false;
+
+  /// Absolute, create-new destination for the schema-2 capture.
+  std::string update_envelope_capture_path;
+
+  /// Stable capture campaign identity written into the schema-2 header.
+  std::string update_envelope_run_id;
+
+  /// Stable dataset-sequence identity written into the schema-2 header.
+  std::string update_envelope_sequence_id;
+
+  /// Main estimator configuration whose exact bytes are hashed into schema 2.
+  std::string update_envelope_capture_config_path;
+
   /// Whether a landmark-elimination enum is one of the two public modes.
   static bool landmark_elimination_is_supported(LandmarkElimination mode) noexcept {
     return mode == LandmarkElimination::NULLSPACE || mode == LandmarkElimination::SCHUR;
@@ -129,6 +144,16 @@ struct UpdaterOptions {
     if (capture_conditioning_systems) {
       PRINT_DEBUG("    - conditioning_capture_path: %s\n",
                   conditioning_capture_path.c_str());
+    }
+    PRINT_DEBUG("    - capture_update_envelopes_v2: %d\n",
+                (int)capture_update_envelopes_v2);
+    if (capture_update_envelopes_v2) {
+      PRINT_DEBUG("    - update_envelope_capture_path: %s\n",
+                  update_envelope_capture_path.c_str());
+      PRINT_DEBUG("    - update_envelope_run_id: %s\n",
+                  update_envelope_run_id.c_str());
+      PRINT_DEBUG("    - update_envelope_sequence_id: %s\n",
+                  update_envelope_sequence_id.c_str());
     }
   }
 };

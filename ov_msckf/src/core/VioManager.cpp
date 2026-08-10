@@ -44,12 +44,40 @@
 #include "update/UpdaterSLAM.h"
 #include "update/UpdaterZeroVelocity.h"
 
+#include <chrono>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 
 using namespace ov_core;
 using namespace ov_type;
 using namespace ov_msckf;
+
+namespace {
+using Schema2RecordClock = std::chrono::steady_clock;
+
+std::uint64_t schema2_record_elapsed_ns(
+    const Schema2RecordClock::time_point &start,
+    const Schema2RecordClock::time_point &end) noexcept {
+  const auto elapsed =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(end - start)
+          .count();
+  return elapsed > 0 ? static_cast<std::uint64_t>(elapsed) : 0U;
+}
+
+void set_schema2_stage_timestamps(UpdateEnvelopeCallbackCosts &costs) {
+  costs.stage_timestamps_available = true;
+  auto &timeline = costs.stage_end_offsets_seconds;
+  timeline[0] = 0.0;
+  timeline[1] = timeline[0] + costs.tracking_seconds;
+  timeline[2] = timeline[1] + costs.propagation_seconds;
+  timeline[3] = timeline[2] + costs.msckf_seconds;
+  timeline[4] = timeline[3] + costs.slam_update_seconds;
+  timeline[5] = timeline[4] + costs.slam_delay_seconds;
+  timeline[6] = timeline[5] + costs.finalization_seconds;
+  costs.total_seconds = timeline[6];
+}
+} // namespace
 
 VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false), thread_init_success(false) {
 
@@ -415,12 +443,35 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   }
   rT3 = boost::posix_time::microsec_clock::local_time();
 
+  const bool schema2_callback =
+      updaterMSCKF && updaterMSCKF->schema2_capture_active();
+  if (schema2_callback) {
+    updaterMSCKF->schema2_begin_callback(state, message.timestamp);
+  }
+
+  const auto finish_schema2_early =
+      [this, schema2_callback](UpdateEnvelopeTerminalStatus status,
+                               std::uint64_t reason) {
+        if (!schema2_callback || !updaterMSCKF) {
+          return;
+        }
+        UpdateEnvelopeCallbackCosts costs;
+        costs.tracking_seconds = std::max(
+            0.0, (rT2 - rT1).total_microseconds() * 1.0e-6);
+        costs.propagation_seconds = std::max(
+            0.0, (rT3 - rT2).total_microseconds() * 1.0e-6);
+        set_schema2_stage_timestamps(costs);
+        updaterMSCKF->schema2_finish_callback(costs, status, reason);
+      };
+
   // If we have not reached max clones, we should just return...
   // This isn't super ideal, but it keeps the logic after this easier...
   // We can start processing things when we have at least 5 clones since we can start triangulating things...
   if ((int)state->_clones_IMU.size() < std::min(state->_options.max_clone_size, 5)) {
     PRINT_DEBUG("waiting for enough clone states (%d of %d)....\n", (int)state->_clones_IMU.size(),
                 std::min(state->_options.max_clone_size, 5));
+    finish_schema2_early(
+        UpdateEnvelopeTerminalStatus::kInsufficientClones, 0U);
     return;
   }
 
@@ -428,6 +479,8 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   if (state->_timestamp != message.timestamp) {
     PRINT_WARNING(RED "[PROP]: Propagator unable to propagate the state forward in time!\n" RESET);
     PRINT_WARNING(RED "[PROP]: It has been %.3f since last time we propagated\n" RESET, message.timestamp - state->_timestamp);
+    finish_schema2_early(
+        UpdateEnvelopeTerminalStatus::kPropagationFailure, 0U);
     return;
   }
   has_moved_since_zupt = true;
@@ -571,6 +624,33 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   std::vector<std::shared_ptr<Feature>> featsup_MSCKF = feats_lost;
   featsup_MSCKF.insert(featsup_MSCKF.end(), feats_marg.begin(), feats_marg.end());
   featsup_MSCKF.insert(featsup_MSCKF.end(), feats_maxtracks.begin(), feats_maxtracks.end());
+  const Schema2RecordClock::time_point schema2_reason_map_start =
+      schema2_callback ? Schema2RecordClock::now()
+                       : Schema2RecordClock::time_point{};
+  std::unordered_map<std::size_t, UpdateEnvelopeCandidateReason>
+      schema2_candidate_reason;
+  if (schema2_callback) {
+    for (const auto &feature : feats_lost) {
+      if (feature) {
+        schema2_candidate_reason[feature->featid] =
+            UpdateEnvelopeCandidateReason::kLost;
+      }
+    }
+    for (const auto &feature : feats_marg) {
+      if (feature) {
+        schema2_candidate_reason[feature->featid] =
+            UpdateEnvelopeCandidateReason::kMarginal;
+      }
+    }
+    for (const auto &feature : feats_maxtracks) {
+      if (feature) {
+        schema2_candidate_reason[feature->featid] =
+            UpdateEnvelopeCandidateReason::kMaximumTrack;
+      }
+    }
+    updaterMSCKF->schema2_add_record_overhead(schema2_record_elapsed_ns(
+        schema2_reason_map_start, Schema2RecordClock::now()));
+  }
 
   //===================================================================================
   // Now that we have a list of features, lets do the EKF update for MSCKF and SLAM!
@@ -595,6 +675,23 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // NOTE: this should only really be used if you want to track a lot of features, or have limited computational resources
   if ((int)featsup_MSCKF.size() > state->_options.max_msckf_in_update)
     featsup_MSCKF.erase(featsup_MSCKF.begin(), featsup_MSCKF.end() - state->_options.max_msckf_in_update);
+  if (schema2_callback) {
+    const Schema2RecordClock::time_point schema2_reason_vector_start =
+        Schema2RecordClock::now();
+    std::vector<UpdateEnvelopeCandidateReason> reasons;
+    reasons.reserve(featsup_MSCKF.size());
+    for (const auto &feature : featsup_MSCKF) {
+      const auto found = feature
+                             ? schema2_candidate_reason.find(feature->featid)
+                             : schema2_candidate_reason.end();
+      reasons.push_back(found == schema2_candidate_reason.end()
+                            ? UpdateEnvelopeCandidateReason::kUnknown
+                            : found->second);
+    }
+    updaterMSCKF->schema2_add_record_overhead(schema2_record_elapsed_ns(
+        schema2_reason_vector_start, Schema2RecordClock::now()));
+    updaterMSCKF->schema2_set_candidates(featsup_MSCKF, reasons);
+  }
   if (cp2_camera_context_active) {
     if (!updaterMSCKF->set_cp2_invocation_context(cp2_camera_context)) {
       throw std::logic_error(
@@ -688,6 +785,23 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   double time_slam_delay = (rT6 - rT5).total_microseconds() * 1e-6;
   double time_marg = (rT7 - rT6).total_microseconds() * 1e-6;
   double time_total = (rT7 - rT1).total_microseconds() * 1e-6;
+
+  if (schema2_callback) {
+    const double capture_record_overhead_seconds =
+        static_cast<double>(updaterMSCKF->schema2_record_overhead_ns()) *
+        1.0e-9;
+    UpdateEnvelopeCallbackCosts costs;
+    costs.tracking_seconds = std::max(0.0, time_track);
+    costs.propagation_seconds = std::max(0.0, time_prop);
+    costs.msckf_seconds =
+        std::max(0.0, time_msckf - capture_record_overhead_seconds);
+    costs.slam_update_seconds = std::max(0.0, time_slam_update);
+    costs.slam_delay_seconds = std::max(0.0, time_slam_delay);
+    costs.finalization_seconds = std::max(0.0, time_marg);
+    set_schema2_stage_timestamps(costs);
+    updaterMSCKF->schema2_finish_callback(
+        costs, UpdateEnvelopeTerminalStatus::kInternalFailure, 0U);
+  }
 
   // Timing information
   PRINT_DEBUG(BLUE "[TIME]: %.4f seconds for tracking\n" RESET, time_track);

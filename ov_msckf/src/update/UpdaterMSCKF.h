@@ -27,6 +27,7 @@
 #include "CP2CommitOracle.h"
 #include "CP2ShadowMath.h"
 #include "ConditioningCapture.h"
+#include "UpdateEnvelopeCapture.h"
 
 #include <Eigen/Eigen>
 #include <array>
@@ -371,6 +372,20 @@ public:
    */
   void update(std::shared_ptr<State> state, std::vector<std::shared_ptr<ov_core::Feature>> &feature_vec);
 
+  /// Default-off Schema-2 callback transaction boundary owned by VioManager.
+  bool schema2_capture_active() const noexcept;
+  void schema2_begin_callback(const std::shared_ptr<State> &state,
+                              double camera_timestamp) noexcept;
+  void schema2_set_candidates(
+      const std::vector<std::shared_ptr<ov_core::Feature>> &features,
+      const std::vector<UpdateEnvelopeCandidateReason> &reasons) noexcept;
+  void schema2_add_record_overhead(std::uint64_t duration_ns) noexcept;
+  std::uint64_t schema2_record_overhead_ns() const noexcept;
+  void schema2_finish_callback(
+      const UpdateEnvelopeCallbackCosts &costs,
+      UpdateEnvelopeTerminalStatus fallback_status,
+      std::uint64_t fallback_reason) noexcept;
+
 protected:
   /// Options used during update
   UpdaterOptions _options;
@@ -380,6 +395,9 @@ protected:
 
   /// Default-off, fail-open raw-system writer; never participates in decisions.
   std::unique_ptr<ConditioningCaptureWriter> conditioning_capture_writer;
+
+  /// Default-off, fail-open callback/update-envelope writer (Schema 2).
+  std::unique_ptr<UpdateEnvelopeCaptureWriter> update_envelope_capture_writer;
 
   /// Chi squared 95th percentile table (lookup would be size of residual)
   std::map<int, double> chi_squared_table;

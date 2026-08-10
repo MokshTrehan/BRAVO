@@ -80,6 +80,7 @@ list(APPEND LIBRARY_SOURCES
         src/update/CP2TraceCodec.cpp
         src/update/CP2TraceJournal.cpp
         src/update/ConditioningCapture.cpp
+        src/update/UpdateEnvelopeCapture.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
@@ -110,6 +111,7 @@ set_source_files_properties(
         src/update/CP2TraceCodec.cpp
         src/update/CP2TraceJournal.cpp
         src/update/ConditioningCapture.cpp
+        src/update/UpdateEnvelopeCapture.cpp
         src/update/SchurUpdate.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp

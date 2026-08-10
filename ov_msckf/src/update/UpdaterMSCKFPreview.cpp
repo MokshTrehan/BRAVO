@@ -257,18 +257,84 @@ UpdaterMSCKFPreview::CapturePrior(const std::shared_ptr<State> &state) {
       state->_options.do_calib_camera_intrinsics;
   snapshot.calibrate_camera_timeoffset =
       state->_options.do_calib_camera_timeoffset;
+  snapshot.calibrate_imu_intrinsics =
+      state->_options.do_calib_imu_intrinsics;
+  snapshot.calibrate_imu_g_sensitivity =
+      state->_options.do_calib_imu_g_sensitivity;
   snapshot.feature_representation =
       static_cast<int>(state->_options.feat_rep_msckf);
   snapshot.nominal_blocks.reserve(state->_variables.size());
-  for (const auto &variable : state->_variables) {
+  snapshot.semantic_blocks.reserve(state->_variables.size());
+  for (std::size_t variable_index = 0;
+       variable_index < state->_variables.size(); ++variable_index) {
+    const auto &variable = state->_variables[variable_index];
     MSCKFUpdatePriorNominalBlock block;
+    MSCKFUpdatePriorSemanticBlock semantic;
+    semantic.ordinal = static_cast<std::uint64_t>(variable_index);
     if (variable) {
       block.covariance_id = variable->id();
       block.size = variable->size();
       block.value = variable->value();
       block.fej = variable->fej();
+      semantic.variable_id = variable->id();
+      semantic.covariance_id = variable->id();
+      semantic.offset = variable->id();
+      semantic.size = variable->size();
+      semantic.role_flags = UINT64_C(3);
+      if (variable.get() == state->_imu.get()) {
+        semantic.block_type = MSCKFUpdatePriorBlockType::kImu;
+      } else if (variable.get() == state->_calib_imu_dw.get()) {
+        semantic.block_type =
+            MSCKFUpdatePriorBlockType::kImuGyroscopeIntrinsics;
+      } else if (variable.get() == state->_calib_imu_da.get()) {
+        semantic.block_type =
+            MSCKFUpdatePriorBlockType::kImuAccelerometerIntrinsics;
+      } else if (variable.get() == state->_calib_imu_tg.get()) {
+        semantic.block_type =
+            MSCKFUpdatePriorBlockType::kImuGravitySensitivity;
+      } else if (variable.get() == state->_calib_imu_GYROtoIMU.get()) {
+        semantic.block_type =
+            MSCKFUpdatePriorBlockType::kGyroscopeToImuRotation;
+      } else if (variable.get() == state->_calib_imu_ACCtoIMU.get()) {
+        semantic.block_type =
+            MSCKFUpdatePriorBlockType::kAccelerometerToImuRotation;
+      } else if (variable.get() == state->_calib_dt_CAMtoIMU.get()) {
+        semantic.block_type =
+            MSCKFUpdatePriorBlockType::kCameraTimeOffset;
+      }
+      for (const auto &camera : state->_calib_IMUtoCAM) {
+        if (variable.get() == camera.second.get()) {
+          semantic.block_type =
+              MSCKFUpdatePriorBlockType::kCameraExtrinsics;
+          semantic.key_type = MSCKFUpdatePriorBlockKey::kCameraId;
+          semantic.key_u64 = static_cast<std::uint64_t>(camera.first);
+        }
+      }
+      for (const auto &camera : state->_cam_intrinsics) {
+        if (variable.get() == camera.second.get()) {
+          semantic.block_type =
+              MSCKFUpdatePriorBlockType::kCameraIntrinsics;
+          semantic.key_type = MSCKFUpdatePriorBlockKey::kCameraId;
+          semantic.key_u64 = static_cast<std::uint64_t>(camera.first);
+        }
+      }
+      for (const auto &clone : state->_clones_IMU) {
+        if (variable.get() == clone.second.get()) {
+          semantic.block_type = MSCKFUpdatePriorBlockType::kClone;
+          semantic.key_type = MSCKFUpdatePriorBlockKey::kTimestamp;
+          semantic.key_double = clone.first;
+        }
+      }
+      for (const auto &landmark : state->_features_SLAM) {
+        if (variable.get() == landmark.second.get()) {
+          semantic.block_type = MSCKFUpdatePriorBlockType::kSlamLandmark;
+          semantic.key_type = MSCKFUpdatePriorBlockKey::kFeatureId;
+          semantic.key_u64 = static_cast<std::uint64_t>(landmark.first);
+        }
+      }
     }
     snapshot.nominal_blocks.push_back(std::move(block));
+    snapshot.semantic_blocks.push_back(std::move(semantic));
   }
 
   snapshot.clone_bindings.reserve(state->_clones_IMU.size());
@@ -321,7 +387,8 @@ MSCKFUpdatePriorMatchResult UpdaterMSCKFPreview::MatchPrior(
   if (state->_Cov.rows() != snapshot.filter.covariance.rows() ||
       state->_Cov.cols() != snapshot.filter.covariance.cols() ||
       state->_variables.size() != snapshot.filter.state_blocks.size() ||
-      state->_variables.size() != snapshot.nominal_blocks.size()) {
+      state->_variables.size() != snapshot.nominal_blocks.size() ||
+      state->_variables.size() != snapshot.semantic_blocks.size()) {
     result.status = MSCKFUpdatePriorMatchStatus::kCovarianceLayout;
     return result;
   }
@@ -329,10 +396,16 @@ MSCKFUpdatePriorMatchResult UpdaterMSCKFPreview::MatchPrior(
     const auto &variable = state->_variables[index];
     const auto &layout = snapshot.filter.state_blocks[index];
     const auto &nominal = snapshot.nominal_blocks[index];
+    const auto &semantic = snapshot.semantic_blocks[index];
     if (!variable || variable->id() != layout.covariance_id ||
         variable->size() != layout.size || layout.offset != layout.covariance_id ||
         nominal.covariance_id != layout.covariance_id ||
-        nominal.size != layout.size) {
+        nominal.size != layout.size ||
+        semantic.ordinal != static_cast<std::uint64_t>(index) ||
+        semantic.variable_id != layout.covariance_id ||
+        semantic.covariance_id != layout.covariance_id ||
+        semantic.offset != layout.offset || semantic.size != layout.size ||
+        semantic.role_flags != UINT64_C(3)) {
       result.status = MSCKFUpdatePriorMatchStatus::kCovarianceLayout;
       result.offending_index = static_cast<Eigen::Index>(index);
       return result;
@@ -380,6 +453,10 @@ MSCKFUpdatePriorMatchResult UpdaterMSCKFPreview::MatchPrior(
           snapshot.calibrate_camera_intrinsics ||
       state->_options.do_calib_camera_timeoffset !=
           snapshot.calibrate_camera_timeoffset ||
+      state->_options.do_calib_imu_intrinsics !=
+          snapshot.calibrate_imu_intrinsics ||
+      state->_options.do_calib_imu_g_sensitivity !=
+          snapshot.calibrate_imu_g_sensitivity ||
       static_cast<int>(state->_options.feat_rep_msckf) !=
           snapshot.feature_representation) {
     result.status = MSCKFUpdatePriorMatchStatus::kOptions;

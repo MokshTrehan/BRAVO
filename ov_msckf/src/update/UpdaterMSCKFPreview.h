@@ -175,6 +175,51 @@ struct MSCKFUpdatePriorNominalBlock {
   Eigen::MatrixXd fej;
 };
 
+/// Stable semantic classification for one complete top-level covariance block.
+enum class MSCKFUpdatePriorBlockType : std::uint64_t {
+  kUnknown = 0U,
+  kImu = 1U,
+  kImuGyroscopeIntrinsics = 2U,
+  kImuAccelerometerIntrinsics = 3U,
+  kImuGravitySensitivity = 4U,
+  kGyroscopeToImuRotation = 5U,
+  kAccelerometerToImuRotation = 6U,
+  kCameraTimeOffset = 7U,
+  kCameraExtrinsics = 8U,
+  kCameraIntrinsics = 9U,
+  kClone = 10U,
+  kSlamLandmark = 11U,
+};
+
+/// Stable key domain used to interpret a semantic covariance block.
+enum class MSCKFUpdatePriorBlockKey : std::uint64_t {
+  kNone = 0U,
+  kTimestamp = 1U,
+  kCameraId = 2U,
+  kFeatureId = 3U,
+};
+
+/**
+ * Complete semantic identity for one top-level active-state block.
+ *
+ * variable_id is the inherited Type::id() and therefore equals covariance_id
+ * for a top-level block. role_flags bit 0 denotes a current nominal value and
+ * bit 1 denotes a FEJ value; both are present in CapturePrior snapshots.
+ */
+struct MSCKFUpdatePriorSemanticBlock {
+  std::uint64_t ordinal = 0U;
+  MSCKFUpdatePriorBlockType block_type =
+      MSCKFUpdatePriorBlockType::kUnknown;
+  MSCKFUpdatePriorBlockKey key_type = MSCKFUpdatePriorBlockKey::kNone;
+  std::uint64_t key_u64 = 0U;
+  double key_double = 0.0;
+  Eigen::Index variable_id = -1;
+  Eigen::Index covariance_id = -1;
+  Eigen::Index offset = -1;
+  Eigen::Index size = 0;
+  std::uint64_t role_flags = 0U;
+};
+
 /// Owning clone-to-covariance binding needed by visual linearization.
 struct MSCKFUpdatePriorCloneBinding {
   double timestamp = 0.0;
@@ -214,12 +259,15 @@ struct MSCKFUpdatePriorSnapshot {
   MSCKFUpdatePreviewSnapshot filter;
   double timestamp = 0.0;
   std::vector<MSCKFUpdatePriorNominalBlock> nominal_blocks;
+  std::vector<MSCKFUpdatePriorSemanticBlock> semantic_blocks;
   std::vector<MSCKFUpdatePriorCloneBinding> clone_bindings;
   std::vector<MSCKFUpdatePriorCamera> cameras;
   bool do_fej = false;
   bool calibrate_camera_pose = false;
   bool calibrate_camera_intrinsics = false;
   bool calibrate_camera_timeoffset = false;
+  bool calibrate_imu_intrinsics = false;
+  bool calibrate_imu_g_sensitivity = false;
   int feature_representation = -1;
 };
 
