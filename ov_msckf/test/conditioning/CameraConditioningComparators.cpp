@@ -639,7 +639,9 @@ MethodResult evaluate_method(const CameraSystem &system, Method method,
   }
   if (reference != nullptr) {
     compare_with_reference(result, *reference);
-  } else if (method == Method::kFullUNullspaceOracle && result.accepted) {
+  } else if ((method == Method::kFullJointOracle ||
+              method == Method::kFullUNullspaceOracle) &&
+             result.accepted) {
     result.state_increment_relative_error = 0.0;
     result.posterior_covariance_relative_error = 0.0;
     result.nis_relative_error = 0.0;
@@ -669,10 +671,12 @@ Comparison evaluate_all(const CameraSystem &system) {
   MethodResult full_u =
       evaluate_method(system, Method::kFullUNullspaceOracle, nullptr);
   MethodResult full_joint =
-      evaluate_method(system, Method::kFullJointOracle, &full_u);
+      evaluate_method(system, Method::kFullJointOracle, nullptr);
+  MethodResult full_joint_vs_full_u = full_joint;
+  compare_with_reference(full_joint_vs_full_u, full_u);
   // All reported method-output safety rows use FULL_JOINT as the common
-  // reference. Preserve FULL_JOINT's independently computed error versus
-  // FULL_U below for the separate oracle-agreement decision.
+  // reference. Keep FULL_JOINT's independent error versus FULL_U in a
+  // separate value used only by the oracle-agreement decision.
   compare_with_reference(full_u, full_joint);
 
   const Method methods[] = {
@@ -693,9 +697,9 @@ Comparison evaluate_all(const CameraSystem &system) {
   const MethodResult &joint = comparison.methods[5];
   comparison.oracle_agreement.full_joint_valid = joint.accepted && joint.finite;
   comparison.oracle_agreement.state_increment_relative_error =
-      joint.state_increment_relative_error;
+      full_joint_vs_full_u.state_increment_relative_error;
   comparison.oracle_agreement.posterior_covariance_relative_error =
-      joint.posterior_covariance_relative_error;
+      full_joint_vs_full_u.posterior_covariance_relative_error;
   comparison.oracle_agreement.full_u_scaled_psd_failure =
       full_u.scaled_psd_failure;
   comparison.oracle_agreement.full_joint_scaled_psd_failure =
@@ -709,7 +713,8 @@ Comparison evaluate_all(const CameraSystem &system) {
           kFrozenHarmfulRelativeThreshold &&
       comparison.oracle_agreement.posterior_covariance_relative_error <=
           kFrozenHarmfulRelativeThreshold &&
-      joint.nis_relative_error <= kFrozenHarmfulRelativeThreshold;
+      full_joint_vs_full_u.nis_relative_error <=
+          kFrozenHarmfulRelativeThreshold;
 
   comparison.unguarded_nullspace_harmful = comparison.methods[0].harmful_accepted;
   comparison.caller_input_mutated =

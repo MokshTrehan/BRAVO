@@ -100,6 +100,11 @@ TEST(CameraConditioningComparators, FullRankMethodsMatchIndependentOraclesWithPs
     EXPECT_LE(result.nis_relative_error, 1.0e-10);
     EXPECT_FALSE(result.scaled_psd_failure);
   }
+  const MethodResult &full_joint =
+      find_method(comparison, Method::kFullJointOracle);
+  EXPECT_DOUBLE_EQ(full_joint.state_increment_relative_error, 0.0);
+  EXPECT_DOUBLE_EQ(full_joint.posterior_covariance_relative_error, 0.0);
+  EXPECT_DOUBLE_EQ(full_joint.nis_relative_error, 0.0);
 }
 
 TEST(CameraConditioningComparators, RankTwoSystemSeparatesFixedDropFromRankAwareRetention) {
