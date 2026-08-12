@@ -51,13 +51,19 @@ may not reinterpret a decision merely because an older plan differs.
 
 The v6 plan intentionally does not supply numerical absolute-angle,
 median/MAD, or spatial-coverage thresholds for the deterministic consensus.
-Session 0 does not invent or claim them. Session 1 may record the raw consensus
-metrics but must mark threshold-dependent pass/fail fields unavailable until
-an advisor-authorized threshold set exists. The exact numerical values and
-threshold-set identifier require an advisor-approved Session 3 contract entry
-before kernel/admission use and before holdout access. Any later authorized
-change must also be entered here, consistent with Sections 8.10 and 15
-(Sessions 2--3).
+Session 0 does not invent or claim them. Session 1 records the complete raw
+fit/residual/spatial metrics and marks threshold-dependent pass/fail fields
+unavailable until an advisor-authorized threshold set exists. No later than
+Session 2, the scientific authority must enter the exact values, boundary
+semantics, and immutable threshold-set identifier here. Session 2 then applies
+that set offline to the already captured raw T0 records, regenerates the
+consensus-survival/valid-group counts, and only then evaluates the T1 gate in
+Sections 7.7--7.8. If the set remains absent, the T1 gate cannot pass and no
+Session 3 T1-kernel authorization may be issued. Session 3 implements and
+tests the same previously frozen values; it does not select them. Any later
+authorized pre-holdout change requires a new decision-log entry and complete
+development re-evaluation, consistent with Sections 8.10 and 15 (Sessions
+2--3).
 
 ## Deliberately unresolved items
 

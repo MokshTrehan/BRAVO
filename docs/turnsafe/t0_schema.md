@@ -354,11 +354,17 @@ fitted rotation is telemetry only and is never an estimator update.
 
 The v6 plan does not supply numerical absolute-angle, median/MAD, or spatial
 coverage thresholds. Until an advisor-authorized threshold set is entered in
-the decision log, T0 records the raw fit/residual/spatial metrics and marks the
-corresponding threshold-dependent results `NOT_APPLICABLE` with reason
-`THRESHOLD_SET_NOT_FROZEN`; it does not claim a passing consensus group. Those
-values require the Session 3 contract freeze before kernel/admission use and
-before holdout access (Sections 8.10 and 15, Sessions 2--3).
+the decision log, T0 records the complete raw fit/residual/spatial metrics and
+marks the corresponding threshold-dependent results `NOT_APPLICABLE` with
+reason `THRESHOLD_SET_NOT_FROZEN`; it does not claim a passing consensus group.
+No later than Session 2, the scientific authority must freeze the exact
+values, boundary semantics, and threshold-set identifier. Offline T0 tooling
+then deterministically re-evaluates the captured raw records under that set and
+regenerates every consensus-survival, valid-group, winner, and foregone-group
+field before the Sections 7.7--7.8 branch gate is evaluated. If no set is
+frozen, the T1 engineering gate is not evaluable and cannot pass. Session 3
+may implement only the same Session-2-frozen values; it does not choose them
+(Sections 7.7--7.8, 8.10, and 15, Sessions 2--3).
 
 The pre-NIS score is recorded in this exact order:
 
