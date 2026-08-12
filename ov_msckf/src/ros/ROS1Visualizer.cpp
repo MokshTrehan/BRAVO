@@ -194,6 +194,14 @@ bool ROS1Visualizer::set_cp2_serial_processing_observer(
   return true;
 }
 
+ROS1SerialCameraQueueState ROS1Visualizer::serial_camera_queue_state() {
+  const std::lock_guard<std::mutex> lock(camera_queue_mtx);
+  ROS1SerialCameraQueueState state;
+  state.pending_messages = camera_queue.size();
+  state.processing_active = thread_update_running.load();
+  return state;
+}
+
 void ROS1Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> parser) {
 
   // We need a valid parser
@@ -646,7 +654,13 @@ void ROS1Visualizer::callback_monocular(const sensor_msgs::ImageConstPtr &msg0, 
 
 void ROS1Visualizer::callback_stereo(const sensor_msgs::ImageConstPtr &msg0, const sensor_msgs::ImageConstPtr &msg1, int cam_id0,
                                      int cam_id1) {
-  (void)callback_stereo_impl(msg0, msg1, cam_id0, cam_id1, nullptr);
+  (void)callback_stereo_serial(msg0, msg1, cam_id0, cam_id1);
+}
+
+CP2SerialEnqueueStatus ROS1Visualizer::callback_stereo_serial(
+    const sensor_msgs::ImageConstPtr &msg0,
+    const sensor_msgs::ImageConstPtr &msg1, int cam_id0, int cam_id1) {
+  return callback_stereo_impl(msg0, msg1, cam_id0, cam_id1, nullptr);
 }
 
 CP2SerialEnqueueStatus ROS1Visualizer::callback_stereo_cp2(

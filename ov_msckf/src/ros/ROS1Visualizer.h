@@ -46,6 +46,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <fstream>
@@ -73,6 +74,12 @@ enum class CP2SerialEnqueueStatus : std::uint8_t {
   kFrequencyDropped,
   kCam0DecodeFailed,
   kCam1DecodeFailed,
+};
+
+/** Read-only snapshot of the serial camera-processing queue. */
+struct ROS1SerialCameraQueueState {
+  std::size_t pending_messages = 0U;
+  bool processing_active = false;
 };
 
 const char *cp2_serial_enqueue_status_name(
@@ -143,6 +150,14 @@ public:
 
   /// Callback for synchronized stereo camera information
   void callback_stereo(const sensor_msgs::ImageConstPtr &msg0, const sensor_msgs::ImageConstPtr &msg1, int cam_id0, int cam_id1);
+
+  /** Queue one ordinary serial pair and expose the existing enqueue outcome. */
+  CP2SerialEnqueueStatus callback_stereo_serial(
+      const sensor_msgs::ImageConstPtr &msg0,
+      const sensor_msgs::ImageConstPtr &msg1, int cam_id0, int cam_id1);
+
+  /** Atomically snapshot pending serial cameras and processing activity. */
+  ROS1SerialCameraQueueState serial_camera_queue_state();
 
   /** Queue one frozen serial pair with identity carried to processing. */
   CP2SerialEnqueueStatus callback_stereo_cp2(

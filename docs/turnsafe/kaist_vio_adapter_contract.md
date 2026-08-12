@@ -36,6 +36,20 @@ Core metadata byte identities are:
 | `config/imu-params.yaml` | `0bf07d9e23c624ec3af51caec26b673069dbfcc05c76740e45ef48b813f56a29` |
 | `config/trans-mat.yaml` | `ae3d00d6022ca520044bb84d190a74a61aa2cd5e86cc6005615b33c686404108` |
 
+The public archive and the direct bag evidence admitted in Session 0.5 are
+byte-identified separately:
+
+| Evidence | SHA-256 |
+|---|---|
+| official `kaist_vio_dataset.zip` archive | `1f3fe695b773342a7a1df227e651a7566802ea2e7a8d5ef1af49f0c112c09e1f` |
+| central-directory-only `ARCHIVE_SAFETY_AUDIT.json` | `d7647058217ff809cfd1be4d6d2e1d7644c2f80fc37d0285e12ab59946a21a30` |
+| extracted `rotation/rotation_fast.bag` | `d77f19421a271e8cb0475971ee3475d8954e19b1b081b758966ba81f3e57ebbb` |
+
+The archive safety audit records 21 regular-file/directory members, the exact
+eleven-bag layout, unique normalized and case-folded paths, and no absolute,
+drive-qualified, or ambiguous paths. It is an archive-structure check; it is
+not a substitute for per-bag semantic audit.
+
 Repository frame, state, timestamp, and camera conventions are fixed by
 `docs/conventions.md`. Repository loader behavior at the Session 0.5 entry
 commit `fdf34496e4f5212c79ab65d6210eed11e1437dd1` is implementation ground
@@ -48,80 +62,173 @@ truth, specifically:
 - `ov_msckf/src/ros1_serial_msckf.cpp` for accepted ROS message types and
   offline stereo dispatch.
 
-If a bag disagrees with the pinned metadata or one of the mappings below, the
-adapter fails closed and records the discrepancy. It must not infer a new
-frame, unit, clock correction, calibration, or noise model from trajectory
-quality.
+For calibration, frames, units, and noise, the pinned metadata and repository
+conventions remain normative. For the archive's recorded topic names, ROS
+types, message counts, and timestamps, the byte-identified bag and its
+deterministic audit take precedence over README prose. Thus the directly
+observed raw infrared profile below is authoritative for the official archive;
+the README's compressed topics remain a separately detected fallback profile.
+If a bag matches neither exact profile or disagrees with another fixed mapping,
+the adapter fails closed and records the discrepancy. It must not infer a new
+profile, frame, unit, clock correction, calibration, or noise model from
+trajectory quality.
 
 ## 2. Input and output message contract
 
-The official README declares two compressed infrared streams at nominal
-30 Hz, one IMU stream at nominal 100 Hz, and ground truth at nominal 50 Hz.
-The adapter's estimator-input allowlist is:
+The official README declares compressed infrared streams at nominal 30 Hz, one
+IMU stream at nominal 100 Hz, and ground truth at nominal 50 Hz. Direct
+inspection of the byte-identified `rotation_fast.bag`, however, found raw
+infrared `sensor_msgs/Image` connections. The adapter therefore supports
+exactly two mutually exclusive source profiles:
 
-| Role | Official source topic and type | Adapter target topic and type | Action |
+| Profile | Role | Exact source topic and type | Exact target topic and type | Action |
+|---|---|---|---|---|
+| `official_raw` (primary) | left infrared | `/camera/infra1/image_rect_raw`, `sensor_msgs/Image` | `/turnsafe/kaist/infra1/image_raw`, `sensor_msgs/Image` | validate and retopic unchanged |
+| `official_raw` (primary) | right infrared | `/camera/infra2/image_rect_raw`, `sensor_msgs/Image` | `/turnsafe/kaist/infra2/image_raw`, `sensor_msgs/Image` | validate and retopic unchanged |
+| `documented_compressed` (fallback) | left infrared | `/camera/infra1/image_rect_raw/compressed`, `sensor_msgs/CompressedImage` | `/turnsafe/kaist/infra1/image_raw`, `sensor_msgs/Image` | validate and decode only |
+| `documented_compressed` (fallback) | right infrared | `/camera/infra2/image_rect_raw/compressed`, `sensor_msgs/CompressedImage` | `/turnsafe/kaist/infra2/image_raw`, `sensor_msgs/Image` | validate and decode only |
+
+Both profiles require these source-only/common streams:
+
+| Role | Exact source topic and type | Exact target | Action |
 |---|---|---|---|
-| left infrared | `/camera/infra1/image_rect_raw/compressed`, `sensor_msgs/CompressedImage` | `/turnsafe/kaist/infra1/image_raw`, `sensor_msgs/Image` | decode only |
-| right infrared | `/camera/infra2/image_rect_raw/compressed`, `sensor_msgs/CompressedImage` | `/turnsafe/kaist/infra2/image_raw`, `sensor_msgs/Image` | decode only |
-| IMU | `/mavros/imu/data`, `sensor_msgs/Imu` | `/mavros/imu/data`, `sensor_msgs/Imu` | exact semantic pass-through |
+| IMU | `/mavros/imu/data`, `sensor_msgs/Imu` | `/mavros/imu/data`, `sensor_msgs/Imu` | exact serialized pass-through |
+| ground truth | `/pose_transformed`, `geometry_msgs/PoseStamped` | none | require and audit source; omit output |
 
-The official color stream
-`/camera/color/image_raw/compressed` is outside the stereo estimator input and
-is omitted. `/pose_transformed` (`geometry_msgs/PoseStamped`) is ground truth
-and is also omitted from the estimator-input bag. All other connections are
-inventoried but omitted. An output bag containing either ground truth or an
-unreviewed sensor topic is not an accepted estimator input.
+Exactly one complete camera profile must be present. Any raw/compressed camera
+mixture, either profile with a missing side, a wrong ROS type, or no recognized
+profile fails before an output is advertised. The selected profile name is
+recorded as `source_profile` in the machine-readable adaptation and source
+audit reports.
 
-Nominal rates are validation metadata, not permission to synthesize samples.
-The adapter never drops, duplicates, interpolates, resamples, or rate-controls
-an allowlisted message. Missing required streams, wrong ROS types, an unreadable
-message, or a zero-message required stream is a hard failure. Measured counts,
-duration, and rates are recorded for every bag; a departure from the official
-nominal rate is reported and never repaired silently.
+Every color-camera connection, including the raw stream observed in the
+archive and the compressed form named by the README, is outside the stereo
+estimator input and is inventoried but omitted. All other nonrequired
+connections are likewise inventoried and omitted. An output bag containing
+ground truth, color, or another unreviewed sensor topic is not an accepted
+estimator input.
 
-### 2.1 Compressed-image decoding
+All camera messages from the uniquely selected profile and all IMU messages
+are retained one-for-one. In particular, a camera message without an exact
+stamp match on the other side remains in the adapted bag. The adapter never
+drops, duplicates, interpolates, resamples, rate-controls, reorders, or retimes
+a retained sensor message. Ground truth is the sole required source stream
+intentionally omitted from output. Missing required streams, an unreadable
+message, or a zero-message required stream is a hard failure. Nominal rates are
+validation metadata, not permission to synthesize samples: measured counts,
+duration, and rates are recorded, and a departure is reported rather than
+silently repaired.
 
-For each infrared `sensor_msgs/CompressedImage`:
+### 2.1 Authoritative raw-image pass-through
 
-1. validate a finite, nonzero ROS header timestamp and a nonempty payload;
-2. decode the payload without resizing, debayering, rectifying, undistorting,
-   contrast adjustment, color conversion, or lossy re-encoding;
-3. require a `640 x 480`, one-channel, unsigned 8-bit decoded image;
-4. emit `sensor_msgs/Image` with `encoding="mono8"`, `is_bigendian=0`,
+For each `official_raw` infrared `sensor_msgs/Image`, the adapter requires
+`width=640`, `height=480`, `encoding="mono8"`, `is_bigendian=0`, `step=640`,
+and exactly `307200` row-major payload bytes. Its header timestamp must be
+nonzero. The original message object is written under the TurnSafe-owned target
+topic without reconstruction or field mutation. Its serialized ROS message
+bytes, `seq`, `stamp`, `frame_id`, pixels, bag-record timestamp, and position in
+the retained stream must therefore be semantically identical to the source.
+Any dimension, encoding, endian, step, or payload-length mismatch rejects the
+bag.
+
+### 2.2 Documented compressed-image fallback
+
+For each `documented_compressed` infrared `sensor_msgs/CompressedImage`:
+
+1. validate a nonzero ROS header timestamp and a nonempty payload;
+2. require `CompressedImage.format` to identify exactly one JPEG or PNG codec
+   and require the payload signature to agree;
+3. decode with the pinned OpenCV `imdecode(..., IMREAD_UNCHANGED)` path, without
+   resizing, debayering, rectifying, undistorting, contrast adjustment, color
+   conversion, or lossy re-encoding;
+4. require a `640 x 480`, two-dimensional, unsigned 8-bit decoded image;
+5. emit `sensor_msgs/Image` with `encoding="mono8"`, `is_bigendian=0`,
    `step=640`, and the decoded row-major pixel bytes; and
-5. copy `seq`, `stamp`, and `frame_id` from the source header exactly.
+6. copy `seq`, `stamp`, and `frame_id` from the source header exactly.
 
-The implementation must parse and record `CompressedImage.format`. It may
-support only a codec actually observed in a validated official bag and decoded
-by a pinned, installed decoder. An empty/unknown format, unsupported codec,
-decode warning, dimension/depth/channel mismatch, or nondeterministic decode
-is `UNSUPPORTED_COMPRESSED_IMAGE` and rejects that bag. A future codec or
-pixel-format extension requires a reviewed contract change.
+An empty or ambiguous format, a codec other than JPEG/PNG, a signature
+mismatch, decode failure, or dimension/depth/channel mismatch raises a visible
+adapter error and leaves no accepted partial output. A future codec or pixel
+format requires a reviewed contract change.
 
-The source topic name contains `image_rect_raw`; that name does not authorize
-another geometric operation. The official nonzero radtan calibration remains
-active, so the adapter performs no rectification or distortion change.
+For either profile, the source topic name contains `image_rect_raw`; that name
+does not authorize another geometric operation. The official nonzero radtan
+calibration remains active, so the adapter performs no rectification or
+distortion change.
 
-### 2.2 Ordering and timestamp preservation
+### 2.3 Ordering, timestamps, and semantic identity
 
-Input traversal order is the ROS bag view's deterministic record order. For
-equal record timestamps, original input ordinal is the tie-breaker. A decoded
-image replaces its compressed source at the same position in that order. Each
-output message uses exactly the source bag record timestamp; every retained
-header timestamp is bit-for-bit unchanged. The adapter must not substitute
-wall time or header time for bag record time.
+Input traversal follows the deterministic order yielded by the pinned ROS1 bag
+reader over the required topics. The adapter does not impose a new tie-breaker
+or reorder equal-record-time messages. A decoded image replaces its compressed
+source at the same position in that traversal. Each output message uses exactly
+the source bag-record timestamp; every retained header timestamp is unchanged.
+The adapter must not substitute wall time or header time for bag-record time.
+Bag-record and header timestamps must each be strictly increasing within every
+required topic, and every required header stamp must be nonzero.
 
-Header timestamps must be strictly increasing within each required topic.
-Stereo observations are accepted only when the left and right header
-timestamps identify an exact common camera time. Pairing must not rewrite a
-stamp or choose a nearest frame. A bag that needs a nonzero stereo pairing
-tolerance is outside this contract and fails closed pending review.
+Determinism is judged by canonical semantic-stream digests over ordered logical
+roles, bag-record nanoseconds, header fields, and either exact serialized
+pass-through bytes or normalized decoded `mono8` pixels. Logical roles, rather
+than source topic names, permit the deliberate retopicking and compressed-to-raw
+conversion to be compared. Two adaptations of the same input with the same
+pinned decoder must produce the same digests. Raw-source cameras and IMU must
+also preserve their recorded-message semantic digests exactly. Container-byte
+equality may be reported but is not a substitute for semantic equality.
 
-Determinism is judged by a canonical semantic-stream digest over ordered topic,
-ROS type, bag-record nanoseconds, header fields, and message payload fields.
-Two adaptations of the same input with the same pinned decoder must produce
-the same digest. Container-byte equality may also be reported but is not a
-substitute for semantic equality.
+### 2.4 Exact-header pairing audit and serial replay seam
+
+Stereo audit pairs only the exact intersection of the two cameras' integer
+header-stamp sets. It never uses ordinal position, nearest-neighbor tolerance,
+or bag-record-time proximity to choose a pair. From the original absolute
+bag-record-time differences of the exact pairs, the report records
+minimum/maximum/sum/mean statistics and the count at or above `20000000 ns`; it
+also records the exact pair count and the count and stamp list unmatched on
+each side. The `20000000 ns` threshold is an audit boundary, not an adapter
+rejection threshold. No header or bag-record timestamp is rewritten. A bag
+with no exact common header stamp fails closed.
+
+The directly audited `rotation_fast.bag` has `3761` raw infrared messages on
+each side, `3760` exact-header pairs, and one unmatched header stamp per side.
+Among the exact pairs, `22` have an original bag-record difference at or above
+`20000000 ns`; the maximum is `53519649 ns` and the observed p99 is
+approximately `15.09 ms`. These are evidence for the exact-header seam and are
+not permission to filter, retime, or impose a record-time acceptance window.
+
+The legacy serial reader's record-time first-forward window cannot represent
+those target-time pairs. KAIST replay therefore uses the dedicated
+`kaist_vio_exact_header_stereo` input-plumbing mode. The executable default is
+`false`; only the dedicated fixed KAIST launch sets it to `true`. When enabled,
+the reader first builds one immutable, topic-filtered view for the authorized
+bag interval, validates the camera headers, and joins exact equal stamps. Each
+pair is dispatched once at the earlier of its two filtered record ordinals.
+The full view makes both already-recorded pair members addressable at that
+anchor without copying, rewriting, or synthesizing a measurement.
+
+Earlier anchoring leaves the subsequent IMU records available to process the
+queued camera callback. For a full-duration replay, the loop drains the full
+filtered view instead of stopping at the last camera record, so a later real
+IMU message can drain the final camera callback; no synthetic IMU or camera
+sample is permitted. Unmatched camera messages stay in the adapted bag and are
+counted, but do not enter a stereo callback. Their exclusion is explicit
+exact-header incompatibility accounting, not a generic dropped/unpaired
+warning. The runtime must emit exactly one selection summary whose exact-pair
+count, unmatched counts, count at or above `20 ms`, and maximum record
+difference equal the adapted-bag audit. A separate terminal summary accounts
+for pairs queued to the existing callback, pairs removed by the already-frozen
+baseline frequency policy, pairs proven processed, camera decode failures, and
+the terminal pending-pair count. Exact-header replay requires synchronous
+subscriber processing and fails unless the terminal queue is empty and no
+camera-processing callback is active. Only after that drain proof may the
+runtime report `processed_pairs = queued_pairs`.
+
+This default-off path is a KAIST offline serial-dispatch seam only. It supplies
+the existing stereo callback with two existing images at one exact target time
+and does not authorize any estimator mathematics, update, gating, calibration,
+frontend, feature-lifecycle, timestamp, image, or IMU behavior change. It
+requires two distinct raw camera input topics, fails closed on malformed or
+nonunique pair identity, and is not accepted when a runtime `path_gt` parameter
+exists.
 
 ## 3. Camera model and calibration
 
@@ -369,10 +476,14 @@ is removed.
 The following are outside this adapter contract:
 
 - a ROS2 bag, non-ROS1 serialization, encrypted archive, or damaged bag;
-- camera types other than `sensor_msgs/CompressedImage` on the two exact
-  official topics;
-- decoded images other than `640 x 480 mono8`;
+- a camera layout other than exactly one complete `official_raw` or
+  `documented_compressed` profile, including a mixture of their topic markers;
+- raw images other than the exact `640 x 480 mono8`, `is_bigendian=0`,
+  tightly-packed layout, or compressed images that do not decode to
+  `640 x 480 mono8` through the fixed JPEG/PNG path;
 - approximate stereo timestamp pairing or any timestamp rewrite;
+- filtering an unmatched camera message or rejecting an exact pair solely
+  because its original bag-record difference reaches `20 ms`;
 - image rectification, undistortion, resizing, photometric enhancement, or
   camera-axis remapping;
 - IMU unit conversion, axis remapping, saturation repair, filtering, or
@@ -381,13 +492,19 @@ The following are outside this adapter contract:
 - a different gravity or IMU noise set selected from trajectory performance;
 - rolling-shutter/readout compensation (the pinned metadata does not specify a
   readout model in this contract);
-- use of color or ground truth by the estimator; and
+- use of color or ground truth by the estimator, or any runtime `path_gt` in
+  the dedicated exact-header KAIST launch; and
 - sequence-name, future-frame, final-error, or evaluator feedback at runtime.
 
-Nonfinite timestamps or IMU samples, nonmonotonic required-topic header time,
-inconsistent calibration transforms, unsupported compressed formats, and
-incomplete stereo streams are hard failures. The implementation must emit a
-typed reason and leave no partial output advertised as compatible.
+Zero/invalid timestamps, nonfinite IMU angular-velocity or linear-acceleration
+components, nonmonotonic required-topic record or header time, nonfinite ground
+truth position/quaternion, a zero ground-truth quaternion, inconsistent
+calibration transforms, unsupported compressed formats, mixed or incomplete
+source profiles, and a bag with no exact common camera header stamp are hard
+failures. Nonfinite optional IMU orientation/covariance fields are counted in
+the audit because the runtime does not consume them; they are neither mutated
+nor silently hidden. The implementation must emit a visible reason and leave
+no partial output advertised as compatible.
 
 ## 9. Required conformance evidence
 
@@ -395,23 +512,35 @@ Before any full-sequence baseline run, tests must prove:
 
 1. the metadata commit is exactly
    `ae672591bab119651be1aa9fc3db5af3e599f49a`;
-2. source and output topic/type allowlists are exact;
-3. one source infrared message produces one pixel-identical decoded target
-   image with preserved header and bag-record time;
-4. corrupt, unsupported, wrong-size, wrong-depth, and wrong-channel images
-   fail closed;
-5. IMU semantic fields and timestamps are unchanged;
-6. two independent adaptations have identical canonical semantic digests;
-7. the exact official transforms load to the expected stored
+2. both source profiles are uniquely detected, their source and output
+   topic/type allowlists are exact, and mixed/incomplete profiles fail closed;
+3. a raw source image is retopicked with identical serialized message bytes,
+   header, pixels, bag-record time, and retained order;
+4. a compressed source image produces one pixel-identical decoded target with
+   preserved header, bag-record time, and retained order;
+5. corrupt, unsupported, wrong-size, wrong-depth, wrong-channel, wrong-encoding,
+   wrong-step, and wrong-payload-length images fail closed;
+6. IMU serialized semantics and timestamps are unchanged, while ground truth
+   is source-validated and intentionally absent from output;
+7. two independent adaptations have identical canonical semantic digests;
+8. unmatched header stamps, including equal-count streams with different stamp
+   sets, are preserved and reported; exact pairs at and above `20 ms` record
+   difference are retained, and exact-pair/unmatched/skew audits are unchanged
+   across adaptation;
+9. the exact official transforms load to the expected stored
    `(R_ItoC, p_IinC)` values, and the stereo composition/baseline checks pass;
-8. radtan coefficients reach `CamRadtan` in `[k1,k2,p1,p2]` order;
-9. the cam0 global offset, its sign equation, and the quantified cam1 disparity
+10. radtan coefficients reach `CamRadtan` in `[k1,k2,p1,p2]` order;
+11. the cam0 global offset, its sign equation, and the quantified cam1 disparity
    are asserted;
-10. the four official IMU noise scalars and `9.805` gravity load exactly;
-11. the estimator-input bag and resolved estimator parameters contain no
+12. the four official IMU noise scalars and `9.805` gravity load exactly;
+13. the estimator-input bag and resolved estimator parameters contain no
     ground-truth input; and
-12. a smoke replay completes without any estimator or evaluator-driven change
-    to the frozen adapter/calibration/configuration.
+14. a full-duration smoke replay enables the otherwise default-off exact-header
+    seam, emits exactly one runtime selection summary whose accounting fields
+    equal the adapted audit, drains the full filtered view and camera queue,
+    reports `processed_pairs = queued_pairs` and `pending_pairs = 0`, and completes
+    without any estimator- or evaluator-driven change to the frozen adapter,
+    serial plumbing, calibration, or configuration.
 
 After the smoke checkpoint, hash the adapter, decoder/runtime dependencies,
 configuration, bags, and references before the ordered eleven-sequence run.

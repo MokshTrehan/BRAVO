@@ -1,13 +1,15 @@
 #!/usr/bin/python3
 """Deterministically adapt official KAIST VIO ROS1 bags for serial replay.
 
-The public KAIST VIO bags carry rectified infrared images through compressed
-image-transport topics.  OpenVINS' serial reader consumes uncompressed
-``sensor_msgs/Image`` messages instead.  This tool validates the four required
-input streams, decodes only JPEG/PNG images, and writes a minimal bag with the
-two TurnSafe-owned raw image topics plus the unchanged IMU stream.  Ground truth
-is mandatory and audited at the source boundary, but is deliberately omitted
-from the estimator-input bag.
+Official KAIST VIO archives have appeared with rectified infrared images as
+raw ``sensor_msgs/Image`` streams, while the public documentation describes
+compressed image-transport streams.  This tool supports those two source
+profiles independently and rejects mixtures.  It validates the four required
+input streams and writes a minimal bag with two TurnSafe-owned raw image topics
+plus the unchanged IMU stream.  Raw source images are retopicked without
+reconstruction; compressed JPEG/PNG images are decoded to raw mono8.  Ground
+truth is mandatory and audited at the source boundary, but is deliberately
+omitted from the estimator-input bag.
 
 No estimator behavior or calibration is encoded here.  The audit is semantic:
 it is independent of rosbag chunking/compression and records exact timestamp,
@@ -36,17 +38,22 @@ import rosbag
 from sensor_msgs.msg import Image
 
 
-SOURCE_CAMERA0_TOPIC = "/camera/infra1/image_rect_raw/compressed"
-SOURCE_CAMERA1_TOPIC = "/camera/infra2/image_rect_raw/compressed"
+RAW_SOURCE_CAMERA0_TOPIC = "/camera/infra1/image_rect_raw"
+RAW_SOURCE_CAMERA1_TOPIC = "/camera/infra2/image_rect_raw"
+COMPRESSED_SOURCE_CAMERA0_TOPIC = "/camera/infra1/image_rect_raw/compressed"
+COMPRESSED_SOURCE_CAMERA1_TOPIC = "/camera/infra2/image_rect_raw/compressed"
 OUTPUT_CAMERA0_TOPIC = "/turnsafe/kaist/infra1/image_raw"
 OUTPUT_CAMERA1_TOPIC = "/turnsafe/kaist/infra2/image_raw"
 IMU_TOPIC = "/mavros/imu/data"
 GROUND_TRUTH_TOPIC = "/pose_transformed"
 
+RAW_SOURCE_PROFILE = "official_raw"
+COMPRESSED_SOURCE_PROFILE = "documented_compressed"
+
 EXPECTED_WIDTH = 640
 EXPECTED_HEIGHT = 480
 OUTPUT_ENCODING = "mono8"
-STRICT_MAXIMUM_STEREO_SKEW_NS = 20_000_000
+STEREO_RECORD_SKEW_THRESHOLD_NS = 20_000_000
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
 AUDIT_SCHEMA = "turnsafe.kaist_vio_adapter.audit.v1"
@@ -65,15 +72,28 @@ class StreamSpec:
     image_transport: Optional[str] = None
 
 
-SOURCE_SPECS: Tuple[StreamSpec, ...] = (
+@dataclass(frozen=True)
+class SourceProfile:
+    name: str
+    specs: Tuple[StreamSpec, ...]
+
+
+RAW_SOURCE_SPECS: Tuple[StreamSpec, ...] = (
+    StreamSpec(RAW_SOURCE_CAMERA0_TOPIC, "sensor_msgs/Image", "camera0", "raw"),
+    StreamSpec(RAW_SOURCE_CAMERA1_TOPIC, "sensor_msgs/Image", "camera1", "raw"),
+    StreamSpec(IMU_TOPIC, "sensor_msgs/Imu", "imu"),
+    StreamSpec(GROUND_TRUTH_TOPIC, "geometry_msgs/PoseStamped", "ground_truth"),
+)
+
+COMPRESSED_SOURCE_SPECS: Tuple[StreamSpec, ...] = (
     StreamSpec(
-        SOURCE_CAMERA0_TOPIC,
+        COMPRESSED_SOURCE_CAMERA0_TOPIC,
         "sensor_msgs/CompressedImage",
         "camera0",
         "compressed",
     ),
     StreamSpec(
-        SOURCE_CAMERA1_TOPIC,
+        COMPRESSED_SOURCE_CAMERA1_TOPIC,
         "sensor_msgs/CompressedImage",
         "camera1",
         "compressed",
@@ -82,16 +102,21 @@ SOURCE_SPECS: Tuple[StreamSpec, ...] = (
     StreamSpec(GROUND_TRUTH_TOPIC, "geometry_msgs/PoseStamped", "ground_truth"),
 )
 
+SOURCE_PROFILES: Tuple[SourceProfile, ...] = (
+    SourceProfile(RAW_SOURCE_PROFILE, RAW_SOURCE_SPECS),
+    SourceProfile(COMPRESSED_SOURCE_PROFILE, COMPRESSED_SOURCE_SPECS),
+)
+
 ADAPTED_SPECS: Tuple[StreamSpec, ...] = (
     StreamSpec(OUTPUT_CAMERA0_TOPIC, "sensor_msgs/Image", "camera0", "raw"),
     StreamSpec(OUTPUT_CAMERA1_TOPIC, "sensor_msgs/Image", "camera1", "raw"),
     StreamSpec(IMU_TOPIC, "sensor_msgs/Imu", "imu"),
 )
 
-SOURCE_TO_OUTPUT = {
-    SOURCE_CAMERA0_TOPIC: OUTPUT_CAMERA0_TOPIC,
-    SOURCE_CAMERA1_TOPIC: OUTPUT_CAMERA1_TOPIC,
-    IMU_TOPIC: IMU_TOPIC,
+OUTPUT_TOPIC_BY_KIND = {
+    "camera0": OUTPUT_CAMERA0_TOPIC,
+    "camera1": OUTPUT_CAMERA1_TOPIC,
+    "imu": IMU_TOPIC,
 }
 
 
@@ -489,8 +514,10 @@ class _AuditCollector:
         specs: Sequence[StreamSpec],
         metadata: Mapping[str, Mapping[str, int]],
         ignored_topics: Sequence[Mapping[str, object]],
+        source_profile: Optional[str] = None,
     ) -> None:
         self.role = role
+        self.source_profile = source_profile
         self.specs = tuple(specs)
         self.streams = {
             spec.topic: _StreamAudit(
@@ -557,6 +584,7 @@ class _AuditCollector:
         return {
             "schema": AUDIT_SCHEMA,
             "role": self.role,
+            "source_profile": self.source_profile,
             "required_topic_count": len(self.specs),
             "total_required_messages": sum(stream.count for stream in self.streams.values()),
             "ignored_topics": self.ignored_topics,
@@ -581,87 +609,124 @@ def _skew_report(values: Sequence[int]) -> Dict[str, object]:
 
 
 def _stereo_report(camera0: _StreamAudit, camera1: _StreamAudit) -> Dict[str, object]:
-    if camera0.count != camera1.count:
-        raise AdapterError(
-            "stereo streams have unequal counts: {} has {}, {} has {}".format(
-                camera0.spec.topic,
-                camera0.count,
-                camera1.spec.topic,
-                camera1.count,
-            )
-        )
-    if camera0.count == 0:
+    if camera0.count == 0 or camera1.count == 0:
         raise AdapterError("stereo streams are empty")
+    camera0_by_header = dict(zip(camera0.header_times, camera0.record_times))
+    camera1_by_header = dict(zip(camera1.header_times, camera1.record_times))
+    exact_headers = sorted(set(camera0_by_header).intersection(camera1_by_header))
+    if not exact_headers:
+        raise AdapterError("stereo streams have no exact header-stamp pairs")
+    unmatched_camera0 = sorted(set(camera0_by_header) - set(camera1_by_header))
+    unmatched_camera1 = sorted(set(camera1_by_header) - set(camera0_by_header))
     record_skews = [
-        abs(left - right)
-        for left, right in zip(camera0.record_times, camera1.record_times)
+        abs(camera0_by_header[header] - camera1_by_header[header])
+        for header in exact_headers
     ]
-    header_skews = [
-        abs(left - right)
-        for left, right in zip(camera0.header_times, camera1.header_times)
-    ]
-    for index, (record_skew, header_skew) in enumerate(zip(record_skews, header_skews)):
-        if record_skew >= STRICT_MAXIMUM_STEREO_SKEW_NS:
-            raise AdapterError(
-                "stereo pair {} record-time skew {} ns is not below {} ns".format(
-                    index, record_skew, STRICT_MAXIMUM_STEREO_SKEW_NS
-                )
-            )
-        if header_skew != 0:
-            raise AdapterError(
-                "stereo pair {} header-time skew is {} ns; exact equality is required".format(
-                    index, header_skew
-                )
-            )
+    at_or_above_limit = sum(
+        skew >= STEREO_RECORD_SKEW_THRESHOLD_NS for skew in record_skews
+    )
 
     digest = hashlib.sha256()
-    _feed_text(digest, "turnsafe.kaist_vio.ordinal_stereo_pairs.v1")
-    for index in range(camera0.count):
+    _feed_text(digest, "turnsafe.kaist_vio.exact_header_stereo_pairs.v1")
+    for index, header in enumerate(exact_headers):
         _feed_u64(digest, index)
-        _feed_u64(digest, camera0.record_times[index])
-        _feed_u64(digest, camera1.record_times[index])
-        _feed_u64(digest, camera0.header_times[index])
-        _feed_u64(digest, camera1.header_times[index])
+        _feed_u64(digest, header)
+        _feed_u64(digest, camera0_by_header[header])
+        _feed_u64(digest, camera1_by_header[header])
     return {
-        "policy": "ordinal_no_reuse",
-        "complete": True,
-        "pair_count": camera0.count,
-        "strict_maximum_skew_ns": STRICT_MAXIMUM_STEREO_SKEW_NS,
-        "header_stamps_exactly_equal": True,
+        "policy": "exact_header_stamp_no_filter_no_retime",
+        "pair_count": len(exact_headers),
+        "exact_header_pair_count": len(exact_headers),
+        "camera0_count": camera0.count,
+        "camera1_count": camera1.count,
+        "camera0_unmatched_count": len(unmatched_camera0),
+        "camera1_unmatched_count": len(unmatched_camera1),
+        "camera0_unmatched_header_stamps_ns": unmatched_camera0,
+        "camera1_unmatched_header_stamps_ns": unmatched_camera1,
+        "record_skew_threshold_ns": STEREO_RECORD_SKEW_THRESHOLD_NS,
+        "matched_pair_record_skew_at_or_above_threshold_count": at_or_above_limit,
         "camera0_topic": camera0.spec.topic,
         "camera1_topic": camera1.spec.topic,
-        "record_time_absolute_skew": _skew_report(record_skews),
-        "header_time_absolute_skew": _skew_report(header_skews),
+        "matched_pair_record_time_absolute_skew": _skew_report(record_skews),
         "pair_semantic_sha256": digest.hexdigest(),
     }
 
 
-def _specs_for_role(role: str) -> Tuple[StreamSpec, ...]:
-    if role == "source":
-        return SOURCE_SPECS
-    if role == "adapted":
-        return ADAPTED_SPECS
-    raise AdapterError("unknown bag role {!r}".format(role))
+def _camera_topics(profile: SourceProfile) -> set:
+    return {
+        spec.topic
+        for spec in profile.specs
+        if spec.kind in ("camera0", "camera1")
+    }
+
+
+def _detect_source_profile(topic_names: Iterable[str]) -> SourceProfile:
+    names = set(topic_names)
+    active = []
+    for profile in SOURCE_PROFILES:
+        present = names.intersection(_camera_topics(profile))
+        if present:
+            active.append((profile, present))
+    if not active:
+        raise AdapterError("no supported KAIST VIO source camera profile is present")
+    if len(active) != 1:
+        raise AdapterError(
+            "mixed or ambiguous KAIST VIO source profiles are present: {}".format(
+                ", ".join(profile.name for profile, _ in active)
+            )
+        )
+    profile, present = active[0]
+    missing = sorted(_camera_topics(profile) - present)
+    if missing:
+        raise AdapterError(
+            "KAIST VIO source profile {!r} is incomplete; missing {}".format(
+                profile.name, ", ".join(missing)
+            )
+        )
+    return profile
 
 
 def _detect_role(topic_names: Iterable[str]) -> str:
     names = set(topic_names)
-    has_source = all(spec.topic in names for spec in SOURCE_SPECS)
-    has_adapted = all(spec.topic in names for spec in ADAPTED_SPECS)
-    if has_source == has_adapted:
+    source_markers = set().union(
+        *(_camera_topics(profile) for profile in SOURCE_PROFILES)
+    ).intersection(names)
+    adapted_markers = {
+        spec.topic
+        for spec in ADAPTED_SPECS
+        if spec.kind in ("camera0", "camera1")
+    }.intersection(names)
+    if source_markers and adapted_markers:
         raise AdapterError(
             "cannot uniquely detect bag role; specify --kind source or adapted"
         )
-    return "source" if has_source else "adapted"
+    if source_markers:
+        _detect_source_profile(names)
+        return "source"
+    if adapted_markers:
+        return "adapted"
+    raise AdapterError("cannot detect a supported KAIST VIO bag role")
 
 
 def _validate_metadata(
     bag: rosbag.Bag, role: str
-) -> Tuple[Tuple[StreamSpec, ...], Dict[str, Dict[str, int]], List[Dict[str, object]]]:
+) -> Tuple[
+    Tuple[StreamSpec, ...],
+    Dict[str, Dict[str, int]],
+    List[Dict[str, object]],
+    Optional[SourceProfile],
+]:
     info = bag.get_type_and_topic_info()
     if role == "auto":
         role = _detect_role(info.topics.keys())
-    specs = _specs_for_role(role)
+    source_profile = None
+    if role == "source":
+        source_profile = _detect_source_profile(info.topics.keys())
+        specs = source_profile.specs
+    elif role == "adapted":
+        specs = ADAPTED_SPECS
+    else:
+        raise AdapterError("unknown bag role {!r}".format(role))
     required = {spec.topic for spec in specs}
     metadata: Dict[str, Dict[str, int]] = {}
     for spec in specs:
@@ -694,7 +759,7 @@ def _validate_metadata(
                 ", ".join(item["topic"] for item in ignored)
             )
         )
-    return specs, metadata, ignored
+    return specs, metadata, ignored, source_profile
 
 
 def audit_bag(path: Path, role: str = "auto") -> Dict[str, object]:
@@ -705,9 +770,15 @@ def audit_bag(path: Path, role: str = "auto") -> Dict[str, object]:
         raise AdapterError("input bag is not a regular file: {}".format(bag_path))
     try:
         with rosbag.Bag(str(bag_path), "r") as bag:
-            specs, metadata, ignored = _validate_metadata(bag, role)
-            resolved_role = "source" if specs == SOURCE_SPECS else "adapted"
-            collector = _AuditCollector(resolved_role, specs, metadata, ignored)
+            specs, metadata, ignored, source_profile = _validate_metadata(bag, role)
+            resolved_role = "source" if source_profile is not None else "adapted"
+            collector = _AuditCollector(
+                resolved_role,
+                specs,
+                metadata,
+                ignored,
+                source_profile.name if source_profile is not None else None,
+            )
             topics = [spec.topic for spec in specs]
             for topic, message, record_time in bag.read_messages(topics=topics):
                 collector.observe(topic, message, record_time)
@@ -718,25 +789,35 @@ def audit_bag(path: Path, role: str = "auto") -> Dict[str, object]:
         raise AdapterError("unable to audit ROS1 bag {}: {}".format(bag_path, exc)) from exc
 
 
+def _streams_by_kind(report: Mapping[str, object]) -> Dict[str, Mapping[str, object]]:
+    result: Dict[str, Mapping[str, object]] = {}
+    for stream in report["streams"].values():
+        kind = stream["kind"]
+        if kind in result:
+            raise AdapterError("audit report contains duplicate stream kind {!r}".format(kind))
+        result[kind] = stream
+    return result
+
+
 def _assert_adaptation_preservation(
     source: Mapping[str, object], adapted: Mapping[str, object]
 ) -> Dict[str, object]:
-    source_streams = source["streams"]
-    adapted_streams = adapted["streams"]
+    source_streams = _streams_by_kind(source)
+    adapted_streams = _streams_by_kind(adapted)
     checks = {
         "camera0_decoded_image_semantics":
-            source_streams[SOURCE_CAMERA0_TOPIC]["image"]["decoded_image_semantic_sha256"]
-            == adapted_streams[OUTPUT_CAMERA0_TOPIC]["image"]["decoded_image_semantic_sha256"],
+            source_streams["camera0"]["image"]["decoded_image_semantic_sha256"]
+            == adapted_streams["camera0"]["image"]["decoded_image_semantic_sha256"],
         "camera1_decoded_image_semantics":
-            source_streams[SOURCE_CAMERA1_TOPIC]["image"]["decoded_image_semantic_sha256"]
-            == adapted_streams[OUTPUT_CAMERA1_TOPIC]["image"]["decoded_image_semantic_sha256"],
+            source_streams["camera1"]["image"]["decoded_image_semantic_sha256"]
+            == adapted_streams["camera1"]["image"]["decoded_image_semantic_sha256"],
         "imu_recorded_message_semantics":
-            source_streams[IMU_TOPIC]["recorded_message_semantic_sha256"]
-            == adapted_streams[IMU_TOPIC]["recorded_message_semantic_sha256"],
+            source_streams["imu"]["recorded_message_semantic_sha256"]
+            == adapted_streams["imu"]["recorded_message_semantic_sha256"],
         "source_ground_truth_validated":
-            source_streams[GROUND_TRUTH_TOPIC]["finite_pose_components"]
-            and source_streams[GROUND_TRUTH_TOPIC]["nonzero_quaternion"],
-        "ground_truth_intentionally_omitted": GROUND_TRUTH_TOPIC
+            source_streams["ground_truth"]["finite_pose_components"]
+            and source_streams["ground_truth"]["nonzero_quaternion"],
+        "ground_truth_intentionally_omitted": "ground_truth"
         not in adapted_streams,
         "stereo_pair_semantics": source["stereo"]["pair_semantic_sha256"]
         == adapted["stereo"]["pair_semantic_sha256"],
@@ -745,15 +826,17 @@ def _assert_adaptation_preservation(
             == adapted["estimator_input_order_semantic_sha256"],
         "retained_message_count":
             sum(
-                source_streams[topic]["count"]
-                for topic in (
-                    SOURCE_CAMERA0_TOPIC,
-                    SOURCE_CAMERA1_TOPIC,
-                    IMU_TOPIC,
-                )
+                source_streams[kind]["count"]
+                for kind in ("camera0", "camera1", "imu")
             )
             == adapted["total_required_messages"],
     }
+    if source_streams["camera0"]["image"]["transport"] == "raw":
+        for kind in ("camera0", "camera1"):
+            checks["{}_recorded_message_semantics".format(kind)] = (
+                source_streams[kind]["recorded_message_semantic_sha256"]
+                == adapted_streams[kind]["recorded_message_semantic_sha256"]
+            )
     failed = sorted(name for name, passed in checks.items() if not passed)
     if failed:
         raise AdapterError(
@@ -785,8 +868,14 @@ def adapt_bag(input_path: Path, output_path: Path) -> Dict[str, object]:
     temporary_path = Path(temporary_name)
     try:
         with rosbag.Bag(str(source_path), "r") as source_bag:
-            specs, metadata, ignored = _validate_metadata(source_bag, "source")
-            source_audit = _AuditCollector("source", specs, metadata, ignored)
+            specs, metadata, ignored, source_profile = _validate_metadata(
+                source_bag, "source"
+            )
+            if source_profile is None:
+                raise AdapterError("source profile detection returned no profile")
+            source_audit = _AuditCollector(
+                "source", specs, metadata, ignored, source_profile.name
+            )
             output_metadata = {
                 spec.topic: {"connections": 1} for spec in ADAPTED_SPECS
             }
@@ -795,13 +884,19 @@ def adapt_bag(input_path: Path, output_path: Path) -> Dict[str, object]:
             )
             with rosbag.Bag(str(temporary_path), "w") as output_bag:
                 topics = [spec.topic for spec in specs]
+                source_spec_by_topic = {spec.topic: spec for spec in specs}
                 for topic, message, record_time in source_bag.read_messages(topics=topics):
                     decoded = source_audit.observe(topic, message, record_time)
-                    if topic == GROUND_TRUTH_TOPIC:
+                    source_spec = source_spec_by_topic[topic]
+                    if source_spec.kind == "ground_truth":
                         continue
-                    output_topic = SOURCE_TO_OUTPUT[topic]
+                    output_topic = OUTPUT_TOPIC_BY_KIND[source_spec.kind]
                     output_message = message
-                    if decoded is not None:
+                    if source_spec.image_transport == "compressed":
+                        if decoded is None:
+                            raise AdapterError(
+                                "compressed image validation produced no decoded image"
+                            )
                         output_message = _raw_image(decoded, message)
                     adapted_audit.observe(output_topic, output_message, record_time)
                     output_bag.write(output_topic, output_message, record_time)
@@ -811,7 +906,13 @@ def adapt_bag(input_path: Path, output_path: Path) -> Dict[str, object]:
             preservation = _assert_adaptation_preservation(
                 source_report, adapted_report
             )
-        os.replace(str(temporary_path), str(destination))
+        try:
+            os.link(str(temporary_path), str(destination))
+        except FileExistsError as exc:
+            raise AdapterError(
+                "refusing to overwrite output bag: {}".format(destination)
+            ) from exc
+        temporary_path.unlink()
     except AdapterError:
         temporary_path.unlink(missing_ok=True)
         raise
@@ -824,6 +925,7 @@ def adapt_bag(input_path: Path, output_path: Path) -> Dict[str, object]:
 
     return {
         "schema": ADAPTATION_SCHEMA,
+        "source_profile": source_profile.name,
         "source_audit": source_report,
         "adapted_audit": adapted_report,
         "preservation": preservation,
@@ -870,7 +972,7 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     adapt = subparsers.add_parser(
-        "adapt", help="convert official compressed infrared topics to raw mono8"
+        "adapt", help="retopic raw or decompress documented infrared topics"
     )
     adapt.add_argument("input_bag", type=Path)
     adapt.add_argument("output_bag", type=Path)

@@ -59,6 +59,7 @@
 #include "update/CP2SerialRuntimeTrace.h"
 #include "update/CP2TraceJournal.h"
 #include "utils/dataset_reader.h"
+#include "utils/KaistVioSerialPairing.h"
 
 using namespace ov_msckf;
 
@@ -223,6 +224,26 @@ int main(int argc, char **argv) {
   PRINT_DEBUG("[SERIAL]: bag start: %.1f\n", bag_start);
   PRINT_DEBUG("[SERIAL]: bag duration: %.1f\n", bag_durr);
 
+  // KAIST-VIO camera measurement times are exact equal header stamps, while
+  // their rosbag record times can differ by more than the legacy 20 ms
+  // first-forward window. This dataset-specific path is default-off and only
+  // selects existing messages; it never rewrites pixels or timestamps.
+  bool kaist_vio_exact_header_stereo = false;
+  nh->param<bool>("kaist_vio_exact_header_stereo",
+                  kaist_vio_exact_header_stereo, false);
+  if (kaist_vio_exact_header_stereo &&
+      (params.state_options.num_cameras != 2 || topic_cameras.size() != 2U ||
+       topic_cameras[0] == topic_cameras[1])) {
+    PRINT_ERROR(RED "[SERIAL-KAIST]: exact-header mode requires two distinct camera topics\n" RESET);
+    ros::shutdown();
+    return EXIT_FAILURE;
+  }
+  if (kaist_vio_exact_header_stereo && params.use_multi_threading_subs) {
+    PRINT_ERROR(RED "[SERIAL-KAIST]: exact-header mode requires synchronous subscriber processing\n" RESET);
+    ros::shutdown();
+    return EXIT_FAILURE;
+  }
+
   // CP2 evidence mode is identified only by the frozen launch parameter. Its
   // strict context is read and bound before constructing any object that can
   // create an output sink and before constructing/opening a rosbag object.
@@ -232,6 +253,11 @@ int main(int argc, char **argv) {
   std::string cp2_trace_level;
   if (nh->getParam("cp2_trace_level", cp2_trace_level)) {
     cp2_evidence_mode = true;
+    if (kaist_vio_exact_header_stereo) {
+      PRINT_ERROR(RED "[SERIAL-KAIST]: exact-header mode cannot be combined with CP2 evidence mode\n" RESET);
+      ros::shutdown();
+      return EXIT_FAILURE;
+    }
     std::string cp2_context_path;
     std::string cp2_trace_directory;
     std::string cp2_sequence_id;
@@ -373,6 +399,12 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
+  if (kaist_vio_exact_header_stereo && nh->hasParam("path_gt")) {
+    PRINT_ERROR(RED "[SERIAL-KAIST]: runtime ground truth is forbidden\n" RESET);
+    ros::shutdown();
+    return EXIT_FAILURE;
+  }
+
   // Load optional ordinary-run ground truth only after the CP2 context gate
   // has ruled evidence mode out.  A CP2 launch therefore cannot cause even a
   // failed ground-truth pathname lookup before its explicit prohibition is
@@ -502,6 +534,11 @@ int main(int argc, char **argv) {
   CP2OpenedOutput cp2_journal_output;
   std::shared_ptr<CP2TraceJournalSink> cp2_journal_sink;
   std::map<std::size_t, CP2SerialPair> cp2_pair_by_anchor;
+  std::map<std::size_t, KaistVioSerialPair> kaist_pair_by_anchor;
+  std::uint64_t kaist_queued_pairs = 0U;
+  std::uint64_t kaist_frequency_thinned_pairs = 0U;
+  std::uint64_t kaist_cam0_decode_failures = 0U;
+  std::uint64_t kaist_cam1_decode_failures = 0U;
   if (cp2_evidence_mode) {
     std::vector<CP2SerialFilteredMessage> filtered;
     try {
@@ -617,6 +654,80 @@ int main(int argc, char **argv) {
     }
   }
 
+  if (kaist_vio_exact_header_stereo) {
+    std::vector<KaistVioSerialMessage> filtered;
+    try {
+      filtered.reserve(msgs.size());
+      for (const rosbag::MessageInstance &instance : msgs) {
+        KaistVioSerialMessage metadata;
+        if (!cp2_time_nanoseconds(instance.getTime(),
+                                  metadata.record_time_ns)) {
+          throw std::overflow_error("rosbag record timestamp is invalid");
+        }
+        if (instance.getTopic() == topic_imu) {
+          metadata.kind = KaistVioSerialMessageKind::kImu;
+        } else if (instance.getTopic() == topic_cameras[0]) {
+          metadata.kind = KaistVioSerialMessageKind::kCamera0;
+          const sensor_msgs::Image::ConstPtr image =
+              instance.instantiate<sensor_msgs::Image>();
+          if (!image || !cp2_time_nanoseconds(image->header.stamp,
+                                               metadata.header_time_ns)) {
+            throw std::runtime_error("cam0 image/header timestamp is invalid");
+          }
+        } else if (instance.getTopic() == topic_cameras[1]) {
+          metadata.kind = KaistVioSerialMessageKind::kCamera1;
+          const sensor_msgs::Image::ConstPtr image =
+              instance.instantiate<sensor_msgs::Image>();
+          if (!image || !cp2_time_nanoseconds(image->header.stamp,
+                                               metadata.header_time_ns)) {
+            throw std::runtime_error("cam1 image/header timestamp is invalid");
+          }
+        } else {
+          throw std::logic_error(
+              "topic-filtered serial view contains an unknown topic");
+        }
+        filtered.push_back(metadata);
+      }
+    } catch (const std::exception &error) {
+      PRINT_ERROR(RED "[SERIAL-KAIST]: unable to form exact filtered view: %s\n" RESET,
+                  error.what());
+      ros::shutdown();
+      return EXIT_FAILURE;
+    }
+
+    const KaistVioSerialPairingResult selected =
+        KaistVioSerialPairSelector::Select(filtered);
+    if (!selected.accepted() || selected.pairs.empty()) {
+      PRINT_ERROR(RED "[SERIAL-KAIST]: exact-header pair selection failed: %s\n" RESET,
+                  kaist_vio_serial_pairing_status_name(selected.status));
+      ros::shutdown();
+      return EXIT_FAILURE;
+    }
+    try {
+      for (const KaistVioSerialPair &pair : selected.pairs) {
+        const std::size_t anchor =
+            static_cast<std::size_t>(pair.anchor_filtered_index);
+        if (static_cast<std::uint64_t>(anchor) !=
+                pair.anchor_filtered_index ||
+            !kaist_pair_by_anchor.emplace(anchor, pair).second) {
+          throw std::runtime_error(
+              "selected exact-header anchor is not unique/representable");
+        }
+      }
+    } catch (const std::exception &error) {
+      PRINT_ERROR(RED "[SERIAL-KAIST]: exact-header pair map failed: %s\n" RESET,
+                  error.what());
+      ros::shutdown();
+      return EXIT_FAILURE;
+    }
+    PRINT_INFO("[SERIAL-KAIST]: exact_header_pairs=%zu camera0_without_match=%llu camera1_without_match=%llu record_delta_ge_20ms=%llu maximum_record_delta_ns=%llu\n",
+               selected.pairs.size(),
+               static_cast<unsigned long long>(selected.camera0_without_match),
+               static_cast<unsigned long long>(selected.camera1_without_match),
+               static_cast<unsigned long long>(selected.record_delta_at_or_above_20ms),
+               static_cast<unsigned long long>(selected.maximum_record_delta_ns));
+  }
+
   //===================================================================================
   //===================================================================================
   //===================================================================================
@@ -627,7 +738,8 @@ int main(int argc, char **argv) {
 
     // End once we reach the last time, or skip if before beginning time (shouldn't happen)
     if (cp2_serial_should_stop_iteration(
-            ros::ok(), msgs.at(m).getTime() > time_finish, cp2_evidence_mode,
+            ros::ok(), msgs.at(m).getTime() > time_finish,
+            cp2_evidence_mode || kaist_vio_exact_header_stereo,
             msgs.at(m).getTime().toSec() > max_camera_time))
       break;
     if (msgs.at(m).getTime() < time_init)
@@ -720,6 +832,69 @@ int main(int argc, char **argv) {
       continue;
     }
 
+    // The KAIST path is mutually exclusive with CP2 and the unchanged legacy
+    // record-time branch below. Only an earlier-record anchor enters the callback;
+    // unmatched camera messages remain visible in the preserved bag and the
+    // exact selection summary above.
+    if (kaist_vio_exact_header_stereo) {
+      const auto selected =
+          kaist_pair_by_anchor.find(static_cast<std::size_t>(m));
+      if (selected == kaist_pair_by_anchor.end()) {
+        continue;
+      }
+      const KaistVioSerialPair &pair = selected->second;
+      const std::size_t cam0_index =
+          static_cast<std::size_t>(pair.cam0_filtered_index);
+      const std::size_t cam1_index =
+          static_cast<std::size_t>(pair.cam1_filtered_index);
+      if (cam0_index >= msgs.size() || cam1_index >= msgs.size() ||
+          msgs[cam0_index].getTopic() != topic_cameras[0] ||
+          msgs[cam1_index].getTopic() != topic_cameras[1]) {
+        PRINT_ERROR(RED "[SERIAL-KAIST]: exact-header pair/source join failed\n" RESET);
+        ros::shutdown();
+        return EXIT_FAILURE;
+      }
+      const sensor_msgs::Image::ConstPtr image0 =
+          msgs[cam0_index].instantiate<sensor_msgs::Image>();
+      const sensor_msgs::Image::ConstPtr image1 =
+          msgs[cam1_index].instantiate<sensor_msgs::Image>();
+      std::uint64_t image0_stamp_ns = 0U;
+      std::uint64_t image1_stamp_ns = 0U;
+      if (!image0 || !image1 ||
+          !cp2_time_nanoseconds(image0->header.stamp, image0_stamp_ns) ||
+          !cp2_time_nanoseconds(image1->header.stamp, image1_stamp_ns) ||
+          image0_stamp_ns != pair.camera_timestamp_ns ||
+          image1_stamp_ns != pair.camera_timestamp_ns) {
+        PRINT_ERROR(RED "[SERIAL-KAIST]: exact-header pair identity changed\n" RESET);
+        ros::shutdown();
+        return EXIT_FAILURE;
+      }
+      try {
+        const CP2SerialEnqueueStatus status =
+            viz->callback_stereo_serial(image0, image1, 0, 1);
+        switch (status) {
+        case CP2SerialEnqueueStatus::kQueued:
+          ++kaist_queued_pairs;
+          break;
+        case CP2SerialEnqueueStatus::kFrequencyDropped:
+          ++kaist_frequency_thinned_pairs;
+          break;
+        case CP2SerialEnqueueStatus::kCam0DecodeFailed:
+          ++kaist_cam0_decode_failures;
+          throw std::runtime_error("cam0 decode failed");
+        case CP2SerialEnqueueStatus::kCam1DecodeFailed:
+          ++kaist_cam1_decode_failures;
+          throw std::runtime_error("cam1 decode failed");
+        }
+      } catch (const std::exception &error) {
+        PRINT_ERROR(RED "[SERIAL-KAIST]: camera processing terminated: %s\n" RESET,
+                    error.what());
+        ros::shutdown();
+        return EXIT_FAILURE;
+      }
+      continue;
+    }
+
     // Camera processing
     for (int cam_id = 0; cam_id < params.state_options.num_cameras; cam_id++) {
 
@@ -784,8 +959,37 @@ int main(int argc, char **argv) {
     }
   }
 
+  std::uint64_t kaist_processed_pairs = 0U;
+  std::uint64_t kaist_pending_pairs = 0U;
+  if (kaist_vio_exact_header_stereo) {
+    const ROS1SerialCameraQueueState queue_state =
+        viz->serial_camera_queue_state();
+    kaist_pending_pairs =
+        static_cast<std::uint64_t>(queue_state.pending_messages);
+    if (static_cast<std::size_t>(kaist_pending_pairs) !=
+            queue_state.pending_messages ||
+        queue_state.processing_active || kaist_pending_pairs != 0U) {
+      PRINT_ERROR(RED "[SERIAL-KAIST]: camera queue did not drain: pending_pairs=%llu processing_active=%d\n" RESET,
+                  static_cast<unsigned long long>(kaist_pending_pairs),
+                  static_cast<int>(queue_state.processing_active));
+      ros::shutdown();
+      return EXIT_FAILURE;
+    }
+    kaist_processed_pairs = kaist_queued_pairs;
+  }
+
   // Final visualization
   viz->visualize_final();
+
+  if (kaist_vio_exact_header_stereo) {
+    PRINT_INFO("[SERIAL-KAIST]: queued_pairs=%llu processed_pairs=%llu frequency_thinned_pairs=%llu cam0_decode_failures=%llu cam1_decode_failures=%llu pending_pairs=%llu\n",
+               static_cast<unsigned long long>(kaist_queued_pairs),
+               static_cast<unsigned long long>(kaist_processed_pairs),
+               static_cast<unsigned long long>(kaist_frequency_thinned_pairs),
+               static_cast<unsigned long long>(kaist_cam0_decode_failures),
+               static_cast<unsigned long long>(kaist_cam1_decode_failures),
+               static_cast<unsigned long long>(kaist_pending_pairs));
+  }
 
   if (cp2_evidence_mode) {
     if (sys->cp2_trace_fatal_latched() || !cp2_runtime_trace->ready()) {

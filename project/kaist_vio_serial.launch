@@ -34,6 +34,7 @@
         <param name="num_opencv_threads" type="int" value="0" />
         <param name="multi_threading_pubs" type="bool" value="false" />
         <param name="multi_threading_subs" type="bool" value="false" />
+        <param name="kaist_vio_exact_header_stereo" type="bool" value="true" />
 
         <!-- Explicit adapter outputs and unchanged official IMU topic. -->
         <param name="cam0_rostopic" type="str" value="/turnsafe/kaist/infra1/image_raw" />

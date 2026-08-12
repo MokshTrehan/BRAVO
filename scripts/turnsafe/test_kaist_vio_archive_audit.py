@@ -140,9 +140,12 @@ class KaistVioArchiveAuditTest(unittest.TestCase):
         names[0] = "root/{}".format(names[0])
         self._assert_rejected(self._archive(names), "inconsistent_archive_root_prefix")
 
-    def test_rejects_nested_root_prefix(self):
-        self._assert_rejected(
-            self._archive(prefix="outer/inner"), "nested_archive_root_prefix"
+    def test_accepts_consistent_multi_component_root_prefix(self):
+        report = audit.audit_archive(self._archive(prefix="outer/inner"))
+        self.assertEqual("outer/inner", report["root_prefix"])
+        self.assertEqual(
+            "outer/inner/circle/circle.bag",
+            report["expected_bag_members"]["circle/circle.bag"],
         )
 
     def test_atomic_writer_refuses_overwrite(self):

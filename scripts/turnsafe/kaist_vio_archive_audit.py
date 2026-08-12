@@ -105,8 +105,6 @@ def _resolve_bag_layout(bag_members):
             _fail("unexpected_bag_member", repr(member))
         relative = matches[0]
         prefix = parts[: -len(expected_parts[relative])]
-        if len(prefix) > 1:
-            _fail("nested_archive_root_prefix", repr(member))
         if relative in mapping:
             _fail("duplicate_expected_bag", repr(relative))
         mapping[relative] = member
@@ -122,7 +120,7 @@ def _resolve_bag_layout(bag_members):
         _fail("inconsistent_archive_root_prefix", repr(rendered))
 
     prefix = next(iter(prefixes))
-    return (prefix[0] if prefix else ""), {
+    return ("/".join(prefix) if prefix else ""), {
         relative: mapping[relative] for relative in sorted(mapping)
     }
 

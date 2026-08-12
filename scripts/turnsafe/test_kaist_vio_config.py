@@ -332,6 +332,7 @@ class KaistVioConfigTest(unittest.TestCase):
             "num_opencv_threads": ("int", "0"),
             "multi_threading_pubs": ("bool", "false"),
             "multi_threading_subs": ("bool", "false"),
+            "kaist_vio_exact_header_stereo": ("bool", "true"),
             "cam0_rostopic": ("str", CAM0_TOPIC),
             "cam1_rostopic": ("str", CAM1_TOPIC),
             "imu0_rostopic": ("str", IMU_TOPIC),

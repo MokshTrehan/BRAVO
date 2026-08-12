@@ -174,7 +174,9 @@ install(TARGETS cp2_recorded_assemble
 
 if (catkin_FOUND AND ENABLE_ROS)
 
-    add_executable(ros1_serial_msckf src/ros1_serial_msckf.cpp)
+    add_executable(ros1_serial_msckf
+            src/ros1_serial_msckf.cpp
+            src/utils/KaistVioSerialPairing.cpp)
     target_link_libraries(ros1_serial_msckf ov_msckf_lib ${thirdparty_libraries})
     install(TARGETS ros1_serial_msckf
             ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
@@ -263,6 +265,25 @@ if (CATKIN_ENABLE_TESTING)
                     -fsigned-zeros)
         endif ()
     endforeach ()
+endif ()
+
+##################################################
+# TurnSafe Session-0.5 KAIST ingestion gate
+##################################################
+if (CATKIN_ENABLE_TESTING)
+    catkin_add_gtest(test_kaist_vio_serial_pairing
+            test/cp1/gtest_main.cpp
+            test/turnsafe/test_kaist_vio_serial_pairing.cpp
+            src/utils/KaistVioSerialPairing.cpp)
+    if (TARGET test_kaist_vio_serial_pairing)
+        target_link_libraries(test_kaist_vio_serial_pairing
+                ov_msckf_lib
+                ${thirdparty_libraries})
+        target_compile_options(test_kaist_vio_serial_pairing PRIVATE
+                -fno-fast-math
+                -ffp-contract=off
+                -fsigned-zeros)
+    endif ()
 endif ()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CP2Tests.cmake)
