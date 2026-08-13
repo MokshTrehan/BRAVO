@@ -70,6 +70,44 @@ SEQUENCE_ORDER: Tuple[str, ...] = (
 
 SCHEMA = "turnsafe.kaist_vio_campaign.sequence.v1"
 T0_SCHEMA = "turnsafe.t0.v1"
+STABLE_TERMINAL_REASON_ORDER: Tuple[str, ...] = (
+    "FULL_OUTCOME_INELIGIBLE",
+    "FULL_OUTCOME_UNMAPPED",
+    "OBSERVATION_OWNERSHIP_INVALID",
+    "CLONE_UNAVAILABLE",
+    "TARGET_STEREO_UNAVAILABLE",
+    "TARGET_STEREO_IDENTITY_MISMATCH",
+    "TARGET_STEREO_TIMESTAMP_MISMATCH",
+    "RANGE_GEOMETRY_INVALID",
+    "RANGE_COVARIANCE_INVALID",
+    "RANGE_LCB_UNAVAILABLE",
+    "RANGE_LCB_NONPOSITIVE",
+    "TRANSLATION_COVARIANCE_INVALID",
+    "TRANSLATION_NOT_ACUTE",
+    "BEARING_COVARIANCE_INVALID",
+    "RHO_TRANSLATION_EXCEEDED",
+    "STATIC_QUALITY_FAILED",
+    "THRESHOLD_SET_NOT_FROZEN",
+    "INSUFFICIENT_FEATURES",
+    "SPATIAL_COVERAGE_FAILED",
+    "CONSENSUS_FAILED",
+    "ROTATION_STACK_RANK_DEFICIENT",
+    "LOWER_PRE_NIS_SCORE",
+    "WINNER_NIS_REJECTED",
+    "WINNER_POST_NIS_COUNT_OR_RANK_FAILED",
+    "GLOBAL_SHADOW_VALIDATION_FAILED",
+    "NONE",
+)
+STABLE_TERMINAL_REASONS = frozenset(STABLE_TERMINAL_REASON_ORDER)
+_TERMINAL_REASON_STAGE_BOUNDS = {
+    "candidate": ("FULL_OUTCOME_INELIGIBLE", "STATIC_QUALITY_FAILED", True),
+    "group_consensus": (
+        "THRESHOLD_SET_NOT_FROZEN",
+        "ROTATION_STACK_RANK_DEFICIENT",
+        True,
+    ),
+    "group_foregone": ("LOWER_PRE_NIS_SCORE", "LOWER_PRE_NIS_SCORE", False),
+}
 SOURCE_SNAPSHOT_SCHEMA = "turnsafe.source_snapshot.v1"
 CONFIGURE_PROVENANCE_SCHEMA = "turnsafe.configure_provenance.v1"
 BUILD_MANIFEST_SCHEMA = "turnsafe.build_manifest.v1"
@@ -114,6 +152,31 @@ FIXED_ENVIRONMENT = {
 
 class CampaignError(RuntimeError):
     """A visible, fail-closed campaign error."""
+
+
+def validate_stable_terminal_reason(
+    value: Any, label: str, stage: Optional[str] = None
+) -> str:
+    """Require exact normative membership and field-stage legality."""
+
+    if not isinstance(value, str) or not value:
+        raise CampaignError("{} is not a nonempty string".format(label))
+    if value not in STABLE_TERMINAL_REASONS:
+        raise CampaignError("{} is not a stable terminal reason".format(label))
+    if stage is None:
+        return value
+    bounds = _TERMINAL_REASON_STAGE_BOUNDS.get(stage)
+    if bounds is None:
+        raise CampaignError("{} has unknown terminal-reason stage".format(label))
+    first, last, allow_none = bounds
+    first_index = STABLE_TERMINAL_REASON_ORDER.index(first)
+    last_index = STABLE_TERMINAL_REASON_ORDER.index(last)
+    allowed = STABLE_TERMINAL_REASON_ORDER[first_index:last_index + 1]
+    if value not in allowed and not (allow_none and value == "NONE"):
+        raise CampaignError(
+            "{} has a terminal reason from the wrong stage".format(label)
+        )
+    return value
 
 
 def utc_now() -> str:
@@ -461,7 +524,31 @@ def _strict_json(line: str, label: str) -> Mapping[str, Any]:
     def reject_constant(value: str) -> None:
         raise CampaignError("{} contains nonfinite JSON token {}".format(label, value))
 
-    value = json.loads(line, parse_constant=reject_constant)
+    def reject_duplicate_keys(pairs: Sequence[Tuple[str, Any]]) -> Dict[str, Any]:
+        value: Dict[str, Any] = {}
+        for key, child in pairs:
+            if key in value:
+                raise CampaignError("{} contains duplicate JSON key {}".format(label, key))
+            value[key] = child
+        return value
+
+    value = json.loads(
+        line,
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=reject_constant,
+    )
+
+    def reject_nonfinite(value: Any, value_label: str) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                reject_nonfinite(child, value_label + "." + key)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                reject_nonfinite(child, "{}[{}]".format(value_label, index))
+        elif isinstance(value, float) and not math.isfinite(value):
+            raise CampaignError("{} contains a nonfinite number".format(value_label))
+
+    reject_nonfinite(value, label)
     if not isinstance(value, dict):
         raise CampaignError("{} is not a JSON object".format(label))
     return value
@@ -1275,9 +1362,14 @@ def _validate_t0_jsonl(
             )
             for string_field in (
                 "full_outcome", "target_stereo_rejection_reason",
-                "static_quality_status", "terminal_reason",
+                "static_quality_status",
             ):
                 require_string(candidate[string_field], label + "." + string_field)
+            validate_stable_terminal_reason(
+                candidate["terminal_reason"],
+                label + ".terminal_reason",
+                stage="candidate",
+            )
             key = require_object(
                 candidate["candidate_key"],
                 label + ".candidate_key",
@@ -1410,22 +1502,57 @@ def _validate_t0_jsonl(
                     group[boolean_field],
                     "T0 shadow group {}.{}".format(group_index, boolean_field),
                 )
-            for string_field in (
-                "group_size_status", "selection_role", "foregone_reason",
-            ):
+            for string_field in ("group_size_status", "selection_role"):
                 require_string(
                     group[string_field],
                     "T0 shadow group {}.{}".format(group_index, string_field),
                 )
+            if group["selection_role"] not in (
+                "WINNER", "FOREGONE_ELIGIBLE", "INELIGIBLE",
+            ):
+                raise CampaignError(
+                    "T0 shadow group {} has an invalid selection role".format(
+                        group_index
+                    )
+                )
+            foregone_label = "T0 shadow group {}.foregone_reason".format(
+                group_index
+            )
+            require_string(group["foregone_reason"], foregone_label)
+            if group["selection_role"] == "FOREGONE_ELIGIBLE":
+                validate_stable_terminal_reason(
+                    group["foregone_reason"],
+                    foregone_label,
+                    stage="group_foregone",
+                )
+            elif group["foregone_reason"] != "NOT_APPLICABLE":
+                raise CampaignError(
+                    "{} is not applicable to this selection role".format(
+                        foregone_label
+                    )
+                )
             for status_field in (
                 "target_bearing_spatial_metrics", "rotation_stack_singular_values",
-                "rotation_stack_rank", "consensus", "predicted_rotation_angle",
+                "rotation_stack_rank", "predicted_rotation_angle",
                 "predicted_information", "score", "winner_shadow_nis",
                 "post_nis_count_rank_status",
             ):
                 require_status(
                     group[status_field],
                     "T0 shadow group {}.{}".format(group_index, status_field),
+                )
+            consensus_label = "T0 shadow group {}.consensus".format(group_index)
+            consensus = require_status(group["consensus"], consensus_label)
+            validate_stable_terminal_reason(
+                consensus["reason"],
+                consensus_label + ".reason",
+                stage="group_consensus",
+            )
+            if "terminal_reason" in consensus:
+                validate_stable_terminal_reason(
+                    consensus["terminal_reason"],
+                    consensus_label + ".terminal_reason",
+                    stage="group_consensus",
                 )
         if pair_keys != sorted(pair_keys) or len(pair_keys) != len(set(pair_keys)):
             raise CampaignError("T0 shadow group ordering is not canonical")
@@ -1480,6 +1607,11 @@ def _validate_t0_jsonl(
             summary["translation_covariance_scale"],
             "T0 shadow_summary.translation_covariance_scale",
         )
+        if "terminal_reason" in summary:
+            validate_stable_terminal_reason(
+                summary["terminal_reason"],
+                "T0 shadow_summary.terminal_reason",
+            )
         completeness = require_object(
             record["completeness"],
             "T0 completeness",

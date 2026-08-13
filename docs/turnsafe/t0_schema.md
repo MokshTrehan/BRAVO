@@ -561,6 +561,7 @@ TARGET_STEREO_IDENTITY_MISMATCH
 TARGET_STEREO_TIMESTAMP_MISMATCH
 RANGE_GEOMETRY_INVALID
 RANGE_COVARIANCE_INVALID
+RANGE_LCB_UNAVAILABLE
 RANGE_LCB_NONPOSITIVE
 TRANSLATION_COVARIANCE_INVALID
 TRANSLATION_NOT_ACUTE
@@ -578,6 +579,13 @@ WINNER_POST_NIS_COUNT_OR_RANK_FAILED
 GLOBAL_SHADOW_VALIDATION_FAILED
 NONE
 ```
+
+`RANGE_LCB_UNAVAILABLE` means that target-time stereo support and the required
+pair evidence exist, but an audited finite range LCB is unavailable. The
+nested range-certificate record retains the exact unavailable or
+`SHADOW_NOT_COMPUTED_*` cause. This reason is ineligible and is distinct from
+an attempted-but-invalid covariance (`RANGE_COVARIANCE_INVALID`) and from a
+computed nonpositive LCB (`RANGE_LCB_NONPOSITIVE`).
 
 Additional native detail may be nested under the stage record, but must not
 replace the stable reason. Full-factor NIS/outlier/nonfinite/pathological

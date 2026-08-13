@@ -282,3 +282,119 @@ under `.turnsafe-work/session_01r/`.
 If and only if the stop packet classifies Session 1R PASS, the next required
 authorization is `APPROVE_SESSION_1C_FROZEN_KAIST_CAMPAIGN`. Otherwise the
 required disposition remains `SESSION_1_REVIEW_REQUIRED`.
+
+---
+
+# TurnSafe v6 Session 1S recertification handover
+
+Status: **PASS at the Session 1S hard stop**
+
+## Identity and scope
+
+| Field | Value |
+|---|---|
+| Authorization | `APPROVE_SESSION_1S_SCHEMA_RECERTIFICATION` |
+| Authoritative cwd | `/home/moksh/newSlam turnsafe-primary` |
+| Branch | `schurvio-lite/turnsafe-primary` |
+| Start/end HEAD | `63a02d04fcc5d39ee4511485bfbd0dcc305c2dbd` |
+| Start/end tree | `77f8de20c7ae7317f26399ea2afd979322646511` |
+| Entry tracked tree/index | clean |
+| Final index | clean; nothing staged |
+| Final worktree | intentionally dirty at the four approved tracked paths only |
+| Erratum | `turnsafe.t0.v1.erratum1.range_lcb_unavailable` |
+| Telemetry schema | unchanged `turnsafe.t0.v1` |
+| Next requested token after human commit | `APPROVE_SESSION_2_T0_DECISION_ONLY` |
+
+Session 1S was restricted to the terminal-reason taxonomy erratum, validator
+strengthening, and offline recertification of immutable Session-1FC evidence.
+No Session-2 branch decision, threshold decision, factor work, T1/T2/T3,
+Branch-B, or pivot work was performed.
+
+## Outcome
+
+Section 10 of `docs/turnsafe/t0_schema.md` now includes the distinct stable,
+ineligible `RANGE_LCB_UNAVAILABLE` reason between
+`RANGE_COVARIANCE_INVALID` and `RANGE_LCB_NONPOSITIVE`, with the advisor-frozen
+meaning. The Python campaign/corpus validator has one canonical ordered tuple
+and derived membership set. Candidate, consensus, eligible non-winner
+foregone, and optional summary terminal reasons pass through one
+membership/stage function; nested availability causes remain their distinct
+taxonomy. Tests bind the canonical taxonomy exactly to the fenced Section-10
+list and reject missing, null, non-string, empty, unknown, and wrong-stage
+stable values.
+
+The original Session-1FC checksum ledger passed. All 16 preserved telemetry
+archives retained their compressed/raw identities and passed `zstd -t` plus
+strict bounded streaming validation. The primary corpus remains exactly
+47,145 records and 47,134 callbacks, with 135,328 terminal attempts,
+11,823,702 shadow candidates, and 2,641,766 shadow groups. The unavailable-LCB
+count remains exactly 1,609,352 with vector:
+
+```text
+123572, 225878, 119510, 45472, 321464, 35042,
+202600, 94592, 108872, 187910, 144440
+```
+
+The six derivative aggregates were regenerated from raw preserved streams
+into `artifacts/turnsafe/session_01s/`. Every original JSON field and CSV cell
+matches Session 1FC after removal of the explicit Session-1S status/erratum
+metadata. Source/build/configuration/calibration/input/parity identities,
+sequence order, all scientific counts and denominators, and estimator results
+are unchanged. Public KAIST remains 48/48 checksum-valid.
+
+`RANGE_LCB_UNAVAILABLE` being valid taxonomy does not mean a range LCB is
+available. All 1,609,352 records remain certificate-unavailable and preserve
+their nested unavailable cause. Consensus/rank/winner values that were
+`NOT_APPLICABLE` remain so. No T1 engineering gate is passed here.
+
+## Changed tracked paths
+
+```text
+docs/turnsafe/t0_schema.md
+scripts/turnsafe/kaist_vio_campaign.py
+scripts/turnsafe/test_kaist_vio_campaign.py
+docs/turnsafe/session_handover.md
+```
+
+No C++, CMake, launch, calibration, runtime configuration, campaign ingestion,
+aggregation formula, estimator, threshold, binary, raw telemetry, or
+Session-1FC artifact changed. Nothing was staged or committed, as required.
+
+## Validation
+
+| Gate | Result |
+|---|---:|
+| Section-10 list versus canonical tuple/set | PASS, 26 unique reasons |
+| Focused affected validator tests | 4/4 PASS |
+| Complete allowed Python suite | 109/109 PASS under offline socket-probe adapter |
+| Strict JSON/JSONL/CSV, duplicate-key, finite-value validation | PASS |
+| Immutable compressed archive identity and `zstd -t` | 16/16 PASS |
+| Strict archive streaming and corrected enum enforcement | 16/16 PASS |
+| Primary records/callbacks | 47,145 / 47,134 exact PASS |
+| Cross-file and callback-funnel reconciliation | PASS |
+| `RANGE_LCB_UNAVAILABLE` total/vector | exact PASS |
+| Original Session-1FC checksum ledger | 19/19 PASS |
+| Public KAIST dataset ledger | 48/48 PASS |
+| Derivative equality except recertification metadata | PASS |
+| Tracked changed-path boundary and clean index | PASS |
+| Session-2 hard stop | PASS |
+
+The ordinary Python-suite command encountered a managed-sandbox AF_INET
+`EPERM` in one pre-existing port-probe test before its intended assertion.
+This is classified ENGINEERING. A scratch-only in-process adapter replaced
+only that forbidden socket probe with its unchanged port-range check; the
+complete suite then passed 109/109. No tracked test or assertion was weakened.
+No CORRECTNESS or SCIENTIFIC failure remains. No ROS/bag replay or C++ rebuild
+was run or required.
+
+Exact commands, tests, artifact identities, and final Git checks are preserved
+in `artifacts/turnsafe/session_01s/COMMANDS.log`, `TEST_RESULTS.md`,
+`CORPUS_RECERTIFICATION.md`, `SCHEMA_VALIDATION.md`, `COMMIT_MANIFEST.json`,
+and `SHA256SUMS`.
+
+## Next gate
+
+Run the human-side recertification commit script using the recorded commit
+message `fix(turnsafe): align T0 terminal reason schema`. After that commit,
+request the exact token `APPROVE_SESSION_2_T0_DECISION_ONLY`. Session 2 has not
+begun in this session.

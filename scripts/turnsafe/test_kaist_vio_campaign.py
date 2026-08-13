@@ -701,6 +701,83 @@ class KaistVioCampaignTest(unittest.TestCase):
         with self.assertRaisesRegex(campaign.CampaignError, "forbidden"):
             campaign.run_campaign(args)
 
+    def test_stable_terminal_reason_set_matches_normative_schema(self) -> None:
+        schema_path = (
+            Path(__file__).resolve().parents[2] / "docs" / "turnsafe" /
+            "t0_schema.md"
+        )
+        schema = schema_path.read_text(encoding="utf-8")
+        section = schema.split(
+            "## 10. Stable reason codes and ordering", 1
+        )[1].split("## 11. Deterministic digest membership", 1)[0]
+        fenced = section.split("```text", 1)[1].split("```", 1)[0]
+        normative_order = tuple(
+            line.strip() for line in fenced.splitlines() if line.strip()
+        )
+        self.assertEqual(len(normative_order), len(set(normative_order)))
+        self.assertEqual(
+            frozenset(normative_order), campaign.STABLE_TERMINAL_REASONS
+        )
+        self.assertEqual(
+            normative_order, campaign.STABLE_TERMINAL_REASON_ORDER
+        )
+        range_index = normative_order.index("RANGE_GEOMETRY_INVALID")
+        self.assertEqual(
+            normative_order[range_index:range_index + 4],
+            (
+                "RANGE_GEOMETRY_INVALID",
+                "RANGE_COVARIANCE_INVALID",
+                "RANGE_LCB_UNAVAILABLE",
+                "RANGE_LCB_NONPOSITIVE",
+            ),
+        )
+
+    def test_stable_terminal_reason_membership_and_stage(self) -> None:
+        for reason in campaign.STABLE_TERMINAL_REASONS:
+            self.assertEqual(
+                campaign.validate_stable_terminal_reason(reason, "fixture"),
+                reason,
+            )
+        self.assertEqual(
+            campaign.validate_stable_terminal_reason(
+                "RANGE_LCB_UNAVAILABLE", "fixture", stage="candidate"
+            ),
+            "RANGE_LCB_UNAVAILABLE",
+        )
+        for invalid in (None, 7, "", "FUTURE_UNKNOWN_REASON"):
+            with self.subTest(invalid=invalid), self.assertRaises(
+                campaign.CampaignError
+            ):
+                campaign.validate_stable_terminal_reason(invalid, "fixture")
+        with self.assertRaisesRegex(campaign.CampaignError, "wrong stage"):
+            campaign.validate_stable_terminal_reason(
+                "CONSENSUS_FAILED", "fixture", stage="candidate"
+            )
+        self.assertEqual(
+            campaign.validate_stable_terminal_reason(
+                "CONSENSUS_FAILED", "fixture", stage="group_consensus"
+            ),
+            "CONSENSUS_FAILED",
+        )
+        with self.assertRaisesRegex(campaign.CampaignError, "wrong stage"):
+            campaign.validate_stable_terminal_reason(
+                "RANGE_LCB_UNAVAILABLE", "fixture", stage="group_consensus"
+            )
+        self.assertEqual(
+            campaign.validate_stable_terminal_reason(
+                "LOWER_PRE_NIS_SCORE", "fixture", stage="group_foregone"
+            ),
+            "LOWER_PRE_NIS_SCORE",
+        )
+
+    def test_strict_json_rejects_duplicate_keys_and_nonfinite_values(self) -> None:
+        with self.assertRaisesRegex(campaign.CampaignError, "duplicate JSON key"):
+            campaign._strict_json('{"value":1,"value":2}', "fixture")
+        with self.assertRaisesRegex(campaign.CampaignError, "nonfinite JSON token"):
+            campaign._strict_json('{"value":NaN}', "fixture")
+        with self.assertRaisesRegex(campaign.CampaignError, "nonfinite number"):
+            campaign._strict_json('{"value":1e400}', "fixture")
+
     def test_t0_jsonl_validator_binds_header_order_and_runtime_firewall(self) -> None:
         path = self.root / "t0.jsonl"
         expected = {
@@ -1004,6 +1081,132 @@ class KaistVioCampaignTest(unittest.TestCase):
             "eligible_before_group": False,
             "terminal_reason": "TARGET_STEREO_UNAVAILABLE",
         }
+        for label, value in (
+            ("null", None),
+            ("non-string", 7),
+            ("unknown", "FUTURE_UNKNOWN_REASON"),
+            ("wrong-stage", "CONSENSUS_FAILED"),
+        ):
+            malformed_reason = dict(candidate)
+            malformed_reason["terminal_reason"] = value
+            callback["shadow_candidates"] = [malformed_reason]
+            path.write_text(
+                json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+                encoding="utf-8",
+            )
+            with self.subTest(label=label), self.assertRaises(
+                campaign.CampaignError
+            ):
+                campaign._validate_t0_jsonl(path, expected)
+        missing_reason = dict(candidate)
+        missing_reason.pop("terminal_reason")
+        callback["shadow_candidates"] = [missing_reason]
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            campaign.CampaignError, "missing required field terminal_reason"
+        ):
+            campaign._validate_t0_jsonl(path, expected)
+
+        accepted_erratum_reason = dict(candidate)
+        accepted_erratum_reason["terminal_reason"] = "RANGE_LCB_UNAVAILABLE"
+        accepted_erratum_reason["target_time_stereo_available"] = True
+        group = {
+            "pair_key": {
+                "camera_id": duplicate_key["camera_id"],
+                "source_timestamp_key": duplicate_key["source_timestamp_key"],
+                "target_timestamp_key": duplicate_key["target_timestamp_key"],
+            },
+            "candidate_keys": [dict(duplicate_key)],
+            "eligible_candidate_keys": [],
+            "raw_candidate_count": 1,
+            "pair_group_feature_count": 1,
+            "eligible_feature_count": 0,
+            "shadow_only_small_group": False,
+            "group_size_status": "INSUFFICIENT_FOR_PAIR_GROUP",
+            "contains_target_stereo_candidate": True,
+            "target_bearing_spatial_metrics": dict(unavailable),
+            "rotation_stack_singular_values": dict(unavailable),
+            "rotation_stack_rank": dict(unavailable),
+            "consensus": {
+                "status": "NOT_APPLICABLE",
+                "reason": "THRESHOLD_SET_NOT_FROZEN",
+            },
+            "eligible_before_selection": False,
+            "predicted_rotation_angle": dict(unavailable),
+            "predicted_information": dict(unavailable),
+            "score": dict(unavailable),
+            "selection_role": "INELIGIBLE",
+            "foregone_reason": "NOT_APPLICABLE",
+            "winner_shadow_nis": dict(unavailable),
+            "post_nis_count_rank_status": dict(unavailable),
+        }
+        callback["shadow_candidates"] = [accepted_erratum_reason]
+        callback["shadow_groups"] = [group]
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        accepted_result = campaign._validate_t0_jsonl(path, expected)
+        self.assertEqual(accepted_result["callback_count"], 1)
+
+        for label, value in (
+            ("null", None),
+            ("non-string", 7),
+            ("unknown", "FUTURE_UNKNOWN_REASON"),
+            ("wrong-stage", "RANGE_LCB_UNAVAILABLE"),
+        ):
+            malformed_group = json.loads(json.dumps(group))
+            malformed_group["consensus"]["reason"] = value
+            callback["shadow_groups"] = [malformed_group]
+            path.write_text(
+                json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+                encoding="utf-8",
+            )
+            with self.subTest(group_consensus=label), self.assertRaises(
+                campaign.CampaignError
+            ):
+                campaign._validate_t0_jsonl(path, expected)
+        missing_group_reason = json.loads(json.dumps(group))
+        missing_group_reason["consensus"].pop("reason")
+        callback["shadow_groups"] = [missing_group_reason]
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            campaign.CampaignError, "consensus.*missing required field reason"
+        ):
+            campaign._validate_t0_jsonl(path, expected)
+
+        foregone_group = json.loads(json.dumps(group))
+        foregone_group["selection_role"] = "FOREGONE_ELIGIBLE"
+        foregone_group["foregone_reason"] = "LOWER_PRE_NIS_SCORE"
+        callback["shadow_groups"] = [foregone_group]
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        campaign._validate_t0_jsonl(path, expected)
+        for label, value in (
+            ("unknown", "FUTURE_UNKNOWN_REASON"),
+            ("wrong-stage", "RANGE_LCB_UNAVAILABLE"),
+        ):
+            malformed_foregone = json.loads(json.dumps(foregone_group))
+            malformed_foregone["foregone_reason"] = value
+            callback["shadow_groups"] = [malformed_foregone]
+            path.write_text(
+                json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+                encoding="utf-8",
+            )
+            with self.subTest(group_foregone=label), self.assertRaises(
+                campaign.CampaignError
+            ):
+                campaign._validate_t0_jsonl(path, expected)
+
+        callback["shadow_groups"] = []
         callback["shadow_candidates"] = [dict(candidate), dict(candidate)]
         path.write_text(
             json.dumps(header) + "\n" + json.dumps(callback) + "\n",
