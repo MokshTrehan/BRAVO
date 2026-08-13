@@ -42,6 +42,45 @@ class Feature;
 class FeatureInitializer {
 
 public:
+  /** Passive value-only mirror of the native initializer predicates. */
+  struct Diagnostics {
+    enum class NativeFunction {
+      kTriangulation,
+      kTriangulation1D,
+      kGaussNewton,
+    };
+
+    enum class TerminationReason {
+      kNotApplicable,
+      kRelativeCost,
+      kStepNorm,
+      kMaximumRuns,
+      kLambdaLimit,
+      kNativeLoopExitNotExposed,
+    };
+
+    NativeFunction native_function = NativeFunction::kTriangulation;
+    bool attempted = false;
+    bool native_success = false;
+    bool condition_available = false;
+    double condition_number = 0.0;
+    bool depth_available = false;
+    double depth = 0.0;
+    bool baseline_ratio_available = false;
+    double baseline_ratio = 0.0;
+    bool predicate_ill_conditioned = false;
+    bool predicate_too_near_or_behind = false;
+    bool predicate_too_far = false;
+    bool predicate_baseline_ratio = false;
+    bool predicate_native_nan = false;
+    int refinement_runs = 0;
+    double refinement_lambda = 0.0;
+    bool refinement_last_step_norm_available = false;
+    double refinement_last_step_norm = 0.0;
+    double refinement_control_epsilon = 0.0;
+    TerminationReason termination_reason = TerminationReason::kNotApplicable;
+  };
+
   /**
    * @brief Structure which stores pose estimates for use in triangulation
    *
@@ -97,7 +136,8 @@ public:
    * in global frame)
    * @return Returns false if it fails to triangulate (based on the thresholds)
    */
-  bool single_triangulation(std::shared_ptr<Feature> feat, std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM);
+  bool single_triangulation(std::shared_ptr<Feature> feat, std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM,
+                            Diagnostics *diagnostics = nullptr);
 
   /**
    * @brief Uses a linear triangulation to get initial estimate for the feature, treating the anchor observation as a true bearing.
@@ -110,7 +150,9 @@ public:
    * in global frame)
    * @return Returns false if it fails to triangulate (based on the thresholds)
    */
-  bool single_triangulation_1d(std::shared_ptr<Feature> feat, std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM);
+  bool single_triangulation_1d(std::shared_ptr<Feature> feat,
+                              std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM,
+                              Diagnostics *diagnostics = nullptr);
 
   /**
    * @brief Uses a nonlinear triangulation to refine initial linear estimate of the feature
@@ -119,7 +161,9 @@ public:
    * in global frame)
    * @return Returns false if it fails to be optimize (based on the thresholds)
    */
-  bool single_gaussnewton(std::shared_ptr<Feature> feat, std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM);
+  bool single_gaussnewton(std::shared_ptr<Feature> feat,
+                          std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM,
+                          Diagnostics *diagnostics = nullptr);
 
   /**
    * @brief Gets the current configuration of the feature initializer

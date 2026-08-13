@@ -152,8 +152,18 @@ SchurReductionResult SchurUpdate::Reduce(const Eigen::MatrixXd &H_x, const Eigen
   const double rank_scale = static_cast<double>(std::max<Eigen::Index>(m, 3));
   const double numerical_floor = rank_scale * std::numeric_limits<double>::epsilon() * largest;
   const bool numerical_rank_deficient = !(smallest > numerical_floor);
+  result.numerical_rank =
+      static_cast<Eigen::Index>((result.singular_values.array() > numerical_floor).count());
+  result.numerical_rank_available = true;
   result.singular_ratio = smallest / largest;
   result.singular_ratio_available = true;
+  if (smallest > 0.0) {
+    result.condition_number = largest / smallest;
+    // Availability records that the native diagnostic division occurred;
+    // finiteness is serialized separately so overflow is NONFINITE rather
+    // than falsely reported as not exposed.
+    result.condition_number_available = true;
+  }
 
   // Step 7: equality at the numerical-rank floor is rejected.
   if (numerical_rank_deficient) {

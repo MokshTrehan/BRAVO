@@ -991,6 +991,14 @@ int main(int argc, char **argv) {
                static_cast<unsigned long long>(kaist_pending_pairs));
   }
 
+  // Passive T0 publication is deliberately non-authoritative: a sink failure
+  // is reported but cannot change replay completion or any estimator result.
+  if (!sys->finalize_turnsafe_t0()) {
+    PRINT_WARNING(YELLOW
+                  "[TURNSAFE-T0]: status=finalize_failed "
+                  "baseline_unchanged=1\n" RESET);
+  }
+
   if (cp2_evidence_mode) {
     if (sys->cp2_trace_fatal_latched() || !cp2_runtime_trace->ready()) {
       PRINT_ERROR(RED "[SERIAL-CP2]: run ended with an incomplete trace\n" RESET);

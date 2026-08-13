@@ -24,8 +24,66 @@ else ()
 endif ()
 
 # Include our header files
+get_filename_component(TURNSAFE_PACKAGE_SOURCE_REAL
+        "${CMAKE_CURRENT_SOURCE_DIR}" REALPATH)
+get_filename_component(TURNSAFE_REPOSITORY_ROOT
+        "${TURNSAFE_PACKAGE_SOURCE_REAL}/.." REALPATH)
+set(TURNSAFE_GENERATED_DIRECTORY
+        "${CMAKE_CURRENT_BINARY_DIR}/turnsafe-generated")
+file(MAKE_DIRECTORY "${TURNSAFE_GENERATED_DIRECTORY}")
+set(TURNSAFE_SOURCE_SNAPSHOT
+        "${TURNSAFE_GENERATED_DIRECTORY}/source_snapshot.json")
+set(TURNSAFE_CONFIGURE_MANIFEST
+        "${TURNSAFE_GENERATED_DIRECTORY}/configure_provenance.json")
+set(TURNSAFE_GENERATED_HEADER
+        "${TURNSAFE_GENERATED_DIRECTORY}/TurnSafeBuildProvenance.generated.h")
+execute_process(
+        COMMAND /usr/bin/python3
+                "${TURNSAFE_REPOSITORY_ROOT}/scripts/turnsafe/source_snapshot.py"
+                "${TURNSAFE_REPOSITORY_ROOT}"
+                "${TURNSAFE_SOURCE_SNAPSHOT}"
+        RESULT_VARIABLE TURNSAFE_SOURCE_SNAPSHOT_RESULT
+        ERROR_VARIABLE TURNSAFE_SOURCE_SNAPSHOT_ERROR)
+if (NOT TURNSAFE_SOURCE_SNAPSHOT_RESULT EQUAL 0)
+    message(FATAL_ERROR
+            "TurnSafe source snapshot failed: ${TURNSAFE_SOURCE_SNAPSHOT_ERROR}")
+endif ()
+get_property(TURNSAFE_CMAKE_CXX_FLAGS_CACHE
+        CACHE CMAKE_CXX_FLAGS PROPERTY VALUE)
+execute_process(
+        COMMAND /usr/bin/python3
+                "${TURNSAFE_REPOSITORY_ROOT}/scripts/turnsafe/generate_build_provenance.py"
+                --source-snapshot "${TURNSAFE_SOURCE_SNAPSHOT}"
+                --schema "${TURNSAFE_REPOSITORY_ROOT}/docs/turnsafe/t0_schema.md"
+                --output-header "${TURNSAFE_GENERATED_HEADER}"
+                --output-manifest "${TURNSAFE_CONFIGURE_MANIFEST}"
+                --build-type "${CMAKE_BUILD_TYPE}"
+                --cxx-compiler "${CMAKE_CXX_COMPILER}"
+                --cxx-compiler-id "${CMAKE_CXX_COMPILER_ID}"
+                --cxx-compiler-version "${CMAKE_CXX_COMPILER_VERSION}"
+                --cmake-generator "${CMAKE_GENERATOR}"
+                --cmake-version "${CMAKE_VERSION}"
+                "--cmake-cxx-flags-cache=${TURNSAFE_CMAKE_CXX_FLAGS_CACHE}"
+                "--cmake-cxx-flags-effective=${CMAKE_CXX_FLAGS}"
+                --ceres-dir "${Ceres_DIR}"
+                --enable-ros "${ENABLE_ROS}"
+                --catkin-enable-testing "${CATKIN_ENABLE_TESTING}"
+                --cmake-source-directory "${CMAKE_CURRENT_SOURCE_DIR}"
+                --cmake-binary-directory "${CMAKE_CURRENT_BINARY_DIR}"
+        RESULT_VARIABLE TURNSAFE_BUILD_PROVENANCE_RESULT
+        ERROR_VARIABLE TURNSAFE_BUILD_PROVENANCE_ERROR)
+if (NOT TURNSAFE_BUILD_PROVENANCE_RESULT EQUAL 0)
+    message(FATAL_ERROR
+            "TurnSafe build provenance failed: ${TURNSAFE_BUILD_PROVENANCE_ERROR}")
+endif ()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${TURNSAFE_REPOSITORY_ROOT}/scripts/turnsafe/source_snapshot.py"
+        "${TURNSAFE_REPOSITORY_ROOT}/scripts/turnsafe/generate_build_provenance.py"
+        "${TURNSAFE_REPOSITORY_ROOT}/scripts/turnsafe/finalize_build_manifest.py"
+        "${TURNSAFE_REPOSITORY_ROOT}/docs/turnsafe/t0_schema.md")
 include_directories(
         src
+        "${TURNSAFE_GENERATED_DIRECTORY}"
         ${EIGEN3_INCLUDE_DIR}
         ${Boost_INCLUDE_DIRS}
         ${CERES_INCLUDE_DIRS}
@@ -101,6 +159,7 @@ list(APPEND LIBRARY_SOURCES
         src/update/CP2TraceCodec.cpp
         src/update/CP2TraceJournal.cpp
         src/update/SchurUpdate.cpp
+        src/update/TurnSafeDiagnostics.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
         src/update/UpdaterMSCKFPreview.cpp
@@ -133,6 +192,7 @@ set_source_files_properties(
         src/update/CP2TraceCodec.cpp
         src/update/CP2TraceJournal.cpp
         src/update/SchurUpdate.cpp
+        src/update/TurnSafeDiagnostics.cpp
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
         src/update/UpdaterMSCKFPreview.cpp
@@ -280,6 +340,24 @@ if (CATKIN_ENABLE_TESTING)
                 ov_msckf_lib
                 ${thirdparty_libraries})
         target_compile_options(test_kaist_vio_serial_pairing PRIVATE
+                -fno-fast-math
+                -ffp-contract=off
+                -fsigned-zeros)
+    endif ()
+endif ()
+
+##################################################
+# TurnSafe Session-1 passive diagnostic gates
+##################################################
+if (CATKIN_ENABLE_TESTING)
+    catkin_add_gtest(test_turnsafe_t0
+            test/cp1/gtest_main.cpp
+            test/turnsafe/test_turnsafe_t0.cpp)
+    if (TARGET test_turnsafe_t0)
+        target_link_libraries(test_turnsafe_t0
+                ov_msckf_lib
+                ${thirdparty_libraries})
+        target_compile_options(test_turnsafe_t0 PRIVATE
                 -fno-fast-math
                 -ffp-contract=off
                 -fsigned-zeros)

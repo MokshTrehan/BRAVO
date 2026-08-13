@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import csv
 import datetime as dt
 import hashlib
 import json
@@ -37,10 +38,18 @@ REPO_ROOT = SCRIPT_DIR.parent.parent
 DATA_ROOT = Path("/home/moksh/datasets/KAIST_VIO")
 ARTIFACT_ROOT = REPO_ROOT / "artifacts" / "turnsafe"
 ADAPTER_PATH = SCRIPT_DIR / "kaist_vio_adapter.py"
+SOURCE_SNAPSHOT_PATH = SCRIPT_DIR / "source_snapshot.py"
 CONVERTER_PATH = REPO_ROOT / "scripts" / "cp0" / "openvins_to_tum.py"
 FIXED_LAUNCH = REPO_ROOT / "project" / "kaist_vio_serial.launch"
 FIXED_CONFIG = (
     REPO_ROOT / "config" / "kaist_vio_turnsafe_baseline" / "estimator_config.yaml"
+)
+FROZEN_BASELINE_RESULTS = (
+    REPO_ROOT / "artifacts" / "turnsafe" / "data" /
+    "KAIST_BASELINE_RESULTS.csv"
+)
+FROZEN_BASELINE_RESULTS_SHA256 = (
+    "99f94546bfe1d807af04c47df82ff5bd0ed63d8c1eb500e5e10bed3fa95bf8b5"
 )
 PYTHON = Path("/usr/bin/python3")
 
@@ -60,6 +69,10 @@ SEQUENCE_ORDER: Tuple[str, ...] = (
 )
 
 SCHEMA = "turnsafe.kaist_vio_campaign.sequence.v1"
+T0_SCHEMA = "turnsafe.t0.v1"
+SOURCE_SNAPSHOT_SCHEMA = "turnsafe.source_snapshot.v1"
+CONFIGURE_PROVENANCE_SCHEMA = "turnsafe.configure_provenance.v1"
+BUILD_MANIFEST_SCHEMA = "turnsafe.build_manifest.v1"
 SERIAL_KAIST_SUMMARY_PREFIX = "[SERIAL-KAIST]: exact_header_pairs="
 SERIAL_KAIST_SUMMARY_PATTERN = re.compile(
     r"\[SERIAL-KAIST\]: exact_header_pairs=(?P<exact_header_pairs>[0-9]+) "
@@ -132,6 +145,1371 @@ def file_identity(path: Path) -> Dict[str, Any]:
     }
 
 
+def _frozen_sequence_inputs(sequence: str) -> Dict[str, str]:
+    """Load byte identities from the checksum-bound Session-0.5 result."""
+    path = _regular_file(
+        FROZEN_BASELINE_RESULTS, "frozen Session-0.5 baseline results"
+    )
+    if sha256_file(path) != FROZEN_BASELINE_RESULTS_SHA256:
+        raise CampaignError("frozen Session-0.5 baseline result hash mismatch")
+    required = (
+        "source_bag_sha256",
+        "adapted_bag_sha256",
+        "config_sha256",
+        "kalibr_imu_chain_sha256",
+        "kalibr_imucam_chain_sha256",
+        "reference_sha256",
+    )
+    with path.open("r", encoding="utf-8", errors="strict", newline="") as stream:
+        reader = csv.DictReader(stream)
+        rows = [row for row in reader if row.get("sequence") == sequence]
+    if len(rows) != 1:
+        raise CampaignError(
+            "frozen Session-0.5 baseline has ambiguous sequence identity"
+        )
+    result: Dict[str, str] = {}
+    for key in required:
+        value = rows[0].get(key, "")
+        if not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise CampaignError(
+                "frozen Session-0.5 baseline {} is invalid".format(key)
+            )
+        result[key] = value
+    return result
+
+
+def _require_frozen_identity(
+    actual: Mapping[str, Any], expected_sha256: str, label: str
+) -> None:
+    if actual.get("sha256") != expected_sha256:
+        raise CampaignError("{} differs from frozen Session-0.5 input".format(label))
+
+
+def _sha256_canonical_json(value: Mapping[str, Any]) -> str:
+    payload = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _validate_recorded_file_identity(
+    record: Any, label: str
+) -> Tuple[Path, Dict[str, Any]]:
+    if not isinstance(record, dict):
+        raise CampaignError("{} identity is not an object".format(label))
+    try:
+        raw_path = Path(str(record["path"]))
+        _reject_forbidden_path(raw_path, label)
+        path = raw_path.resolve(strict=True)
+    except (KeyError, OSError) as exc:
+        raise CampaignError("{} identity path is invalid".format(label)) from exc
+    actual = file_identity(path)
+    for key in ("size_bytes", "sha256", "executable"):
+        if record.get(key) != actual[key]:
+            raise CampaignError("{} {} identity mismatch".format(label, key))
+    return path, actual
+
+
+def _validate_source_snapshot(value: Any, label: str) -> Dict[str, Any]:
+    if not isinstance(value, dict) or value.get("schema_version") != SOURCE_SNAPSHOT_SCHEMA:
+        raise CampaignError("{} source snapshot schema mismatch".format(label))
+    claimed = value.get("aggregate_source_snapshot_sha256")
+    body = dict(value)
+    body.pop("aggregate_source_snapshot_sha256", None)
+    if claimed != _sha256_canonical_json(body):
+        raise CampaignError("{} source snapshot aggregate mismatch".format(label))
+    return dict(value)
+
+
+def _parse_cmake_cache(path: Path) -> Dict[str, str]:
+    values: Dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8", errors="strict").splitlines():
+        if not raw or raw.startswith("#") or raw.startswith("//") or "=" not in raw:
+            continue
+        typed_key, value = raw.split("=", 1)
+        key = typed_key.split(":", 1)[0]
+        if key in values:
+            raise CampaignError("duplicate CMake cache key {}".format(key))
+        values[key] = value
+    return values
+
+
+def _normal_cmake_bool(value: str) -> str:
+    upper = value.upper()
+    if upper in ("1", "ON", "TRUE", "YES", "Y"):
+        return "ON"
+    if upper in ("0", "OFF", "FALSE", "NO", "N", ""):
+        return "OFF"
+    raise CampaignError("invalid CMake Boolean value {}".format(value))
+
+
+def _validate_cache_descriptor_binding(
+    cache_path: Path, configure_path: Path, descriptor: Mapping[str, Any]
+) -> Tuple[Path, Path, Path]:
+    configuration = descriptor.get("configuration")
+    if not isinstance(configuration, dict):
+        raise CampaignError("build configuration descriptor is missing")
+    raw_binary = Path(str(configuration.get("cmake_binary_directory", "")))
+    raw_source = Path(str(configuration.get("cmake_source_directory", "")))
+    _reject_forbidden_path(raw_binary, "configured binary directory")
+    _reject_forbidden_path(raw_source, "configured source directory")
+    binary_directory = raw_binary.resolve(strict=True)
+    source_directory = raw_source.resolve(strict=True)
+    if cache_path != binary_directory / "CMakeCache.txt":
+        raise CampaignError("CMake cache is outside the configured build")
+    if configure_path != (
+        binary_directory / "turnsafe-generated" / "configure_provenance.json"
+    ):
+        raise CampaignError("configure manifest is outside the configured build")
+    cache = _parse_cmake_cache(cache_path)
+    exact = {
+        "CMAKE_BUILD_TYPE": str(configuration.get("build_type", "")),
+        "CMAKE_CXX_FLAGS": str(configuration.get("cmake_cxx_flags_cache", "")),
+        "CMAKE_GENERATOR": str(configuration.get("cmake_generator", "")),
+    }
+    for key, expected in exact.items():
+        if cache.get(key) != expected:
+            raise CampaignError("CMake cache {} binding mismatch".format(key))
+    paths = {
+        "CMAKE_CXX_COMPILER": str(configuration.get("cxx_compiler", "")),
+        "Ceres_DIR": str(configuration.get("ceres_dir", "")),
+        "CMAKE_HOME_DIRECTORY": str(source_directory),
+        "ov_msckf_BINARY_DIR": str(binary_directory),
+    }
+    for key, expected in paths.items():
+        actual = cache.get(key)
+        if actual is None or Path(actual).resolve(strict=False) != Path(
+            expected
+        ).resolve(strict=False):
+            raise CampaignError("CMake cache {} binding mismatch".format(key))
+    booleans = {
+        "ENABLE_ROS": str(configuration.get("enable_ros", "")),
+        "CATKIN_ENABLE_TESTING": str(
+            configuration.get("catkin_enable_testing", "")
+        ),
+    }
+    for key, expected in booleans.items():
+        actual = cache.get(key)
+        if actual is None or _normal_cmake_bool(actual) != _normal_cmake_bool(
+            expected
+        ):
+            raise CampaignError("CMake cache {} binding mismatch".format(key))
+    if not isinstance(configuration.get("cmake_cxx_flags_cache"), str) or not isinstance(
+        configuration.get("cmake_cxx_flags_effective"), str
+    ):
+        raise CampaignError("build configuration has incomplete C++ flags")
+    flags_path = binary_directory / "CMakeFiles/ov_msckf_lib.dir/flags.make"
+    _reject_forbidden_path(flags_path, "target compile flags")
+    lines = [
+        line.split("=", 1)[1].strip()
+        for line in flags_path.read_text(encoding="utf-8", errors="strict").splitlines()
+        if line.startswith("CXX_FLAGS =")
+    ]
+    if len(lines) != 1:
+        raise CampaignError("target compile flags are missing or ambiguous")
+    try:
+        expected_flags = shlex.split(
+            str(configuration["cmake_cxx_flags_effective"])
+        )
+        actual_flags = shlex.split(lines[0])
+    except ValueError as exc:
+        raise CampaignError("invalid target compile flags: {}".format(exc))
+    if actual_flags[: len(expected_flags)] != expected_flags:
+        raise CampaignError("target compile flags binding mismatch")
+    return binary_directory, binary_directory.parent.parent, flags_path.resolve(strict=True)
+
+
+def _validate_build_manifest(
+    path: Path, estimator_binary: Path, schema_path: Path, repository: Path
+) -> Dict[str, Any]:
+    _reject_forbidden_path(path, "TurnSafe build manifest")
+    _reject_forbidden_path(estimator_binary, "estimator binary")
+    _reject_forbidden_path(schema_path, "TurnSafe schema")
+    _reject_forbidden_path(repository, "TurnSafe repository")
+    value = _strict_json(path.read_text(encoding="ascii"), "build manifest")
+    if value.get("schema_version") != BUILD_MANIFEST_SCHEMA:
+        raise CampaignError("TurnSafe build-manifest schema mismatch")
+    claimed_payload = value.get("build_manifest_payload_sha256")
+    body = dict(value)
+    body.pop("build_manifest_payload_sha256", None)
+    if claimed_payload != _sha256_canonical_json(body):
+        raise CampaignError("TurnSafe build-manifest payload mismatch")
+    descriptor = value.get("descriptor")
+    if not isinstance(descriptor, dict):
+        raise CampaignError("TurnSafe build descriptor is missing")
+    build_id = _sha256_canonical_json(descriptor)
+    if value.get("build_provenance_id") != build_id:
+        raise CampaignError("TurnSafe build-provenance ID mismatch")
+    source_snapshot = _validate_source_snapshot(
+        value.get("source_snapshot"), "build manifest"
+    )
+    recorded_repository = Path(str(source_snapshot.get("repository", "")))
+    _reject_forbidden_path(recorded_repository, "build source repository")
+    if recorded_repository.resolve(strict=True) != repository:
+        raise CampaignError("build manifest belongs to a different repository")
+    source_descriptor = descriptor.get("source")
+    if not isinstance(source_descriptor, dict):
+        raise CampaignError("build source descriptor is missing")
+    expected_source = {
+        "head_sha": source_snapshot.get("head_sha"),
+        "head_tree": source_snapshot.get("head_tree"),
+        "source_dirty": source_snapshot.get("source_dirty"),
+        "source_snapshot_sha256": source_snapshot.get(
+            "aggregate_source_snapshot_sha256"
+        ),
+        "tracked_diff_sha256": source_snapshot.get("tracked_diff_sha256"),
+        "status_porcelain_sha256": source_snapshot.get(
+            "status_porcelain_sha256"
+        ),
+    }
+    if source_descriptor != expected_source:
+        raise CampaignError("build source descriptor does not match snapshot")
+
+    configure_path, configure_identity = _validate_recorded_file_identity(
+        value.get("configure_manifest"), "configure manifest"
+    )
+    configure = _strict_json(
+        configure_path.read_text(encoding="ascii"), "configure manifest"
+    )
+    if configure.get("schema_version") != CONFIGURE_PROVENANCE_SCHEMA:
+        raise CampaignError("configure-provenance schema mismatch")
+    if configure.get("descriptor") != descriptor or configure.get(
+        "build_provenance_id"
+    ) != build_id:
+        raise CampaignError("configure provenance differs from build manifest")
+    if configure.get("source_snapshot") != source_snapshot:
+        raise CampaignError("configure source snapshot differs from build manifest")
+    cache_path, _ = _validate_recorded_file_identity(
+        value.get("cmake_cache"), "CMake cache"
+    )
+    _, workspace_root, flags_path = _validate_cache_descriptor_binding(
+        cache_path, configure_path, descriptor
+    )
+    recorded_flags_path, _ = _validate_recorded_file_identity(
+        value.get("target_compile_flags"), "target compile flags"
+    )
+    if recorded_flags_path != flags_path:
+        raise CampaignError("target compile flags are outside the configured build")
+    recorded_schema_path, recorded_schema = _validate_recorded_file_identity(
+        value.get("diagnostic_schema"), "diagnostic schema"
+    )
+    if recorded_schema_path != schema_path or recorded_schema["sha256"] != descriptor.get(
+        "diagnostic_schema_sha256"
+    ):
+        raise CampaignError("diagnostic schema is not build-bound")
+
+    artifacts = value.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise CampaignError("build artifacts are missing")
+    for required in (
+        "estimator_binary",
+        "ov_msckf_library",
+        "ov_core_library",
+    ):
+        if required not in artifacts:
+            raise CampaignError("build artifact {} is missing".format(required))
+    artifact_paths: Dict[str, Path] = {}
+    for name, identity in sorted(artifacts.items()):
+        artifact_paths[name], _ = _validate_recorded_file_identity(
+            identity, "build artifact {}".format(name)
+        )
+    expected_artifacts = {
+        "estimator_binary": workspace_root
+        / "devel/lib/ov_msckf/ros1_serial_msckf",
+        "ov_msckf_library": workspace_root / "devel/lib/libov_msckf_lib.so",
+        "ov_core_library": workspace_root / "devel/lib/libov_core_lib.so",
+    }
+    for name, expected in expected_artifacts.items():
+        if artifact_paths[name] != expected:
+            raise CampaignError(
+                "build artifact {} is outside the configured workspace".format(name)
+            )
+    if artifact_paths["estimator_binary"] != estimator_binary:
+        raise CampaignError("build manifest binds a different estimator binary")
+    return {
+        "value": dict(value),
+        "build_provenance_id": build_id,
+        "source_snapshot": source_snapshot,
+        "configure_manifest_path": configure_path,
+        "configure_manifest_sha256": configure_identity["sha256"],
+        "artifact_paths": artifact_paths,
+        "cmake_cache_path": cache_path,
+    }
+
+
+def _validate_t0_caller_expectations(
+    build_source: Mapping[str, Any],
+    build_provenance_id: str,
+    source_sha: str,
+    source_tree: str,
+    expected_build_id: str,
+    expected_source_state: str,
+) -> None:
+    if source_sha and source_sha != build_source.get("head_sha"):
+        raise CampaignError("caller-provided source SHA conflicts with build")
+    if source_tree and source_tree != build_source.get("head_tree"):
+        raise CampaignError("caller-provided source tree conflicts with build")
+    if expected_build_id and expected_build_id != build_provenance_id:
+        raise CampaignError("caller-provided build ID conflicts with build")
+    if bool(build_source.get("source_dirty")) != (
+        expected_source_state == "dirty"
+    ):
+        raise CampaignError("build source state conflicts with requested state")
+
+
+def _strict_json(line: str, label: str) -> Mapping[str, Any]:
+    def reject_constant(value: str) -> None:
+        raise CampaignError("{} contains nonfinite JSON token {}".format(label, value))
+
+    value = json.loads(line, parse_constant=reject_constant)
+    if not isinstance(value, dict):
+        raise CampaignError("{} is not a JSON object".format(label))
+    return value
+
+
+def _validate_t0_jsonl(
+    path: Path, expected_header: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Open and validate the actual atomically published estimator log."""
+
+    if not path.is_file() or path.stat().st_size == 0:
+        raise CampaignError("TurnSafe T0 JSONL was not atomically published")
+    records: List[Mapping[str, Any]] = []
+    with path.open("r", encoding="utf-8", newline="") as stream:
+        for line_number, raw in enumerate(stream, 1):
+            if not raw.endswith("\n"):
+                raise CampaignError("T0 JSONL final line is not newline terminated")
+            records.append(_strict_json(raw, "T0 JSONL line {}".format(line_number)))
+    if not records or records[0].get("record_type") != "run_header":
+        raise CampaignError("T0 JSONL is missing its run header")
+    header = records[0]
+    if header.get("schema") != T0_SCHEMA:
+        raise CampaignError("T0 run-header schema mismatch")
+    for key, expected in sorted(expected_header.items()):
+        if header.get(key) != expected:
+            raise CampaignError("T0 run-header {} identity mismatch".format(key))
+    resolved_configuration = header.get("resolved_configuration")
+    required_configuration = {
+        "one_pass_schur": True,
+        "fej_enabled": True,
+        "global_3d_transient": True,
+        "all_cameras_radtan": True,
+        "camera_extrinsic_calibration_off": True,
+        "camera_intrinsic_calibration_off": True,
+        "camera_time_offset_calibration_off": True,
+        "stereo_enabled": True,
+        "stereo_available": True,
+        "require_target_stereo_range": True,
+        "camera_count": 2,
+    }
+    if resolved_configuration != required_configuration:
+        raise CampaignError("T0 resolved supported configuration mismatch")
+    unsupported_reasons = header.get("unsupported_reasons")
+    if not isinstance(unsupported_reasons, list) or not all(
+        isinstance(reason, str) for reason in unsupported_reasons
+    ) or unsupported_reasons != sorted(set(unsupported_reasons)):
+        raise CampaignError("T0 unsupported reasons are not canonical")
+    supported = header.get("supported_configuration")
+    if not isinstance(supported, bool) or supported != (not unsupported_reasons):
+        raise CampaignError("T0 supported-configuration claim is inconsistent")
+    if not supported:
+        raise CampaignError("fixed KAIST replay is not a supported configuration")
+
+    forbidden_keys = {
+        "sequence",
+        "sequence_id",
+        "sequence_name",
+        "bag",
+        "bag_path",
+        "bag_sha256",
+        "ground_truth",
+        "path_gt",
+        "final_error",
+    }
+
+    def inspect(value: Any, label: str) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key.lower() in forbidden_keys:
+                    raise CampaignError("runtime T0 record contains forbidden key {}".format(key))
+                inspect(child, label + "." + key)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                inspect(child, "{}[{}]".format(label, index))
+        elif isinstance(value, float) and not math.isfinite(value):
+            raise CampaignError("{} contains a nonfinite number".format(label))
+
+    def require_object(
+        value: Any, label: str, required: Sequence[str]
+    ) -> Mapping[str, Any]:
+        if not isinstance(value, dict):
+            raise CampaignError("{} is not an object".format(label))
+        missing = [key for key in required if key not in value]
+        if missing:
+            raise CampaignError(
+                "{} is missing required field {}".format(label, missing[0])
+            )
+        return value
+
+    def require_array(value: Any, label: str) -> List[Any]:
+        if not isinstance(value, list):
+            raise CampaignError("{} is not an array".format(label))
+        return value
+
+    def require_nonnegative_integer(value: Any, label: str) -> None:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise CampaignError("{} is not a nonnegative integer".format(label))
+
+    def require_bool(value: Any, label: str) -> None:
+        if not isinstance(value, bool):
+            raise CampaignError("{} is not a Boolean".format(label))
+
+    def require_string(value: Any, label: str) -> None:
+        if not isinstance(value, str) or not value:
+            raise CampaignError("{} is not a nonempty string".format(label))
+
+    def require_finite_number(value: Any, label: str) -> None:
+        if (isinstance(value, bool) or not isinstance(value, (int, float)) or
+                not math.isfinite(value)):
+            raise CampaignError("{} is not a finite number".format(label))
+
+    availability_statuses = {
+        "AVAILABLE",
+        "NOT_APPLICABLE",
+        "NOT_EXPOSED",
+        "NOT_AVAILABLE",
+        "NOT_AVAILABLE_FROM_SENSOR",
+        "UNSUPPORTED_CONFIGURATION",
+        "INVALID_INPUT",
+        "NONFINITE",
+        "NUMERICAL_FAILURE",
+    }
+
+    def require_number_or_status(value: Any, label: str) -> None:
+        if isinstance(value, bool):
+            raise CampaignError("{} has invalid numeric availability".format(label))
+        if isinstance(value, (int, float)):
+            if isinstance(value, float) and not math.isfinite(value):
+                raise CampaignError("{} is nonfinite".format(label))
+            return
+        status = require_object(value, label, ("status", "reason"))
+        if status.get("status") not in availability_statuses:
+            raise CampaignError("{} has an invalid availability status".format(label))
+        require_string(status.get("reason"), label + ".reason")
+        if status.get("status") == "AVAILABLE":
+            if "value" not in status:
+                raise CampaignError(
+                    "{} AVAILABLE status is missing numeric value".format(label)
+                )
+            require_finite_number(status["value"], label + ".value")
+
+    def require_nonnegative_integer_or_status(value: Any, label: str) -> None:
+        if isinstance(value, dict):
+            require_number_or_status(value, label)
+            return
+        require_nonnegative_integer(value, label)
+
+    def require_status(value: Any, label: str) -> Mapping[str, Any]:
+        status = require_object(value, label, ("status", "reason"))
+        if status.get("status") not in availability_statuses:
+            raise CampaignError("{} has an invalid availability status".format(label))
+        require_string(status.get("reason"), label + ".reason")
+        return status
+
+    def require_pixel(value: Any, label: str) -> None:
+        if isinstance(value, list):
+            if len(value) != 2:
+                raise CampaignError("{} is not a two-coordinate pixel".format(label))
+            for index, coordinate in enumerate(value):
+                require_finite_number(coordinate, "{}[{}]".format(label, index))
+            return
+        status = require_status(value, label)
+        if status.get("status") == "AVAILABLE":
+            raise CampaignError(
+                "{} AVAILABLE pixel is missing two coordinates".format(label)
+            )
+
+    observation_key_fields = (
+        "camera_id",
+        "timestamp_value",
+        "timestamp_key",
+        "feature_id",
+        "detached_index",
+        "observation_ordinal",
+    )
+
+    def require_observation_key(value: Any, label: str) -> Mapping[str, Any]:
+        key = require_object(value, label, observation_key_fields)
+        for field in ("camera_id", "feature_id", "detached_index",
+                      "observation_ordinal"):
+            require_nonnegative_integer(key[field], label + "." + field)
+        require_finite_number(key["timestamp_value"], label + ".timestamp_value")
+        require_string(key["timestamp_key"], label + ".timestamp_key")
+        return key
+
+    def require_observation_evidence(value: Any, label: str) -> None:
+        evidence = require_object(
+            value, label, ("observation_key", "raw_pixel", "normalized_pixel")
+        )
+        require_observation_key(evidence["observation_key"], label + ".observation_key")
+        require_pixel(evidence["raw_pixel"], label + ".raw_pixel")
+        require_pixel(evidence["normalized_pixel"], label + ".normalized_pixel")
+
+    def require_camera_identity(value: Any, label: str) -> None:
+        identity = require_object(value, label, ("status",))
+        require_string(identity["status"], label + ".status")
+        if identity["status"] == "AVAILABLE":
+            require_object(
+                identity, label,
+                ("camera_id", "model", "intrinsic_id", "extrinsic_id"),
+            )
+            require_nonnegative_integer(identity["camera_id"], label + ".camera_id")
+            require_string(identity["model"], label + ".model")
+            require_nonnegative_integer(identity["intrinsic_id"], label + ".intrinsic_id")
+            require_nonnegative_integer(identity["extrinsic_id"], label + ".extrinsic_id")
+        else:
+            require_string(identity.get("reason"), label + ".reason")
+
+    initializer_fields = (
+        "attempted",
+        "native_success",
+        "native_function",
+        "native_outcome",
+        "condition_number",
+        "depth",
+        "baseline_ratio",
+        "predicates",
+        "refinement_runs",
+        "refinement_lambda",
+        "refinement_last_step_norm",
+        "refinement_control_epsilon",
+        "termination_reason",
+    )
+    schur_fields = (
+        "attempted",
+        "native_accepted",
+        "native_status",
+        "native_stage",
+        "raw_rows",
+        "rows_before_reduction",
+        "degrees_of_freedom",
+        "rows_after_reduction",
+        "singular_values",
+        "numerical_rank",
+        "reciprocal_condition",
+        "condition_number",
+        "numerical_repairs",
+    )
+    nis_fields = (
+        "attempted",
+        "native_stage",
+        "lifecycle_accept",
+        "degrees_of_freedom",
+        "statistic",
+        "threshold",
+        "decision",
+    )
+    attempt_fields = (
+        "detached_index",
+        "feature_id",
+        "ordered_observation_keys",
+        "attempt_has_any_live_same_camera_clone_pair",
+        "attempt_valid_clone_pair_count",
+        "triangulation",
+        "refinement",
+        "schur",
+        "full_nis",
+        "full_outcome",
+        "full_outcome_mapping",
+        "native_terminal_status",
+        "target_time_stereo_available",
+        "accepted_at_native_feature_gate",
+        "native_feature_row_count",
+        "accepted_full_factor",
+        "accepted_full_row_count",
+        "accepted_full_row_status",
+        "finalization_result",
+    )
+    candidate_fields = (
+        "candidate_key",
+        "source_observation_key",
+        "source_observation",
+        "target_observation_key",
+        "target_observation",
+        "supporting_target_time_stereo_observation_key",
+        "supporting_target_time_stereo_observation",
+        "camera_calibration",
+        "full_outcome",
+        "target_time_stereo_available",
+        "target_stereo_rejection_reason",
+        "stereo_geometry_primitives",
+        "target_bearing",
+        "range_certificate",
+        "translation_certificate",
+        "bearing_covariance",
+        "acute_regime",
+        "rho_trans",
+        "rho_threshold",
+        "static_quality_status",
+        "eligible_before_group",
+        "terminal_reason",
+    )
+    funnel_fields = (
+        "camera_frames",
+        "previous_tracked_points",
+        "klt_status_survivors",
+        "in_bounds_survivors",
+        "mask_survivors",
+        "native_combined_track_survivors",
+        "fmatrix_input_points",
+        "fmatrix_survivors",
+        "database_observations_written",
+        "terminal_attempt_count",
+        "tracks_with_valid_clone_pairs",
+        "attempt_valid_clone_pair_count_total",
+        "full_outcome_counts_by_code",
+        "triangulation_outcome_counts_by_code",
+        "refinement_outcome_counts_by_code",
+        "schur_outcome_counts_by_code",
+        "full_nis_outcome_counts_by_code",
+        "accepted_full_factors",
+        "accepted_full_rows",
+        "shadow_pair_candidates",
+        "candidate_pairs_with_target_stereo",
+        "attempts_with_at_least_one_target_stereo_pair",
+        "groups_with_at_least_one_target_stereo_pair",
+        "candidates_with_calibrated_range_lcb",
+        "candidates_with_calibrated_translation_ucb",
+        "candidates_translation_acute",
+        "candidates_passing_rho_trans",
+        "groups_n_lt_2",
+        "groups_n_2",
+        "groups_n_3",
+        "groups_n_ge_4",
+        "groups_passing_rank",
+        "groups_passing_consensus",
+        "eligible_groups_before_selection",
+        "winner_count",
+        "foregone_eligible_groups",
+        "foregone_eligible_features",
+        "winner_shadow_factors_passing_nis",
+        "winner_shadow_rows_passing_nis",
+    )
+
+    callback_count = 0
+    updater_callback_count = 0
+    for record_index, record in enumerate(records):
+        inspect(record, "record[{}]".format(record_index))
+        if record_index == 0:
+            continue
+        if record.get("schema") != T0_SCHEMA or record.get("record_type") != "callback":
+            raise CampaignError("T0 JSONL contains an unknown record type")
+        if record.get("callback_index") != callback_count:
+            raise CampaignError("T0 callback ordering is not contiguous")
+        callback_count += 1
+        timestamp = record.get("callback_timestamp_value")
+        if not isinstance(timestamp, (int, float)) or not math.isfinite(timestamp):
+            raise CampaignError("T0 callback timestamp is unavailable")
+        require_object(
+            record,
+            "T0 callback",
+            (
+                "callback_timestamp_key",
+                "prior_fingerprint",
+                "frontend_cameras",
+                "full_track_attempts",
+                "shadow_candidates",
+                "shadow_groups",
+                "prior_primitives",
+                "baseline_decision",
+                "funnel",
+                "shadow_summary",
+                "completeness",
+            ),
+        )
+        cameras = require_array(record.get("frontend_cameras"), "T0 frontend_cameras")
+        camera_fields = (
+            "camera_id",
+            "source_camera_timestamp",
+            "frame_timestamp_value",
+            "frame_timestamp_key",
+            "reseed_count",
+            "klt_attempted_count",
+            "klt_counts_available",
+            "previous_tracked_points",
+            "klt_status_survivors",
+            "klt_status_rejections",
+            "out_of_bounds_rejections",
+            "in_bounds_survivors",
+            "mask_rejections",
+            "mask_survivors",
+            "mask_stage_present",
+            "fmatrix_input_points",
+            "fmatrix_inliers",
+            "fmatrix_rejections",
+            "native_combined_track_survivors",
+            "database_observations_written",
+            "database_tracked_observations_written",
+            "database_new_observations_written",
+            "reset_too_few_points",
+            "reset_native_reason",
+            "forward_backward_check",
+            "klt_error_summary",
+            "gyro_magnitude_rad_s",
+            "gyro_integrated_rotation_rad",
+            "blur_metric",
+            "exposure",
+            "gain",
+            "native_accepted_feature_ids",
+        )
+        for camera_index, camera in enumerate(cameras):
+            camera = require_object(
+                camera,
+                "T0 frontend camera {}".format(camera_index),
+                camera_fields,
+            )
+            camera_label = "T0 frontend camera {}".format(camera_index)
+            for count_field in (
+                "camera_id", "reseed_count", "klt_attempted_count",
+                "previous_tracked_points", "klt_status_survivors",
+                "klt_status_rejections", "out_of_bounds_rejections",
+                "in_bounds_survivors", "mask_rejections", "mask_survivors",
+                "fmatrix_input_points", "fmatrix_inliers",
+                "fmatrix_rejections", "native_combined_track_survivors",
+                "database_observations_written",
+            ):
+                require_nonnegative_integer(
+                    camera[count_field], camera_label + "." + count_field
+                )
+            for boolean_field in (
+                "klt_counts_available", "mask_stage_present",
+                "reset_too_few_points",
+            ):
+                require_bool(
+                    camera[boolean_field], camera_label + "." + boolean_field
+                )
+            require_finite_number(
+                camera["frame_timestamp_value"],
+                camera_label + ".frame_timestamp_value",
+            )
+            require_string(
+                camera["frame_timestamp_key"], camera_label + ".frame_timestamp_key"
+            )
+            require_string(
+                camera["reset_native_reason"], camera_label + ".reset_native_reason"
+            )
+            require_status(
+                camera["forward_backward_check"],
+                camera_label + ".forward_backward_check",
+            )
+            for optional_numeric in (
+                "database_tracked_observations_written",
+                "database_new_observations_written", "gyro_magnitude_rad_s",
+                "gyro_integrated_rotation_rad", "blur_metric", "exposure", "gain",
+            ):
+                require_number_or_status(
+                    camera[optional_numeric], camera_label + "." + optional_numeric
+                )
+            accepted_ids = require_array(
+                camera["native_accepted_feature_ids"],
+                camera_label + ".native_accepted_feature_ids",
+            )
+            for accepted_index, accepted_id in enumerate(accepted_ids):
+                require_nonnegative_integer(
+                    accepted_id,
+                    "{}.native_accepted_feature_ids[{}]".format(
+                        camera_label, accepted_index
+                    ),
+                )
+        camera_ids = [item.get("camera_id") for item in cameras]
+        if camera_ids != sorted(camera_ids) or len(camera_ids) != len(set(camera_ids)):
+            raise CampaignError("T0 camera ordering is not canonical")
+        attempts = require_array(record.get("full_track_attempts"), "T0 full_track_attempts")
+        for attempt_index, attempt in enumerate(attempts):
+            label = "T0 full-track attempt {}".format(attempt_index)
+            attempt = require_object(attempt, label, attempt_fields)
+            require_nonnegative_integer(attempt["detached_index"], label + ".detached_index")
+            require_nonnegative_integer(attempt["feature_id"], label + ".feature_id")
+            require_bool(
+                attempt["attempt_has_any_live_same_camera_clone_pair"],
+                label + ".attempt_has_any_live_same_camera_clone_pair",
+            )
+            require_nonnegative_integer(
+                attempt["attempt_valid_clone_pair_count"],
+                label + ".attempt_valid_clone_pair_count",
+            )
+            observations = require_array(
+                attempt["ordered_observation_keys"],
+                label + ".ordered_observation_keys",
+            )
+            for observation_index, observation in enumerate(observations):
+                observation = require_object(
+                    observation,
+                    "{}.ordered_observation_keys[{}]".format(
+                        label, observation_index
+                    ),
+                    (
+                        "camera_id",
+                        "timestamp_value",
+                        "timestamp_key",
+                        "feature_id",
+                        "detached_index",
+                        "baseline_observation_index",
+                        "clone_available",
+                        "uv",
+                        "uv_normalized",
+                    ),
+                )
+                for field in ("camera_id", "feature_id", "detached_index",
+                              "baseline_observation_index"):
+                    require_nonnegative_integer(
+                        observation[field],
+                        "{}.ordered_observation_keys[{}].{}".format(
+                            label, observation_index, field
+                        ),
+                    )
+                require_finite_number(
+                    observation["timestamp_value"],
+                    "{}.ordered_observation_keys[{}].timestamp_value".format(
+                        label, observation_index
+                    ),
+                )
+                require_string(
+                    observation["timestamp_key"],
+                    "{}.ordered_observation_keys[{}].timestamp_key".format(
+                        label, observation_index
+                    ),
+                )
+                require_bool(
+                    observation["clone_available"],
+                    "{}.ordered_observation_keys[{}].clone_available".format(
+                        label, observation_index
+                    ),
+                )
+                require_pixel(
+                    observation["uv"],
+                    "{}.ordered_observation_keys[{}].uv".format(
+                        label, observation_index
+                    ),
+                )
+                require_pixel(
+                    observation["uv_normalized"],
+                    "{}.ordered_observation_keys[{}].uv_normalized".format(
+                        label, observation_index
+                    ),
+                )
+            for stage_name in ("triangulation", "refinement"):
+                stage = require_object(
+                    attempt[stage_name], label + "." + stage_name,
+                    initializer_fields,
+                )
+                require_object(
+                    stage["predicates"],
+                    label + "." + stage_name + ".predicates",
+                    (
+                        "ill_conditioned",
+                        "too_near_or_behind",
+                        "too_far",
+                        "baseline_ratio",
+                        "native_nan",
+                    ),
+                )
+                require_bool(stage["attempted"], label + "." + stage_name + ".attempted")
+                require_bool(stage["native_success"], label + "." + stage_name + ".native_success")
+                require_string(stage["native_function"], label + "." + stage_name + ".native_function")
+                require_string(stage["native_outcome"], label + "." + stage_name + ".native_outcome")
+                for numeric_field in (
+                    "condition_number", "depth", "baseline_ratio",
+                    "refinement_lambda", "refinement_last_step_norm",
+                    "refinement_control_epsilon",
+                ):
+                    require_number_or_status(
+                        stage[numeric_field],
+                        label + "." + stage_name + "." + numeric_field,
+                    )
+                require_nonnegative_integer_or_status(
+                    stage["refinement_runs"],
+                    label + "." + stage_name + ".refinement_runs",
+                )
+                for predicate_name, predicate in stage["predicates"].items():
+                    require_bool(
+                        predicate,
+                        label + "." + stage_name + ".predicates." + predicate_name,
+                    )
+                require_string(
+                    stage["termination_reason"],
+                    label + "." + stage_name + ".termination_reason",
+                )
+            schur = require_object(
+                attempt["schur"], label + ".schur", schur_fields
+            )
+            require_bool(schur["attempted"], label + ".schur.attempted")
+            require_bool(schur["native_accepted"], label + ".schur.native_accepted")
+            require_string(schur["native_status"], label + ".schur.native_status")
+            require_string(schur["native_stage"], label + ".schur.native_stage")
+            for integer_field in (
+                "raw_rows", "rows_before_reduction", "degrees_of_freedom",
+                "rows_after_reduction", "numerical_rank",
+            ):
+                require_nonnegative_integer_or_status(
+                    schur[integer_field], label + ".schur." + integer_field
+                )
+            singular_values = schur["singular_values"]
+            if isinstance(singular_values, list):
+                if len(singular_values) != 3:
+                    raise CampaignError(
+                        "{}.schur.singular_values is not a three-value array".format(label)
+                    )
+                for value_index, value in enumerate(singular_values):
+                    require_finite_number(
+                        value,
+                        "{}.schur.singular_values[{}]".format(label, value_index),
+                    )
+            else:
+                require_status(singular_values, label + ".schur.singular_values")
+            for numeric_field in ("reciprocal_condition", "condition_number"):
+                require_number_or_status(
+                    schur[numeric_field], label + ".schur." + numeric_field
+                )
+            repairs = require_object(
+                schur["numerical_repairs"], label + ".schur.numerical_repairs",
+                ("jitter", "clamp", "regularization", "fallback"),
+            )
+            for repair_name, repair_count in repairs.items():
+                require_nonnegative_integer(
+                    repair_count,
+                    label + ".schur.numerical_repairs." + repair_name,
+                )
+            full_nis = require_object(
+                attempt["full_nis"], label + ".full_nis", nis_fields
+            )
+            require_bool(full_nis["attempted"], label + ".full_nis.attempted")
+            require_bool(
+                full_nis["lifecycle_accept"], label + ".full_nis.lifecycle_accept"
+            )
+            require_string(full_nis["native_stage"], label + ".full_nis.native_stage")
+            require_string(full_nis["decision"], label + ".full_nis.decision")
+            require_nonnegative_integer_or_status(
+                full_nis["degrees_of_freedom"],
+                label + ".full_nis.degrees_of_freedom",
+            )
+            for numeric_field in ("statistic", "threshold"):
+                require_number_or_status(
+                    full_nis[numeric_field], label + ".full_nis." + numeric_field
+                )
+            require_number_or_status(
+                attempt["native_feature_row_count"],
+                label + ".native_feature_row_count",
+            )
+            require_nonnegative_integer(
+                attempt["accepted_full_row_count"],
+                label + ".accepted_full_row_count",
+            )
+            for boolean_field in (
+                "target_time_stereo_available", "accepted_at_native_feature_gate",
+                "accepted_full_factor",
+            ):
+                require_bool(attempt[boolean_field], label + "." + boolean_field)
+            for string_field in (
+                "full_outcome", "full_outcome_mapping", "native_terminal_status",
+                "accepted_full_row_status", "finalization_result",
+            ):
+                require_string(attempt[string_field], label + "." + string_field)
+        detached = [item.get("detached_index") for item in attempts]
+        if detached != sorted(detached) or len(detached) != len(set(detached)):
+            raise CampaignError("T0 detached-attempt ordering is not canonical")
+        baseline = record.get("baseline_decision")
+        baseline = require_object(
+            baseline,
+            "T0 baseline decision",
+            (
+                "native_status",
+                "native_subreason",
+                "accepted_full_feature_ids",
+                "proposal_sufficient_statistics",
+                "proposal_attempted",
+                "proposal_accepted",
+                "baseline_commit_occurred",
+                "no_full_visual_update_duration",
+                "mean_commit_count",
+                "covariance_commit_count",
+                "terminal_finalization_count",
+                "nominal_state_fingerprint",
+                "covariance_fingerprint",
+            ),
+        )
+        if baseline.get("native_status") != "UPDATER_NOT_REACHED":
+            updater_callback_count += 1
+        require_string(baseline["native_status"], "T0 baseline decision.native_status")
+        require_string(
+            baseline["native_subreason"], "T0 baseline decision.native_subreason"
+        )
+        accepted_full_ids = require_array(
+            baseline["accepted_full_feature_ids"],
+            "T0 baseline decision.accepted_full_feature_ids",
+        )
+        for accepted_index, accepted_id in enumerate(accepted_full_ids):
+            require_nonnegative_integer(
+                accepted_id,
+                "T0 baseline decision.accepted_full_feature_ids[{}]".format(
+                    accepted_index
+                ),
+            )
+        proposal = require_object(
+            baseline["proposal_sufficient_statistics"],
+            "T0 baseline decision.proposal_sufficient_statistics",
+            ("gamma", "precompression_rows", "compressed_rows"),
+        )
+        require_number_or_status(
+            proposal["gamma"],
+            "T0 baseline decision.proposal_sufficient_statistics.gamma",
+        )
+        for row_field in ("precompression_rows", "compressed_rows"):
+            require_nonnegative_integer_or_status(
+                proposal[row_field],
+                "T0 baseline decision.proposal_sufficient_statistics." + row_field,
+            )
+        for boolean_field in (
+            "proposal_attempted", "proposal_accepted", "baseline_commit_occurred",
+        ):
+            require_bool(
+                baseline[boolean_field],
+                "T0 baseline decision." + boolean_field,
+            )
+        require_number_or_status(
+            baseline["no_full_visual_update_duration"],
+            "T0 baseline decision.no_full_visual_update_duration",
+        )
+        for counter in (
+            "mean_commit_count",
+            "covariance_commit_count",
+            "terminal_finalization_count",
+        ):
+            value = baseline.get(counter)
+            if not isinstance(value, int) or value < 0 or value > 1:
+                raise CampaignError("T0 {} violates the one-boundary invariant".format(counter))
+        if baseline.get("mean_commit_count") != baseline.get("covariance_commit_count"):
+            raise CampaignError("T0 mean/covariance commit counts disagree")
+        candidates = require_array(record.get("shadow_candidates"), "T0 shadow_candidates")
+        candidate_keys = []
+        for candidate_index, candidate in enumerate(candidates):
+            label = "T0 shadow candidate {}".format(candidate_index)
+            candidate = require_object(candidate, label, candidate_fields)
+            for observation_name in (
+                "source_observation_key",
+                "target_observation_key",
+            ):
+                require_observation_key(
+                    candidate[observation_name],
+                    label + "." + observation_name,
+                )
+            for evidence_name in ("source_observation", "target_observation"):
+                require_observation_evidence(
+                    candidate[evidence_name],
+                    label + "." + evidence_name,
+                )
+            support_key_name = "supporting_target_time_stereo_observation_key"
+            support_key = require_object(
+                candidate[support_key_name], label + "." + support_key_name, ()
+            )
+            if "status" in support_key:
+                support_status = require_status(
+                    support_key, label + "." + support_key_name
+                )
+                if support_status.get("status") == "AVAILABLE":
+                    raise CampaignError(
+                        "{}.{} AVAILABLE status is missing observation key".format(
+                            label, support_key_name
+                        )
+                    )
+            else:
+                require_observation_key(
+                    support_key, label + "." + support_key_name
+                )
+            support_evidence_name = "supporting_target_time_stereo_observation"
+            support_evidence = require_object(
+                candidate[support_evidence_name],
+                label + "." + support_evidence_name,
+                (),
+            )
+            if "status" in support_evidence:
+                support_status = require_status(
+                    support_evidence, label + "." + support_evidence_name
+                )
+                if support_status.get("status") == "AVAILABLE":
+                    raise CampaignError(
+                        "{}.{} AVAILABLE status is missing pixel evidence".format(
+                            label, support_evidence_name
+                        )
+                    )
+            else:
+                require_observation_evidence(
+                    support_evidence, label + "." + support_evidence_name
+                )
+            calibration = require_object(
+                candidate["camera_calibration"],
+                label + ".camera_calibration",
+                ("source", "target", "stereo"),
+            )
+            for calibration_name in ("source", "target", "stereo"):
+                require_camera_identity(
+                    calibration[calibration_name],
+                    label + ".camera_calibration." + calibration_name,
+                )
+            for diagnostic_name in (
+                "stereo_geometry_primitives", "target_bearing",
+                "range_certificate", "translation_certificate",
+                "bearing_covariance", "acute_regime", "rho_trans",
+                "rho_threshold",
+            ):
+                require_status(
+                    candidate[diagnostic_name], label + "." + diagnostic_name
+                )
+            require_bool(
+                candidate["target_time_stereo_available"],
+                label + ".target_time_stereo_available",
+            )
+            require_bool(
+                candidate["eligible_before_group"],
+                label + ".eligible_before_group",
+            )
+            for string_field in (
+                "full_outcome", "target_stereo_rejection_reason",
+                "static_quality_status", "terminal_reason",
+            ):
+                require_string(candidate[string_field], label + "." + string_field)
+            key = require_object(
+                candidate["candidate_key"],
+                label + ".candidate_key",
+                (
+                    "camera_id",
+                    "source_timestamp_key",
+                    "target_timestamp_key",
+                    "feature_id",
+                    "detached_index",
+                    "source_observation_ordinal",
+                    "target_observation_ordinal",
+                ),
+            )
+            candidate_keys.append(
+                (
+                    key.get("camera_id"),
+                    key.get("source_timestamp_key"),
+                    key.get("target_timestamp_key"),
+                    key.get("feature_id"),
+                    key.get("detached_index"),
+                    key.get("source_observation_ordinal"),
+                    key.get("target_observation_ordinal"),
+                )
+            )
+        if (candidate_keys != sorted(candidate_keys) or
+                len(candidate_keys) != len(set(candidate_keys))):
+            raise CampaignError("T0 shadow candidate ordering is not canonical")
+        groups = require_array(record.get("shadow_groups"), "T0 shadow_groups")
+        pair_keys = []
+        grouped_candidate_keys = []
+        group_fields = (
+            "pair_key",
+            "candidate_keys",
+            "eligible_candidate_keys",
+            "raw_candidate_count",
+            "pair_group_feature_count",
+            "eligible_feature_count",
+            "shadow_only_small_group",
+            "group_size_status",
+            "contains_target_stereo_candidate",
+            "target_bearing_spatial_metrics",
+            "rotation_stack_singular_values",
+            "rotation_stack_rank",
+            "consensus",
+            "eligible_before_selection",
+            "predicted_rotation_angle",
+            "predicted_information",
+            "score",
+            "selection_role",
+            "foregone_reason",
+            "winner_shadow_nis",
+            "post_nis_count_rank_status",
+        )
+        for group_index, group in enumerate(groups):
+            group = require_object(
+                group, "T0 shadow group {}".format(group_index), group_fields
+            )
+            pair_key = require_object(
+                group["pair_key"],
+                "T0 shadow group {}.pair_key".format(group_index),
+                ("camera_id", "source_timestamp_key", "target_timestamp_key"),
+            )
+            require_nonnegative_integer(
+                pair_key["camera_id"],
+                "T0 shadow group {}.pair_key.camera_id".format(group_index),
+            )
+            require_string(
+                pair_key["source_timestamp_key"],
+                "T0 shadow group {}.pair_key.source_timestamp_key".format(group_index),
+            )
+            require_string(
+                pair_key["target_timestamp_key"],
+                "T0 shadow group {}.pair_key.target_timestamp_key".format(group_index),
+            )
+            pair_keys.append(
+                (
+                    pair_key.get("camera_id"),
+                    pair_key.get("source_timestamp_key"),
+                    pair_key.get("target_timestamp_key"),
+                )
+            )
+            members = group.get("candidate_keys")
+            if not isinstance(members, list):
+                raise CampaignError("T0 group candidate_keys is not an array")
+            member_keys = [
+                (
+                    key.get("camera_id"),
+                    key.get("source_timestamp_key"),
+                    key.get("target_timestamp_key"),
+                    key.get("feature_id"),
+                    key.get("detached_index"),
+                    key.get("source_observation_ordinal"),
+                    key.get("target_observation_ordinal"),
+                )
+                for key in members
+            ]
+            if (member_keys != sorted(member_keys) or
+                    len(member_keys) != len(set(member_keys))):
+                raise CampaignError("T0 group membership is not canonical")
+            grouped_candidate_keys.extend(member_keys)
+            eligible_members = require_array(
+                group["eligible_candidate_keys"],
+                "T0 shadow group {}.eligible_candidate_keys".format(group_index),
+            )
+            for eligible_index, eligible_key in enumerate(eligible_members):
+                require_object(
+                    eligible_key,
+                    "T0 shadow group {}.eligible_candidate_keys[{}]".format(
+                        group_index, eligible_index
+                    ),
+                    (
+                        "camera_id", "source_timestamp_key", "target_timestamp_key",
+                        "feature_id", "detached_index",
+                        "source_observation_ordinal", "target_observation_ordinal",
+                    ),
+                )
+            for count_field in (
+                "raw_candidate_count", "pair_group_feature_count",
+                "eligible_feature_count",
+            ):
+                require_nonnegative_integer(
+                    group[count_field],
+                    "T0 shadow group {}.{}".format(group_index, count_field),
+                )
+            for boolean_field in (
+                "shadow_only_small_group", "contains_target_stereo_candidate",
+                "eligible_before_selection",
+            ):
+                require_bool(
+                    group[boolean_field],
+                    "T0 shadow group {}.{}".format(group_index, boolean_field),
+                )
+            for string_field in (
+                "group_size_status", "selection_role", "foregone_reason",
+            ):
+                require_string(
+                    group[string_field],
+                    "T0 shadow group {}.{}".format(group_index, string_field),
+                )
+            for status_field in (
+                "target_bearing_spatial_metrics", "rotation_stack_singular_values",
+                "rotation_stack_rank", "consensus", "predicted_rotation_angle",
+                "predicted_information", "score", "winner_shadow_nis",
+                "post_nis_count_rank_status",
+            ):
+                require_status(
+                    group[status_field],
+                    "T0 shadow group {}.{}".format(group_index, status_field),
+                )
+        if pair_keys != sorted(pair_keys) or len(pair_keys) != len(set(pair_keys)):
+            raise CampaignError("T0 shadow group ordering is not canonical")
+        if sorted(grouped_candidate_keys) != candidate_keys:
+            raise CampaignError("T0 group membership differs from candidates")
+        prior = require_object(
+            record["prior_primitives"], "T0 prior_primitives", ("status", "reason")
+        )
+        if prior.get("status") == "AVAILABLE":
+            require_object(
+                prior,
+                "T0 prior_primitives",
+                ("clones", "pair_covariances", "cameras", "covariance_dimension"),
+            )
+        funnel = require_object(record["funnel"], "T0 funnel", funnel_fields)
+        for key in funnel_fields:
+            if key.endswith("_by_code"):
+                if not isinstance(funnel[key], dict):
+                    raise CampaignError("T0 funnel.{} is not an object".format(key))
+                for outcome, count in funnel[key].items():
+                    require_string(outcome, "T0 funnel.{} outcome".format(key))
+                    require_nonnegative_integer(
+                        count, "T0 funnel.{}.{}".format(key, outcome)
+                    )
+            else:
+                require_nonnegative_integer(funnel[key], "T0 funnel." + key)
+        summary = require_object(
+            record["shadow_summary"],
+            "T0 shadow_summary",
+            (
+                "eligible_group_count",
+                "frozen_winner",
+                "runner_up",
+                "foregone_eligible_groups",
+                "foregone_eligible_features",
+                "no_runner_up_gate_shopping",
+                "translation_covariance_scale",
+            ),
+        )
+        for count_field in (
+            "eligible_group_count", "foregone_eligible_groups",
+            "foregone_eligible_features",
+        ):
+            require_nonnegative_integer(
+                summary[count_field], "T0 shadow_summary." + count_field
+            )
+        require_bool(
+            summary["no_runner_up_gate_shopping"],
+            "T0 shadow_summary.no_runner_up_gate_shopping",
+        )
+        require_finite_number(
+            summary["translation_covariance_scale"],
+            "T0 shadow_summary.translation_covariance_scale",
+        )
+        completeness = require_object(
+            record["completeness"],
+            "T0 completeness",
+            ("status", "typed_reasons"),
+        )
+        require_string(completeness["status"], "T0 completeness.status")
+        typed_reasons = require_array(
+            completeness["typed_reasons"], "T0 completeness.typed_reasons"
+        )
+        for reason_index, reason in enumerate(typed_reasons):
+            require_string(
+                reason,
+                "T0 completeness.typed_reasons[{}]".format(reason_index),
+            )
+    if callback_count == 0:
+        raise CampaignError("T0 JSONL contains no camera callbacks")
+    return {
+        "schema": T0_SCHEMA,
+        "record_count": len(records),
+        "callback_count": callback_count,
+        "updater_callback_count": updater_callback_count,
+        "identity": file_identity(path),
+        "runtime_sequence_identity_absent": True,
+        "finite_json": True,
+        "deterministic_ordering_validated": True,
+        "required_schema_fields_validated": True,
+        "single_commit_boundary_validated": True,
+    }
+
+
 def _is_within(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
@@ -141,7 +1519,7 @@ def _is_within(path: Path, root: Path) -> bool:
 
 
 def _reject_forbidden_path(path: Path, label: str) -> None:
-    for candidate in (path, path.resolve(strict=False)):
+    def reject_components(candidate: Path) -> None:
         lowered = [component.lower() for component in candidate.parts]
         for component in lowered:
             if any(word in component for word in FORBIDDEN_COMPONENTS):
@@ -153,6 +1531,11 @@ def _reject_forbidden_path(path: Path, label: str) -> None:
         for index in range(len(lowered) - 1):
             if lowered[index : index + 2] == ["scripts", "cp2"]:
                 raise CampaignError("{} enters protected scripts/cp2: {}".format(label, path))
+
+    # Reject lexical components before resolving so a hostile embedded path is
+    # never stat'ed, traversed, or hashed merely to discover that it is banned.
+    reject_components(path)
+    reject_components(path.resolve(strict=False))
 
 
 def _regular_file(path: Path, label: str, executable: bool = False) -> Path:
@@ -814,12 +2197,80 @@ def _write_failure_result(
 def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
     campaign_started = time.monotonic()
     paths = _validate_paths(args)
+    frozen_sequence_inputs = _frozen_sequence_inputs(args.sequence)
     if not math.isfinite(args.timeout_seconds) or args.timeout_seconds <= 0:
         raise CampaignError("--timeout-seconds must be finite and positive")
     if not args.prepare_only:
         if args.ros_port is None:
             raise CampaignError("--ros-port is required unless --prepare-only is used")
         _assert_port_available(args.ros_port)
+
+    t0_capture = bool(getattr(args, "turnsafe_t0_capture", False))
+    t0_provenance = t0_capture or bool(
+        getattr(args, "turnsafe_t0_provenance", False)
+    )
+    t0_source_sha = str(getattr(args, "turnsafe_t0_source_sha", ""))
+    t0_source_tree = str(getattr(args, "turnsafe_t0_source_tree", ""))
+    t0_frozen_base_sha = str(getattr(args, "turnsafe_t0_frozen_base_sha", ""))
+    t0_expected_build_id = str(
+        getattr(args, "turnsafe_t0_build_provenance_id", "")
+    )
+    t0_expected_source_state = str(
+        getattr(args, "turnsafe_t0_expected_source_state", "")
+    )
+    t0_build_manifest_arg = getattr(args, "turnsafe_t0_build_manifest", None)
+    t0_schema_file_arg = getattr(args, "turnsafe_t0_schema_file", None)
+    t0_repository_arg = getattr(args, "turnsafe_t0_repository", None)
+    t0_build_manifest: Optional[Path] = None
+    t0_schema_file: Optional[Path] = None
+    t0_repository: Optional[Path] = None
+    t0_build_binding: Optional[Dict[str, Any]] = None
+    if t0_provenance:
+        if t0_source_sha and not re.fullmatch(r"[0-9a-f]{40}", t0_source_sha):
+            raise CampaignError("--turnsafe-t0-source-sha must be a lowercase SHA-1")
+        if t0_source_tree and not re.fullmatch(r"[0-9a-f]{40}", t0_source_tree):
+            raise CampaignError("--turnsafe-t0-source-tree must be a lowercase tree SHA-1")
+        if t0_capture and not re.fullmatch(r"[0-9a-f]{40}", t0_frozen_base_sha):
+            raise CampaignError("--turnsafe-t0-frozen-base-sha must be a lowercase SHA-1")
+        if t0_expected_build_id and not re.fullmatch(
+            r"[0-9a-f]{64}", t0_expected_build_id
+        ):
+            raise CampaignError(
+                "--turnsafe-t0-build-provenance-id must be lowercase SHA-256"
+            )
+        if t0_expected_source_state not in ("dirty", "clean"):
+            raise CampaignError(
+                "T0 provenance requires --turnsafe-t0-expected-source-state"
+            )
+        if (
+            t0_build_manifest_arg is None
+            or t0_schema_file_arg is None
+            or t0_repository_arg is None
+        ):
+            raise CampaignError(
+                "T0 provenance requires build-manifest, schema, and repository"
+            )
+        t0_build_manifest = _regular_file(
+            Path(t0_build_manifest_arg), "TurnSafe T0 build manifest"
+        )
+        t0_schema_file = _regular_file(
+            Path(t0_schema_file_arg), "TurnSafe T0 schema"
+        )
+        t0_repository = Path(t0_repository_arg).resolve(strict=True)
+        if t0_repository != REPO_ROOT:
+            raise CampaignError("T0 repository is not the authoritative worktree")
+        t0_build_binding = _validate_build_manifest(
+            t0_build_manifest, paths["binary"], t0_schema_file, t0_repository
+        )
+        build_source = t0_build_binding["source_snapshot"]
+        _validate_t0_caller_expectations(
+            build_source,
+            t0_build_binding["build_provenance_id"],
+            t0_source_sha,
+            t0_source_tree,
+            t0_expected_build_id,
+            t0_expected_source_state,
+        )
 
     output = paths["output_dir"]
     output.mkdir(parents=True, exist_ok=False)
@@ -860,6 +2311,8 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
                     "evo_rpe": _command_path("evo_rpe"),
                 }
             )
+            if t0_provenance:
+                tool_paths["ldd"] = _command_path("ldd")
         environment = _minimal_environment(output, args.ros_port)
         manifest["runtime"] = {
             "ros_port": args.ros_port,
@@ -888,14 +2341,153 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
             "reference_tum": paths["reference_tum"],
             "adapter": ADAPTER_PATH,
             "trajectory_converter": CONVERTER_PATH,
+            "frozen_baseline_results": FROZEN_BASELINE_RESULTS,
             "python": PYTHON,
         }
+        if t0_provenance:
+            fixed_inputs["turnsafe_t0_build_manifest"] = t0_build_manifest
+            fixed_inputs["turnsafe_t0_schema"] = t0_schema_file
+            fixed_inputs["turnsafe_source_snapshot_tool"] = SOURCE_SNAPSHOT_PATH
+            if t0_build_binding is None:
+                raise CampaignError("T0 build binding was not initialized")
+            fixed_inputs["turnsafe_configure_manifest"] = t0_build_binding[
+                "configure_manifest_path"
+            ]
+            fixed_inputs["turnsafe_cmake_cache"] = t0_build_binding[
+                "cmake_cache_path"
+            ]
+            for name, path in sorted(
+                t0_build_binding["artifact_paths"].items()
+            ):
+                fixed_inputs["turnsafe_artifact_" + name] = path
         for name, path in list(fixed_inputs.items()):
             fixed_inputs[name] = _regular_file(path, name, name in ("estimator_binary", "python"))
         fixed_inputs.update(tool_paths)
         manifest["inputs_before"] = {
             name: file_identity(path) for name, path in sorted(fixed_inputs.items())
         }
+        frozen_pre_adapter = {
+            "source_bag": "source_bag_sha256",
+            "config": "config_sha256",
+            "kalibr_imu_chain": "kalibr_imu_chain_sha256",
+            "kalibr_imucam_chain": "kalibr_imucam_chain_sha256",
+            "reference_tum": "reference_sha256",
+        }
+        for input_name, frozen_name in frozen_pre_adapter.items():
+            _require_frozen_identity(
+                manifest["inputs_before"][input_name],
+                frozen_sequence_inputs[frozen_name],
+                input_name,
+            )
+        manifest["frozen_input_binding"] = {
+            "baseline_results_sha256": FROZEN_BASELINE_RESULTS_SHA256,
+            "expected": dict(sorted(frozen_sequence_inputs.items())),
+            "pre_adapter_inputs_match": True,
+            "adapted_bag_matches": False,
+        }
+        manifest["checks"]["frozen_pre_adapter_inputs_match"] = True
+        if paths["adapted_bag"].exists():
+            adapted_before = file_identity(
+                _regular_file(paths["adapted_bag"], "adapted bag")
+            )
+            _require_frozen_identity(
+                adapted_before,
+                frozen_sequence_inputs["adapted_bag_sha256"],
+                "adapted_bag",
+            )
+            manifest["frozen_input_binding"]["adapted_bag_matches"] = True
+            manifest["checks"]["frozen_adapted_bag_matches"] = True
+        source_snapshot_before: Optional[Dict[str, Any]] = None
+        if t0_provenance:
+            if t0_repository is None or t0_build_binding is None:
+                raise CampaignError("T0 provenance binding is unavailable")
+            source_before_path = output / "source_snapshot_before.json"
+            source_before_record = run_command(
+                [
+                    str(PYTHON),
+                    str(SOURCE_SNAPSHOT_PATH),
+                    str(t0_repository),
+                    str(source_before_path),
+                ],
+                output / "source_snapshot_before.log",
+                environment,
+                min(args.timeout_seconds, 120.0),
+            )
+            manifest["commands"]["source_snapshot_before"] = source_before_record
+            if not _command_succeeded(source_before_record):
+                raise CampaignError("pre-run source snapshot failed")
+            source_snapshot_before = _validate_source_snapshot(
+                _strict_json(
+                    source_before_path.read_text(encoding="ascii"),
+                    "pre-run source snapshot",
+                ),
+                "pre-run",
+            )
+            if source_snapshot_before[
+                "aggregate_source_snapshot_sha256"
+            ] != t0_build_binding["source_snapshot"][
+                "aggregate_source_snapshot_sha256"
+            ]:
+                raise CampaignError("current source snapshot differs from build")
+            if bool(source_snapshot_before["source_dirty"]) != (
+                t0_expected_source_state == "dirty"
+            ):
+                raise CampaignError("current source state differs from requested state")
+            manifest["source_provenance_before"] = {
+                "head_sha": source_snapshot_before["head_sha"],
+                "head_tree": source_snapshot_before["head_tree"],
+                "source_dirty": source_snapshot_before["source_dirty"],
+                "source_snapshot_sha256": source_snapshot_before[
+                    "aggregate_source_snapshot_sha256"
+                ],
+                "build_provenance_id": t0_build_binding[
+                    "build_provenance_id"
+                ],
+            }
+
+        def verify_source_after() -> None:
+            if not t0_provenance:
+                return
+            if t0_repository is None or source_snapshot_before is None:
+                raise CampaignError("pre-run source snapshot is unavailable")
+            source_after_path = output / "source_snapshot_after.json"
+            source_after_record = run_command(
+                [
+                    str(PYTHON),
+                    str(SOURCE_SNAPSHOT_PATH),
+                    str(t0_repository),
+                    str(source_after_path),
+                ],
+                output / "source_snapshot_after.log",
+                environment,
+                min(args.timeout_seconds, 120.0),
+            )
+            manifest["commands"]["source_snapshot_after"] = source_after_record
+            if not _command_succeeded(source_after_record):
+                raise CampaignError("post-run source snapshot failed")
+            source_after = _validate_source_snapshot(
+                _strict_json(
+                    source_after_path.read_text(encoding="ascii"),
+                    "post-run source snapshot",
+                ),
+                "post-run",
+            )
+            if source_after[
+                "aggregate_source_snapshot_sha256"
+            ] != source_snapshot_before[
+                "aggregate_source_snapshot_sha256"
+            ]:
+                raise CampaignError("source changed during campaign")
+            manifest["source_provenance_after"] = {
+                "head_sha": source_after["head_sha"],
+                "head_tree": source_after["head_tree"],
+                "source_dirty": source_after["source_dirty"],
+                "source_snapshot_sha256": source_after[
+                    "aggregate_source_snapshot_sha256"
+                ],
+            }
+            manifest["checks"]["source_snapshot_unchanged"] = True
+
         paths["adapted_bag"].parent.mkdir(parents=True, exist_ok=True)
         operation = "audit" if paths["adapted_bag"].exists() else "adapt"
         adapter_record, source_audit, adapted_audit = _adapter_call(
@@ -912,6 +2504,13 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
 
         paths["adapted_bag"] = _regular_file(paths["adapted_bag"], "adapted bag")
         manifest["adapted_bag"] = file_identity(paths["adapted_bag"])
+        _require_frozen_identity(
+            manifest["adapted_bag"],
+            frozen_sequence_inputs["adapted_bag_sha256"],
+            "adapted_bag",
+        )
+        manifest["frozen_input_binding"]["adapted_bag_matches"] = True
+        manifest["checks"]["frozen_adapted_bag_matches"] = True
         info_timeout = min(args.timeout_seconds, 300.0)
         for role in ("source", "adapted"):
             bag_path = paths[role + "_bag"]
@@ -926,6 +2525,7 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
                 raise CampaignError("rosbag info failed for {} bag".format(role))
 
         if args.prepare_only:
+            verify_source_after()
             manifest["inputs_after"] = {
                 name: file_identity(path) for name, path in sorted(fixed_inputs.items())
             }
@@ -952,6 +2552,64 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
             "path_time:=" + str(timing),
             "verbosity:=INFO",
         ]
+        t0_output = output / "t0_events.jsonl"
+        t0_expected_header: Dict[str, Any] = {}
+        if t0_provenance:
+            if t0_build_binding is None:
+                raise CampaignError("T0 build binding is unavailable")
+            calibration_bundle = {
+                "kalibr_imu_chain": manifest["inputs_before"]["kalibr_imu_chain"]["sha256"],
+                "kalibr_imucam_chain": manifest["inputs_before"]["kalibr_imucam_chain"]["sha256"],
+            }
+            build_source = t0_build_binding["source_snapshot"]
+            t0_expected_header = {
+                "frozen_base_sha": t0_frozen_base_sha,
+                "source_sha": build_source["head_sha"],
+                "tree_sha": build_source["head_tree"],
+                "source_snapshot_sha256": build_source[
+                    "aggregate_source_snapshot_sha256"
+                ],
+                "source_dirty": bool(build_source["source_dirty"]),
+                "build_provenance_id": t0_build_binding[
+                    "build_provenance_id"
+                ],
+                "configure_manifest_sha256": t0_build_binding[
+                    "configure_manifest_sha256"
+                ],
+                "build_manifest_sha256": manifest["inputs_before"]["turnsafe_t0_build_manifest"]["sha256"],
+                "binary_sha256": manifest["inputs_before"]["estimator_binary"]["sha256"],
+                "config_sha256": manifest["inputs_before"]["config"]["sha256"],
+                "calibration_sha256": _sha256_canonical_json(calibration_bundle),
+                "diagnostic_schema_sha256": manifest["inputs_before"]["turnsafe_t0_schema"]["sha256"],
+            }
+            if t0_capture:
+                launch_arguments.extend(
+                    [
+                        "turnsafe_t0_capture:=true",
+                        "turnsafe_t0_output_path:=" + str(t0_output),
+                        "turnsafe_t0_schema:=" + T0_SCHEMA,
+                        "turnsafe_t0_frozen_base_sha:="
+                        + t0_expected_header["frozen_base_sha"],
+                        "turnsafe_t0_source_sha:="
+                        + t0_expected_header["source_sha"],
+                        "turnsafe_t0_source_tree:="
+                        + t0_expected_header["tree_sha"],
+                        "turnsafe_t0_source_snapshot_sha256:="
+                        + t0_expected_header["source_snapshot_sha256"],
+                        "turnsafe_t0_build_provenance_id:="
+                        + t0_expected_header["build_provenance_id"],
+                        "turnsafe_t0_build_manifest_sha256:="
+                        + t0_expected_header["build_manifest_sha256"],
+                        "turnsafe_t0_binary_sha256:="
+                        + t0_expected_header["binary_sha256"],
+                        "turnsafe_t0_config_sha256:="
+                        + t0_expected_header["config_sha256"],
+                        "turnsafe_t0_calibration_sha256:="
+                        + t0_expected_header["calibration_sha256"],
+                        "turnsafe_t0_diagnostic_schema_sha256:="
+                        + t0_expected_header["diagnostic_schema_sha256"],
+                    ]
+                )
         joined_runtime = "\n".join(launch_arguments).lower()
         if str(paths["reference_tum"]) in joined_runtime or any(
             token in joined_runtime for token in FORBIDDEN_RUNTIME_TEXT
@@ -1004,6 +2662,45 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
             raise CampaignError(
                 "catkin_find resolved a different estimator binary than --binary"
             )
+
+        if t0_provenance:
+            if t0_build_binding is None:
+                raise CampaignError("T0 build binding is unavailable")
+            loader_record = run_command(
+                [str(tool_paths["ldd"]), str(paths["binary"])],
+                output / "resolved_dynamic_libraries.txt",
+                environment,
+                preflight_timeout,
+            )
+            manifest["commands"]["resolve_dynamic_libraries"] = loader_record
+            if not _command_succeeded(loader_record):
+                raise CampaignError("dynamic-loader resolution failed")
+            loader_lines = Path(loader_record["log"]).read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines()
+            resolved_libraries: Dict[str, Path] = {}
+            for line in loader_lines:
+                if "=>" not in line:
+                    continue
+                name, remainder = line.split("=>", 1)
+                name = name.strip()
+                target = remainder.strip().split(" (", 1)[0].strip()
+                if target == "not found":
+                    raise CampaignError("dynamic library {} was not found".format(name))
+                if target.startswith("/"):
+                    resolved_libraries[name] = Path(target).resolve(strict=True)
+            for artifact_name, soname in (
+                ("ov_msckf_library", "libov_msckf_lib.so"),
+                ("ov_core_library", "libov_core_lib.so"),
+            ):
+                expected = t0_build_binding["artifact_paths"][artifact_name]
+                if resolved_libraries.get(soname) != expected:
+                    raise CampaignError(
+                        "dynamic loader resolved {} outside build manifest".format(
+                            soname
+                        )
+                    )
+            manifest["checks"]["dynamic_libraries_match_build_manifest"] = True
 
         launch_argv = [
             str(tool_paths["roslaunch"]),
@@ -1068,6 +2765,20 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
         manifest["checks"]["camera_decode_failures_zero"] = True
         manifest["checks"]["camera_processed_pairs_match_queued"] = True
         manifest["checks"]["camera_queue_drained"] = True
+
+        if t0_capture:
+            manifest["turnsafe_t0"] = _validate_t0_jsonl(
+                t0_output, t0_expected_header
+            )
+            manifest["turnsafe_t0"].update(
+                {
+                    "capture_requested": True,
+                    "run_header_expected": t0_expected_header,
+                    "calibration_bundle": calibration_bundle,
+                }
+            )
+            manifest["checks"]["turnsafe_t0_schema_valid"] = True
+            manifest["checks"]["turnsafe_t0_runtime_identity_firewall"] = True
 
         # Until roslaunch terminates, only the reference's byte identity is
         # bound. Its numeric ground-truth contents are first parsed here.
@@ -1166,6 +2877,7 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
         if not all(manifest["checks"].values()):
             raise CampaignError("runtime diagnostics or ground-truth boundary check failed")
 
+        verify_source_after()
         manifest["inputs_after"] = {
             name: file_identity(path) for name, path in sorted(fixed_inputs.items())
         }
@@ -1218,6 +2930,22 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="audit/adapt and record rosbag metadata without starting the estimator",
     )
+    parser.add_argument("--turnsafe-t0-capture", action="store_true")
+    parser.add_argument(
+        "--turnsafe-t0-provenance",
+        action="store_true",
+        help="bind a capture-off replay to the same verified source/build identity",
+    )
+    parser.add_argument("--turnsafe-t0-frozen-base-sha", default="")
+    parser.add_argument("--turnsafe-t0-source-sha", default="")
+    parser.add_argument("--turnsafe-t0-source-tree", default="")
+    parser.add_argument("--turnsafe-t0-build-provenance-id", default="")
+    parser.add_argument(
+        "--turnsafe-t0-expected-source-state", choices=("dirty", "clean")
+    )
+    parser.add_argument("--turnsafe-t0-repository", type=Path)
+    parser.add_argument("--turnsafe-t0-build-manifest", type=Path)
+    parser.add_argument("--turnsafe-t0-schema-file", type=Path)
     return parser
 
 

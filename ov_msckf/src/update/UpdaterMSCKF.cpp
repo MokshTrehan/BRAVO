@@ -30,6 +30,7 @@
 #include "CP2TimingClock.h"
 #include "CP2TraceCodec.h"
 #include "SchurUpdate.h"
+#include "TurnSafeDiagnostics.h"
 #include "UpdaterHelper.h"
 #include "UpdaterMSCKFPreview.h"
 
@@ -1668,6 +1669,66 @@ bool UpdaterMSCKF::set_cp2_update_callback(CP2UpdateCallback callback, bool enab
   return true;
 }
 
+bool UpdaterMSCKF::set_turnsafe_t0_callback(TurnSafeT0Callback callback) {
+  try {
+    std::shared_ptr<const TurnSafeT0Callback> installed_callback;
+    if (callback) {
+      installed_callback =
+          std::make_shared<const TurnSafeT0Callback>(std::move(callback));
+    }
+    const std::lock_guard<std::mutex> lock(cp2_callback_mutex);
+    if (cp2_callback_configuration_frozen ||
+        cp2_update_active.load(std::memory_order_acquire)) {
+      return false;
+    }
+    turnsafe_t0_callback = std::move(installed_callback);
+    turnsafe_t0_failure_reason_value.store(
+        static_cast<std::uint8_t>(
+            TurnSafeUpdaterDiagnosticFailureReason::kNone),
+        std::memory_order_release);
+    turnsafe_t0_failure_count_value.store(0U, std::memory_order_release);
+    return true;
+  } catch (const std::bad_alloc &) {
+    note_turnsafe_t0_failure(
+        TurnSafeUpdaterDiagnosticFailureReason::kBadAlloc);
+    return false;
+  } catch (const std::exception &) {
+    note_turnsafe_t0_failure(
+        TurnSafeUpdaterDiagnosticFailureReason::kStdException);
+    return false;
+  } catch (...) {
+    note_turnsafe_t0_failure(
+        TurnSafeUpdaterDiagnosticFailureReason::kUnknownException);
+    return false;
+  }
+}
+
+TurnSafeUpdaterDiagnosticFailureReason
+UpdaterMSCKF::turnsafe_t0_failure_reason() const noexcept {
+  return static_cast<TurnSafeUpdaterDiagnosticFailureReason>(
+      turnsafe_t0_failure_reason_value.load(std::memory_order_acquire));
+}
+
+std::uint64_t UpdaterMSCKF::turnsafe_t0_failure_count() const noexcept {
+  return turnsafe_t0_failure_count_value.load(std::memory_order_acquire);
+}
+
+void UpdaterMSCKF::note_turnsafe_t0_failure(
+    TurnSafeUpdaterDiagnosticFailureReason reason) noexcept {
+  std::uint8_t expected = static_cast<std::uint8_t>(
+      TurnSafeUpdaterDiagnosticFailureReason::kNone);
+  turnsafe_t0_failure_reason_value.compare_exchange_strong(
+      expected, static_cast<std::uint8_t>(reason), std::memory_order_acq_rel,
+      std::memory_order_acquire);
+  std::uint64_t count =
+      turnsafe_t0_failure_count_value.load(std::memory_order_relaxed);
+  while (count != std::numeric_limits<std::uint64_t>::max() &&
+         !turnsafe_t0_failure_count_value.compare_exchange_weak(
+             count, count + 1U, std::memory_order_relaxed,
+             std::memory_order_relaxed)) {
+  }
+}
+
 bool UpdaterMSCKF::set_cp2_recorded_sink(
     std::shared_ptr<CP2RecordedUpdateSink> sink) {
   if (sink && _options.landmark_elimination !=
@@ -1753,6 +1814,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   }
   const CP2UpdateActivityGuard activity_guard(cp2_update_active);
   std::shared_ptr<const CP2UpdateCallback> update_callback;
+  std::shared_ptr<const TurnSafeT0Callback> turnsafe_callback;
   std::shared_ptr<CP2RecordedUpdateSink> recorded_sink;
   bool shadow_requested = false;
   bool invocation_context_supplied = false;
@@ -1762,6 +1824,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   {
     const std::lock_guard<std::mutex> lock(cp2_callback_mutex);
     update_callback = cp2_update_callback;
+    turnsafe_callback = turnsafe_t0_callback;
     recorded_sink = cp2_recorded_sink;
     shadow_requested = cp2_shadow_enabled;
     if (cp2_invocation_context_pending) {
@@ -1777,6 +1840,26 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     }
   }
   const bool recorded_mode = static_cast<bool>(recorded_sink);
+  bool turnsafe_capture = !recorded_mode && turnsafe_callback &&
+                          static_cast<bool>(*turnsafe_callback) &&
+                          turnsafe_t0_failure_reason() ==
+                              TurnSafeUpdaterDiagnosticFailureReason::kNone;
+  const auto disable_turnsafe_for_current_exception =
+      [this, &turnsafe_capture]() noexcept {
+        turnsafe_capture = false;
+        try {
+          throw;
+        } catch (const std::bad_alloc &) {
+          note_turnsafe_t0_failure(
+              TurnSafeUpdaterDiagnosticFailureReason::kBadAlloc);
+        } catch (const std::exception &) {
+          note_turnsafe_t0_failure(
+              TurnSafeUpdaterDiagnosticFailureReason::kStdException);
+        } catch (...) {
+          note_turnsafe_t0_failure(
+              TurnSafeUpdaterDiagnosticFailureReason::kUnknownException);
+        }
+      };
   if (invocation_id_overflow) {
     if (recorded_mode) {
       latch_cp2_trace_fatal(
@@ -1821,6 +1904,45 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
                             "CP2 input feature count exceeds u64");
     }
     throw std::overflow_error("UpdaterMSCKF input feature count exceeds u64");
+  }
+
+  std::vector<TurnSafeFullTrackAttempt> turnsafe_attempts;
+  std::vector<const ov_core::Feature *> turnsafe_attempt_sources;
+  if (turnsafe_capture) {
+    try {
+      turnsafe_attempts.reserve(feature_vec.size());
+      turnsafe_attempt_sources.reserve(feature_vec.size());
+      for (std::size_t index = 0U; index < feature_vec.size(); ++index) {
+        const ov_core::Feature *source = feature_vec[index].get();
+        if (source != nullptr &&
+            std::find(turnsafe_attempt_sources.begin(),
+                      turnsafe_attempt_sources.end(), source) !=
+                turnsafe_attempt_sources.end()) {
+          throw std::logic_error(
+              "duplicate live feature pointer in TurnSafe terminal batch");
+        }
+        turnsafe_attempt_sources.push_back(source);
+        if (feature_vec[index]) {
+          turnsafe_attempts.push_back(TurnSafeDiagnostics::CaptureAttempt(
+              *feature_vec[index], static_cast<std::uint64_t>(index)));
+        } else {
+          TurnSafeFullTrackAttempt attempt;
+          attempt.detached_index = static_cast<std::uint64_t>(index);
+          attempt.full_outcome =
+              TurnSafeFullOutcome::kUnsupportedOrInvalidInput;
+          attempt.full_outcome_mapping = TurnSafeOutcomeMapping::kExact;
+          attempt.native_terminal_status = "NULL_FEATURE_INPUT";
+          turnsafe_attempts.push_back(std::move(attempt));
+        }
+      }
+    } catch (...) {
+      disable_turnsafe_for_current_exception();
+      turnsafe_attempts.clear();
+      turnsafe_attempt_sources.clear();
+      PRINT_WARNING(YELLOW
+                    "[TURNSAFE-T0]: status=disabled reason=attempt_copy_exception "
+                    "baseline_unchanged=1\n" RESET);
+    }
   }
 
   const auto notify_observer = [&update_callback](const CP2LiveUpdateEvent &event,
@@ -1870,8 +1992,180 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   int ordinary_completed_passes = 0;
   int ordinary_selected_pass = 0;
   bool ordinary_iteration_terminal_logged = false;
+  const MSCKFUpdatePriorSnapshot *turnsafe_prior = nullptr;
 
-  const auto finish_update = [this, &notify_observer, &update_event,
+  const auto turnsafe_attempt_for_feature =
+      [&turnsafe_attempts, &turnsafe_attempt_sources](
+          const ov_core::Feature *source)
+          -> TurnSafeFullTrackAttempt * {
+    for (std::size_t index = 0U; index < turnsafe_attempt_sources.size();
+         ++index) {
+      if (turnsafe_attempt_sources[index] == source &&
+          index < turnsafe_attempts.size()) {
+        return &turnsafe_attempts[index];
+      }
+    }
+    return nullptr;
+  };
+
+  const auto copy_initializer_diagnostics = [](
+      const FeatureInitializer::Diagnostics &source,
+      TurnSafeInitializerValue &destination) {
+    destination.attempted = source.attempted;
+    destination.native_success = source.native_success;
+    switch (source.native_function) {
+    case FeatureInitializer::Diagnostics::NativeFunction::kTriangulation:
+      destination.native_function = "single_triangulation";
+      break;
+    case FeatureInitializer::Diagnostics::NativeFunction::kTriangulation1D:
+      destination.native_function = "single_triangulation_1d";
+      break;
+    case FeatureInitializer::Diagnostics::NativeFunction::kGaussNewton:
+      destination.native_function = "single_gaussnewton";
+      break;
+    }
+    destination.condition_available = source.condition_available;
+    destination.condition_number = source.condition_number;
+    destination.depth_available = source.depth_available;
+    destination.depth = source.depth;
+    destination.baseline_ratio_available = source.baseline_ratio_available;
+    destination.baseline_ratio = source.baseline_ratio;
+    destination.predicate_ill_conditioned =
+        source.predicate_ill_conditioned;
+    destination.predicate_too_near_or_behind =
+        source.predicate_too_near_or_behind;
+    destination.predicate_too_far = source.predicate_too_far;
+    destination.predicate_baseline_ratio =
+        source.predicate_baseline_ratio;
+    destination.predicate_native_nan = source.predicate_native_nan;
+    destination.refinement_runs = source.refinement_runs;
+    destination.refinement_lambda = source.refinement_lambda;
+    destination.refinement_last_step_norm_available =
+        source.refinement_last_step_norm_available;
+    destination.refinement_last_step_norm =
+        source.refinement_last_step_norm;
+    destination.refinement_control_epsilon =
+        source.refinement_control_epsilon;
+    switch (source.termination_reason) {
+    case FeatureInitializer::Diagnostics::TerminationReason::kNotApplicable:
+      destination.termination_reason = "NOT_APPLICABLE";
+      break;
+    case FeatureInitializer::Diagnostics::TerminationReason::kRelativeCost:
+      destination.termination_reason = "RELATIVE_COST";
+      break;
+    case FeatureInitializer::Diagnostics::TerminationReason::kStepNorm:
+      destination.termination_reason = "STEP_NORM";
+      break;
+    case FeatureInitializer::Diagnostics::TerminationReason::kMaximumRuns:
+      destination.termination_reason = "MAXIMUM_RUNS";
+      break;
+    case FeatureInitializer::Diagnostics::TerminationReason::kLambdaLimit:
+      destination.termination_reason = "LAMBDA_LIMIT";
+      break;
+    case FeatureInitializer::Diagnostics::TerminationReason::
+        kNativeLoopExitNotExposed:
+      destination.termination_reason = "NOT_EXPOSED_BY_NATIVE_PATH";
+      break;
+    }
+  };
+
+  const auto notify_turnsafe =
+      [&turnsafe_capture, &turnsafe_callback, &turnsafe_attempts,
+       &turnsafe_prior, &ordinary_mean_commit_count,
+       &ordinary_covariance_commit_count,
+       &ordinary_feature_finalization_count, &state,
+       &disable_turnsafe_for_current_exception](
+          const CP2LiveUpdateEvent &event, bool baseline_committed) noexcept {
+        if (!turnsafe_capture || !turnsafe_callback ||
+            !*turnsafe_callback) {
+          return;
+        }
+        try {
+          inject_turnsafe_diagnostic_fault_for_test(
+              TurnSafeDiagnosticFaultStage::kUpdaterPublication);
+          TurnSafeUpdateRecord record;
+          record.callback_timestamp = state ? state->_timestamp :
+              std::numeric_limits<double>::quiet_NaN();
+          record.native_terminal_status =
+              cp2_update_terminal_status_name(event.terminal_status);
+          record.native_terminal_subreason =
+              cp2_update_terminal_subreason_name(event.terminal_subreason);
+          record.input_feature_count = event.input_feature_count;
+          record.raw_system_count = event.raw_system_count;
+          if (baseline_committed) {
+            record.baseline_accepted_ids = event.baseline_accepted_ids;
+          }
+          record.proposal_gamma_available =
+              event.baseline_gamma_status == CP2GammaStatus::kAvailable &&
+              std::isfinite(event.baseline_gamma);
+          record.proposal_gamma = event.baseline_gamma;
+          record.precompression_rows_available =
+              event.baseline_precompression_rows_available;
+          record.precompression_rows = event.baseline_precompression_rows;
+          record.compressed_rows_available =
+              event.baseline_compressed_rows_available;
+          record.compressed_rows = event.baseline_compressed_rows;
+          record.proposal_attempted = event.baseline_preflight_attempted;
+          record.proposal_accepted = event.baseline_preflight_accepted;
+          record.baseline_commit_occurred = baseline_committed;
+          record.mean_commit_count =
+              static_cast<std::uint64_t>(ordinary_mean_commit_count);
+          record.covariance_commit_count =
+              static_cast<std::uint64_t>(ordinary_covariance_commit_count);
+          record.feature_finalization_count =
+              static_cast<std::uint64_t>(ordinary_feature_finalization_count);
+          record.attempts = turnsafe_attempts;
+
+          for (auto &attempt : record.attempts) {
+            const bool accepted = baseline_committed &&
+                std::find(event.baseline_accepted_ids.begin(),
+                          event.baseline_accepted_ids.end(),
+                          attempt.feature_id) !=
+                    event.baseline_accepted_ids.end();
+            if (accepted) {
+              attempt.full_outcome = TurnSafeFullOutcome::kFullAccepted;
+              attempt.full_outcome_mapping = TurnSafeOutcomeMapping::kExact;
+              attempt.native_terminal_status = "FULL_ACCEPTED";
+              attempt.accepted_full_factor = true;
+              attempt.accepted_full_row_count =
+                  attempt.native_feature_row_count;
+            }
+            attempt.finalization_result =
+                ordinary_feature_finalization_count == 1U
+                    ? "FINALIZED_ONCE_AFTER_ESTIMATOR_DECISION"
+                    : (ordinary_feature_finalization_count == 0U
+                           ? "NOT_FINALIZED"
+                           : "FINALIZATION_INVARIANT_VIOLATION");
+          }
+          if (turnsafe_prior != nullptr) {
+            TurnSafeDiagnostics::CapturePriorPrimitives(
+                *turnsafe_prior, record.attempts, record.prior);
+          }
+          (*turnsafe_callback)(std::move(record));
+        } catch (const std::bad_alloc &) {
+          disable_turnsafe_for_current_exception();
+          PRINT_WARNING(YELLOW
+                        "[TURNSAFE-T0]: status=disabled "
+                        "reason=observer_bad_alloc "
+                        "baseline_unchanged=1\n" RESET);
+        } catch (const std::exception &exception) {
+          disable_turnsafe_for_current_exception();
+          PRINT_WARNING(YELLOW
+                        "[TURNSAFE-T0]: status=disabled "
+                        "reason=observer_exception detail=%s "
+                        "baseline_unchanged=1\n" RESET,
+                        exception.what());
+        } catch (...) {
+          disable_turnsafe_for_current_exception();
+          PRINT_WARNING(YELLOW
+                        "[TURNSAFE-T0]: status=disabled "
+                        "reason=observer_exception_unknown "
+                        "baseline_unchanged=1\n" RESET);
+        }
+      };
+
+  const auto finish_update = [this, &notify_observer, &notify_turnsafe,
+                              &update_event,
                               &cp2_update_start, &state, &recorded_mode,
                               &ordinary_mean_commit_count,
                               &ordinary_covariance_commit_count,
@@ -1908,6 +2202,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
       ordinary_iteration_terminal_logged = true;
     }
     notify_observer(update_event, false);
+    notify_turnsafe(update_event, false);
   };
 
   const auto finish_recorded_zero_raw =
@@ -1972,6 +2267,9 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   if (!recorded_mode) {
     ordinary_state_options = state->_options;
     ordinary_prior = UpdaterMSCKFPreview::CapturePrior(state);
+    if (turnsafe_capture) {
+      turnsafe_prior = &ordinary_prior;
+    }
     const MSCKFUpdatePriorMatchResult entry_match =
         UpdaterMSCKFPreview::MatchPrior(state, ordinary_prior);
     if (!entry_match.accepted()) {
@@ -2031,6 +2329,30 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     ordinary_feature_batch.reset(
         new MSCKFDetachedFeatureBatch(feature_vec));
     proposal_features = &ordinary_feature_batch->active();
+    // The ordinary updater deliberately performs all native work on detached
+    // feature copies.  TurnSafe attempts were captured from the immutable live
+    // inputs before that transaction existed, so rebind only the diagnostic
+    // lookup keys to the one-for-one working copies.  The attempt payloads
+    // remain value-only snapshots of the live inputs.  A violated mapping
+    // invariant disables capture without changing the native proposal vector.
+    if (turnsafe_capture) {
+      const auto &working_features = ordinary_feature_batch->active();
+      bool mapping_valid =
+          turnsafe_attempt_sources.size() == working_features.size();
+      for (std::size_t index = 0U;
+           mapping_valid && index < working_features.size(); ++index) {
+        mapping_valid = static_cast<bool>(working_features[index]);
+      }
+      if (!mapping_valid) {
+        turnsafe_capture = false;
+        note_turnsafe_t0_failure(
+            TurnSafeUpdaterDiagnosticFailureReason::kStdException);
+      } else {
+        for (std::size_t index = 0U; index < working_features.size(); ++index) {
+          turnsafe_attempt_sources[index] = working_features[index].get();
+        }
+      }
+    }
   }
   std::vector<std::shared_ptr<Feature>> &proposal_feature_vec =
       *proposal_features;
@@ -2098,6 +2420,21 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
 
     // Remove if we don't have enough
     if (feature_measurement_count < 2U) {
+      if (turnsafe_capture) {
+        try {
+          TurnSafeFullTrackAttempt *attempt =
+              turnsafe_attempt_for_feature(it0->get());
+          if (attempt != nullptr) {
+            attempt->full_outcome =
+                TurnSafeFullOutcome::kUnsupportedOrInvalidInput;
+            attempt->full_outcome_mapping = TurnSafeOutcomeMapping::kExact;
+            attempt->native_terminal_status =
+                "CLEANED_INSUFFICIENT_MEASUREMENTS";
+          }
+        } catch (...) {
+          disable_turnsafe_for_current_exception();
+        }
+      }
       (*it0)->to_delete = true;
       it0 = proposal_feature_vec.erase(it0);
     } else {
@@ -2131,18 +2468,88 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   auto it1 = proposal_feature_vec.begin();
   while (it1 != proposal_feature_vec.end()) {
 
+    FeatureInitializer::Diagnostics turnsafe_triangulation;
+    FeatureInitializer::Diagnostics turnsafe_refinement;
+    FeatureInitializer::Diagnostics *turnsafe_triangulation_ptr =
+        turnsafe_capture ? &turnsafe_triangulation : nullptr;
+    FeatureInitializer::Diagnostics *turnsafe_refinement_ptr =
+        turnsafe_capture ? &turnsafe_refinement : nullptr;
+
     // Triangulate the feature and remove if it fails
     bool success_tri = true;
     if (initializer_feat->config().triangulate_1d) {
-      success_tri = initializer_feat->single_triangulation_1d(*it1, clones_cam);
+      success_tri = initializer_feat->single_triangulation_1d(
+          *it1, clones_cam, turnsafe_triangulation_ptr);
     } else {
-      success_tri = initializer_feat->single_triangulation(*it1, clones_cam);
+      success_tri = initializer_feat->single_triangulation(
+          *it1, clones_cam, turnsafe_triangulation_ptr);
     }
 
     // Gauss-newton refine the feature
     bool success_refine = true;
     if (initializer_feat->config().refine_features) {
-      success_refine = initializer_feat->single_gaussnewton(*it1, clones_cam);
+      success_refine = initializer_feat->single_gaussnewton(
+          *it1, clones_cam, turnsafe_refinement_ptr);
+    }
+
+    if (turnsafe_capture) {
+      try {
+        inject_turnsafe_diagnostic_fault_for_test(
+            TurnSafeDiagnosticFaultStage::kInitializerProjection);
+        TurnSafeFullTrackAttempt *attempt =
+            turnsafe_attempt_for_feature(it1->get());
+        if (attempt != nullptr) {
+          copy_initializer_diagnostics(turnsafe_triangulation,
+                                       attempt->triangulation);
+          if (initializer_feat->config().refine_features) {
+            copy_initializer_diagnostics(turnsafe_refinement,
+                                         attempt->refinement);
+          }
+          if (!success_tri) {
+            attempt->full_outcome_mapping = TurnSafeOutcomeMapping::kExact;
+            if (turnsafe_triangulation.predicate_ill_conditioned) {
+              attempt->full_outcome =
+                  TurnSafeFullOutcome::kInitIllConditioned;
+            } else if (turnsafe_triangulation.
+                           predicate_too_near_or_behind) {
+              attempt->full_outcome =
+                  TurnSafeFullOutcome::kInitTooNearOrBehind;
+            } else if (turnsafe_triangulation.predicate_too_far) {
+              attempt->full_outcome = TurnSafeFullOutcome::kInitTooFar;
+            } else if (turnsafe_triangulation.predicate_native_nan) {
+              attempt->full_outcome = TurnSafeFullOutcome::kInitNonfinite;
+            } else {
+              attempt->full_outcome = TurnSafeFullOutcome::kUnavailable;
+              attempt->full_outcome_mapping =
+                  TurnSafeOutcomeMapping::kUnmapped;
+            }
+            attempt->native_terminal_status =
+                "INITIALIZER_NATIVE_REJECTED";
+          } else if (!success_refine) {
+            attempt->full_outcome_mapping = TurnSafeOutcomeMapping::kExact;
+            if (turnsafe_refinement.predicate_too_near_or_behind) {
+              attempt->full_outcome =
+                  TurnSafeFullOutcome::kInitTooNearOrBehind;
+            } else if (turnsafe_refinement.predicate_too_far) {
+              attempt->full_outcome = TurnSafeFullOutcome::kInitTooFar;
+            } else if (turnsafe_refinement.predicate_baseline_ratio) {
+              attempt->full_outcome =
+                  TurnSafeFullOutcome::kInitBaselineRatio;
+            } else if (turnsafe_refinement.predicate_native_nan) {
+              attempt->full_outcome = TurnSafeFullOutcome::kInitNonfinite;
+            } else {
+              attempt->full_outcome =
+                  TurnSafeFullOutcome::kRefinementFailed;
+            }
+            attempt->native_terminal_status = "REFINEMENT_NATIVE_REJECTED";
+          } else {
+            attempt->native_terminal_status =
+                "INITIALIZER_AND_REFINEMENT_ACCEPTED";
+          }
+        }
+      } catch (...) {
+        disable_turnsafe_for_current_exception();
+      }
     }
 
     // Remove the feature if not a success
@@ -2525,6 +2932,89 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     bool reduction_evidence_available = true;
     if (_options.landmark_elimination == UpdaterOptions::LandmarkElimination::SCHUR) {
       SchurReductionResult reduction = SchurUpdate::Reduce(H_x, H_f, res, _options.sigma_pix);
+      if (turnsafe_capture) {
+        try {
+          inject_turnsafe_diagnostic_fault_for_test(
+              TurnSafeDiagnosticFaultStage::kSchurProjection);
+          TurnSafeFullTrackAttempt *attempt =
+              turnsafe_attempt_for_feature(it2->get());
+          if (attempt != nullptr) {
+            attempt->schur.attempted = true;
+            attempt->schur.native_accepted = reduction.accepted();
+            attempt->schur.native_status =
+                schur_reduction_status_name(reduction.status);
+            attempt->schur.native_stage =
+                schur_reduction_stage_name(reduction.stage);
+            attempt->schur.raw_rows_available = true;
+            attempt->schur.raw_rows =
+                static_cast<std::int64_t>(reduction.raw_rows);
+            attempt->schur.degrees_of_freedom_available =
+                reduction.accepted();
+            attempt->schur.degrees_of_freedom =
+                static_cast<std::int64_t>(reduction.degrees_of_freedom);
+            attempt->schur.singular_values_available =
+                reduction.singular_values_available;
+            if (reduction.singular_values_available) {
+              attempt->schur.singular_values =
+                  {{reduction.singular_values(0),
+                    reduction.singular_values(1),
+                    reduction.singular_values(2)}};
+            }
+            attempt->schur.singular_ratio_available =
+                reduction.singular_ratio_available;
+            attempt->schur.singular_ratio = reduction.singular_ratio;
+            attempt->schur.numerical_rank_available =
+                reduction.numerical_rank_available;
+            attempt->schur.numerical_rank =
+                static_cast<std::int64_t>(reduction.numerical_rank);
+            attempt->schur.condition_number_available =
+                reduction.condition_number_available;
+            attempt->schur.condition_number = reduction.condition_number;
+            attempt->schur.reduced_rows_available = reduction.accepted();
+            attempt->schur.reduced_rows = reduction.accepted()
+                ? static_cast<std::int64_t>(reduction.H_reduced.rows())
+                : 0;
+            attempt->schur.jitter_count = reduction.jitter_count;
+            attempt->schur.clamp_count = reduction.clamp_count;
+            attempt->schur.regularization_count =
+                reduction.regularization_count;
+            attempt->schur.fallback_count = reduction.fallback_count;
+            if (!reduction.accepted()) {
+              attempt->full_outcome_mapping = TurnSafeOutcomeMapping::kExact;
+              switch (reduction.status) {
+              case SchurReductionStatus::kInsufficientRows:
+                attempt->full_outcome =
+                    TurnSafeFullOutcome::kSchurInsufficientRows;
+                break;
+              case SchurReductionStatus::kRankDeficient:
+                attempt->full_outcome =
+                    TurnSafeFullOutcome::kSchurRankDeficient;
+                break;
+              case SchurReductionStatus::kIllConditioned:
+                attempt->full_outcome =
+                    TurnSafeFullOutcome::kSchurIllConditioned;
+                break;
+              case SchurReductionStatus::kNonfinite:
+                attempt->full_outcome =
+                    TurnSafeFullOutcome::kSchurNonfinite;
+                break;
+              case SchurReductionStatus::kAccepted:
+                attempt->full_outcome = TurnSafeFullOutcome::kUnavailable;
+                attempt->full_outcome_mapping =
+                    TurnSafeOutcomeMapping::kUnmapped;
+                break;
+              }
+              attempt->native_terminal_status =
+                  std::string("SCHUR_NATIVE_REJECTED_") +
+                  schur_reduction_stage_name(reduction.stage);
+            } else {
+              attempt->native_terminal_status = "SCHUR_ACCEPTED";
+            }
+          }
+        } catch (...) {
+          disable_turnsafe_for_current_exception();
+        }
+      }
       if (!reduction.accepted()) {
         if (!reduction.singular_values_available) {
           PRINT_WARNING(YELLOW
@@ -2569,6 +3059,25 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
                       "jitter=0 clamp=0 regularization=0 fallback=0\n" RESET,
                       feat.featid, (int)res.rows());
       }
+      if (turnsafe_capture) {
+        try {
+          inject_turnsafe_diagnostic_fault_for_test(
+              TurnSafeDiagnosticFaultStage::kSchurProjection);
+          TurnSafeFullTrackAttempt *attempt =
+              turnsafe_attempt_for_feature(it2->get());
+          if (attempt != nullptr) {
+            attempt->schur.native_status = "not_selected";
+            attempt->schur.native_stage = "nullspace_live_mode";
+            attempt->native_terminal_status =
+                "UNSUPPORTED_NON_SCHUR_LIVE_MODE";
+            attempt->full_outcome =
+                TurnSafeFullOutcome::kUnsupportedOrInvalidInput;
+            attempt->full_outcome_mapping = TurnSafeOutcomeMapping::kExact;
+          }
+        } catch (...) {
+          disable_turnsafe_for_current_exception();
+        }
+      }
     } else {
       PRINT_ERROR(RED "[MSCKF-REDUCTION]: feature=%zu pass=1 rows=%d status=invalid_mode fallback=0\n" RESET,
                   feat.featid, (int)H_f.rows());
@@ -2594,6 +3103,61 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
                   H_x, res, prior_snapshot.covariance, feature_layout, _options.sigma_pix_sq,
                   _options.chi2_multipler);
     const CP2FeatureGateResult gate = CP2FeatureGate::Evaluate(std::move(gate_input), chi_squared_table);
+    if (turnsafe_capture) {
+      try {
+        inject_turnsafe_diagnostic_fault_for_test(
+            TurnSafeDiagnosticFaultStage::kNisProjection);
+        TurnSafeFullTrackAttempt *attempt =
+            turnsafe_attempt_for_feature(it2->get());
+        if (attempt != nullptr) {
+          attempt->full_nis.attempted = true;
+          attempt->full_nis.lifecycle_accept = gate.lifecycle_accept;
+          attempt->full_nis.native_stage =
+              cp2_feature_gate_stage_name(gate.stage);
+          attempt->full_nis.degrees_of_freedom_available = true;
+          attempt->full_nis.degrees_of_freedom =
+              static_cast<std::int64_t>(gate.degrees_of_freedom);
+          attempt->full_nis.statistic_available = gate.chi2_available;
+          attempt->full_nis.statistic = gate.chi2;
+          attempt->full_nis.threshold_available = gate.threshold_available;
+          attempt->full_nis.threshold = gate.threshold;
+          attempt->full_nis.decision = gate.lifecycle_accept
+              ? "ACCEPTED"
+              : (gate.stage == CP2FeatureGateStage::kDecision
+                     ? "REJECTED"
+                     : std::string("UNAVAILABLE_") +
+                           cp2_feature_gate_stage_name(gate.stage));
+          attempt->native_feature_row_count_available = true;
+          attempt->native_feature_row_count =
+              res.rows() > 0
+                  ? static_cast<std::uint64_t>(res.rows())
+                  : 0U;
+          if (!gate.lifecycle_accept) {
+            if (gate.stage == CP2FeatureGateStage::kDecision &&
+                gate.chi2_available && gate.threshold_available &&
+                std::isfinite(gate.chi2) && std::isfinite(gate.threshold) &&
+                gate.chi2 > gate.threshold) {
+              attempt->full_outcome =
+                  TurnSafeFullOutcome::kFullNisRejected;
+              attempt->full_outcome_mapping = TurnSafeOutcomeMapping::kExact;
+            } else {
+              attempt->full_outcome =
+                  TurnSafeFullOutcome::kUnsupportedOrInvalidInput;
+              attempt->full_outcome_mapping =
+                  TurnSafeOutcomeMapping::kUnmapped;
+            }
+            attempt->native_terminal_status =
+                std::string("FULL_GATE_REJECTED_") +
+                cp2_feature_gate_stage_name(gate.stage);
+          } else {
+            attempt->accepted_at_native_feature_gate = true;
+            attempt->native_terminal_status = "FULL_GATE_ACCEPTED";
+          }
+        }
+      } catch (...) {
+        disable_turnsafe_for_current_exception();
+      }
+    }
     if (!gate.lifecycle_accept) {
       PRINT_WARNING(YELLOW "[MSCKF-GATE]: feature=%zu pass=1 rows=%d status=rejected stage=%s\n" RESET,
                     feat.featid, (int)res.rows(), cp2_feature_gate_stage_name(gate.stage));
@@ -3354,6 +3918,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     update_event.baseline_commit_occurred = true;
     rT5 = boost::posix_time::microsec_clock::local_time();
     notify_observer(update_event, true);
+    notify_turnsafe(update_event, true);
     PRINT_DEBUG(
         "[MSCKF-ITER]: timestamp=%.17g terminal=1 requested_passes=2 "
         "attempted_passes=2 completed_passes=%d selected_pass=%d "
@@ -3515,6 +4080,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     update_event.baseline_commit_occurred = true;
     rT5 = boost::posix_time::microsec_clock::local_time();
     notify_observer(update_event, true);
+    notify_turnsafe(update_event, true);
     PRINT_DEBUG(
         "[MSCKF-ITER]: timestamp=%.17g terminal=1 requested_passes=1 "
         "attempted_passes=1 completed_passes=1 selected_pass=1 "

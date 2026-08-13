@@ -85,8 +85,12 @@ struct SchurReductionResult {
 
   bool singular_values_available = false;
   bool singular_ratio_available = false;
+  bool numerical_rank_available = false;
+  Eigen::Index numerical_rank = 0;
+  bool condition_number_available = false;
   Eigen::Vector3d singular_values = Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN());
   double singular_ratio = std::numeric_limits<double>::quiet_NaN();
+  double condition_number = std::numeric_limits<double>::quiet_NaN();
 
   Eigen::MatrixXd H_reduced;
   Eigen::VectorXd residual_reduced;

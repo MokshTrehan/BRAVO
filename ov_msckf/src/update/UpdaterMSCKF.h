@@ -26,6 +26,7 @@
 
 #include "CP2CommitOracle.h"
 #include "CP2ShadowMath.h"
+#include "TurnSafeTypes.h"
 
 #include <Eigen/Eigen>
 #include <array>
@@ -52,6 +53,13 @@ namespace ov_msckf {
 
 class State;
 class UpdaterMSCKFOrdinaryTestAccess;
+
+enum class TurnSafeUpdaterDiagnosticFailureReason : std::uint8_t {
+  kNone,
+  kBadAlloc,
+  kStdException,
+  kUnknownException,
+};
 
 #if defined(OV_MSCKF_CP2_TESTING)
 enum class CP2UpdaterTestFault : std::uint8_t {
@@ -303,6 +311,7 @@ class UpdaterMSCKF {
 
 public:
   using CP2UpdateCallback = std::function<void(CP2LiveUpdateEvent)>;
+  using TurnSafeT0Callback = std::function<void(TurnSafeUpdateRecord)>;
 
   /**
    * @brief Default constructor for our MSCKF updater
@@ -335,6 +344,13 @@ public:
    * @return true when the requested callback state was installed.
    */
   bool set_cp2_update_callback(CP2UpdateCallback callback, bool enable_shadow = false);
+
+  /** Install or clear the independent passive T0 observer before first update. */
+  bool set_turnsafe_t0_callback(TurnSafeT0Callback callback);
+
+  TurnSafeUpdaterDiagnosticFailureReason
+  turnsafe_t0_failure_reason() const noexcept;
+  std::uint64_t turnsafe_t0_failure_count() const noexcept;
 
   /**
    * Install or clear the authoritative CP2 recorded sink before first update.
@@ -383,6 +399,14 @@ protected:
   /// Empty by default; therefore ordinary and CP2-E runs execute no shadow.
   std::shared_ptr<const CP2UpdateCallback> cp2_update_callback;
 
+  /// Independent, default-empty Session-1 passive observer.
+  std::shared_ptr<const TurnSafeT0Callback> turnsafe_t0_callback;
+
+  std::atomic<std::uint8_t> turnsafe_t0_failure_reason_value{
+      static_cast<std::uint8_t>(
+          TurnSafeUpdaterDiagnosticFailureReason::kNone)};
+  std::atomic<std::uint64_t> turnsafe_t0_failure_count_value{0U};
+
   /// Empty by default; nonnull activates authoritative recorded mode.
   std::shared_ptr<CP2RecordedUpdateSink> cp2_recorded_sink;
 
@@ -406,6 +430,9 @@ protected:
       CP2TraceFatalReason::kNone};
 
 private:
+  void note_turnsafe_t0_failure(
+      TurnSafeUpdaterDiagnosticFailureReason reason) noexcept;
+
   enum class OrdinaryTwoPassTestFault : std::uint8_t {
     kNone,
     kPassTwoGeometryFailure,

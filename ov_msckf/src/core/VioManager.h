@@ -68,6 +68,8 @@ public:
    */
   VioManager(VioManagerOptions &params_);
 
+  ~VioManager();
+
   /**
    * @brief Feed function for inertial data
    * @param message Contains our timestamp and inertial information
@@ -136,6 +138,9 @@ public:
   /// Read the updater's sticky authoritative-trace failure state.
   bool cp2_trace_fatal_latched() const noexcept;
   CP2TraceFatalReason cp2_trace_fatal_reason() const noexcept;
+
+  /** Atomically publish the passive T0 stream; logging failure is isolated. */
+  bool finalize_turnsafe_t0() noexcept;
 
   /// Get a nice visualization image of what tracks we have
   cv::Mat get_historical_viz_image();
@@ -226,6 +231,9 @@ protected:
 
   /// Our MSCKF feature updater
   std::shared_ptr<UpdaterMSCKF> updaterMSCKF;
+
+  /// Default-null passive T0 sink; it has no estimator mutation surface.
+  std::shared_ptr<TurnSafeDiagnostics> turnsafe_t0_diagnostics;
 
   /// Serial-camera identity held only for one synchronous camera feed.
   bool cp2_camera_context_active = false;

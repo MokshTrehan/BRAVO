@@ -35,6 +35,7 @@
 
 #include "state/StateOptions.h"
 #include "update/CP2OutputCapability.h"
+#include "update/TurnSafeDiagnostics.h"
 #include "update/UpdaterOptions.h"
 #include "utils/NoiseManager.h"
 
@@ -105,6 +106,9 @@ struct VioManagerOptions {
   /// The path to the file we will record the timing information into
   std::string record_timing_filepath = "ov_msckf_timing.txt";
 
+  /// Default-off, passive Session-1 T0 diagnostic configuration.
+  TurnSafeDiagnosticsOptions turnsafe_t0;
+
   /// Internal-only CP2 switch; never populated by YAML or ROS parameters.
   bool cp2_preopened_output_mode = false;
 
@@ -135,6 +139,24 @@ struct VioManagerOptions {
       parser->parse_config("zupt_only_at_beginning", zupt_only_at_beginning);
       parser->parse_config("record_timing_information", record_timing_information);
       parser->parse_config("record_timing_filepath", record_timing_filepath);
+      parser->parse_config("turnsafe_t0_capture", turnsafe_t0.capture_requested, false);
+      parser->parse_config("turnsafe_t0_output_path", turnsafe_t0.output_path, false);
+      parser->parse_config("turnsafe_t0_schema", turnsafe_t0.schema_version, false);
+      parser->parse_config("turnsafe_t0_frozen_base_sha", turnsafe_t0.frozen_base_sha, false);
+      parser->parse_config("turnsafe_t0_source_sha", turnsafe_t0.expected_source_sha, false);
+      parser->parse_config("turnsafe_t0_source_tree", turnsafe_t0.expected_source_tree, false);
+      parser->parse_config("turnsafe_t0_source_snapshot_sha256",
+                           turnsafe_t0.expected_source_snapshot_sha256, false);
+      parser->parse_config("turnsafe_t0_build_provenance_id",
+                           turnsafe_t0.expected_build_provenance_id, false);
+      parser->parse_config("turnsafe_t0_build_manifest_sha256", turnsafe_t0.build_manifest_sha256, false);
+      parser->parse_config("turnsafe_t0_binary_sha256", turnsafe_t0.binary_sha256, false);
+      parser->parse_config("turnsafe_t0_config_sha256", turnsafe_t0.config_sha256, false);
+      parser->parse_config("turnsafe_t0_calibration_sha256", turnsafe_t0.calibration_sha256, false);
+      parser->parse_config("turnsafe_t0_diagnostic_schema_sha256", turnsafe_t0.diagnostic_schema_sha256, false);
+      parser->parse_config("turnsafe_t0_digest_contract_version", turnsafe_t0.digest_contract_version, false);
+      parser->parse_config("turnsafe_t0_require_target_stereo_range",
+                           turnsafe_t0.require_target_stereo_range, false);
     }
     PRINT_DEBUG("  - dt_slam_delay: %.1f\n", dt_slam_delay);
     PRINT_DEBUG("  - zero_velocity_update: %d\n", try_zupt);
@@ -144,6 +166,11 @@ struct VioManagerOptions {
     PRINT_DEBUG("  - zupt_only_at_beginning?: %d\n", zupt_only_at_beginning);
     PRINT_DEBUG("  - record timing?: %d\n", (int)record_timing_information);
     PRINT_DEBUG("  - record timing filepath: %s\n", record_timing_filepath.c_str());
+    PRINT_DEBUG("  - TurnSafe T0 capture requested?: %d\n", (int)turnsafe_t0.capture_requested);
+    PRINT_DEBUG("  - TurnSafe T0 output configured?: %d\n", (int)!turnsafe_t0.output_path.empty());
+    PRINT_DEBUG("  - TurnSafe T0 schema: %s\n", turnsafe_t0.schema_version.c_str());
+    PRINT_DEBUG("  - TurnSafe T0 target-stereo range required?: %d\n",
+                (int)turnsafe_t0.require_target_stereo_range);
   }
 
   // NOISE / CHI2 ============================

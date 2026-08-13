@@ -2,6 +2,7 @@
 """Focused tests for the one-sequence KAIST-VIO campaign harness."""
 
 import argparse
+import csv
 import hashlib
 import io
 import json
@@ -64,6 +65,43 @@ class KaistVioCampaignTest(unittest.TestCase):
                 path.write_text("fixture\n", encoding="utf-8")
         for path in (self.binary, self.python):
             path.chmod(0o755)
+        self.adapted.parent.mkdir(parents=True, exist_ok=True)
+        self.adapted.write_bytes(b"adapted bag")
+        self.frozen_baseline = (
+            self.repo / "artifacts" / "turnsafe" / "data" /
+            "KAIST_BASELINE_RESULTS.csv"
+        )
+        self.frozen_baseline.parent.mkdir(parents=True, exist_ok=True)
+        frozen_fields = [
+            "sequence",
+            "source_bag_sha256",
+            "adapted_bag_sha256",
+            "config_sha256",
+            "kalibr_imu_chain_sha256",
+            "kalibr_imucam_chain_sha256",
+            "reference_sha256",
+        ]
+        with self.frozen_baseline.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=frozen_fields)
+            writer.writeheader()
+            writer.writerow(
+                {
+                    "sequence": self.sequence,
+                    "source_bag_sha256": campaign.sha256_file(self.source),
+                    "adapted_bag_sha256": campaign.sha256_file(self.adapted),
+                    "config_sha256": campaign.sha256_file(self.config),
+                    "kalibr_imu_chain_sha256": campaign.sha256_file(
+                        self.config.parent / "kalibr_imu_chain.yaml"
+                    ),
+                    "kalibr_imucam_chain_sha256": campaign.sha256_file(
+                        self.config.parent / "kalibr_imucam_chain.yaml"
+                    ),
+                    "reference_sha256": campaign.sha256_file(self.reference),
+                }
+            )
+        self.frozen_baseline_sha256 = campaign.sha256_file(
+            self.frozen_baseline
+        )
 
         self.patches = [
             mock.patch.object(campaign, "REPO_ROOT", self.repo),
@@ -73,6 +111,14 @@ class KaistVioCampaignTest(unittest.TestCase):
             mock.patch.object(campaign, "CONVERTER_PATH", self.converter),
             mock.patch.object(campaign, "FIXED_LAUNCH", self.launch),
             mock.patch.object(campaign, "FIXED_CONFIG", self.config),
+            mock.patch.object(
+                campaign, "FROZEN_BASELINE_RESULTS", self.frozen_baseline
+            ),
+            mock.patch.object(
+                campaign,
+                "FROZEN_BASELINE_RESULTS_SHA256",
+                self.frozen_baseline_sha256,
+            ),
             mock.patch.object(campaign, "PYTHON", self.python),
         ]
         for patch in self.patches:
@@ -116,9 +162,10 @@ class KaistVioCampaignTest(unittest.TestCase):
         return source, adapted
 
     def fake_adapter(self, operation, source, adapted):
-        self.assertEqual(operation, "adapt")
+        self.assertIn(operation, ("adapt", "audit"))
         adapted.parent.mkdir(parents=True, exist_ok=True)
-        adapted.write_bytes(b"adapted bag")
+        if operation == "adapt":
+            adapted.write_bytes(b"adapted bag")
         source_audit, adapted_audit = self.audits()
         return (
             {
@@ -516,6 +563,25 @@ class KaistVioCampaignTest(unittest.TestCase):
 
     def test_reference_contents_are_not_parsed_before_estimator_finishes(self) -> None:
         self.reference.write_text("not a trajectory\n", encoding="utf-8")
+        # This test isolates the runtime ordering contract. Rebind the trusted
+        # fixture ledger to the deliberately invalid reference bytes so the
+        # independent frozen-input check passes without parsing the reference.
+        rows = []
+        with self.frozen_baseline.open(
+            "r", encoding="utf-8", newline=""
+        ) as stream:
+            reader = csv.DictReader(stream)
+            fieldnames = reader.fieldnames
+            rows = list(reader)
+        self.assertIsNotNone(fieldnames)
+        rows[0]["reference_sha256"] = campaign.sha256_file(self.reference)
+        with self.frozen_baseline.open(
+            "w", encoding="utf-8", newline=""
+        ) as stream:
+            writer = csv.DictWriter(stream, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        rebound_ledger_sha256 = campaign.sha256_file(self.frozen_baseline)
         args = self.arguments()
         args.output_dir = self.repo / "artifacts" / "turnsafe" / "reference-order"
         tools = {
@@ -544,7 +610,11 @@ class KaistVioCampaignTest(unittest.TestCase):
                 record["exit_code"] = 1
             return record
 
-        with mock.patch.object(campaign, "_command_path", side_effect=lambda name: tools[name]), mock.patch.object(
+        with mock.patch.object(
+            campaign,
+            "FROZEN_BASELINE_RESULTS_SHA256",
+            rebound_ledger_sha256,
+        ), mock.patch.object(campaign, "_command_path", side_effect=lambda name: tools[name]), mock.patch.object(
             campaign, "_adapter_call", side_effect=self.fake_adapter
         ), mock.patch.object(campaign, "_assert_port_available"), mock.patch.object(
             campaign, "run_command", side_effect=fake_run
@@ -557,6 +627,52 @@ class KaistVioCampaignTest(unittest.TestCase):
             args.output_dir.joinpath("sequence_result.json").read_text(encoding="utf-8")
         )
         self.assertNotIn("reference_validation", failure)
+
+    def test_frozen_inputs_reject_pre_run_bag_config_and_calibration_drift(self) -> None:
+        cases = (
+            self.source,
+            self.adapted,
+            self.config,
+            self.config.parent / "kalibr_imu_chain.yaml",
+            self.config.parent / "kalibr_imucam_chain.yaml",
+            self.reference,
+        )
+        for index, path in enumerate(cases):
+            with self.subTest(path=path):
+                original = path.read_bytes()
+                path.write_bytes(original + b"drift")
+                args = self.arguments(prepare_only=True)
+                args.output_dir = (
+                    self.repo / "artifacts" / "turnsafe" /
+                    "frozen-drift-{}".format(index)
+                )
+                try:
+                    with self.assertRaisesRegex(
+                        campaign.CampaignError,
+                        "differs from frozen Session-0.5 input",
+                    ):
+                        campaign.run_campaign(args)
+                finally:
+                    path.write_bytes(original)
+
+    def test_frozen_baseline_ledger_hash_is_independently_pinned(self) -> None:
+        self.frozen_baseline.write_bytes(
+            self.frozen_baseline.read_bytes() + b"drift"
+        )
+        with self.assertRaisesRegex(
+            campaign.CampaignError,
+            "frozen Session-0.5 baseline result hash mismatch",
+        ):
+            campaign.run_campaign(self.arguments(prepare_only=True))
+
+    def test_capture_off_provenance_requires_expected_source_state(self) -> None:
+        args = self.arguments()
+        args.turnsafe_t0_provenance = True
+        with self.assertRaisesRegex(
+            campaign.CampaignError,
+            "T0 provenance requires --turnsafe-t0-expected-source-state",
+        ):
+            campaign.run_campaign(args)
 
     def test_timeout_sends_process_group_signal_and_records_cleanup(self) -> None:
         log = self.root / "timeout.log"
@@ -584,6 +700,525 @@ class KaistVioCampaignTest(unittest.TestCase):
         args.source_bag = self.data / "PRIVATE" / self.sequence
         with self.assertRaisesRegex(campaign.CampaignError, "forbidden"):
             campaign.run_campaign(args)
+
+    def test_t0_jsonl_validator_binds_header_order_and_runtime_firewall(self) -> None:
+        path = self.root / "t0.jsonl"
+        expected = {
+            "frozen_base_sha": "a" * 40,
+            "source_sha": "b" * 40,
+            "tree_sha": "c" * 40,
+            "build_manifest_sha256": "d" * 64,
+            "binary_sha256": "e" * 64,
+            "config_sha256": "f" * 64,
+            "calibration_sha256": "1" * 64,
+            "diagnostic_schema_sha256": "2" * 64,
+        }
+        header = dict(expected)
+        header.update({
+            "schema": campaign.T0_SCHEMA,
+            "record_type": "run_header",
+            "supported_configuration": True,
+            "unsupported_reasons": [],
+            "resolved_configuration": {
+                "one_pass_schur": True,
+                "fej_enabled": True,
+                "global_3d_transient": True,
+                "all_cameras_radtan": True,
+                "camera_extrinsic_calibration_off": True,
+                "camera_intrinsic_calibration_off": True,
+                "camera_time_offset_calibration_off": True,
+                "stereo_enabled": True,
+                "stereo_available": True,
+                "require_target_stereo_range": True,
+                "camera_count": 2,
+            },
+        })
+        frontend = {
+            "camera_id": 0,
+            "source_camera_timestamp": {
+                "status": "NOT_APPLICABLE",
+                "reason": "INITIAL_FRAME",
+            },
+            "frame_timestamp_value": 1.0,
+            "frame_timestamp_key": "f64:0x3ff0000000000000",
+            "reseed_count": 0,
+            "klt_attempted_count": 0,
+            "klt_counts_available": True,
+            "previous_tracked_points": 0,
+            "klt_status_survivors": 0,
+            "klt_status_rejections": 0,
+            "out_of_bounds_rejections": 0,
+            "in_bounds_survivors": 0,
+            "mask_rejections": 0,
+            "mask_survivors": 0,
+            "mask_stage_present": True,
+            "fmatrix_input_points": 0,
+            "fmatrix_inliers": 0,
+            "fmatrix_rejections": 0,
+            "native_combined_track_survivors": 0,
+            "database_observations_written": 0,
+            "database_tracked_observations_written": {
+                "status": "NOT_EXPOSED",
+                "reason": "NOT_EXPOSED_BY_NATIVE_PATH",
+            },
+            "database_new_observations_written": {
+                "status": "NOT_EXPOSED",
+                "reason": "NOT_EXPOSED_BY_NATIVE_PATH",
+            },
+            "reset_too_few_points": False,
+            "reset_native_reason": "NONE",
+            "forward_backward_check": {
+                "status": "NOT_APPLICABLE",
+                "reason": "NATIVE_KLT_HAS_NO_FORWARD_BACKWARD_CHECK",
+            },
+            "klt_error_summary": {"count": 0, "nonfinite_count": 0},
+            "gyro_magnitude_rad_s": {
+                "status": "NOT_EXPOSED",
+                "reason": "NOT_EXPOSED_BY_NATIVE_PATH",
+            },
+            "gyro_integrated_rotation_rad": {
+                "status": "NOT_EXPOSED",
+                "reason": "NOT_EXPOSED_BY_NATIVE_PATH",
+            },
+            "blur_metric": {
+                "status": "NOT_EXPOSED",
+                "reason": "NOT_EXPOSED_BY_NATIVE_PATH",
+            },
+            "exposure": {
+                "status": "NOT_EXPOSED",
+                "reason": "NOT_EXPOSED_BY_NATIVE_PATH",
+            },
+            "gain": {
+                "status": "NOT_EXPOSED",
+                "reason": "NOT_EXPOSED_BY_NATIVE_PATH",
+            },
+            "native_accepted_feature_ids": [],
+        }
+        funnel_fields = (
+            "camera_frames",
+            "previous_tracked_points",
+            "klt_status_survivors",
+            "in_bounds_survivors",
+            "mask_survivors",
+            "native_combined_track_survivors",
+            "fmatrix_input_points",
+            "fmatrix_survivors",
+            "database_observations_written",
+            "terminal_attempt_count",
+            "tracks_with_valid_clone_pairs",
+            "attempt_valid_clone_pair_count_total",
+            "accepted_full_factors",
+            "accepted_full_rows",
+            "shadow_pair_candidates",
+            "candidate_pairs_with_target_stereo",
+            "attempts_with_at_least_one_target_stereo_pair",
+            "groups_with_at_least_one_target_stereo_pair",
+            "candidates_with_calibrated_range_lcb",
+            "candidates_with_calibrated_translation_ucb",
+            "candidates_translation_acute",
+            "candidates_passing_rho_trans",
+            "groups_n_lt_2",
+            "groups_n_2",
+            "groups_n_3",
+            "groups_n_ge_4",
+            "groups_passing_rank",
+            "groups_passing_consensus",
+            "eligible_groups_before_selection",
+            "winner_count",
+            "foregone_eligible_groups",
+            "foregone_eligible_features",
+            "winner_shadow_factors_passing_nis",
+            "winner_shadow_rows_passing_nis",
+        )
+        funnel = dict((field, 0) for field in funnel_fields)
+        funnel["camera_frames"] = 2
+        for field in (
+            "full_outcome_counts_by_code",
+            "triangulation_outcome_counts_by_code",
+            "refinement_outcome_counts_by_code",
+            "schur_outcome_counts_by_code",
+            "full_nis_outcome_counts_by_code",
+        ):
+            funnel[field] = {}
+        callback = {
+            "schema": campaign.T0_SCHEMA,
+            "record_type": "callback",
+            "callback_index": 0,
+            "callback_timestamp_value": 1.0,
+            "callback_timestamp_key": "f64:0x3ff0000000000000",
+            "prior_fingerprint": {
+                "status": "NOT_EXPOSED",
+                "reason": "UPDATER_PRIOR_NOT_CAPTURED",
+            },
+            "frontend_cameras": [dict(frontend), dict(frontend, camera_id=1)],
+            "full_track_attempts": [],
+            "baseline_decision": {
+                "native_status": "all_rejected",
+                "native_subreason": "NONE",
+                "accepted_full_feature_ids": [],
+                "proposal_sufficient_statistics": {
+                    "gamma": {
+                        "status": "NOT_EXPOSED",
+                        "reason": "NOT_EXPOSED_BY_NATIVE_PATH",
+                    },
+                    "precompression_rows": {
+                        "status": "NOT_EXPOSED",
+                        "reason": "NOT_EXPOSED_BY_NATIVE_PATH",
+                    },
+                    "compressed_rows": {
+                        "status": "NOT_EXPOSED",
+                        "reason": "NOT_EXPOSED_BY_NATIVE_PATH",
+                    },
+                },
+                "proposal_attempted": False,
+                "proposal_accepted": False,
+                "baseline_commit_occurred": False,
+                "no_full_visual_update_duration": {
+                    "status": "NOT_AVAILABLE",
+                    "reason": "NO_PRIOR_ACCEPTED_FULL_UPDATE",
+                },
+                "mean_commit_count": 0,
+                "covariance_commit_count": 0,
+                "terminal_finalization_count": 1,
+                "nominal_state_fingerprint": {
+                    "status": "NOT_EXPOSED",
+                    "reason": "FILE_BOUND_PARITY_USED",
+                },
+                "covariance_fingerprint": {
+                    "status": "NOT_EXPOSED",
+                    "reason": "FILE_BOUND_PARITY_USED",
+                },
+            },
+            "shadow_candidates": [],
+            "shadow_groups": [],
+            "prior_primitives": {
+                "status": "NOT_EXPOSED",
+                "reason": "UPDATER_PRIOR_NOT_CAPTURED",
+            },
+            "funnel": funnel,
+            "shadow_summary": {
+                "eligible_group_count": 0,
+                "frozen_winner": {},
+                "runner_up": {},
+                "foregone_eligible_groups": 0,
+                "foregone_eligible_features": 0,
+                "no_runner_up_gate_shopping": True,
+                "translation_covariance_scale": 2.0,
+            },
+            "completeness": {
+                "status": "PARTIAL_SHADOW_BY_CONTRACT",
+                "typed_reasons": [],
+            },
+        }
+        path.write_text(
+            json.dumps(header, sort_keys=True) + "\n" +
+            json.dumps(callback, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        result = campaign._validate_t0_jsonl(path, expected)
+        self.assertEqual(result["callback_count"], 1)
+        self.assertTrue(result["runtime_sequence_identity_absent"])
+
+        callback["sequence_id"] = "forbidden"
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(campaign.CampaignError, "forbidden key"):
+            campaign._validate_t0_jsonl(path, expected)
+
+        callback.pop("sequence_id")
+        duplicate_key = {
+            "camera_id": 0,
+            "source_timestamp_key": "f64:0x1",
+            "target_timestamp_key": "f64:0x2",
+            "feature_id": 1,
+            "detached_index": 0,
+            "source_observation_ordinal": 0,
+            "target_observation_ordinal": 1,
+        }
+        observation_key = {
+            "camera_id": 0,
+            "timestamp_value": 1.0,
+            "timestamp_key": "f64:0x3ff0000000000000",
+            "feature_id": 1,
+            "detached_index": 0,
+            "observation_ordinal": 0,
+        }
+        unavailable = {
+            "status": "NOT_EXPOSED",
+            "reason": "NOT_EXPOSED_BY_NATIVE_PATH",
+        }
+        source_camera = {
+            "status": "AVAILABLE",
+            "camera_id": 0,
+            "model": "CamRadtan",
+            "intrinsic_id": 10,
+            "extrinsic_id": 20,
+        }
+        candidate = {
+            "candidate_key": dict(duplicate_key),
+            "source_observation_key": dict(observation_key),
+            "source_observation": {
+                "observation_key": dict(observation_key),
+                "raw_pixel": [1.0, 2.0],
+                "normalized_pixel": [0.1, 0.2],
+            },
+            "target_observation_key": dict(observation_key),
+            "target_observation": {
+                "observation_key": dict(observation_key),
+                "raw_pixel": [1.0, 2.0],
+                "normalized_pixel": [0.1, 0.2],
+            },
+            "supporting_target_time_stereo_observation_key": {
+                "status": "NOT_AVAILABLE_FROM_SENSOR",
+                "reason": "TARGET_STEREO_UNAVAILABLE",
+            },
+            "supporting_target_time_stereo_observation": {
+                "status": "NOT_AVAILABLE_FROM_SENSOR",
+                "reason": "TARGET_STEREO_UNAVAILABLE",
+            },
+            "camera_calibration": {
+                "source": dict(source_camera),
+                "target": dict(source_camera),
+                "stereo": {
+                    "status": "NOT_APPLICABLE",
+                    "reason": "TARGET_STEREO_UNAVAILABLE",
+                },
+            },
+            "full_outcome": "INIT_TOO_FAR",
+            "target_time_stereo_available": False,
+            "target_stereo_rejection_reason": "TARGET_STEREO_UNAVAILABLE",
+            "stereo_geometry_primitives": {
+                "status": "NOT_AVAILABLE_FROM_SENSOR",
+                "reason": "TARGET_STEREO_UNAVAILABLE",
+            },
+            "target_bearing": dict(unavailable),
+            "range_certificate": dict(unavailable),
+            "translation_certificate": dict(unavailable),
+            "bearing_covariance": dict(unavailable),
+            "acute_regime": dict(unavailable),
+            "rho_trans": dict(unavailable),
+            "rho_threshold": dict(unavailable),
+            "static_quality_status": "NOT_APPLICABLE",
+            "eligible_before_group": False,
+            "terminal_reason": "TARGET_STEREO_UNAVAILABLE",
+        }
+        callback["shadow_candidates"] = [dict(candidate), dict(candidate)]
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(campaign.CampaignError, "not canonical"):
+            campaign._validate_t0_jsonl(path, expected)
+
+        callback["shadow_candidates"] = []
+        initializer = {
+            "attempted": False,
+            "native_success": False,
+            "native_function": "NOT_EXPOSED_BY_NATIVE_PATH",
+            "native_outcome": "NOT_ATTEMPTED",
+            "condition_number": dict(unavailable),
+            "depth": dict(unavailable),
+            "baseline_ratio": dict(unavailable),
+            "predicates": {
+                "ill_conditioned": False,
+                "too_near_or_behind": False,
+                "too_far": False,
+                "baseline_ratio": False,
+                "native_nan": False,
+            },
+            "refinement_runs": {
+                "status": "NOT_APPLICABLE",
+                "reason": "NOT_A_REFINEMENT_STAGE",
+            },
+            "refinement_lambda": dict(unavailable),
+            "refinement_last_step_norm": dict(unavailable),
+            "refinement_control_epsilon": dict(unavailable),
+            "termination_reason": "NOT_APPLICABLE",
+        }
+        attempt = {
+            "detached_index": 0,
+            "feature_id": 1,
+            "ordered_observation_keys": [],
+            "attempt_has_any_live_same_camera_clone_pair": False,
+            "attempt_valid_clone_pair_count": 0,
+            "triangulation": dict(initializer),
+            "refinement": dict(initializer),
+            "schur": {
+                "attempted": False,
+                "native_accepted": False,
+                "native_status": "NOT_EXPOSED_BY_NATIVE_PATH",
+                "native_stage": "NOT_EXPOSED_BY_NATIVE_PATH",
+                "raw_rows": dict(unavailable),
+                "rows_before_reduction": dict(unavailable),
+                "degrees_of_freedom": dict(unavailable),
+                "rows_after_reduction": dict(unavailable),
+                "singular_values": dict(unavailable),
+                "numerical_rank": dict(unavailable),
+                "reciprocal_condition": dict(unavailable),
+                "condition_number": dict(unavailable),
+                "numerical_repairs": {
+                    "jitter": 0,
+                    "clamp": 0,
+                    "regularization": 0,
+                    "fallback": 0,
+                },
+            },
+            "full_outcome": "UNAVAILABLE",
+            "full_outcome_mapping": "NOT_APPLICABLE",
+            "native_terminal_status": "NOT_REACHED",
+            "target_time_stereo_available": False,
+            "accepted_at_native_feature_gate": False,
+            "native_feature_row_count": {
+                "status": "NOT_EXPOSED",
+                "reason": "NOT_EXPOSED_BY_NATIVE_PATH",
+            },
+            "accepted_full_factor": False,
+            "accepted_full_row_count": 0,
+            "accepted_full_row_status": "NOT_CONTRIBUTED",
+            "finalization_result": "NOT_REACHED",
+        }
+        callback["full_track_attempts"] = [attempt]
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            campaign.CampaignError, "missing required field full_nis"
+        ):
+            campaign._validate_t0_jsonl(path, expected)
+        callback["full_track_attempts"] = []
+
+        missing_stereo_key = dict(candidate)
+        missing_stereo_key.pop("supporting_target_time_stereo_observation_key")
+        callback["shadow_candidates"] = [missing_stereo_key]
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            campaign.CampaignError,
+            "supporting_target_time_stereo_observation_key",
+        ):
+            campaign._validate_t0_jsonl(path, expected)
+        callback["shadow_candidates"] = []
+
+        malformed_calibration = json.loads(json.dumps(candidate))
+        malformed_calibration["camera_calibration"]["source"] = {}
+        callback["shadow_candidates"] = [malformed_calibration]
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            campaign.CampaignError,
+            "camera_calibration.source.*missing required field status",
+        ):
+            campaign._validate_t0_jsonl(path, expected)
+        callback["shadow_candidates"] = []
+
+        malformed_geometry = json.loads(json.dumps(candidate))
+        malformed_geometry["stereo_geometry_primitives"] = {}
+        callback["shadow_candidates"] = [malformed_geometry]
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            campaign.CampaignError,
+            "stereo_geometry_primitives.*missing required field status",
+        ):
+            campaign._validate_t0_jsonl(path, expected)
+        callback["shadow_candidates"] = []
+
+        attempt["full_nis"] = {
+            "attempted": False,
+            "native_stage": "NOT_EXPOSED_BY_NATIVE_PATH",
+            "lifecycle_accept": False,
+            "degrees_of_freedom": dict(unavailable),
+            "statistic": dict(unavailable),
+            "threshold": dict(unavailable),
+            "decision": "NOT_ATTEMPTED",
+        }
+        attempt["schur"]["raw_rows"] = {}
+        callback["full_track_attempts"] = [attempt]
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            campaign.CampaignError,
+            "schur.raw_rows.*missing required field status",
+        ):
+            campaign._validate_t0_jsonl(path, expected)
+        callback["full_track_attempts"] = []
+
+        callback["completeness"]["typed_reasons"] = "not-an-array"
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            campaign.CampaignError, "completeness.typed_reasons is not an array"
+        ):
+            campaign._validate_t0_jsonl(path, expected)
+        callback["completeness"]["typed_reasons"] = []
+
+        callback["baseline_decision"]["no_full_visual_update_duration"] = {
+            "status": "AVAILABLE",
+            "reason": "NONE",
+        }
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            campaign.CampaignError, "AVAILABLE status is missing numeric value"
+        ):
+            campaign._validate_t0_jsonl(path, expected)
+        callback["baseline_decision"]["no_full_visual_update_duration"] = {
+            "status": "NOT_AVAILABLE",
+            "reason": "NO_PRIOR_ACCEPTED_FULL_UPDATE",
+        }
+
+        malformed_available_stereo = json.loads(json.dumps(candidate))
+        malformed_available_stereo[
+            "supporting_target_time_stereo_observation_key"
+        ] = {"status": "AVAILABLE", "reason": "NONE"}
+        callback["shadow_candidates"] = [malformed_available_stereo]
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            campaign.CampaignError, "AVAILABLE status is missing observation key"
+        ):
+            campaign._validate_t0_jsonl(path, expected)
+        callback["shadow_candidates"] = []
+
+        callback["funnel"]["full_outcome_counts_by_code"] = {
+            "FULL_ACCEPTED": "one"
+        }
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            campaign.CampaignError,
+            "full_outcome_counts_by_code.FULL_ACCEPTED.*nonnegative integer",
+        ):
+            campaign._validate_t0_jsonl(path, expected)
+        callback["funnel"]["full_outcome_counts_by_code"] = {}
+
+        header["supported_configuration"] = False
+        header["unsupported_reasons"] = ["CALLER_SELF_DECLARED"]
+        path.write_text(
+            json.dumps(header) + "\n" + json.dumps(callback) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(campaign.CampaignError, "not a supported"):
+            campaign._validate_t0_jsonl(path, expected)
 
 
 if __name__ == "__main__":

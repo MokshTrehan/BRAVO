@@ -28,7 +28,14 @@
 using namespace ov_core;
 
 bool FeatureInitializer::single_triangulation(std::shared_ptr<Feature> feat,
-                                              std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM) {
+                                              std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM,
+                                              Diagnostics *diagnostics) {
+
+  if (diagnostics != nullptr) {
+    *diagnostics = Diagnostics();
+    diagnostics->native_function = Diagnostics::NativeFunction::kTriangulation;
+    diagnostics->attempted = true;
+  }
 
   // Total number of measurements
   // Also set the first measurement to be the anchor frame
@@ -93,6 +100,12 @@ bool FeatureInitializer::single_triangulation(std::shared_ptr<Feature> feat,
   singularValues.resize(svd.singularValues().rows(), 1);
   singularValues = svd.singularValues();
   double condA = singularValues(0, 0) / singularValues(singularValues.rows() - 1, 0);
+  if (diagnostics != nullptr) {
+    diagnostics->condition_available = true;
+    diagnostics->condition_number = condA;
+    diagnostics->depth_available = true;
+    diagnostics->depth = p_f(2, 0);
+  }
 
   // std::stringstream ss;
   // ss << feat->featid << " - cond " << std::abs(condA) << " - z " << p_f(2, 0) << std::endl;
@@ -100,6 +113,16 @@ bool FeatureInitializer::single_triangulation(std::shared_ptr<Feature> feat,
 
   // If we have a bad condition number, or it is too close
   // Then set the flag for bad (i.e. set z-axis to nan)
+  if (diagnostics != nullptr) {
+    if (std::abs(condA) > _options.max_cond_number)
+      diagnostics->predicate_ill_conditioned = true;
+    else if (p_f(2, 0) < _options.min_dist)
+      diagnostics->predicate_too_near_or_behind = true;
+    else if (p_f(2, 0) > _options.max_dist)
+      diagnostics->predicate_too_far = true;
+    else if (std::isnan(p_f.norm()))
+      diagnostics->predicate_native_nan = true;
+  }
   if (std::abs(condA) > _options.max_cond_number || p_f(2, 0) < _options.min_dist || p_f(2, 0) > _options.max_dist ||
       std::isnan(p_f.norm())) {
     return false;
@@ -108,11 +131,20 @@ bool FeatureInitializer::single_triangulation(std::shared_ptr<Feature> feat,
   // Store it in our feature object
   feat->p_FinA = p_f;
   feat->p_FinG = R_GtoA.transpose() * feat->p_FinA + p_AinG;
+  if (diagnostics != nullptr)
+    diagnostics->native_success = true;
   return true;
 }
 
 bool FeatureInitializer::single_triangulation_1d(std::shared_ptr<Feature> feat,
-                                                 std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM) {
+                                                 std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM,
+                                                 Diagnostics *diagnostics) {
+
+  if (diagnostics != nullptr) {
+    *diagnostics = Diagnostics();
+    diagnostics->native_function = Diagnostics::NativeFunction::kTriangulation1D;
+    diagnostics->attempted = true;
+  }
 
   // Total number of measurements
   // Also set the first measurement to be the anchor frame
@@ -182,8 +214,20 @@ bool FeatureInitializer::single_triangulation_1d(std::shared_ptr<Feature> feat,
   // Solve the linear system
   double depth = b / A;
   Eigen::MatrixXd p_f = depth * bearing_inA;
+  if (diagnostics != nullptr) {
+    diagnostics->depth_available = true;
+    diagnostics->depth = p_f(2, 0);
+  }
 
   // Then set the flag for bad (i.e. set z-axis to nan)
+  if (diagnostics != nullptr) {
+    if (p_f(2, 0) < _options.min_dist)
+      diagnostics->predicate_too_near_or_behind = true;
+    else if (p_f(2, 0) > _options.max_dist)
+      diagnostics->predicate_too_far = true;
+    else if (std::isnan(p_f.norm()))
+      diagnostics->predicate_native_nan = true;
+  }
   if (p_f(2, 0) < _options.min_dist || p_f(2, 0) > _options.max_dist || std::isnan(p_f.norm())) {
     return false;
   }
@@ -191,11 +235,20 @@ bool FeatureInitializer::single_triangulation_1d(std::shared_ptr<Feature> feat,
   // Store it in our feature object
   feat->p_FinA = p_f;
   feat->p_FinG = R_GtoA.transpose() * feat->p_FinA + p_AinG;
+  if (diagnostics != nullptr)
+    diagnostics->native_success = true;
   return true;
 }
 
 bool FeatureInitializer::single_gaussnewton(std::shared_ptr<Feature> feat,
-                                            std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM) {
+                                            std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM,
+                                            Diagnostics *diagnostics) {
+
+  if (diagnostics != nullptr) {
+    *diagnostics = Diagnostics();
+    diagnostics->native_function = Diagnostics::NativeFunction::kGaussNewton;
+    diagnostics->attempted = true;
+  }
 
   // Get into inverse depth
   double rho = 1 / feat->p_FinA(2);
@@ -206,6 +259,11 @@ bool FeatureInitializer::single_gaussnewton(std::shared_ptr<Feature> feat,
   double lam = _options.init_lamda;
   double eps = 10000;
   int runs = 0;
+  double diagnostic_last_step_norm =
+      std::numeric_limits<double>::quiet_NaN();
+  bool diagnostic_last_step_norm_available = false;
+  Diagnostics::TerminationReason diagnostic_termination =
+      Diagnostics::TerminationReason::kNotApplicable;
 
   // Variables used in the optimization
   bool recompute = true;
@@ -292,6 +350,10 @@ bool FeatureInitializer::single_gaussnewton(std::shared_ptr<Feature> feat,
     }
 
     Eigen::Matrix<double, 3, 1> dx = Hess_l.colPivHouseholderQr().solve(grad);
+    if (diagnostics != nullptr) {
+      diagnostic_last_step_norm = dx.norm();
+      diagnostic_last_step_norm_available = true;
+    }
     // Eigen::Matrix<double,3,1> dx = (Hess+lam*Eigen::MatrixXd::Identity(Hess.rows(), Hess.rows())).colPivHouseholderQr().solve(grad);
 
     // Check if error has gone down
@@ -308,6 +370,7 @@ bool FeatureInitializer::single_gaussnewton(std::shared_ptr<Feature> feat,
       beta += dx(1, 0);
       rho += dx(2, 0);
       eps = 0;
+      diagnostic_termination = Diagnostics::TerminationReason::kRelativeCost;
       break;
     }
 
@@ -329,10 +392,35 @@ bool FeatureInitializer::single_gaussnewton(std::shared_ptr<Feature> feat,
     }
   }
 
+  if (diagnostics != nullptr &&
+      diagnostic_termination == Diagnostics::TerminationReason::kNotApplicable) {
+    if (runs >= _options.max_runs) {
+      diagnostic_termination = Diagnostics::TerminationReason::kMaximumRuns;
+    } else if (!(lam < _options.max_lamda)) {
+      diagnostic_termination = Diagnostics::TerminationReason::kLambdaLimit;
+    } else if (!(eps > _options.min_dx)) {
+      diagnostic_termination = Diagnostics::TerminationReason::kStepNorm;
+    } else {
+      diagnostic_termination =
+          Diagnostics::TerminationReason::kNativeLoopExitNotExposed;
+    }
+  }
+
   // Revert to standard, and set to all
   feat->p_FinA(0) = alpha / rho;
   feat->p_FinA(1) = beta / rho;
   feat->p_FinA(2) = 1 / rho;
+  if (diagnostics != nullptr) {
+    diagnostics->depth_available = true;
+    diagnostics->depth = feat->p_FinA(2);
+    diagnostics->refinement_runs = runs;
+    diagnostics->refinement_lambda = lam;
+    diagnostics->refinement_last_step_norm_available =
+        diagnostic_last_step_norm_available;
+    diagnostics->refinement_last_step_norm = diagnostic_last_step_norm;
+    diagnostics->refinement_control_epsilon = eps;
+    diagnostics->termination_reason = diagnostic_termination;
+  }
 
   // Get tangent plane to x_hat
   Eigen::HouseholderQR<Eigen::MatrixXd> qr(feat->p_FinA);
@@ -364,13 +452,36 @@ bool FeatureInitializer::single_gaussnewton(std::shared_ptr<Feature> feat,
   // 1. If the feature is too close
   // 2. If the feature is invalid
   // 3. If the baseline ratio is large
+  if (diagnostics != nullptr) {
+    if (feat->p_FinA(2) < _options.min_dist) {
+      diagnostics->predicate_too_near_or_behind = true;
+    } else if (feat->p_FinA(2) > _options.max_dist) {
+      diagnostics->predicate_too_far = true;
+    } else {
+      const double diagnostic_baseline_ratio = feat->p_FinA.norm() / base_line_max;
+      diagnostics->baseline_ratio_available = true;
+      diagnostics->baseline_ratio = diagnostic_baseline_ratio;
+      if (diagnostic_baseline_ratio > _options.max_baseline)
+        diagnostics->predicate_baseline_ratio = true;
+      else if (std::isnan(feat->p_FinA.norm()))
+        diagnostics->predicate_native_nan = true;
+    }
+  }
   if (feat->p_FinA(2) < _options.min_dist || feat->p_FinA(2) > _options.max_dist ||
       (feat->p_FinA.norm() / base_line_max) > _options.max_baseline || std::isnan(feat->p_FinA.norm())) {
+    if (diagnostics != nullptr &&
+        !diagnostics->predicate_too_near_or_behind &&
+        !diagnostics->predicate_too_far &&
+        diagnostics->baseline_ratio_available &&
+        diagnostics->baseline_ratio > _options.max_baseline)
+      diagnostics->predicate_baseline_ratio = true;
     return false;
   }
 
   // Finally get position in global frame
   feat->p_FinG = R_GtoA.transpose() * feat->p_FinA + p_AinG;
+  if (diagnostics != nullptr)
+    diagnostics->native_success = true;
   return true;
 }
 

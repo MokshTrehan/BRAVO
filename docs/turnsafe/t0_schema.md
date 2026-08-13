@@ -1,6 +1,6 @@
 # TurnSafe T0 diagnostic schema
 
-Status: frozen for Session 1 passive instrumentation
+Status: Session 1R repair contract; replay validation pending
 
 Schema identifier: `turnsafe.t0.v1`
 
@@ -10,6 +10,29 @@ This schema describes evidence emitted by capture-only T0 diagnostics. It does
 not authorize factor rows, proposal changes, new gates, fallback behavior, or
 live-state mutation. A missing diagnostic is represented explicitly; estimator
 behavior is never changed to manufacture a value.
+
+Session 1R repairs the passive candidate against the eight findings in the
+Session-1 final review. Until its precommit and clean-postcommit replay gates
+finish, this document makes no parity or campaign claim. The repaired path
+fails closed for diagnostic exceptions, binds runtime support and build/source
+identity independently, and retains the raw evidence required by this schema.
+
+The repository-convention tests needed for stereo range covariance, relative camera-center
+translation covariance, and CamRadtan inverse bearing covariance were not
+established in this run. Their emitted typed results are respectively:
+
+```text
+SHADOW_NOT_COMPUTED_STEREO_RANGE_COVARIANCE_NOT_ESTABLISHED
+SHADOW_NOT_COMPUTED_RELATIVE_CAMERA_CENTER_JACOBIAN_NOT_CERTIFIED
+SHADOW_NOT_COMPUTED_PIXEL_TO_BEARING_JACOBIAN_NOT_CERTIFIED
+```
+
+The absolute-angle, median/MAD, and spatial-coverage thresholds remain
+unfrozen. Consensus, eligible-group, winner, runner-up, and derived survival
+fields therefore remain `NOT_APPLICABLE`, retain reason
+`THRESHOLD_SET_NOT_FROZEN`, and also carry typed result
+`SHADOW_NOT_COMPUTED_THRESHOLD_SET_NOT_FROZEN`. Session 1 does not choose or
+infer those thresholds.
 
 ## 1. Non-interference contract
 
@@ -23,12 +46,22 @@ Capture mode obeys all of the following:
    telemetry.
 4. Store value-only identifiers and diagnostics; no record owns a live feature,
    database, state, or mutation callback.
-5. Emit one terminal callback record even when the baseline coasts, rejects,
-   resets, or a diagnostic computation is unavailable.
+5. While capture remains active, emit one terminal callback record even when
+   the baseline coasts, rejects, or resets. A contained diagnostic failure
+   atomically disables capture and records only its fixed-size reason/counter.
 6. Prove disabled and capture-only decision parity against the frozen digest.
 
 These requirements specialize the v6 plan Sections 5.1--5.6, 7, 12.1, and 15
 (Session 1).
+
+Native masks, accepted IDs, database writes, tracker state, estimator decision,
+and finalization complete independently of diagnostic containers. Every
+diagnostic allocation/copy, summary, grouping, serialization, observer call,
+sink open/write/flush, and final publication operation is inside an explicit
+containment boundary with ordered `bad_alloc`, standard-exception, and unknown
+handling. The first failure stores only a fixed enum and saturating counter;
+no diagnostic retry or native decision change is permitted. Capture-off does
+not allocate diagnostic containers on the live KLT path.
 
 ## 2. Serialization and identity
 
@@ -55,16 +88,26 @@ rules:
 Canonical keys are:
 
 ```text
-observation_key = (camera_id, timestamp_key, feature_id)
+observation_key = (camera_id, timestamp_key, feature_id,
+                   detached_index, observation_ordinal)
 pair_key        = (camera_id, source_timestamp_key, target_timestamp_key)
-candidate_key   = (pair_key, feature_id)
+candidate_key   = (camera_id, source_timestamp_key, target_timestamp_key,
+                   feature_id, detached_index,
+                   source_observation_ordinal,
+                   target_observation_ordinal)
 callback_key    = callback_index
 ```
 
-`callback_index` is the zero-based order of baseline visual callbacks. Feature
-and observation arrays preserve baseline order where that order is meaningful;
-otherwise they use ascending canonical keys. The log must record which rule
-applies to each array.
+Timestamp-key comparison is bytewise over the fixed-width bit-preserving key.
+The complete callback candidate collection is globally sorted once by
+`candidate_key` after collection and before grouping or serialization. Group
+membership, group order, and any foregone-group order derive from the same
+typed keys. Duplicate detached attempt identities or duplicate complete
+candidate keys disable capture as an ownership error; input order is never a
+tie-breaker. `callback_index` is the zero-based order of baseline visual
+callbacks. Attempt records sort by unique `detached_index`; observations within
+an attempt sort cameras by numeric `camera_id` and preserve native vector order
+within each camera. Those positions define the observation ordinals.
 
 ### Run header
 
@@ -73,15 +116,37 @@ applies to each array.
 | `schema` | string | Exactly `turnsafe.t0.v1` |
 | `record_type` | string | `run_header` |
 | `frozen_base_sha` | string | Frozen repository identity |
-| `tree_sha` | string | Tree actually executed |
-| `build_manifest_sha256` | string/status | Hash of the external baseline build manifest |
+| `source_sha` | string | Git HEAD independently resolved by the source-snapshot tool at configure time |
+| `tree_sha` | string | Git `HEAD^{tree}` independently resolved at configure time |
+| `source_snapshot_sha256` | SHA-256 | Aggregate identity of HEAD/tree, porcelain state, tracked diff, compiled inputs, and untracked compiled inputs |
+| `source_dirty` | boolean | True only for an explicit precommit dirty snapshot identity |
+| `build_provenance_id` | SHA-256 | Configure descriptor ID compiled into the TurnSafe-owning shared library |
+| `configure_manifest_sha256` | SHA-256 | Hash of the configure manifest used to generate the compiled identity |
+| `build_manifest_sha256` | SHA-256 | Campaign-computed hash of the detached binary/library/cache build manifest |
+| `binary_sha256` | string | Hash of the estimator executable actually launched |
 | `config_sha256` | string | Hash of the exact effective estimator configuration |
 | `calibration_sha256` | string | Hash of the exact calibration input |
 | `capture_mode` | string | `disabled` or `capture_only`; T0 has no active mode |
 | `supported_configuration` | boolean | Result of the Section 4 production-envelope check, used only for telemetry eligibility |
 | `unsupported_reasons` | array[string] | Stable sorted reason codes; empty when supported |
+| `resolved_configuration` | object | Actual one-pass Schur, FEJ, GLOBAL_3D, CamRadtan, fixed-calibration, stereo, camera-count, and target-range predicates |
 | `threshold_set_id` | string/status | Hash or immutable identifier for all shadow thresholds |
 | `digest_contract_version` | string | Baseline digest contract used by the run |
+
+Caller-provided source SHA/tree/build values are expectations only; a conflict
+disables capture. The source-snapshot tool accepts only repository and output
+paths. A detached build manifest binds the configure descriptor, CMake cache,
+schema, estimator executable, and both TurnSafe-owning shared libraries. The
+configure descriptor and cache must identify the same source/build directories,
+compiler, cached flags, generator, Ceres prefix, ROS setting, and testing
+setting. The descriptor separately records the effective `CMAKE_CXX_FLAGS`;
+the finalizer and campaign bind the generated `ov_msckf_lib` target-flags file
+and require its effective-flag prefix to match. The campaign also verifies that
+the dynamic loader resolves `ov_msckf` and `ov_core` to
+the exact manifest-bound library paths, then regenerates and compares the source
+snapshot before and after every provenance-bound replay. Capture-on implies
+this binding; capture-off parity runs request the same binding explicitly while
+leaving telemetry disabled.
 
 Dataset names, maneuver labels, development/holdout membership, ground truth,
 future frames, and final-error feedback are not estimator inputs and are not
@@ -101,6 +166,7 @@ When unavailable, `value` is omitted and `status` is one of:
 ```text
 NOT_APPLICABLE
 NOT_EXPOSED
+NOT_AVAILABLE
 NOT_AVAILABLE_FROM_SENSOR
 UNSUPPORTED_CONFIGURATION
 INVALID_INPUT
@@ -127,9 +193,10 @@ Each callback record contains:
 | `callback_timestamp_key` | string | Canonical timestamp identity |
 | `prior_fingerprint` | string/status | Read-only fingerprint of the one captured prior, when exposed |
 | `frontend_cameras` | array | Section 5 records, ordered by camera ID |
-| `full_track_attempts` | array | Section 6 records, in detached baseline order |
+| `full_track_attempts` | array | Section 6 records, sorted by unique detached index |
 | `shadow_candidates` | array | Section 7 records, ordered by candidate key |
 | `shadow_groups` | array | Section 8 records, ordered by pair key |
+| `prior_primitives` | object/status | Immutable clone, calibration, and covariance primitives captured before mutation, or a typed absence reason |
 | `funnel` | object | Counts below, derived without changing the baseline |
 | `baseline_decision` | object | Section 9 baseline result |
 | `shadow_summary` | object | Section 9 counterfactual summary |
@@ -143,11 +210,13 @@ previous_tracked_points
 klt_status_survivors
 in_bounds_survivors
 mask_survivors
+native_combined_track_survivors
 fmatrix_input_points
 fmatrix_survivors
 database_observations_written
-terminal_msckf_tracks
+terminal_attempt_count
 tracks_with_valid_clone_pairs
+attempt_valid_clone_pair_count_total
 full_outcome_counts_by_code
 triangulation_outcome_counts_by_code
 refinement_outcome_counts_by_code
@@ -156,13 +225,16 @@ full_nis_outcome_counts_by_code
 accepted_full_factors
 accepted_full_rows
 shadow_pair_candidates
-candidates_with_target_stereo
+candidate_pairs_with_target_stereo
+attempts_with_at_least_one_target_stereo_pair
+groups_with_at_least_one_target_stereo_pair
 candidates_with_calibrated_range_lcb
 candidates_with_calibrated_translation_ucb
 candidates_translation_acute
 candidates_passing_rho_trans
-groups_n2_shadow_only
-groups_n3_shadow_only
+groups_n_lt_2
+groups_n_2
+groups_n_3
 groups_n_ge_4
 groups_passing_rank
 groups_passing_consensus
@@ -188,7 +260,11 @@ counts are exclusive at the named sequential stage.
 | Field | Type | Required meaning |
 |---|---|---|
 | `camera_id` | integer | Stable repository camera ID |
+| `source_camera_timestamp` | timestamp/status | Previous same-camera frame timestamp when the native tracker exposes one |
 | `frame_timestamp_value/key` | timestamp pair | Exact sensor-frame identity |
+| `reseed_count` | uint64 | Native reseed population for this frame |
+| `klt_attempted_count` | uint64 | Points for which native temporal KLT was attempted |
+| `klt_counts_available` | boolean | Whether the native path exposed exact KLT stage counts |
 | `previous_tracked_points` | uint64 | Points presented to temporal KLT |
 | `klt_status_survivors` | uint64 | Points with passing KLT status before bounds/mask checks |
 | `klt_status_rejections` | uint64 | KLT status failures |
@@ -196,20 +272,24 @@ counts are exclusive at the named sequential stage.
 | `in_bounds_survivors` | uint64 | Status survivors remaining after bounds |
 | `mask_rejections` | uint64 | In-bounds points rejected by the existing mask |
 | `mask_survivors` | uint64 | Points remaining after the existing mask |
+| `mask_stage_present` | boolean | Whether the native path executed a distinct mask stage |
 | `fmatrix_input_points` | uint64 | Points submitted to the existing fundamental-matrix test |
 | `fmatrix_inliers` | uint64 | Existing-test inliers |
 | `fmatrix_rejections` | uint64 | Existing-test rejections |
+| `native_combined_track_survivors` | uint64 | Points passing the unchanged KLT/RANSAC combination and native bounds/mask rules |
 | `database_observations_written` | uint64 | All observations written for the frame |
 | `database_tracked_observations_written` | uint64/status | Writes attributable to the tracked funnel, if exposed |
 | `database_new_observations_written` | uint64/status | Writes attributable to new detections, if exposed |
 | `reset_too_few_points` | boolean | Existing low-point reset decision |
 | `reset_native_reason` | string/status | Existing native reason, if exposed |
+| `forward_backward_check` | object/status | Native forward/backward-check evidence, or explicit native-path absence |
 | `klt_error_summary` | object | Distribution defined below |
 | `gyro_magnitude_rad_s` | number/status | Read-only frame-interval gyro magnitude |
 | `gyro_integrated_rotation_rad` | number/status | Read-only integrated rotation over the exact camera interval |
 | `blur_metric` | number/status | Existing or sensor-provided metric only |
 | `exposure` | number/status | Recorded metadata with units named in `extensions` |
 | `gain` | number/status | Recorded metadata with units named in `extensions` |
+| `native_accepted_feature_ids` | array | Exact native KLT/RANSAC accepted IDs after all unchanged frontend gates |
 
 `klt_error_summary` covers finite KLT errors for status survivors and contains
 `count`, `nonfinite_count`, `min`, `max`, `mean`, `p50`, `p90`, `p95`, and
@@ -239,18 +319,39 @@ early full-path stage fails.
 |---|---|---|
 | `detached_index` | uint64 | Index in the immutable detached batch |
 | `feature_id` | repository ID type | Baseline feature identity |
-| `ordered_observation_keys` | array | Raw observations in baseline semantic order |
-| `valid_clone_pair_count` | uint64 | Same-camera pairs whose source and target clones are live |
+| `ordered_observation_keys` | array | Numeric camera order, preserving native vector order within each camera |
+| `attempt_has_any_live_same_camera_clone_pair` | boolean | Any same-camera pair has two live clones, independent of typed eligibility |
+| `attempt_valid_clone_pair_count` | uint64 | Same-camera live-clone pairs, computed before typed eligibility |
 | `triangulation` | typed status + diagnostics | Native outcome, mapped outcome if exact, and existing geometry/conditioning values |
 | `refinement` | typed status + diagnostics | Native outcome, mapped outcome if exact, and existing diagnostics |
 | `schur` | typed status + diagnostics | Native typed reduction status/stage, row/rank/conditioning/nonfinite evidence |
 | `full_nis` | typed status + diagnostics | Attempted/not attempted, statistic, dof, threshold, and result when exposed |
 | `full_outcome` | enum/status | Unified terminal outcome below |
 | `full_outcome_mapping` | enum | `EXACT`, `UNMAPPED`, or `NOT_APPLICABLE` |
-| `target_time_stereo_available` | boolean | Same-feature stereo observation exists at candidate target time |
+| `native_terminal_status` | string/status | Unmodified native terminal stage/status for auditability |
+| `target_time_stereo_available` | boolean | Legacy attempt summary only; never substitutes for candidate-scoped evidence |
+| `accepted_at_native_feature_gate` | boolean | Native full-row gate result before global proposal selection |
+| `native_feature_row_count` | uint64 or typed unavailable | Native rows presented to and evaluated by that feature gate, including a rejected factor; unavailable if the native gate was not reached |
 | `accepted_full_factor` | boolean | Full factor contributed to the accepted baseline proposal |
 | `accepted_full_row_count` | uint64 | Rows contributed to that proposal |
+| `accepted_full_row_status` | enum | Explicit contributed/not-contributed status after the estimator decision |
 | `finalization_result` | native status | Existing terminal lifecycle result after the estimator decision |
+
+Triangulation, refinement, Schur reduction, full-factor NIS, and accepted-row
+status are distinct fields and distinct funnel maps; the unified outcome never
+replaces them. Refinement retains native lambda, actual last-step norm, native
+control epsilon, run count, and termination reason. Schur retains raw/reduced
+row counts, descending singular values, numerical rank, reciprocal condition,
+condition number, and zero/nonzero repair counters. Full NIS retains dof,
+statistic, threshold, native stage, and decision. A native quantity that does
+not exist is `NOT_EXPOSED` with reason `NOT_EXPOSED_BY_NATIVE_PATH`; no finite
+placeholder is invented. In particular, `schur.raw_rows` and
+`schur.rows_before_reduction` are typed `NOT_EXPOSED` when native Schur was not
+attempted, and `native_feature_row_count` is typed `NOT_EXPOSED` when the
+native full-row gate was not reached, rather than using zero as an availability
+sentinel. Unreached initializer, Schur, and NIS native function/status/stage
+strings use the explicit `NOT_EXPOSED_BY_NATIVE_PATH` code; empty strings are
+not availability sentinels.
 
 The exact unified outcomes are:
 
@@ -282,9 +383,17 @@ may be emitted even when ineligible.
 
 | Field | Type | Required meaning |
 |---|---|---|
-| `candidate_key` | object | Canonical pair key plus feature ID |
+| `candidate_key` | object | Complete globally unique canonical key from Section 2 |
 | `source_observation_key` | object | Exact supporting source observation |
 | `target_observation_key` | object | Exact supporting target observation |
+| `supporting_target_time_stereo_observation_key` | object/status | Exact configured-mate support at the target timestamp |
+| `source_observation` | object | Exact key plus raw and native-normalized pixel primitives |
+| `target_observation` | object | Exact key plus raw and native-normalized pixel primitives |
+| `supporting_target_time_stereo_observation` | object/status | Supporting stereo pixels or exact rejection reason |
+| `camera_calibration` | object | Source/target/stereo camera, model, intrinsic ID, and extrinsic ID |
+| `target_time_stereo_available` | boolean | Candidate-scoped configured-mate observation availability |
+| `target_stereo_rejection_reason` | reason code | Exact missing configuration/observation/pixel primitive reason |
+| `stereo_geometry_primitives` | object/status | Pair-scoped target/stereo raw and normalized pixel geometry availability |
 | `full_outcome` | enum/status | Source typed failure; unmapped is ineligible |
 | `target_bearing` | 3-vector/status | Measured target unit bearing for spatial diagnostics |
 | `range_certificate` | object | Range fields below |
@@ -296,6 +405,12 @@ may be emitted even when ineligible.
 | `static_quality_status` | enum | Existing non-NIS candidate checks |
 | `eligible_before_group` | boolean | All per-feature pre-group checks pass |
 | `terminal_reason` | reason code | First failing check in Section 10 ordering |
+
+Raw and normalized pixel primitives distinguish native absence from an exposed
+nonfinite value. Missing pixels use `NOT_EXPOSED_BY_NATIVE_PATH`; exposed
+NaN/Inf pixels use `NONFINITE` with a source-, target-, or target-stereo-scoped
+reason, and `stereo_geometry_primitives.status` is never `AVAILABLE` for such a
+candidate.
 
 `range_certificate` contains supporting stereo observation keys, identity and
 timestamp audit results, nominal radial range, propagated standard deviation,
@@ -328,10 +443,14 @@ T0.
 | Field | Type | Required meaning |
 |---|---|---|
 | `pair_key` | object | Canonical group identity |
-| `candidate_keys` | array | All candidates, sorted by feature ID |
+| `candidate_keys` | array | All candidates, sorted by complete canonical key |
 | `eligible_candidate_keys` | array | Per-feature certified candidates |
+| `raw_candidate_count` | uint64 | Candidate-pair population before group eligibility |
+| `pair_group_feature_count` | uint64 | Distinct `(feature_id, detached_index)` population before the production minimum |
 | `eligible_feature_count` | uint64 | Count before consensus |
-| `shadow_only_small_group` | boolean | True for `n=2` or `n=3`; such a group is never production-eligible |
+| `shadow_only_small_group` | boolean | True exactly for `n=2` or `n=3`; false for `n<2` and `n>=4` |
+| `group_size_status` | enum | `INSUFFICIENT_FOR_PAIR_GROUP` for `n<2`, `SHADOW_ONLY_SMALL_GROUP` for `n=2,3`, otherwise `PRODUCTION_MINIMUM_MET` |
+| `contains_target_stereo_candidate` | boolean | At least one candidate in this group has exact target-time stereo evidence |
 | `target_bearing_spatial_metrics` | object | Frozen coverage metric, threshold, and result |
 | `rotation_stack_singular_values` | array[3] | Descending local-stack singular values |
 | `rotation_stack_rank` | uint64 | Rank under the recorded threshold |
@@ -399,6 +518,14 @@ reset/recovery status observable in this callback
 no-full-visual-update duration measured in sensor time
 translation covariance scale from the captured prior
 ```
+
+The duration state exists only in an active capture sink. It starts
+`NO_PRIOR_ACCEPTED_FULL_UPDATE`, resets to zero only on the ordinary accepted
+full-visual decision, advances from causal callback camera timestamps on
+coasts, and never reads wall time. Nonfinite timestamps, callback/updater
+timestamp mismatch, and regression against the last valid callback-time
+frontier produce typed unavailable reasons and do not move either trusted
+timestamp backward.
 
 `shadow_summary` contains:
 

@@ -20,6 +20,7 @@
  */
 
 #include "VioManager.h"
+#include "TurnSafeCallbackInstaller.h"
 
 #include "feat/Feature.h"
 #include "feat/FeatureDatabase.h"
@@ -41,15 +42,130 @@
 #include "state/StateHelper.h"
 #include "update/UpdaterMSCKF.h"
 #include "update/CP2OutputCapability.h"
+#include "update/TurnSafeDiagnostics.h"
 #include "update/UpdaterSLAM.h"
 #include "update/UpdaterZeroVelocity.h"
 
+#include <new>
 #include <stdexcept>
 #include <utility>
 
 using namespace ov_core;
 using namespace ov_type;
 using namespace ov_msckf;
+
+namespace {
+
+class TurnSafeCallbackEnvelope {
+public:
+  TurnSafeCallbackEnvelope(
+      const std::shared_ptr<TurnSafeDiagnostics> &diagnostics,
+      const TrackKLT *tracker, const UpdaterMSCKF *updater,
+      double timestamp) noexcept
+      : diagnostics_(diagnostics), tracker_(tracker), updater_(updater) {
+    PollComponentFailures();
+    if (diagnostics_ && diagnostics_->active())
+      diagnostics_->BeginCallback(timestamp);
+  }
+
+  ~TurnSafeCallbackEnvelope() noexcept {
+    PollComponentFailures();
+    if (diagnostics_) diagnostics_->EndCallback();
+  }
+
+private:
+  void PollComponentFailures() noexcept {
+    if (!diagnostics_ || !diagnostics_->active()) return;
+    if (tracker_ && tracker_->turnsafe_diagnostic_failure_reason() !=
+                        TrackKLTDiagnosticFailureReason::kNone) {
+      diagnostics_->ReportComponentFailure(
+          TurnSafeCaptureDisableReason::kFrontendCaptureFailure);
+      return;
+    }
+    if (updater_ && updater_->turnsafe_t0_failure_reason() !=
+                        TurnSafeUpdaterDiagnosticFailureReason::kNone) {
+      diagnostics_->ReportComponentFailure(
+          TurnSafeCaptureDisableReason::kUpdaterCaptureFailure);
+    }
+  }
+
+  std::shared_ptr<TurnSafeDiagnostics> diagnostics_;
+  const TrackKLT *tracker_ = nullptr;
+  const UpdaterMSCKF *updater_ = nullptr;
+};
+
+} // namespace
+
+TurnSafeCallbackInstallationResult ov_msckf::install_turnsafe_t0_callbacks(
+    const std::shared_ptr<TurnSafeDiagnostics> &diagnostics,
+    TrackKLT *tracker, UpdaterMSCKF *updater) noexcept {
+  TurnSafeCallbackInstallationResult result;
+  if (!diagnostics || !diagnostics->active()) return result;
+
+  const std::weak_ptr<TurnSafeDiagnostics> weak_sink = diagnostics;
+  bool tracker_installed = tracker == nullptr;
+  bool updater_installed = false;
+  result.failure_reason =
+      TurnSafeCaptureDisableReason::kFrontendCaptureFailure;
+  try {
+    // std::function construction itself may allocate before a by-value setter
+    // can begin executing, so construction and installation share one guard.
+    if (tracker) {
+      inject_turnsafe_diagnostic_fault_for_test(
+          TurnSafeDiagnosticFaultStage::kTrackerCallbackInstallation);
+      TrackKLT::DiagnosticsCallback tracker_callback(
+          [weak_sink](TrackKLTFrameDiagnostics record) {
+            const auto sink = weak_sink.lock();
+            if (sink) sink->RecordFrontend(std::move(record));
+          });
+      tracker_installed = tracker->set_turnsafe_diagnostics_callback(
+          std::move(tracker_callback));
+    }
+    if (tracker_installed) {
+      result.failure_reason =
+          TurnSafeCaptureDisableReason::kUpdaterCaptureFailure;
+      if (updater) {
+        inject_turnsafe_diagnostic_fault_for_test(
+            TurnSafeDiagnosticFaultStage::kUpdaterCallbackInstallation);
+        UpdaterMSCKF::TurnSafeT0Callback updater_callback(
+            [weak_sink](TurnSafeUpdateRecord record) {
+              const auto sink = weak_sink.lock();
+              if (sink) sink->RecordUpdate(std::move(record));
+            });
+        updater_installed = updater->set_turnsafe_t0_callback(
+            std::move(updater_callback));
+      }
+    }
+  } catch (const std::bad_alloc &) {
+  } catch (const std::exception &) {
+  } catch (...) {
+  }
+
+  if (tracker_installed && updater_installed) {
+    result.success = true;
+    result.tracker_callback_retained = tracker != nullptr;
+    result.updater_callback_retained = true;
+    result.failure_reason = TurnSafeCaptureDisableReason::kNone;
+    return result;
+  }
+
+  // Remove whichever half installed successfully. The empty callbacks do not
+  // allocate; each setter contains its own lock/assignment failure boundary.
+  if (tracker && tracker_installed) {
+    result.tracker_rollback_succeeded =
+        tracker->set_turnsafe_diagnostics_callback({});
+    result.tracker_callback_retained =
+        !result.tracker_rollback_succeeded;
+  }
+  if (updater && updater_installed) {
+    result.updater_rollback_succeeded =
+        updater->set_turnsafe_t0_callback({});
+    result.updater_callback_retained =
+        !result.updater_rollback_succeeded;
+  }
+  diagnostics->ReportComponentFailure(result.failure_reason);
+  return result;
+}
 
 VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false), thread_init_success(false) {
 
@@ -174,12 +290,85 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
   updaterMSCKF = std::make_shared<UpdaterMSCKF>(params.msckf_options, params.featinit_options);
   updaterSLAM = std::make_shared<UpdaterSLAM>(params.slam_options, params.aruco_options, params.featinit_options);
 
+  // Bind support claims to the fully resolved runtime objects and options.
+  // The capture sink receives the result; it never accepts a caller-supplied
+  // supported_configuration Boolean.
+  if (params.turnsafe_t0.capture_requested &&
+      !params.turnsafe_t0.output_path.empty()) {
+    TurnSafeResolvedConfiguration turnsafe_configuration;
+    turnsafe_configuration.one_pass_schur =
+        params.msckf_options.landmark_elimination ==
+            UpdaterOptions::LandmarkElimination::SCHUR &&
+        params.msckf_options.max_visual_passes == 1;
+    turnsafe_configuration.fej_enabled = params.state_options.do_fej;
+    turnsafe_configuration.global_3d_transient =
+        params.state_options.feat_rep_msckf ==
+            ov_type::LandmarkRepresentation::Representation::GLOBAL_3D;
+    turnsafe_configuration.camera_count =
+        params.state_options.num_cameras > 0
+            ? static_cast<std::uint64_t>(params.state_options.num_cameras)
+            : 0U;
+    turnsafe_configuration.all_cameras_radtan =
+        params.camera_intrinsics.size() ==
+            turnsafe_configuration.camera_count;
+    for (const auto &camera : params.camera_intrinsics) {
+      turnsafe_configuration.all_cameras_radtan =
+          turnsafe_configuration.all_cameras_radtan &&
+          std::dynamic_pointer_cast<CamRadtan>(camera.second) != nullptr;
+    }
+    turnsafe_configuration.camera_extrinsic_calibration_off =
+        !params.state_options.do_calib_camera_pose;
+    turnsafe_configuration.camera_intrinsic_calibration_off =
+        !params.state_options.do_calib_camera_intrinsics;
+    turnsafe_configuration.camera_time_offset_calibration_off =
+        !params.state_options.do_calib_camera_timeoffset;
+    turnsafe_configuration.stereo_enabled = params.use_stereo;
+    turnsafe_configuration.stereo_available =
+        params.use_stereo && turnsafe_configuration.camera_count == 2U &&
+        params.camera_intrinsics.size() == 2U;
+    turnsafe_configuration.require_target_stereo_range =
+        params.turnsafe_t0.require_target_stereo_range;
+    params.turnsafe_t0.resolved_configuration =
+        std::move(turnsafe_configuration);
+  }
+
+  // Session-1 diagnostics are wholly absent unless both the opt-in bit and an
+  // explicit output pathname are supplied. Weak callbacks prevent ownership
+  // cycles and expose only value records to the sink.
+  turnsafe_t0_diagnostics = TurnSafeDiagnostics::Create(params.turnsafe_t0);
+  if (turnsafe_t0_diagnostics && turnsafe_t0_diagnostics->active()) {
+    const std::shared_ptr<TrackKLT> klt =
+        std::dynamic_pointer_cast<TrackKLT>(trackFEATS);
+    const TurnSafeCallbackInstallationResult installation =
+        install_turnsafe_t0_callbacks(turnsafe_t0_diagnostics, klt.get(),
+                                      updaterMSCKF.get());
+    if (!installation.success) {
+      PRINT_WARNING(YELLOW
+                    "[TURNSAFE-T0]: status=installation_rejected "
+                    "baseline_unchanged=1\n" RESET);
+    }
+  } else if (params.turnsafe_t0.capture_requested &&
+             !params.turnsafe_t0.output_path.empty()) {
+    PRINT_WARNING(YELLOW
+                  "[TURNSAFE-T0]: status=disabled reason=%s "
+                  "baseline_unchanged=1\n" RESET,
+                  turnsafe_t0_diagnostics
+                      ? turnsafe_t0_diagnostics->failure_reason()
+                      : "SINK_ALLOCATION_FAILED");
+  }
+
   // If we are using zero velocity updates, then create the updater
   if (params.try_zupt) {
     updaterZUPT = std::make_shared<UpdaterZeroVelocity>(params.zupt_options, params.imu_noises, trackFEATS->get_feature_database(),
                                                         propagator, params.gravity_mag, params.zupt_max_velocity,
                                                         params.zupt_noise_multiplier, params.zupt_max_disparity);
   }
+}
+
+VioManager::~VioManager() { finalize_turnsafe_t0(); }
+
+bool VioManager::finalize_turnsafe_t0() noexcept {
+  return !turnsafe_t0_diagnostics || turnsafe_t0_diagnostics->Finalize();
 }
 
 bool VioManager::set_cp2_invocation_context(
@@ -330,6 +519,9 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
 
   // Start timing
   rT1 = boost::posix_time::microsec_clock::local_time();
+  const TurnSafeCallbackEnvelope turnsafe_callback_envelope(
+      turnsafe_t0_diagnostics, dynamic_cast<const TrackKLT *>(trackFEATS.get()),
+      updaterMSCKF.get(), message_const.timestamp);
 
   // Assert we have valid measurement data and ids
   assert(!message_const.sensor_ids.empty());

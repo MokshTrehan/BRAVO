@@ -29,7 +29,202 @@
 #include "utils/opencv_lambda_body.h"
 #include "utils/print.h"
 
+#include <algorithm>
+#include <new>
+
 using namespace ov_core;
+
+bool TrackKLT::set_turnsafe_diagnostics_callback(
+    DiagnosticsCallback callback) noexcept {
+  try {
+    const std::lock_guard<std::mutex> lock(turnsafe_diagnostics_mutex);
+    turnsafe_diagnostics_callback = std::move(callback);
+    turnsafe_previous_timestamp.clear();
+    turnsafe_diagnostics_failure_reason.store(
+        static_cast<std::uint8_t>(TrackKLTDiagnosticFailureReason::kNone),
+        std::memory_order_release);
+    turnsafe_diagnostics_failure_count.store(0U, std::memory_order_release);
+    return true;
+  } catch (const std::bad_alloc &) {
+    note_turnsafe_diagnostic_failure(TrackKLTDiagnosticFailureReason::kBadAlloc);
+    return false;
+  } catch (const std::exception &) {
+    note_turnsafe_diagnostic_failure(
+        TrackKLTDiagnosticFailureReason::kStdException);
+    return false;
+  } catch (...) {
+    note_turnsafe_diagnostic_failure(
+        TrackKLTDiagnosticFailureReason::kUnknownException);
+    return false;
+  }
+}
+
+TrackKLTDiagnosticFailureReason
+TrackKLT::turnsafe_diagnostic_failure_reason() const noexcept {
+  return static_cast<TrackKLTDiagnosticFailureReason>(
+      turnsafe_diagnostics_failure_reason.load(std::memory_order_acquire));
+}
+
+std::uint64_t TrackKLT::turnsafe_diagnostic_failure_count() const noexcept {
+  return turnsafe_diagnostics_failure_count.load(std::memory_order_acquire);
+}
+
+void TrackKLT::note_turnsafe_diagnostic_failure(
+    TrackKLTDiagnosticFailureReason reason) noexcept {
+  std::uint8_t expected =
+      static_cast<std::uint8_t>(TrackKLTDiagnosticFailureReason::kNone);
+  turnsafe_diagnostics_failure_reason.compare_exchange_strong(
+      expected, static_cast<std::uint8_t>(reason), std::memory_order_acq_rel,
+      std::memory_order_acquire);
+  std::uint64_t count =
+      turnsafe_diagnostics_failure_count.load(std::memory_order_relaxed);
+  while (count != std::numeric_limits<std::uint64_t>::max() &&
+         !turnsafe_diagnostics_failure_count.compare_exchange_weak(
+             count, count + 1U, std::memory_order_relaxed,
+             std::memory_order_relaxed)) {
+  }
+}
+
+bool TrackKLT::begin_turnsafe_diagnostic_frame(
+    size_t camera_id, double target_timestamp,
+    TrackKLTFrameDiagnostics &record) noexcept {
+  try {
+    inject_track_klt_diagnostic_fault_for_test(
+        TrackKLTDiagnosticFaultStage::kActivation);
+    const std::lock_guard<std::mutex> lock(turnsafe_diagnostics_mutex);
+    if (!turnsafe_diagnostics_callback ||
+        turnsafe_diagnostic_failure_reason() !=
+            TrackKLTDiagnosticFailureReason::kNone) {
+      return false;
+    }
+    record.camera_id = camera_id;
+    record.target_timestamp = target_timestamp;
+    const auto previous = turnsafe_previous_timestamp.find(camera_id);
+    if (previous != turnsafe_previous_timestamp.end()) {
+      record.source_timestamp_available = true;
+      record.source_timestamp = previous->second;
+    }
+    turnsafe_previous_timestamp[camera_id] = target_timestamp;
+    return true;
+  } catch (const std::bad_alloc &) {
+    note_turnsafe_diagnostic_failure(TrackKLTDiagnosticFailureReason::kBadAlloc);
+    return false;
+  } catch (const std::exception &) {
+    note_turnsafe_diagnostic_failure(
+        TrackKLTDiagnosticFailureReason::kStdException);
+    return false;
+  } catch (...) {
+    note_turnsafe_diagnostic_failure(
+        TrackKLTDiagnosticFailureReason::kUnknownException);
+    return false;
+  }
+}
+
+void TrackKLT::emit_turnsafe_diagnostic(
+    TrackKLTFrameDiagnostics &&record) noexcept {
+  DiagnosticsCallback callback;
+  try {
+    if (turnsafe_diagnostic_failure_reason() !=
+        TrackKLTDiagnosticFailureReason::kNone) {
+      return;
+    }
+    inject_track_klt_diagnostic_fault_for_test(
+        TrackKLTDiagnosticFaultStage::kCallback);
+    {
+      const std::lock_guard<std::mutex> lock(turnsafe_diagnostics_mutex);
+      callback = turnsafe_diagnostics_callback;
+    }
+    if (callback) {
+      callback(std::move(record));
+    }
+  } catch (const std::bad_alloc &) {
+    note_turnsafe_diagnostic_failure(TrackKLTDiagnosticFailureReason::kBadAlloc);
+  } catch (const std::exception &) {
+    note_turnsafe_diagnostic_failure(
+        TrackKLTDiagnosticFailureReason::kStdException);
+  } catch (...) {
+    note_turnsafe_diagnostic_failure(
+        TrackKLTDiagnosticFailureReason::kUnknownException);
+  }
+}
+
+void TrackKLT::capture_turnsafe_matching_diagnostics(
+    std::size_t temporal_input_points, bool klt_performed,
+    bool ransac_performed, const std::vector<uchar> &klt_status,
+    const std::vector<float> &klt_error,
+    const std::vector<uchar> &ransac_status,
+    TrackKLTMatchingDiagnostics &output) noexcept {
+  try {
+    if (turnsafe_diagnostic_failure_reason() !=
+        TrackKLTDiagnosticFailureReason::kNone) {
+      return;
+    }
+    inject_track_klt_diagnostic_fault_for_test(
+        TrackKLTDiagnosticFaultStage::kMatchingCopy);
+    TrackKLTMatchingDiagnostics captured;
+    captured.temporal_input_points = temporal_input_points;
+    captured.klt_performed = klt_performed;
+    captured.ransac_performed = ransac_performed;
+    captured.klt_status.assign(klt_status.begin(), klt_status.end());
+    captured.klt_error.assign(klt_error.begin(), klt_error.end());
+    captured.ransac_status.assign(ransac_status.begin(), ransac_status.end());
+    output = std::move(captured);
+  } catch (const std::bad_alloc &) {
+    note_turnsafe_diagnostic_failure(TrackKLTDiagnosticFailureReason::kBadAlloc);
+  } catch (const std::exception &) {
+    note_turnsafe_diagnostic_failure(
+        TrackKLTDiagnosticFailureReason::kStdException);
+  } catch (...) {
+    note_turnsafe_diagnostic_failure(
+        TrackKLTDiagnosticFailureReason::kUnknownException);
+  }
+}
+
+void TrackKLT::finish_turnsafe_diagnostic_frame(
+    TrackKLTFrameDiagnostics &&record,
+    const TrackKLTMatchingDiagnostics &matching,
+    const std::vector<cv::KeyPoint> &target_points, int image_rows,
+    int image_cols, const cv::Mat &native_mask, bool apply_native_mask,
+    TrackKLTBoundsRule bounds_rule,
+    const std::vector<std::size_t> &accepted_feature_ids,
+    std::size_t database_observations_written, std::size_t reseed_count,
+    bool reset_too_few_points,
+    TrackKLTNativeReason native_reason) noexcept {
+  try {
+    if (turnsafe_diagnostic_failure_reason() !=
+        TrackKLTDiagnosticFailureReason::kNone) {
+      return;
+    }
+    inject_track_klt_diagnostic_fault_for_test(
+        TrackKLTDiagnosticFaultStage::kSummary);
+    TrackKLTFrameDiagnostics completed = summarize_track_klt_diagnostics(
+        matching, target_points, image_rows, image_cols, native_mask,
+        apply_native_mask, bounds_rule);
+    completed.camera_id = record.camera_id;
+    completed.target_timestamp = record.target_timestamp;
+    completed.source_timestamp_available = record.source_timestamp_available;
+    completed.source_timestamp = record.source_timestamp;
+    completed.database_observations_written = database_observations_written;
+    completed.reseed_count = reseed_count;
+    completed.reset_too_few_points = reset_too_few_points;
+    completed.reset_native_reason = native_reason;
+    inject_track_klt_diagnostic_fault_for_test(
+        TrackKLTDiagnosticFaultStage::kAcceptedIdCopy);
+    completed.native_accepted_feature_ids.assign(accepted_feature_ids.begin(),
+                                                 accepted_feature_ids.end());
+    inject_track_klt_diagnostic_fault_for_test(
+        TrackKLTDiagnosticFaultStage::kFrameAssembly);
+    emit_turnsafe_diagnostic(std::move(completed));
+  } catch (const std::bad_alloc &) {
+    note_turnsafe_diagnostic_failure(TrackKLTDiagnosticFailureReason::kBadAlloc);
+  } catch (const std::exception &) {
+    note_turnsafe_diagnostic_failure(
+        TrackKLTDiagnosticFailureReason::kStdException);
+  } catch (...) {
+    note_turnsafe_diagnostic_failure(
+        TrackKLTDiagnosticFailureReason::kUnknownException);
+  }
+}
 
 void TrackKLT::feed_new_camera(const CameraData &message) {
 
@@ -103,6 +298,9 @@ void TrackKLT::feed_monocular(const CameraData &message, size_t msg_id) {
   cv::Mat img = img_curr.at(cam_id);
   std::vector<cv::Mat> imgpyr = img_pyramid_curr.at(cam_id);
   cv::Mat mask = message.masks.at(msg_id);
+  TrackKLTFrameDiagnostics turnsafe_record;
+  const bool turnsafe_capture = begin_turnsafe_diagnostic_frame(
+      cam_id, message.timestamp, turnsafe_record);
   rT2 = boost::posix_time::microsec_clock::local_time();
 
   // If we didn't have any successful tracks last time, just extract this time
@@ -113,12 +311,20 @@ void TrackKLT::feed_monocular(const CameraData &message, size_t msg_id) {
     std::vector<size_t> good_ids_left;
     perform_detection_monocular(imgpyr, mask, good_left, good_ids_left);
     // Save the current image and pyramid
-    std::lock_guard<std::mutex> lckv(mtx_last_vars);
-    img_last[cam_id] = img;
-    img_pyramid_last[cam_id] = imgpyr;
-    img_mask_last[cam_id] = mask;
-    pts_last[cam_id] = good_left;
-    ids_last[cam_id] = good_ids_left;
+    {
+      std::lock_guard<std::mutex> lckv(mtx_last_vars);
+      img_last[cam_id] = img;
+      img_pyramid_last[cam_id] = imgpyr;
+      img_mask_last[cam_id] = mask;
+      pts_last[cam_id] = good_left;
+      ids_last[cam_id] = good_ids_left;
+    }
+    if (turnsafe_capture) {
+      turnsafe_record.reseed_count = good_left.size();
+      turnsafe_record.reset_native_reason =
+          TrackKLTNativeReason::kInitialOrEmptyReseed;
+      emit_turnsafe_diagnostic(std::move(turnsafe_record));
+    }
     return;
   }
 
@@ -133,20 +339,31 @@ void TrackKLT::feed_monocular(const CameraData &message, size_t msg_id) {
   // Our return success masks, and predicted new features
   std::vector<uchar> mask_ll;
   std::vector<cv::KeyPoint> pts_left_new = pts_left_old;
+  TrackKLTMatchingDiagnostics turnsafe_matching;
 
   // Lets track temporally
-  perform_matching(img_pyramid_last[cam_id], imgpyr, pts_left_old, pts_left_new, cam_id, cam_id, mask_ll);
+  perform_matching(img_pyramid_last[cam_id], imgpyr, pts_left_old, pts_left_new, cam_id, cam_id, mask_ll,
+                   turnsafe_capture ? &turnsafe_matching : nullptr);
   assert(pts_left_new.size() == ids_left_old.size());
   rT4 = boost::posix_time::microsec_clock::local_time();
 
   // If any of our mask is empty, that means we didn't have enough to do ransac, so just return
   if (mask_ll.empty()) {
-    std::lock_guard<std::mutex> lckv(mtx_last_vars);
-    img_last[cam_id] = img;
-    img_pyramid_last[cam_id] = imgpyr;
-    img_mask_last[cam_id] = mask;
-    pts_last[cam_id].clear();
-    ids_last[cam_id].clear();
+    {
+      std::lock_guard<std::mutex> lckv(mtx_last_vars);
+      img_last[cam_id] = img;
+      img_pyramid_last[cam_id] = imgpyr;
+      img_mask_last[cam_id] = mask;
+      pts_last[cam_id].clear();
+      ids_last[cam_id].clear();
+    }
+    if (turnsafe_capture) {
+      const std::vector<std::size_t> no_ids;
+      finish_turnsafe_diagnostic_frame(
+          std::move(turnsafe_record), turnsafe_matching, pts_left_new, img.rows,
+          img.cols, mask, true, TrackKLTBoundsRule::kGreaterEqual, no_ids, 0U,
+          0U, true, TrackKLTNativeReason::kTemporalMaskEmpty);
+    }
     PRINT_ERROR(RED "[KLT-EXTRACTOR]: Failed to get enough points to do RANSAC, resetting.....\n" RESET);
     return;
   }
@@ -189,6 +406,19 @@ void TrackKLT::feed_monocular(const CameraData &message, size_t msg_id) {
   }
   rT5 = boost::posix_time::microsec_clock::local_time();
 
+  if (turnsafe_capture) {
+    const std::size_t reseed_count =
+        pts_left_old.size() > static_cast<std::size_t>(pts_before_detect)
+            ? pts_left_old.size() - static_cast<std::size_t>(pts_before_detect)
+            : 0U;
+    finish_turnsafe_diagnostic_frame(
+        std::move(turnsafe_record), turnsafe_matching, pts_left_new, img.rows,
+        img.cols, mask, true, TrackKLTBoundsRule::kGreaterEqual,
+        good_ids_left, good_left.size(), reseed_count, false,
+        reseed_count > 0U ? TrackKLTNativeReason::kTopOffBeforeTemporalKlt
+                          : TrackKLTNativeReason::kNoReseed);
+  }
+
   // Timing information
   PRINT_ALL("[TIME-KLT]: %.4f seconds for pyramid\n", (rT2 - rT1).total_microseconds() * 1e-6);
   PRINT_ALL("[TIME-KLT]: %.4f seconds for detection (%zu detected)\n", (rT3 - rT2).total_microseconds() * 1e-6,
@@ -214,6 +444,12 @@ void TrackKLT::feed_stereo(const CameraData &message, size_t msg_id_left, size_t
   std::vector<cv::Mat> imgpyr_right = img_pyramid_curr.at(cam_id_right);
   cv::Mat mask_left = message.masks.at(msg_id_left);
   cv::Mat mask_right = message.masks.at(msg_id_right);
+  TrackKLTFrameDiagnostics turnsafe_left_record;
+  TrackKLTFrameDiagnostics turnsafe_right_record;
+  const bool turnsafe_left_capture = begin_turnsafe_diagnostic_frame(
+      cam_id_left, message.timestamp, turnsafe_left_record);
+  const bool turnsafe_right_capture = begin_turnsafe_diagnostic_frame(
+      cam_id_right, message.timestamp, turnsafe_right_record);
   rT2 = boost::posix_time::microsec_clock::local_time();
 
   // If we didn't have any successful tracks last time, just extract this time
@@ -225,23 +461,47 @@ void TrackKLT::feed_stereo(const CameraData &message, size_t msg_id_left, size_t
     perform_detection_stereo(imgpyr_left, imgpyr_right, mask_left, mask_right, cam_id_left, cam_id_right, good_left, good_right,
                              good_ids_left, good_ids_right);
     // Save the current image and pyramid
-    std::lock_guard<std::mutex> lckv(mtx_last_vars);
-    img_last[cam_id_left] = img_left;
-    img_last[cam_id_right] = img_right;
-    img_pyramid_last[cam_id_left] = imgpyr_left;
-    img_pyramid_last[cam_id_right] = imgpyr_right;
-    img_mask_last[cam_id_left] = mask_left;
-    img_mask_last[cam_id_right] = mask_right;
-    pts_last[cam_id_left] = good_left;
-    pts_last[cam_id_right] = good_right;
-    ids_last[cam_id_left] = good_ids_left;
-    ids_last[cam_id_right] = good_ids_right;
+    {
+      std::lock_guard<std::mutex> lckv(mtx_last_vars);
+      img_last[cam_id_left] = img_left;
+      img_last[cam_id_right] = img_right;
+      img_pyramid_last[cam_id_left] = imgpyr_left;
+      img_pyramid_last[cam_id_right] = imgpyr_right;
+      img_mask_last[cam_id_left] = mask_left;
+      img_mask_last[cam_id_right] = mask_right;
+      pts_last[cam_id_left] = good_left;
+      pts_last[cam_id_right] = good_right;
+      ids_last[cam_id_left] = good_ids_left;
+      ids_last[cam_id_right] = good_ids_right;
+    }
+    if (turnsafe_left_capture) {
+      turnsafe_left_record.reseed_count = good_left.size();
+      turnsafe_left_record.reset_native_reason =
+          TrackKLTNativeReason::kInitialOrEmptyReseed;
+    }
+    if (turnsafe_right_capture) {
+      turnsafe_right_record.reseed_count = good_right.size();
+      turnsafe_right_record.reset_native_reason =
+          TrackKLTNativeReason::kInitialOrEmptyReseed;
+    }
+    if (turnsafe_left_capture && turnsafe_right_capture &&
+        turnsafe_right_record.camera_id < turnsafe_left_record.camera_id) {
+      emit_turnsafe_diagnostic(std::move(turnsafe_right_record));
+      emit_turnsafe_diagnostic(std::move(turnsafe_left_record));
+    } else {
+      if (turnsafe_left_capture)
+        emit_turnsafe_diagnostic(std::move(turnsafe_left_record));
+      if (turnsafe_right_capture)
+        emit_turnsafe_diagnostic(std::move(turnsafe_right_record));
+    }
     return;
   }
 
   // First we should make that the last images have enough features so we can do KLT
   // This will "top-off" our number of tracks so always have a constant number
   int pts_before_detect = (int)pts_last[cam_id_left].size();
+  const std::size_t turnsafe_right_before_detect =
+      pts_last[cam_id_right].size();
   auto pts_left_old = pts_last[cam_id_left];
   auto pts_right_old = pts_last[cam_id_right];
   auto ids_left_old = ids_last[cam_id_left];
@@ -255,6 +515,8 @@ void TrackKLT::feed_stereo(const CameraData &message, size_t msg_id_left, size_t
   std::vector<uchar> mask_ll, mask_rr;
   std::vector<cv::KeyPoint> pts_left_new = pts_left_old;
   std::vector<cv::KeyPoint> pts_right_new = pts_right_old;
+  TrackKLTMatchingDiagnostics turnsafe_left_matching;
+  TrackKLTMatchingDiagnostics turnsafe_right_matching;
 
   // Lets track temporally
   parallel_for_(cv::Range(0, 2), LambdaBody([&](const cv::Range &range) {
@@ -263,7 +525,9 @@ void TrackKLT::feed_stereo(const CameraData &message, size_t msg_id_left, size_t
                     perform_matching(img_pyramid_last[is_left ? cam_id_left : cam_id_right], is_left ? imgpyr_left : imgpyr_right,
                                      is_left ? pts_left_old : pts_right_old, is_left ? pts_left_new : pts_right_new,
                                      is_left ? cam_id_left : cam_id_right, is_left ? cam_id_left : cam_id_right,
-                                     is_left ? mask_ll : mask_rr);
+                                     is_left ? mask_ll : mask_rr,
+                                     is_left ? (turnsafe_left_capture ? &turnsafe_left_matching : nullptr)
+                                             : (turnsafe_right_capture ? &turnsafe_right_matching : nullptr));
                   }
                 }));
   rT4 = boost::posix_time::microsec_clock::local_time();
@@ -283,17 +547,34 @@ void TrackKLT::feed_stereo(const CameraData &message, size_t msg_id_left, size_t
 
   // If any of our masks are empty, that means we didn't have enough to do ransac, so just return
   if (mask_ll.empty() && mask_rr.empty()) {
-    std::lock_guard<std::mutex> lckv(mtx_last_vars);
-    img_last[cam_id_left] = img_left;
-    img_last[cam_id_right] = img_right;
-    img_pyramid_last[cam_id_left] = imgpyr_left;
-    img_pyramid_last[cam_id_right] = imgpyr_right;
-    img_mask_last[cam_id_left] = mask_left;
-    img_mask_last[cam_id_right] = mask_right;
-    pts_last[cam_id_left].clear();
-    pts_last[cam_id_right].clear();
-    ids_last[cam_id_left].clear();
-    ids_last[cam_id_right].clear();
+    {
+      std::lock_guard<std::mutex> lckv(mtx_last_vars);
+      img_last[cam_id_left] = img_left;
+      img_last[cam_id_right] = img_right;
+      img_pyramid_last[cam_id_left] = imgpyr_left;
+      img_pyramid_last[cam_id_right] = imgpyr_right;
+      img_mask_last[cam_id_left] = mask_left;
+      img_mask_last[cam_id_right] = mask_right;
+      pts_last[cam_id_left].clear();
+      pts_last[cam_id_right].clear();
+      ids_last[cam_id_left].clear();
+      ids_last[cam_id_right].clear();
+    }
+    const std::vector<std::size_t> no_ids;
+    if (turnsafe_left_capture) {
+      finish_turnsafe_diagnostic_frame(
+          std::move(turnsafe_left_record), turnsafe_left_matching,
+          pts_left_new, img_left.rows, img_left.cols, mask_left, false,
+          TrackKLTBoundsRule::kGreater, no_ids, 0U, 0U, true,
+          TrackKLTNativeReason::kTemporalMaskEmpty);
+    }
+    if (turnsafe_right_capture) {
+      finish_turnsafe_diagnostic_frame(
+          std::move(turnsafe_right_record), turnsafe_right_matching,
+          pts_right_new, img_right.rows, img_right.cols, mask_right, false,
+          TrackKLTBoundsRule::kGreaterEqual, no_ids, 0U, 0U, true,
+          TrackKLTNativeReason::kTemporalMaskEmpty);
+    }
     PRINT_ERROR(RED "[KLT-EXTRACTOR]: Failed to get enough points to do RANSAC, resetting.....\n" RESET);
     return;
   }
@@ -380,6 +661,35 @@ void TrackKLT::feed_stereo(const CameraData &message, size_t msg_id_left, size_t
     ids_last[cam_id_right] = good_ids_right;
   }
   rT6 = boost::posix_time::microsec_clock::local_time();
+
+  const std::size_t turnsafe_left_reseed_count =
+      pts_left_old.size() > static_cast<std::size_t>(pts_before_detect)
+          ? pts_left_old.size() - static_cast<std::size_t>(pts_before_detect)
+          : 0U;
+  const std::size_t turnsafe_right_reseed_count =
+      pts_right_old.size() > turnsafe_right_before_detect
+          ? pts_right_old.size() - turnsafe_right_before_detect
+          : 0U;
+  if (turnsafe_left_capture) {
+    finish_turnsafe_diagnostic_frame(
+        std::move(turnsafe_left_record), turnsafe_left_matching, pts_left_new,
+        img_left.rows, img_left.cols, mask_left, false,
+        TrackKLTBoundsRule::kGreater, good_ids_left, good_left.size(),
+        turnsafe_left_reseed_count, false,
+        turnsafe_left_reseed_count > 0U
+            ? TrackKLTNativeReason::kTopOffBeforeTemporalKlt
+            : TrackKLTNativeReason::kNoReseed);
+  }
+  if (turnsafe_right_capture) {
+    finish_turnsafe_diagnostic_frame(
+        std::move(turnsafe_right_record), turnsafe_right_matching,
+        pts_right_new, img_right.rows, img_right.cols, mask_right, false,
+        TrackKLTBoundsRule::kGreaterEqual, good_ids_right, good_right.size(),
+        turnsafe_right_reseed_count, false,
+        turnsafe_right_reseed_count > 0U
+            ? TrackKLTNativeReason::kTopOffBeforeTemporalKlt
+            : TrackKLTNativeReason::kNoReseed);
+  }
 
   //  // Timing information
   PRINT_ALL("[TIME-KLT]: %.4f seconds for pyramid\n", (rT2 - rT1).total_microseconds() * 1e-6);
@@ -827,14 +1137,23 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
 }
 
 void TrackKLT::perform_matching(const std::vector<cv::Mat> &img0pyr, const std::vector<cv::Mat> &img1pyr, std::vector<cv::KeyPoint> &kpts0,
-                                std::vector<cv::KeyPoint> &kpts1, size_t id0, size_t id1, std::vector<uchar> &mask_out) {
+                                std::vector<cv::KeyPoint> &kpts1, size_t id0, size_t id1, std::vector<uchar> &mask_out,
+                                TrackKLTMatchingDiagnostics *diagnostics) {
 
   // We must have equal vectors
   assert(kpts0.size() == kpts1.size());
 
   // Return if we don't have any points
-  if (kpts0.empty() || kpts1.empty())
+  if (kpts0.empty() || kpts1.empty()) {
+    if (diagnostics != nullptr) {
+      const std::vector<uchar> no_status;
+      const std::vector<float> no_error;
+      capture_turnsafe_matching_diagnostics(
+          kpts0.size(), false, false, no_status, no_error, no_status,
+          *diagnostics);
+    }
     return;
+  }
 
   // Convert keypoints into points (stupid opencv stuff)
   std::vector<cv::Point2f> pts0, pts1;
@@ -848,6 +1167,13 @@ void TrackKLT::perform_matching(const std::vector<cv::Mat> &img0pyr, const std::
   if (pts0.size() < 10) {
     for (size_t i = 0; i < pts0.size(); i++)
       mask_out.push_back((uchar)0);
+    if (diagnostics != nullptr) {
+      const std::vector<uchar> no_status;
+      const std::vector<float> no_error;
+      capture_turnsafe_matching_diagnostics(
+          kpts0.size(), false, false, no_status, no_error, no_status,
+          *diagnostics);
+    }
     return;
   }
 
@@ -882,5 +1208,13 @@ void TrackKLT::perform_matching(const std::vector<cv::Mat> &img0pyr, const std::
   for (size_t i = 0; i < pts0.size(); i++) {
     kpts0.at(i).pt = pts0.at(i);
     kpts1.at(i).pt = pts1.at(i);
+  }
+
+  // Native masks and tracked points are complete before the first diagnostic
+  // allocation or copy. A diagnostic failure can therefore only disable
+  // capture; it cannot truncate or alter the tracker result.
+  if (diagnostics != nullptr) {
+    capture_turnsafe_matching_diagnostics(
+        kpts0.size(), true, true, mask_klt, error, mask_rsc, *diagnostics);
   }
 }

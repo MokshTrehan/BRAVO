@@ -8,13 +8,16 @@
 #include <gtest/gtest.h>
 
 #include "cam/CamRadtan.h"
+#include "core/TurnSafeCallbackInstaller.h"
 #include "feat/Feature.h"
 #include "feat/FeatureInitializer.h"
+#include "track/TrackKLT.h"
 #include "state/State.h"
 #include "state/StateHelper.h"
 #include "types/LandmarkRepresentation.h"
 #include "types/Type.h"
 #include "update/SchurUpdate.h"
+#include "update/TurnSafeDiagnostics.h"
 #include "update/UpdaterHelper.h"
 #include "update/UpdaterMSCKF.h"
 #include "update/UpdaterMSCKFPreview.h"
@@ -40,6 +43,7 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
+#include <unistd.h>
 
 namespace ov_msckf {
 
@@ -133,6 +137,40 @@ const std::array<double, 39> kExpectedIncrement = {{
     8.1273006007104664e-06,  8.7109030947243962e-07,
     2.1631117283029831e-06,  5.4713850238138913e-06,
     -9.7356198631762872e-07}};
+
+std::string temporary_turnsafe_path() {
+  char pattern[] = "/tmp/turnsafe_cp1_install_XXXXXX";
+  const int descriptor = ::mkstemp(pattern);
+  EXPECT_GE(descriptor, 0);
+  if (descriptor >= 0) ::close(descriptor);
+  ::unlink(pattern);
+  return pattern;
+}
+
+ov_msckf::TurnSafeDiagnosticsOptions turnsafe_options(
+    const std::string &path) {
+  ov_msckf::TurnSafeDiagnosticsOptions options;
+  options.capture_requested = true;
+  options.output_path = path;
+  options.frozen_base_sha = "frozen";
+  options.build_manifest_sha256 = "build";
+  options.binary_sha256 = "binary";
+  options.config_sha256 = "config";
+  options.calibration_sha256 = "calibration";
+  auto &configuration = options.resolved_configuration;
+  configuration.one_pass_schur = true;
+  configuration.fej_enabled = true;
+  configuration.global_3d_transient = true;
+  configuration.all_cameras_radtan = true;
+  configuration.camera_extrinsic_calibration_off = true;
+  configuration.camera_intrinsic_calibration_off = true;
+  configuration.camera_time_offset_calibration_off = true;
+  configuration.stereo_enabled = true;
+  configuration.stereo_available = true;
+  configuration.require_target_stereo_range = true;
+  configuration.camera_count = 2U;
+  return options;
+}
 
 class InspectingCamRadtan : public ov_core::CamRadtan {
 public:
@@ -3718,6 +3756,279 @@ TEST(CP1OnePassRegression,
     expect_same_bytes(fixture.state_order[index]->value(), values_before[index]);
     expect_same_bytes(fixture.state_order[index]->fej(), fej_before[index]);
   }
+}
+
+TEST(CP1OnePassRegression,
+     TurnSafeAttemptStagesFollowDetachedWorkingCopies) {
+  Fixture fixture = make_fixture();
+  std::vector<std::shared_ptr<Feature>> features = {
+      fixture.accepted_feature, fixture.rejected_feature};
+
+  std::size_t callback_count = 0U;
+  ov_msckf::TurnSafeUpdateRecord captured;
+  UpdaterMSCKF updater(fixture.updater_options,
+                       fixture.initializer_options);
+  ASSERT_TRUE(updater.set_turnsafe_t0_callback(
+      [&](ov_msckf::TurnSafeUpdateRecord record) {
+        ++callback_count;
+        captured = std::move(record);
+      }));
+
+  updater.update(fixture.state, features);
+
+  ASSERT_EQ(callback_count, 1U);
+  ASSERT_EQ(captured.attempts.size(), 2U);
+  const auto accepted = std::find_if(
+      captured.attempts.begin(), captured.attempts.end(),
+      [](const ov_msckf::TurnSafeFullTrackAttempt &attempt) {
+        return attempt.feature_id == kAcceptedFeatureId;
+      });
+  ASSERT_NE(accepted, captured.attempts.end());
+  EXPECT_TRUE(accepted->triangulation.attempted);
+  EXPECT_TRUE(accepted->triangulation.native_success);
+  EXPECT_TRUE(accepted->refinement.attempted);
+  EXPECT_TRUE(accepted->refinement.native_success);
+  EXPECT_TRUE(accepted->schur.attempted);
+  EXPECT_TRUE(accepted->schur.native_accepted);
+  EXPECT_TRUE(accepted->schur.raw_rows_available);
+  EXPECT_TRUE(accepted->schur.degrees_of_freedom_available);
+  EXPECT_GT(accepted->schur.raw_rows, 0);
+  EXPECT_GT(accepted->schur.degrees_of_freedom, 0);
+  EXPECT_TRUE(accepted->full_nis.attempted);
+  EXPECT_EQ(accepted->full_nis.native_stage, "decision");
+  EXPECT_TRUE(accepted->full_nis.degrees_of_freedom_available);
+  EXPECT_TRUE(accepted->full_nis.statistic_available);
+  EXPECT_TRUE(accepted->full_nis.threshold_available);
+  EXPECT_TRUE(accepted->accepted_at_native_feature_gate);
+  EXPECT_TRUE(accepted->native_feature_row_count_available);
+  EXPECT_GT(accepted->native_feature_row_count, 0U);
+  EXPECT_TRUE(accepted->accepted_full_factor);
+  EXPECT_EQ(accepted->accepted_full_row_count,
+            accepted->native_feature_row_count);
+  EXPECT_EQ(accepted->native_terminal_status, "FULL_ACCEPTED");
+}
+
+TEST(CP1OnePassRegression,
+     TurnSafeUpdaterFaultsCannotChangeNativeDecisionOrFinalization) {
+  Fixture capture_off = make_fixture();
+  std::vector<std::shared_ptr<Feature>> capture_off_features = {
+      capture_off.accepted_feature, capture_off.rejected_feature};
+  UpdaterMSCKF capture_off_updater(capture_off.updater_options,
+                                   capture_off.initializer_options);
+  capture_off_updater.update(capture_off.state, capture_off_features);
+
+  const Eigen::MatrixXd expected_covariance =
+      StateHelper::get_full_covariance(capture_off.state);
+  std::vector<Eigen::MatrixXd> expected_values;
+  std::vector<Eigen::MatrixXd> expected_fej;
+  for (const auto &variable : capture_off.state_order) {
+    expected_values.push_back(variable->value());
+    expected_fej.push_back(variable->fej());
+  }
+  std::vector<std::size_t> expected_accepted_ids;
+  for (const auto &feature : capture_off_features) {
+    expected_accepted_ids.push_back(feature->featid);
+  }
+  const Feature expected_accepted_feature =
+      *capture_off.accepted_feature;
+  const Feature expected_rejected_feature =
+      *capture_off.rejected_feature;
+
+  // A successful capture binds the exact lifecycle disposition corresponding
+  // to the capture-off native result used below as the byte-exact oracle.
+  Fixture successful_capture = make_fixture();
+  std::vector<std::shared_ptr<Feature>> successful_features = {
+      successful_capture.accepted_feature,
+      successful_capture.rejected_feature};
+  ov_msckf::TurnSafeUpdateRecord successful_record;
+  std::size_t successful_callback_count = 0U;
+  UpdaterMSCKF successful_updater(successful_capture.updater_options,
+                                  successful_capture.initializer_options);
+  ASSERT_TRUE(successful_updater.set_turnsafe_t0_callback(
+      [&](ov_msckf::TurnSafeUpdateRecord record) {
+        ++successful_callback_count;
+        successful_record = std::move(record);
+      }));
+  successful_updater.update(successful_capture.state, successful_features);
+  ASSERT_EQ(successful_callback_count, 1U);
+  EXPECT_EQ(successful_record.baseline_accepted_ids,
+            expected_accepted_ids);
+  EXPECT_EQ(successful_record.mean_commit_count, 1U);
+  EXPECT_EQ(successful_record.covariance_commit_count, 1U);
+  EXPECT_EQ(successful_record.feature_finalization_count, 1U);
+  expect_same_bytes(
+      StateHelper::get_full_covariance(successful_capture.state),
+      expected_covariance);
+
+  const std::array<ov_msckf::TurnSafeDiagnosticFaultStage, 6U> stages{{
+      ov_msckf::TurnSafeDiagnosticFaultStage::kAttemptCopy,
+      ov_msckf::TurnSafeDiagnosticFaultStage::kInitializerProjection,
+      ov_msckf::TurnSafeDiagnosticFaultStage::kSchurProjection,
+      ov_msckf::TurnSafeDiagnosticFaultStage::kNisProjection,
+      ov_msckf::TurnSafeDiagnosticFaultStage::kPriorCopy,
+      ov_msckf::TurnSafeDiagnosticFaultStage::kUpdaterPublication,
+  }};
+  const std::array<ov_msckf::TurnSafeDiagnosticFaultKind, 3U> kinds{{
+      ov_msckf::TurnSafeDiagnosticFaultKind::kBadAlloc,
+      ov_msckf::TurnSafeDiagnosticFaultKind::kStdException,
+      ov_msckf::TurnSafeDiagnosticFaultKind::kUnknown,
+  }};
+  for (const auto stage : stages) {
+    for (const auto kind : kinds) {
+      SCOPED_TRACE(static_cast<int>(stage));
+      SCOPED_TRACE(static_cast<int>(kind));
+      Fixture faulted = make_fixture();
+      std::vector<std::shared_ptr<Feature>> faulted_features = {
+          faulted.accepted_feature, faulted.rejected_feature};
+      std::size_t callback_count = 0U;
+      UpdaterMSCKF updater(faulted.updater_options,
+                           faulted.initializer_options);
+      ASSERT_TRUE(updater.set_turnsafe_t0_callback(
+          [&](ov_msckf::TurnSafeUpdateRecord) { ++callback_count; }));
+      ov_msckf::set_turnsafe_diagnostic_fault_for_test(stage, kind);
+      EXPECT_NO_THROW(updater.update(faulted.state, faulted_features));
+      ov_msckf::clear_turnsafe_diagnostic_fault_for_test();
+
+      EXPECT_EQ(callback_count, 0U);
+      EXPECT_NE(updater.turnsafe_t0_failure_reason(),
+                ov_msckf::TurnSafeUpdaterDiagnosticFailureReason::kNone);
+      EXPECT_EQ(updater.turnsafe_t0_failure_count(), 1U);
+      expect_same_bytes(StateHelper::get_full_covariance(faulted.state),
+                        expected_covariance);
+      ASSERT_EQ(faulted.state_order.size(), expected_values.size());
+      for (std::size_t index = 0U; index < faulted.state_order.size();
+           ++index) {
+        expect_same_bytes(faulted.state_order[index]->value(),
+                          expected_values[index]);
+        expect_same_bytes(faulted.state_order[index]->fej(),
+                          expected_fej[index]);
+      }
+      std::vector<std::size_t> accepted_ids;
+      for (const auto &feature : faulted_features) {
+        accepted_ids.push_back(feature->featid);
+      }
+      EXPECT_EQ(accepted_ids, expected_accepted_ids);
+      expect_same_feature_observations(*faulted.accepted_feature,
+                                       expected_accepted_feature);
+      expect_same_feature_observations(*faulted.rejected_feature,
+                                       expected_rejected_feature);
+    }
+  }
+}
+
+TEST(CP1OnePassRegression,
+     TurnSafeCallbackInstallationFaultsPreserveNativeUpdate) {
+  Fixture capture_off = make_fixture();
+  std::vector<std::shared_ptr<Feature>> capture_off_features = {
+      capture_off.accepted_feature, capture_off.rejected_feature};
+  UpdaterMSCKF capture_off_updater(capture_off.updater_options,
+                                   capture_off.initializer_options);
+  capture_off_updater.update(capture_off.state, capture_off_features);
+  const Eigen::MatrixXd expected_covariance =
+      StateHelper::get_full_covariance(capture_off.state);
+  std::vector<Eigen::MatrixXd> expected_values;
+  std::vector<Eigen::MatrixXd> expected_fej;
+  for (const auto &variable : capture_off.state_order) {
+    expected_values.push_back(variable->value());
+    expected_fej.push_back(variable->fej());
+  }
+  std::vector<std::size_t> expected_accepted_ids;
+  for (const auto &feature : capture_off_features) {
+    expected_accepted_ids.push_back(feature->featid);
+  }
+
+  const std::array<ov_msckf::TurnSafeDiagnosticFaultStage, 2U> stages{{
+      ov_msckf::TurnSafeDiagnosticFaultStage::kTrackerCallbackInstallation,
+      ov_msckf::TurnSafeDiagnosticFaultStage::kUpdaterCallbackInstallation,
+  }};
+  const std::array<ov_msckf::TurnSafeDiagnosticFaultKind, 3U> kinds{{
+      ov_msckf::TurnSafeDiagnosticFaultKind::kBadAlloc,
+      ov_msckf::TurnSafeDiagnosticFaultKind::kStdException,
+      ov_msckf::TurnSafeDiagnosticFaultKind::kUnknown,
+  }};
+  for (const auto stage : stages) {
+    for (const auto kind : kinds) {
+      SCOPED_TRACE(static_cast<int>(stage));
+      SCOPED_TRACE(static_cast<int>(kind));
+      Fixture faulted = make_fixture();
+      std::vector<std::shared_ptr<Feature>> faulted_features = {
+          faulted.accepted_feature, faulted.rejected_feature};
+      UpdaterMSCKF updater(faulted.updater_options,
+                           faulted.initializer_options);
+      std::unordered_map<std::size_t,
+                         std::shared_ptr<ov_core::CamBase>> cameras{{
+          0U, faulted.camera}};
+      ov_core::TrackKLT tracker(
+          cameras, 40, 0, false, ov_core::TrackBase::NONE, 10, 4, 4, 5);
+      const std::string path = temporary_turnsafe_path();
+      auto sink = ov_msckf::TurnSafeDiagnostics::Create(
+          turnsafe_options(path));
+      ASSERT_TRUE(sink && sink->active());
+
+      ov_msckf::set_turnsafe_diagnostic_fault_for_test(stage, kind);
+      ov_msckf::TurnSafeCallbackInstallationResult installation;
+      EXPECT_NO_THROW(installation = ov_msckf::install_turnsafe_t0_callbacks(
+                          sink, &tracker, &updater));
+      ov_msckf::clear_turnsafe_diagnostic_fault_for_test();
+      ASSERT_FALSE(installation.success);
+      EXPECT_FALSE(installation.tracker_callback_retained);
+      EXPECT_FALSE(installation.updater_callback_retained);
+      EXPECT_FALSE(sink->active());
+
+      updater.update(faulted.state, faulted_features);
+      expect_same_bytes(StateHelper::get_full_covariance(faulted.state),
+                        expected_covariance);
+      ASSERT_EQ(faulted.state_order.size(), expected_values.size());
+      for (std::size_t index = 0U; index < faulted.state_order.size();
+           ++index) {
+        expect_same_bytes(faulted.state_order[index]->value(),
+                          expected_values[index]);
+        expect_same_bytes(faulted.state_order[index]->fej(),
+                          expected_fej[index]);
+      }
+      std::vector<std::size_t> accepted_ids;
+      for (const auto &feature : faulted_features) {
+        accepted_ids.push_back(feature->featid);
+      }
+      EXPECT_EQ(accepted_ids, expected_accepted_ids);
+      EXPECT_FALSE(sink->Finalize());
+      ::unlink(path.c_str());
+      ::unlink((path + ".tmp").c_str());
+    }
+  }
+}
+
+TEST(CP1OnePassRegression,
+     TurnSafeNisRejectionRetainsNativeRowsButContributesNone) {
+  Fixture fixture = make_fixture();
+  fixture.updater_options.chi2_multipler = 0.0;
+  std::vector<std::shared_ptr<Feature>> features = {
+      fixture.accepted_feature};
+  ov_msckf::TurnSafeUpdateRecord captured;
+  std::size_t callback_count = 0U;
+  UpdaterMSCKF updater(fixture.updater_options,
+                       fixture.initializer_options);
+  ASSERT_TRUE(updater.set_turnsafe_t0_callback(
+      [&](ov_msckf::TurnSafeUpdateRecord record) {
+        ++callback_count;
+        captured = std::move(record);
+      }));
+
+  updater.update(fixture.state, features);
+
+  ASSERT_EQ(callback_count, 1U);
+  ASSERT_EQ(captured.attempts.size(), 1U);
+  const auto &attempt = captured.attempts.front();
+  EXPECT_TRUE(attempt.full_nis.attempted);
+  EXPECT_FALSE(attempt.full_nis.lifecycle_accept);
+  EXPECT_EQ(attempt.full_nis.decision, "REJECTED");
+  EXPECT_TRUE(attempt.native_feature_row_count_available);
+  EXPECT_GT(attempt.native_feature_row_count, 0U);
+  EXPECT_FALSE(attempt.accepted_at_native_feature_gate);
+  EXPECT_FALSE(attempt.accepted_full_factor);
+  EXPECT_EQ(attempt.accepted_full_row_count, 0U);
+  EXPECT_EQ(attempt.full_outcome,
+            ov_msckf::TurnSafeFullOutcome::kFullNisRejected);
 }
 
 TEST(CP1OnePassRegression,

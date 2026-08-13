@@ -172,3 +172,113 @@ Session 0.5 stops here. Session 1 may begin only after the exact token
 passive T0 instrumentation; this handover does not authorize factor rows,
 decision changes, outcome-driven adapter/configuration changes, or runtime
 ground truth.
+
+---
+
+# TurnSafe v6 Session 1 handover
+
+Status: **PARTIAL at the Session 1 hard stop**
+
+Session 1 started from the required clean branch identity
+`7b965c3b5f43fe1be72858ad5a9149a21b86481b`, tree
+`96ca875a32f63733743512cf25e1e0b94446b64a`, under authorization
+`APPROVE_SESSION_1_T0_INSTRUMENTATION_KAIST_READY`. The entry, frozen
+Session-0.5 evidence, 11/11 adapter classification, and MH_01 digest
+`8525ee08a3e7b00261bcd5089cefd6b51c279747ecb26bed9505edc5e890010a`
+were independently verified.
+
+The unchanged start reproduced in a fresh Release build. Direct CP1 passed
+35/35, full registered CTest passed 28/28, the affected registered CP2 subset
+passed 4/4, and the Session-0.5 Python suite passed 86/86. A candidate passive
+implementation was then built successfully; direct CP1 again passed 35/35,
+the new T0 unit suite passed 8/8, full registered CTest passed 29/29, and the
+extended campaign Python suite passed 19/19.
+
+The candidate attempts default-off, explicit-path JSONL capture; passive KLT,
+bounds/mask, and fundamental-matrix counters; initializer/refinement, Schur,
+and full-NIS native mirrors; detached value-only terminal attempts; one-prior
+primitive capture; and typed fail-closed shadow reasons. It adds no factor row,
+proposal statistic, state/covariance write, lifecycle decision, or Session-2
+branch logic. Consensus-dependent selection remains unavailable because its
+threshold set is not frozen.
+
+No candidate source commit was made. The required precommit replay gate could
+not start in this execution environment. The first MH_01 launch failed before
+estimator construction when ROS network-interface enumeration returned
+`EPERM`. A loopback-only `netifaces` shim removed that enumeration, but the
+second launch again failed before estimator construction because ROS could not
+create its local XML-RPC socket (`Operation not permitted`). This is classified
+ENGINEERING, not CORRECTNESS or SCIENTIFIC. It does not constitute capture-off
+parity and cannot be papered over, so source freeze, MH_01 capture-on/off,
+minimum KAIST parity, all-eleven capture, aggregation, and PASS classification
+were not attempted.
+
+After the hard stop, the required independent read-only diff review found
+blocking candidate CORRECTNESS defects, each independently verified by the
+primary agent: diagnostic allocations can throw through the live KLT path;
+valid-clone and target-stereo funnel counts are eligibility-filtered and use
+the wrong aggregation granularity; explicit candidate observation/stereo
+evidence and required stage/no-full-update fields are absent; small-group and
+supported-configuration values are hardcoded; candidates are not globally
+canonical-sorted; and source SHA/tree declarations are not independently
+bound to Git/build provenance. These defects were not repaired after the hard
+stop. Passing local tests therefore do not establish candidate conformance.
+
+The candidate tracked tree remains intentionally uncommitted and dirty because
+the prompt forbids a source commit before replay parity. The index is clean.
+No dataset byte was modified, no holdout/private path was accessed, and no
+content below `scripts/cp2/` was inspected. Session 2 was not begun.
+
+Authoritative Session-1 evidence is under
+`artifacts/turnsafe/session_01/`. Continue only in an environment that permits
+an isolated loopback ROS master. First repair the recorded correctness defects
+under an authorized continuation and rerun focused gates; then rerun the
+precommit replay gates and commit only if all gates pass.
+
+Required next disposition: `SESSION_1_REVIEW_REQUIRED`.
+
+---
+
+# TurnSafe v6 Session 1R repair handover
+
+Authorization: `APPROVE_SESSION_1R_REPAIR_AND_REPLAY`
+
+Session 1R starts from commit
+`7b965c3b5f43fe1be72858ad5a9149a21b86481b` and tree
+`96ca875a32f63733743512cf25e1e0b94446b64a`, preserving the deliberately
+uncommitted Session-1 candidate. The repair is committed only if the precommit
+MH_01 and minimum-KAIST parity gates pass. Because a commit cannot embed its
+own SHA, the exact resulting commit/tree and clean postcommit replay results
+are bound in `artifacts/turnsafe/session_01r/GIT_END.txt`,
+`SOURCE_PROVENANCE.md`, `PARITY_REPORT.md`, and `SESSION1R_REPORT.md`.
+
+This continuation closes only the eight Session-1 review findings:
+
+- diagnostic allocation, projection, grouping, serialization, publication,
+  and sink failures are contained behind fixed first-reason and saturating
+  counters and cannot alter native masks, IDs, rows, decisions, or lifecycle;
+- clone-pair populations precede typed eligibility, while target stereo is
+  retained and aggregated per candidate, attempt, and group;
+- candidates retain exact source, target, and target-time stereo observation
+  keys, pixels, normalized values, and camera/calibration identities;
+- group cardinalities retain the exact `n<2`, `n=2,3`, and `n>=4` meanings;
+- support is recomputed from resolved one-pass Schur, FEJ, GLOBAL_3D,
+  CamRadtan, fixed-calibration, stereo, and target-range options;
+- initializer, refinement, Schur, NIS, accepted-row, numerical, and causal
+  no-full-visual-update fields remain distinct and honest about availability;
+- candidates and groups use the global canonical key in `t0_schema.md`; and
+- configure-time source identity, cache/build identity, runtime binaries,
+  dynamic libraries, schema, configuration, calibration, and source state are
+  independently bound and checked before and after capture.
+
+No factor row, threshold, estimator gate, fallback, update proposal, state or
+covariance write, feature-lifecycle decision, Session-2 branch, or scientific
+tuning is introduced. The full eleven-sequence KAIST campaign is explicitly
+not run in Session 1R. The authoritative command/test/replay logs and dataset
+before/after hashes remain untracked under
+`artifacts/turnsafe/session_01r/`; generated build and replay scratch remains
+under `.turnsafe-work/session_01r/`.
+
+If and only if the stop packet classifies Session 1R PASS, the next required
+authorization is `APPROVE_SESSION_1C_FROZEN_KAIST_CAMPAIGN`. Otherwise the
+required disposition remains `SESSION_1_REVIEW_REQUIRED`.

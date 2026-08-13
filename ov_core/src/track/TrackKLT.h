@@ -23,6 +23,11 @@
 #define OV_CORE_TRACK_KLT_H
 
 #include "TrackBase.h"
+#include "TrackKLTDiagnostics.h"
+
+#include <atomic>
+#include <functional>
+#include <mutex>
 
 namespace ov_core {
 
@@ -39,6 +44,9 @@ namespace ov_core {
 class TrackKLT : public TrackBase {
 
 public:
+  using DiagnosticsCallback =
+      std::function<void(TrackKLTFrameDiagnostics)>;
+
   /**
    * @brief Public constructor with configuration variables
    * @param cameras camera calibration object which has all camera intrinsics in it
@@ -61,6 +69,13 @@ public:
    * @param message Contains our timestamp, images, and camera ids
    */
   void feed_new_camera(const CameraData &message) override;
+
+  /** Install or clear the passive value-only observer before camera feeds. */
+  bool set_turnsafe_diagnostics_callback(DiagnosticsCallback callback) noexcept;
+
+  TrackKLTDiagnosticFailureReason turnsafe_diagnostic_failure_reason()
+      const noexcept;
+  std::uint64_t turnsafe_diagnostic_failure_count() const noexcept;
 
 protected:
   /**
@@ -129,7 +144,30 @@ protected:
    * If the second vector is non-empty, it will be used as an initial guess of where the keypoints are in the second image.
    */
   void perform_matching(const std::vector<cv::Mat> &img0pyr, const std::vector<cv::Mat> &img1pyr, std::vector<cv::KeyPoint> &pts0,
-                        std::vector<cv::KeyPoint> &pts1, size_t id0, size_t id1, std::vector<uchar> &mask_out);
+                        std::vector<cv::KeyPoint> &pts1, size_t id0, size_t id1, std::vector<uchar> &mask_out,
+                        TrackKLTMatchingDiagnostics *diagnostics = nullptr);
+
+  bool begin_turnsafe_diagnostic_frame(size_t camera_id, double target_timestamp,
+                                       TrackKLTFrameDiagnostics &record) noexcept;
+  void capture_turnsafe_matching_diagnostics(
+      std::size_t temporal_input_points, bool klt_performed,
+      bool ransac_performed, const std::vector<uchar> &klt_status,
+      const std::vector<float> &klt_error,
+      const std::vector<uchar> &ransac_status,
+      TrackKLTMatchingDiagnostics &output) noexcept;
+  void finish_turnsafe_diagnostic_frame(
+      TrackKLTFrameDiagnostics &&record,
+      const TrackKLTMatchingDiagnostics &matching,
+      const std::vector<cv::KeyPoint> &target_points, int image_rows,
+      int image_cols, const cv::Mat &native_mask, bool apply_native_mask,
+      TrackKLTBoundsRule bounds_rule,
+      const std::vector<std::size_t> &accepted_feature_ids,
+      std::size_t database_observations_written, std::size_t reseed_count,
+      bool reset_too_few_points,
+      TrackKLTNativeReason native_reason) noexcept;
+  void emit_turnsafe_diagnostic(TrackKLTFrameDiagnostics &&record) noexcept;
+  void note_turnsafe_diagnostic_failure(
+      TrackKLTDiagnosticFailureReason reason) noexcept;
 
   // Parameters for our FAST grid detector
   int threshold;
@@ -147,6 +185,14 @@ protected:
   std::map<size_t, std::vector<cv::Mat>> img_pyramid_last;
   std::map<size_t, cv::Mat> img_curr;
   std::map<size_t, std::vector<cv::Mat>> img_pyramid_curr;
+
+  // Passive observer state. It never participates in tracker decisions.
+  std::mutex turnsafe_diagnostics_mutex;
+  DiagnosticsCallback turnsafe_diagnostics_callback;
+  std::map<size_t, double> turnsafe_previous_timestamp;
+  std::atomic<std::uint8_t> turnsafe_diagnostics_failure_reason{
+      static_cast<std::uint8_t>(TrackKLTDiagnosticFailureReason::kNone)};
+  std::atomic<std::uint64_t> turnsafe_diagnostics_failure_count{0U};
 };
 
 } // namespace ov_core
