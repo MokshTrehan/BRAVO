@@ -29,6 +29,7 @@
 #include "utils/sensor_data.h"
 
 #include "utils/NoiseManager.h"
+#include "update/TurnSafeTypes.h"
 
 namespace ov_msckf {
 
@@ -89,6 +90,14 @@ public:
       }
     }
   }
+
+  /**
+   * Copy only the causal native-order support surrounding [start,end]. This is
+   * a passive Session-1E accessor: it never calls the propagation selector and
+   * never consumes, erases, sorts, resamples, or otherwise mutates imu_data.
+   */
+  TurnSafeImuSupportSnapshot turnsafe_copy_imu_support(
+      double start, double end);
 
   /**
    * @brief Will invalidate the cache used for fast propagation

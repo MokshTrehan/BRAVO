@@ -14,6 +14,8 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 
 SOURCE_SCHEMA = "turnsafe.source_snapshot.v1"
 CONFIGURE_SCHEMA = "turnsafe.configure_provenance.v1"
+T0_BASE_SCHEMA = "turnsafe.t0.v1"
+T0_EVENT_EXTENSION_SCHEMA = "turnsafe.t0.event_extension.v1"
 
 
 class ProvenanceError(RuntimeError):
@@ -111,6 +113,10 @@ def generate(args: argparse.Namespace) -> Dict[str, Any]:
             ],
         },
         "diagnostic_schema_sha256": _sha256_file(schema_path),
+        "diagnostic_schema_identifiers": {
+            "base": T0_BASE_SCHEMA,
+            "event_extension": T0_EVENT_EXTENSION_SCHEMA,
+        },
         "configuration": configuration,
     }
     build_provenance_id = hashlib.sha256(
@@ -135,6 +141,8 @@ static constexpr bool kSourceDirty = %s;
 static constexpr const char kBuildProvenanceId[] = %s;
 static constexpr const char kConfigureManifestSha256[] = %s;
 static constexpr const char kDiagnosticSchemaSha256[] = %s;
+static constexpr const char kDiagnosticBaseSchema[] = %s;
+static constexpr const char kDiagnosticEventExtensionSchema[] = %s;
 } } // namespace ov_msckf::turnsafe_build
 #endif
 """ % (
@@ -145,6 +153,8 @@ static constexpr const char kDiagnosticSchemaSha256[] = %s;
         _cpp_string(build_provenance_id),
         _cpp_string(manifest_sha256),
         _cpp_string(str(descriptor["diagnostic_schema_sha256"])),
+        _cpp_string(T0_BASE_SCHEMA),
+        _cpp_string(T0_EVENT_EXTENSION_SCHEMA),
     )
     _write_atomic(Path(args.output_manifest), manifest_payload)
     _write_atomic(Path(args.output_header), header)

@@ -28,6 +28,8 @@ class Feature;
 namespace ov_msckf {
 
 struct MSCKFUpdatePriorSnapshot;
+class Propagator;
+class State;
 
 enum class TurnSafeDiagnosticFaultStage : std::uint8_t {
   kNone,
@@ -42,6 +44,13 @@ enum class TurnSafeDiagnosticFaultStage : std::uint8_t {
   kFrontendCopy,
   kUpdateCopy,
   kCandidateGrouping,
+  kImuSupportCopy,
+  kEndpointInterpolation,
+  kGyroIntegration,
+  kSo3Composition,
+  kCallbackMetadata,
+  kGroupProvenance,
+  kExtensionSerialization,
   kHeaderSerialization,
   kCallbackSerialization,
   kSinkOpen,
@@ -89,6 +98,7 @@ enum class TurnSafeCaptureDisableReason : std::uint8_t {
   kDiagnosticUnknownException,
   kFrontendCaptureFailure,
   kUpdaterCaptureFailure,
+  kEventExtensionRequiresPassiveCapture,
 };
 
 const char *turnsafe_capture_disable_reason_name(
@@ -112,8 +122,14 @@ struct TurnSafeResolvedConfiguration {
 
 struct TurnSafeDiagnosticsOptions {
   bool capture_requested = false;
+  bool capture_causal_imu_intervals = false;
+  bool capture_outcome_association_keys = false;
+  bool capture_group_bearing_provenance = false;
   std::string output_path;
   std::string schema_version = "turnsafe.t0.v1";
+  std::string event_extension_schema_version =
+      "turnsafe.t0.event_extension.v1";
+  std::string run_identity;
   std::string frozen_base_sha;
   // Caller values are expectations only. Runtime identity comes from the
   // generated build-provenance header and conflicts fail closed.
@@ -155,9 +171,16 @@ public:
   std::uint64_t failure_count() const noexcept;
 
   void BeginCallback(double timestamp) noexcept;
+  void BeginCallback(double timestamp, const std::vector<int> &camera_frame_ids,
+                     bool estimator_initialized, bool output_ready,
+                     const State *state,
+                     Propagator *propagator) noexcept;
   void RecordFrontend(ov_core::TrackKLTFrameDiagnostics &&record) noexcept;
   void RecordUpdate(TurnSafeUpdateRecord &&record) noexcept;
   void EndCallback() noexcept;
+  void EndCallback(bool estimator_initialized, bool output_ready,
+                   const State *state,
+                   bool callback_incomplete = false) noexcept;
   void ReportComponentFailure(TurnSafeCaptureDisableReason reason) noexcept;
   bool Finalize() noexcept;
 
@@ -171,6 +194,14 @@ public:
   static TurnSafeAcuteCertificateResult EvaluateAcuteCertificate(
       double translation_ucb, double range_lcb,
       const Eigen::Matrix2d &bearing_covariance);
+  static TurnSafeCausalImuInterval EvaluateCausalImuInterval(
+      std::uint64_t interval_id, const std::vector<int> &camera_frame_ids,
+      bool previous_timestamp_available, double previous_timestamp,
+      double current_timestamp, bool force_initialization_boundary,
+      bool imu_time_offset_available, double imu_time_offset_s,
+      bool gyro_bias_available,
+      const std::array<double, 3U> &gyro_bias_rad_s,
+      const TurnSafeImuSupportSnapshot &support);
 
 private:
   struct CallbackRecord {
@@ -179,6 +210,11 @@ private:
     std::vector<ov_core::TrackKLTFrameDiagnostics> frontend;
     bool update_available = false;
     TurnSafeUpdateRecord update;
+    bool event_extension_available = false;
+    bool initialized_before_available = false;
+    bool initialized_before = false;
+    TurnSafeCausalImuInterval causal_imu_interval;
+    TurnSafeOutcomeAssociationKeys outcome_association_keys;
     bool no_full_visual_update_duration_available = false;
     double no_full_visual_update_duration = 0.0;
     enum class DurationReason : std::uint8_t {
@@ -200,6 +236,16 @@ private:
   void DisableForCurrentException() noexcept;
   std::string SerializeHeader() const;
   std::string SerializeCallback(const CallbackRecord &record);
+  void BeginCallbackImpl(double timestamp,
+                         const std::vector<int> *camera_frame_ids,
+                         bool estimator_initialized, bool output_ready,
+                         const State *state,
+                         Propagator *propagator) noexcept;
+  void EndCallbackImpl(bool initialized_available,
+                       bool estimator_initialized, bool output_ready,
+                       const State *state,
+                       bool callback_incomplete) noexcept;
+  bool EventExtensionRequested() const noexcept;
 
   TurnSafeDiagnosticsOptions options_;
   mutable std::mutex mutex_;
@@ -218,6 +264,11 @@ private:
   double last_full_visual_timestamp_ = 0.0;
   bool last_camera_timestamp_available_ = false;
   double last_camera_timestamp_ = 0.0;
+  bool previous_processed_callback_available_ = false;
+  double previous_processed_callback_timestamp_ = 0.0;
+  bool previous_initialized_after_available_ = false;
+  bool previous_initialized_after_ = false;
+  bool next_callback_initialization_boundary_ = false;
 };
 
 } // namespace ov_msckf

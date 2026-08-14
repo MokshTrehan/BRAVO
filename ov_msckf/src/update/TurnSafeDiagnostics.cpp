@@ -8,6 +8,9 @@
 #include "TurnSafeBuildProvenance.generated.h"
 #include "UpdaterMSCKFPreview.h"
 #include "feat/Feature.h"
+#include "state/Propagator.h"
+#include "state/State.h"
+#include "utils/quat_ops.h"
 
 #include <Eigen/Eigenvalues>
 
@@ -110,6 +113,24 @@ bool matrix_value_valid(const TurnSafeMatrixValue &matrix) {
                      [](double value) { return std::isfinite(value); });
 }
 
+bool camera_provenance_valid(const TurnSafePriorCameraValue &camera) {
+  if (camera.width <= 0 || camera.height <= 0 || camera.model != "RADTAN" ||
+      !matrix_value_valid(camera.intrinsic_value) ||
+      camera.intrinsic_value.rows != 8U ||
+      camera.intrinsic_value.cols != 1U ||
+      !matrix_value_valid(camera.extrinsic_value) ||
+      camera.extrinsic_value.rows != 7U ||
+      camera.extrinsic_value.cols != 1U) {
+    return false;
+  }
+  double quaternion_squared_norm = 0.0;
+  for (std::size_t index = 0U; index < 4U; ++index)
+    quaternion_squared_norm += camera.extrinsic_value.values[index] *
+                               camera.extrinsic_value.values[index];
+  return std::isfinite(quaternion_squared_norm) &&
+         std::fabs(quaternion_squared_norm - 1.0) <= 1e-10;
+}
+
 std::string matrix_json(const TurnSafeMatrixValue &matrix) {
   if (!matrix_value_valid(matrix)) {
     return "{\"status\":\"NONFINITE\",\"reason\":\"MATRIX_VALUE_INVALID\"}";
@@ -173,6 +194,600 @@ bool same_timestamp(double left, double right) noexcept {
   std::memcpy(&left_bits, &left, sizeof(left_bits));
   std::memcpy(&right_bits, &right, sizeof(right_bits));
   return left_bits == right_bits;
+}
+
+bool finite_vector3(const std::array<double, 3U> &value) noexcept {
+  return std::isfinite(value[0]) && std::isfinite(value[1]) &&
+         std::isfinite(value[2]);
+}
+
+std::array<double, 3U> interpolate_omega(
+    const TurnSafeImuSampleValue &lower,
+    const TurnSafeImuSampleValue &upper, double timestamp) {
+  const double span = upper.timestamp - lower.timestamp;
+  if (!(span > 0.0) || !std::isfinite(span))
+    throw std::runtime_error("invalid IMU interpolation bracket");
+  const double alpha = (timestamp - lower.timestamp) / span;
+  std::array<double, 3U> output{{0.0, 0.0, 0.0}};
+  for (std::size_t axis = 0U; axis < 3U; ++axis) {
+    output[axis] = lower.omega_rad_s[axis] +
+                   alpha * (upper.omega_rad_s[axis] -
+                            lower.omega_rad_s[axis]);
+  }
+  if (!finite_vector3(output))
+    throw std::runtime_error("nonfinite interpolated gyro");
+  return output;
+}
+
+Eigen::Vector3d eigen_vector3(const std::array<double, 3U> &value) {
+  return Eigen::Vector3d(value[0], value[1], value[2]);
+}
+
+TurnSafeGyroSummary summarize_gyro_series(
+    const std::vector<double> &timestamps,
+    const std::vector<std::array<double, 3U>> &omega) {
+  TurnSafeGyroSummary output;
+  if (timestamps.size() < 2U || timestamps.size() != omega.size()) {
+    output.reason = "INSUFFICIENT_INTERVAL_SUPPORT";
+    return output;
+  }
+  Eigen::Vector3d vector_integral = Eigen::Vector3d::Zero();
+  double norm_integral = 0.0;
+  double squared_norm_integral = 0.0;
+  double maximum_norm = 0.0;
+  Eigen::Matrix3d delta_rotation = Eigen::Matrix3d::Identity();
+  for (const auto &sample : omega) {
+    if (!finite_vector3(sample)) {
+      output.reason = "GYRO_SERIES_NONFINITE";
+      return output;
+    }
+    maximum_norm = std::max(maximum_norm, eigen_vector3(sample).norm());
+  }
+  for (std::size_t index = 0U; index + 1U < timestamps.size(); ++index) {
+    const double dt = timestamps[index + 1U] - timestamps[index];
+    if (!(dt > 0.0) || !std::isfinite(dt)) {
+      output.reason = "KNOT_TIMESTAMPS_NOT_STRICTLY_INCREASING";
+      return output;
+    }
+    const Eigen::Vector3d left = eigen_vector3(omega[index]);
+    const Eigen::Vector3d right = eigen_vector3(omega[index + 1U]);
+    const Eigen::Vector3d average = 0.5 * (left + right);
+    vector_integral.noalias() += average * dt;
+    norm_integral += 0.5 * (left.norm() + right.norm()) * dt;
+    squared_norm_integral +=
+        0.5 * (left.squaredNorm() + right.squaredNorm()) * dt;
+    inject_diagnostic_fault(TurnSafeDiagnosticFaultStage::kSo3Composition);
+    delta_rotation = ov_core::exp_so3(-average * dt) * delta_rotation;
+  }
+  const double duration = timestamps.back() - timestamps.front();
+  if (!(duration > 0.0) || !std::isfinite(duration) ||
+      !vector_integral.allFinite() || !std::isfinite(norm_integral) ||
+      !std::isfinite(squared_norm_integral) ||
+      !delta_rotation.allFinite()) {
+    output.reason = "INTEGRATION_NONFINITE";
+    return output;
+  }
+  const Eigen::Vector3d mean = vector_integral / duration;
+  Eigen::Vector4d quaternion = ov_core::rot_2_quat(delta_rotation);
+  if (quaternion(3) < 0.0 ||
+      (quaternion(3) == 0.0 &&
+       (quaternion(0) < 0.0 ||
+        (quaternion(0) == 0.0 &&
+         (quaternion(1) < 0.0 ||
+          (quaternion(1) == 0.0 && quaternion(2) < 0.0)))))) {
+    quaternion = -quaternion;
+  }
+  const double vector_norm = quaternion.head<3>().norm();
+  const double angle = 2.0 * std::atan2(vector_norm,
+                                        std::fabs(quaternion(3)));
+  output.max_norm_rad_s = maximum_norm;
+  output.rms_norm_rad_s = std::sqrt(squared_norm_integral / duration);
+  output.mean_omega_rad_s = {{mean(0), mean(1), mean(2)}};
+  output.integral_norm_rad = norm_integral;
+  output.integral_omega_rad = {{vector_integral(0), vector_integral(1),
+                                vector_integral(2)}};
+  for (Eigen::Index row = 0; row < 3; ++row) {
+    for (Eigen::Index col = 0; col < 3; ++col) {
+      output.delta_rotation_matrix_row_major[
+          static_cast<std::size_t>(row * 3 + col)] =
+          delta_rotation(row, col);
+    }
+  }
+  output.delta_rotation_jpl_xyzw = {{quaternion(0), quaternion(1),
+                                      quaternion(2), quaternion(3)}};
+  output.delta_rotation_angle_rad = angle;
+  if (vector_norm > 0.0 && std::isfinite(vector_norm)) {
+    const Eigen::Vector3d axis = -quaternion.head<3>() / vector_norm;
+    output.delta_rotation_axis = {{axis(0), axis(1), axis(2)}};
+    output.delta_rotation_axis_available = axis.allFinite();
+    output.delta_rotation_axis_reason =
+        output.delta_rotation_axis_available ? "NONE" : "ROTATION_AXIS_NONFINITE";
+  } else {
+    output.delta_rotation_axis_reason = "ROTATION_AXIS_UNDEFINED";
+  }
+  output.available = std::isfinite(output.max_norm_rad_s) &&
+                     std::isfinite(output.rms_norm_rad_s) &&
+                     finite_vector3(output.mean_omega_rad_s) &&
+                     std::isfinite(output.integral_norm_rad) &&
+                     finite_vector3(output.integral_omega_rad) &&
+                     std::isfinite(output.delta_rotation_angle_rad);
+  output.reason = output.available ? "NONE" : "INTEGRATION_NONFINITE";
+  return output;
+}
+
+std::string event_number_json(bool available, double value,
+                              const char *reason) {
+  if (available && std::isfinite(value)) {
+    return std::string("{\"status\":\"AVAILABLE\",\"value\":") +
+           double_json(value) + ",\"reason\":\"NONE\"}";
+  }
+  const bool explicitly_nonfinite =
+      reason != nullptr && std::strstr(reason, "NONFINITE") != nullptr;
+  return std::string("{\"status\":") +
+         quote((available || explicitly_nonfinite) ? "NONFINITE"
+                                                   : "NOT_AVAILABLE") +
+         ",\"reason\":" +
+         quote(available ? "VALUE_NONFINITE" : reason) + "}";
+}
+
+std::string event_uint_json(bool available, std::uint64_t value,
+                            const char *reason) {
+  if (available) {
+    return std::string("{\"status\":\"AVAILABLE\",\"value\":") +
+           std::to_string(value) + ",\"reason\":\"NONE\"}";
+  }
+  return std::string("{\"status\":\"NOT_AVAILABLE\",\"reason\":") +
+         quote(reason) + "}";
+}
+
+std::string event_bool_json(bool available, bool value,
+                            const char *reason) {
+  if (available) {
+    return std::string("{\"status\":\"AVAILABLE\",\"value\":") +
+           (value ? "true" : "false") + ",\"reason\":\"NONE\"}";
+  }
+  return std::string("{\"status\":\"NOT_AVAILABLE\",\"reason\":") +
+         quote(reason) + "}";
+}
+
+void write_vector3(std::ostringstream &output,
+                   const std::array<double, 3U> &value) {
+  output << '[' << double_json(value[0]) << ',' << double_json(value[1])
+         << ',' << double_json(value[2]) << ']';
+}
+
+void write_endpoint(std::ostringstream &output,
+                    const TurnSafeImuEndpointEvidence &endpoint,
+                    const std::string &interval_reason) {
+  output << "{\"status\":" << quote(endpoint.status)
+         << ",\"reason\":"
+         << quote(endpoint.reason == "NOT_CAPTURED" ? interval_reason
+                                                     : endpoint.reason)
+         << ",\"lower_timestamp\":"
+         << event_number_json(endpoint.lower_timestamp_available,
+                              endpoint.lower_timestamp,
+                              "LOWER_BRACKET_UNAVAILABLE")
+         << ",\"upper_timestamp\":"
+         << event_number_json(endpoint.upper_timestamp_available,
+                              endpoint.upper_timestamp,
+                              "UPPER_BRACKET_UNAVAILABLE") << '}';
+}
+
+void write_gyro_summary(std::ostringstream &output,
+                        const TurnSafeGyroSummary &summary,
+                        const std::string &interval_reason) {
+  if (!summary.available) {
+    output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":"
+           << quote(summary.reason == "NOT_CAPTURED" ? interval_reason
+                                                      : summary.reason) << '}';
+    return;
+  }
+  output << "{\"status\":\"AVAILABLE\",\"reason\":\"NONE\""
+         << ",\"max_norm_rad_s\":" << double_json(summary.max_norm_rad_s)
+         << ",\"rms_norm_rad_s\":" << double_json(summary.rms_norm_rad_s)
+         << ",\"mean_omega_xyz_rad_s\":";
+  write_vector3(output, summary.mean_omega_rad_s);
+  output << ",\"integral_norm_rad\":"
+         << double_json(summary.integral_norm_rad)
+         << ",\"integral_omega_xyz_rad\":";
+  write_vector3(output, summary.integral_omega_rad);
+  output << ",\"delta_rotation_matrix_row_major\":[";
+  for (std::size_t index = 0U;
+       index < summary.delta_rotation_matrix_row_major.size(); ++index) {
+    if (index != 0U) output << ',';
+    output << double_json(summary.delta_rotation_matrix_row_major[index]);
+  }
+  output << "],\"delta_rotation_jpl_xyzw\":[";
+  for (std::size_t index = 0U;
+       index < summary.delta_rotation_jpl_xyzw.size(); ++index) {
+    if (index != 0U) output << ',';
+    output << double_json(summary.delta_rotation_jpl_xyzw[index]);
+  }
+  output << "],\"delta_rotation_angle_rad\":"
+         << double_json(summary.delta_rotation_angle_rad)
+         << ",\"delta_rotation_axis\":";
+  if (summary.delta_rotation_axis_available) {
+    output << "{\"status\":\"AVAILABLE\",\"reason\":\"NONE\",\"value\":";
+    write_vector3(output, summary.delta_rotation_axis);
+    output << '}';
+  } else {
+    output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":"
+           << quote(summary.delta_rotation_axis_reason) << '}';
+  }
+  output << '}';
+}
+
+void write_causal_interval(std::ostringstream &output,
+                           const TurnSafeCausalImuInterval &interval,
+                           std::uint64_t callback_id) {
+  output << "{\"gyro_interval_id\":" << interval.gyro_interval_id
+         << ",\"callback_id\":" << callback_id
+         << ",\"status\":"
+         << quote(interval.available ? "AVAILABLE" : "NOT_AVAILABLE")
+         << ",\"reason\":" << quote(interval.reason)
+         << ",\"units\":{\"time\":\"s\",\"angular_rate\":\"rad/s\",\"rotation\":\"rad\"}"
+         << ",\"frame_convention\":{\"raw\":\"native_gyroscope_measurement_frame\",\"bias_corrected\":\"native_gyroscope_measurement_frame_wm_minus_bias_g\",\"delta\":\"native_gyroscope_frame_passive_left_composed_Exp_minus_omega_dt_diagnostic\"}"
+         << ",\"camera_frame_ids\":[";
+  for (std::size_t index = 0U; index < interval.camera_frame_ids.size(); ++index) {
+    if (index != 0U) output << ',';
+    output << interval.camera_frame_ids[index];
+  }
+  output << "],\"current_callback_camera_timestamp\":"
+         << event_number_json(std::isfinite(interval.current_callback_timestamp),
+                              interval.current_callback_timestamp,
+                              "CALLBACK_TIMESTAMP_NONFINITE")
+         << ",\"previous_processed_callback_camera_timestamp\":"
+         << event_number_json(interval.previous_callback_timestamp_available,
+                              interval.previous_callback_timestamp,
+                              "FIRST_CALLBACK")
+         << ",\"interval_start_camera_s\":"
+         << event_number_json(interval.previous_callback_timestamp_available &&
+                                  std::isfinite(interval.previous_callback_timestamp),
+                              interval.previous_callback_timestamp,
+                              interval.reason.c_str())
+         << ",\"interval_end_camera_s\":"
+         << event_number_json(std::isfinite(interval.current_callback_timestamp),
+                              interval.current_callback_timestamp,
+                              interval.reason.c_str())
+         << ",\"duration_s\":"
+         << event_number_json(interval.duration_available, interval.duration_s,
+                              interval.reason.c_str())
+         << ",\"dt_CAMtoIMU_s\":"
+         << event_number_json(interval.imu_time_offset_available,
+                              interval.imu_time_offset_s,
+                              interval.imu_time_offset_reason.c_str())
+         << ",\"clock_equation\":\"t_imu=t_camera+dt_CAMtoIMU\""
+         << ",\"interval_start_imu_s\":"
+         << event_number_json(interval.imu_interval_endpoints_available,
+                              interval.imu_interval_start_s,
+                              interval.reason.c_str())
+         << ",\"interval_end_imu_s\":"
+         << event_number_json(interval.imu_interval_endpoints_available,
+                              interval.imu_interval_end_s,
+                              interval.reason.c_str())
+         << ",\"support\":{\"first_timestamp_s\":"
+         << event_number_json(interval.first_support_timestamp_available,
+                              interval.first_support_timestamp,
+                              interval.reason.c_str())
+         << ",\"last_timestamp_s\":"
+         << event_number_json(interval.last_support_timestamp_available,
+                              interval.last_support_timestamp,
+                              interval.reason.c_str())
+         << ",\"source_sample_count\":"
+         << event_uint_json(interval.source_sample_count_available,
+                            interval.source_sample_count,
+                            interval.source_sample_count_reason.c_str())
+         << ",\"start_endpoint\":";
+  write_endpoint(output, interval.start_endpoint, interval.reason);
+  output << ",\"end_endpoint\":";
+  write_endpoint(output, interval.end_endpoint, interval.reason);
+  output << ",\"maximum_internal_sample_gap_s\":"
+         << event_number_json(interval.maximum_internal_gap_available,
+                              interval.maximum_internal_gap_s,
+                              "INSUFFICIENT_SUPPORT_FOR_GAP")
+         << ",\"coverage_fraction\":"
+         << event_number_json(interval.coverage_fraction_available,
+                              interval.coverage_fraction,
+                              "INTERVAL_ENDPOINTS_UNAVAILABLE")
+         << ",\"endpoint_policy\":\"exact_or_linear_bracket_no_extrapolation.v1\"}"
+         << ",\"gyro_bias_snapshot_xyz_rad_s\":";
+  if (interval.gyro_bias_available) {
+    output << "{\"status\":\"AVAILABLE\",\"reason\":\"NONE\",\"value\":";
+    write_vector3(output, interval.gyro_bias_rad_s);
+    output << '}';
+  } else {
+    output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":"
+           << quote(interval.gyro_bias_reason) << '}';
+  }
+  output << ",\"knots\":{\"status\":"
+         << quote(interval.knot_timestamps_s.empty() ? "NOT_AVAILABLE" : "AVAILABLE")
+         << ",\"reason\":"
+         << quote(interval.knot_timestamps_s.empty() ? interval.reason : "NONE");
+  if (!interval.knot_timestamps_s.empty()) {
+    output << ",\"timestamp_value_s\":[";
+    for (std::size_t index = 0U; index < interval.knot_timestamps_s.size(); ++index) {
+      if (index != 0U) output << ',';
+      output << double_json(interval.knot_timestamps_s[index]);
+    }
+    output << "],\"timestamp_key\":[";
+    for (std::size_t index = 0U; index < interval.knot_timestamps_s.size(); ++index) {
+      if (index != 0U) output << ',';
+      output << quote(timestamp_key(interval.knot_timestamps_s[index]));
+    }
+    output << "],\"raw_omega_xyz_rad_s\":[";
+    for (std::size_t index = 0U; index < interval.raw_omega_rad_s.size(); ++index) {
+      if (index != 0U) output << ',';
+      write_vector3(output, interval.raw_omega_rad_s[index]);
+    }
+    output << "],\"bias_corrected_omega_xyz_rad_s\":";
+    if (interval.bias_corrected_omega_rad_s.size() ==
+        interval.knot_timestamps_s.size()) {
+      output << '[';
+      for (std::size_t index = 0U;
+           index < interval.bias_corrected_omega_rad_s.size(); ++index) {
+        if (index != 0U) output << ',';
+        write_vector3(output, interval.bias_corrected_omega_rad_s[index]);
+      }
+      output << ']';
+    } else {
+      output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":"
+             << quote(interval.gyro_bias_reason) << '}';
+    }
+  }
+  output << "},\"integration_method\":\"piecewise_linear_trapezoid.v1\""
+         << ",\"raw_summary\":";
+  write_gyro_summary(output, interval.raw_summary, interval.reason);
+  output << ",\"bias_corrected_summary\":";
+  write_gyro_summary(output, interval.bias_corrected_summary, interval.reason);
+  output << '}';
+}
+
+void write_expected_row_key(std::ostringstream &output,
+                            const char *stream_id, bool available,
+                            double timestamp, const std::string &reason) {
+  if (!available || !std::isfinite(timestamp)) {
+    output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":"
+           << quote(reason) << '}';
+    return;
+  }
+  output << "{\"status\":\"AVAILABLE\",\"reason\":\"NONE\",\"stream_id\":"
+         << quote(stream_id)
+         << ",\"timestamp_value\":" << double_json(timestamp)
+         << ",\"timestamp_key\":" << quote(timestamp_key(timestamp))
+         << ",\"row_ordinal\":{\"status\":\"NOT_AVAILABLE\",\"reason\":\"ROW_ORDINAL_OFFLINE_ONLY\"}}";
+}
+
+void write_outcome_association_keys(
+    std::ostringstream &output,
+    const TurnSafeDiagnosticsOptions &options,
+    std::uint64_t callback_index, double callback_timestamp,
+    const TurnSafeOutcomeAssociationKeys &keys,
+    bool update_available, const TurnSafeUpdateRecord &update,
+    bool duration_available, double duration) {
+  std::uint64_t accepted_full_factor_count = 0U;
+  if (update_available) {
+    for (const auto &attempt : update.attempts) {
+      if (attempt.accepted_full_factor) ++accepted_full_factor_count;
+    }
+  }
+  const bool full_accepted = update_available &&
+      update.baseline_commit_occurred &&
+      !update.baseline_accepted_ids.empty();
+  output << "{\"callback_id\":" << callback_index
+         << ",\"callback_camera_timestamp_value\":"
+         << double_json(callback_timestamp)
+         << ",\"callback_camera_timestamp_key\":"
+         << quote(timestamp_key(callback_timestamp))
+         << ",\"estimator_initialized_before\":"
+         << event_bool_json(keys.initialized_before_available,
+                            keys.initialized_before,
+                            "INITIALIZED_STATUS_NOT_EXPOSED")
+         << ",\"estimator_initialized_after\":"
+         << event_bool_json(keys.initialized_after_available,
+                            keys.initialized_after,
+                            "INITIALIZED_STATUS_NOT_EXPOSED")
+         << ",\"estimator_valid_before\":"
+         << event_bool_json(keys.estimator_valid_before_available,
+                            keys.estimator_valid_before,
+                            "STATE_VALIDITY_NOT_EXPOSED")
+         << ",\"estimator_valid_after\":"
+         << event_bool_json(keys.estimator_valid_after_available,
+                            keys.estimator_valid_after,
+                            "STATE_VALIDITY_NOT_EXPOSED")
+         << ",\"state_timestamp_before\":"
+         << event_number_json(keys.state_timestamp_before_available,
+                              keys.state_timestamp_before,
+                              keys.state_timestamp_before_reason.c_str())
+         << ",\"state_timestamp_after\":"
+         << event_number_json(keys.state_timestamp_after_available,
+                              keys.state_timestamp_after,
+                              keys.state_timestamp_after_reason.c_str())
+         << ",\"expected_state_row_key\":";
+  write_expected_row_key(output, "state_estimate",
+                         keys.expected_output_timestamp_available,
+                         keys.expected_output_timestamp,
+                         keys.expected_output_timestamp_reason);
+  output << ",\"expected_deviation_row_key\":";
+  write_expected_row_key(output, "state_deviation",
+                         keys.expected_output_timestamp_available,
+                         keys.expected_output_timestamp,
+                         keys.expected_output_timestamp_reason);
+  output << ",\"expected_pose_row_key\":";
+  write_expected_row_key(output, "trajectory_tum",
+                         keys.expected_output_timestamp_available,
+                         keys.expected_output_timestamp,
+                         keys.expected_output_timestamp_reason);
+  output << ",\"pose_stream_write_status\":{\"status\":\"NOT_EXPOSED\",\"reason\":\"POSE_WRITE_STATUS_OFFLINE_ONLY\"}"
+         << ",\"reset_status\":{\"status\":\"NOT_EXPOSED\",\"reason\":\"RESET_STATUS_NOT_EXPOSED_BY_NATIVE_PATH\"}"
+         << ",\"nonfinite_observed\":";
+  if (keys.nonfinite_observed_available) {
+    output << "{\"status\":\"AVAILABLE\",\"value\":"
+           << (keys.nonfinite_observed ? "true" : "false")
+           << ",\"observation_scope\":\"nominal_imu_and_state_timestamp\",\"reason\":\"NONE\"}";
+  } else {
+    output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":"
+           << quote(keys.nonfinite_observed_reason) << '}';
+  }
+  output
+         << ",\"callback_incomplete\":{\"status\":\"AVAILABLE\",\"value\":"
+         << (keys.callback_incomplete ? "true" : "false")
+         << ",\"reason\":\"NONE\",\"completion_reason\":"
+         << quote(keys.callback_completion_reason) << '}'
+         << ",\"run_completeness\":{\"status\":\"NOT_AVAILABLE\",\"reason\":\"RUN_COMPLETENESS_POST_CLOSE_ONLY\"}"
+         << ",\"ordinary_accepted_full_factor_count\":"
+         << event_uint_json(update_available, accepted_full_factor_count,
+                            "UPDATER_NOT_REACHED")
+         << ",\"ordinary_full_visual_update_accepted\":"
+         << event_bool_json(update_available, full_accepted,
+                            "UPDATER_NOT_REACHED")
+         << ",\"time_since_last_accepted_ordinary_full_update_camera_s\":";
+  if (duration_available) {
+    output << event_number_json(true,
+                                duration,
+                                "NONE");
+  } else {
+    output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":\"SEE_BASELINE_DECISION_TYPED_REASON\"}";
+  }
+  output << ",\"reference_association\":{\"status\":\"NOT_AVAILABLE\",\"reason\":\"REFERENCE_ASSOCIATION_OFFLINE_ONLY\"}"
+         << ",\"identity\":{\"run_identity\":";
+  if (options.run_identity.empty())
+    output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":\"OPAQUE_RUN_IDENTITY_NOT_CONFIGURED\"}";
+  else
+    output << quote(options.run_identity);
+  output << ",\"source_sha\":" << quote(options.source_sha)
+         << ",\"source_tree\":" << quote(options.source_tree)
+         << ",\"source_snapshot_sha256\":"
+         << quote(options.source_snapshot_sha256)
+         << ",\"build_provenance_id\":"
+         << quote(options.build_provenance_id)
+         << ",\"config_sha256\":" << quote(options.config_sha256)
+         << ",\"calibration_sha256\":"
+         << quote(options.calibration_sha256) << "}}";
+}
+
+void fnv_mix_u64_be(std::uint64_t &hash, std::uint64_t value) {
+  for (int shift = 56; shift >= 0; shift -= 8) {
+    const unsigned char byte =
+        static_cast<unsigned char>((value >> shift) & UINT64_C(0xff));
+    fnv_mix(hash, &byte, 1U);
+  }
+}
+
+std::string canonical_matrix_hash(const TurnSafeMatrixValue &matrix) {
+  if (!matrix_value_valid(matrix)) return "UNAVAILABLE";
+  std::uint64_t hash = UINT64_C(1469598103934665603);
+  fnv_mix_u64_be(hash, static_cast<std::uint64_t>(matrix.rows));
+  fnv_mix_u64_be(hash, static_cast<std::uint64_t>(matrix.cols));
+  for (double value : matrix.values) {
+    std::uint64_t bits = 0U;
+    std::memcpy(&bits, &value, sizeof(bits));
+    fnv_mix_u64_be(hash, bits);
+  }
+  std::ostringstream output;
+  output << "fnv1a64:" << std::hex << std::setw(16) << std::setfill('0')
+         << hash;
+  return output.str();
+}
+
+bool pose_rotation(const TurnSafeMatrixValue &pose,
+                   Eigen::Matrix3d &rotation) {
+  if (pose.rows != 7U || pose.cols != 1U || pose.values.size() != 7U ||
+      !std::all_of(pose.values.begin(), pose.values.end(),
+                   [](double value) { return std::isfinite(value); })) {
+    return false;
+  }
+  Eigen::Vector4d quaternion(pose.values[0], pose.values[1],
+                             pose.values[2], pose.values[3]);
+  const double norm = quaternion.norm();
+  if (!std::isfinite(norm) || std::fabs(norm - 1.0) > 1e-10) return false;
+  quaternion /= norm;
+  rotation = ov_core::quat_2_Rot(quaternion);
+  return rotation.allFinite();
+}
+
+void write_rotation(std::ostringstream &output,
+                    const TurnSafeMatrixValue *pose,
+                    const char *reason) {
+  Eigen::Matrix3d rotation;
+  if (pose == nullptr || !pose_rotation(*pose, rotation)) {
+    output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":"
+           << quote(reason) << '}';
+    return;
+  }
+  output << "{\"status\":\"AVAILABLE\",\"reason\":\"NONE\",\"rows\":3,\"cols\":3,\"values_row_major\":[";
+  for (Eigen::Index row = 0; row < 3; ++row) {
+    for (Eigen::Index col = 0; col < 3; ++col) {
+      if (row != 0 || col != 0) output << ',';
+      output << double_json(rotation(row, col));
+    }
+  }
+  output << "]}";
+}
+
+void write_pixel_value(std::ostringstream &output, bool available,
+                       const std::array<double, 2U> &pixel,
+                       const char *missing_reason,
+                       const char *nonfinite_reason) {
+  if (!available) {
+    output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":"
+           << quote(missing_reason) << '}';
+    return;
+  }
+  if (!std::isfinite(pixel[0]) || !std::isfinite(pixel[1])) {
+    output << "{\"status\":\"NONFINITE\",\"reason\":"
+           << quote(nonfinite_reason) << '}';
+    return;
+  }
+  output << "{\"status\":\"AVAILABLE\",\"reason\":\"NONE\",\"value\":["
+         << double_json(pixel[0]) << ',' << double_json(pixel[1]) << "]}";
+}
+
+void write_unit_bearing(std::ostringstream &output,
+                        const TurnSafeObservationValue &observation,
+                        const char *missing_reason,
+                        const char *nonfinite_reason) {
+  if (!observation.uv_normalized_available) {
+    output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":"
+           << quote(missing_reason) << '}';
+    return;
+  }
+  const Eigen::Vector3d ray(observation.uv_normalized[0],
+                            observation.uv_normalized[1], 1.0);
+  const double norm = ray.norm();
+  if (!ray.allFinite() || !(norm > 0.0) || !std::isfinite(norm)) {
+    output << "{\"status\":\"NONFINITE\",\"reason\":"
+           << quote(nonfinite_reason) << '}';
+    return;
+  }
+  const Eigen::Vector3d bearing = ray / norm;
+  output << "{\"status\":\"AVAILABLE\",\"reason\":\"NONE\",\"frame\":\"camera\",\"value\":["
+         << double_json(bearing(0)) << ',' << double_json(bearing(1))
+         << ',' << double_json(bearing(2)) << "]}";
+}
+
+void write_image_cell(std::ostringstream &output,
+                      const TurnSafeObservationValue &observation,
+                      const TurnSafePriorCameraValue *camera) {
+  if (camera == nullptr || camera->width <= 0 || camera->height <= 0) {
+    output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":\"IMAGE_DIMENSIONS_UNAVAILABLE\"}";
+    return;
+  }
+  if (!observation.uv_available) {
+    output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":\"RAW_PIXEL_UNAVAILABLE\"}";
+    return;
+  }
+  if (!std::isfinite(observation.uv[0]) ||
+      !std::isfinite(observation.uv[1])) {
+    output << "{\"status\":\"NONFINITE\",\"reason\":\"RAW_PIXEL_NONFINITE\"}";
+    return;
+  }
+  output << "{\"status\":\"AVAILABLE\",\"reason\":\"NONE\",\"representation\":\"continuous_pixel_center_fraction.v1\",\"value\":["
+         << double_json((observation.uv[0] + 0.5) /
+                        static_cast<double>(camera->width))
+         << ','
+         << double_json((observation.uv[1] + 0.5) /
+                        static_cast<double>(camera->height))
+         << "]}";
 }
 
 const MSCKFUpdatePriorCloneBinding *find_binding(
@@ -486,6 +1101,8 @@ const char *turnsafe_capture_disable_reason_name(
     return "FRONTEND_CAPTURE_FAILURE";
   case TurnSafeCaptureDisableReason::kUpdaterCaptureFailure:
     return "UPDATER_CAPTURE_FAILURE";
+  case TurnSafeCaptureDisableReason::kEventExtensionRequiresPassiveCapture:
+    return "EVENT_EXTENSION_REQUIRES_ACTIVE_PASSIVE_CAPTURE";
   }
   return "DIAGNOSTIC_UNKNOWN_EXCEPTION";
 }
@@ -567,6 +1184,22 @@ TurnSafeResolvedConfiguration TurnSafeDiagnostics::EvaluateConfiguration(
 
 std::shared_ptr<TurnSafeDiagnostics> TurnSafeDiagnostics::Create(
     const TurnSafeDiagnosticsOptions &options) noexcept {
+  const bool extension_requested =
+      options.capture_causal_imu_intervals ||
+      options.capture_outcome_association_keys ||
+      options.capture_group_bearing_provenance;
+  if (extension_requested &&
+      (!options.capture_requested || options.output_path.empty())) {
+    try {
+      auto sink = std::shared_ptr<TurnSafeDiagnostics>(
+          new TurnSafeDiagnostics(options));
+      sink->Disable(
+          TurnSafeCaptureDisableReason::kEventExtensionRequiresPassiveCapture);
+      return sink;
+    } catch (...) {
+      return nullptr;
+    }
+  }
   if (!options.capture_requested || options.output_path.empty()) return nullptr;
   try {
     TurnSafeDiagnosticsOptions bound = options;
@@ -637,6 +1270,12 @@ bool TurnSafeDiagnostics::Initialize() noexcept {
       Disable(TurnSafeCaptureDisableReason::kUnsupportedSchemaVersion);
       return false;
     }
+    if (EventExtensionRequested() &&
+        options_.event_extension_schema_version !=
+            "turnsafe.t0.event_extension.v1") {
+      Disable(TurnSafeCaptureDisableReason::kUnsupportedSchemaVersion);
+      return false;
+    }
     if (options_.provenance_conflict) {
       Disable(TurnSafeCaptureDisableReason::kProvenanceConflict);
       return false;
@@ -677,6 +1316,12 @@ bool TurnSafeDiagnostics::Initialize() noexcept {
     Disable(TurnSafeCaptureDisableReason::kDiagnosticUnknownException);
     return false;
   }
+}
+
+bool TurnSafeDiagnostics::EventExtensionRequested() const noexcept {
+  return options_.capture_causal_imu_intervals ||
+         options_.capture_outcome_association_keys ||
+         options_.capture_group_bearing_provenance;
 }
 
 void TurnSafeDiagnostics::Disable(
@@ -788,23 +1433,384 @@ std::string TurnSafeDiagnostics::SerializeHeader() const {
          << (configuration.require_target_stereo_range ? "true" : "false")
          << ",\"camera_count\":" << configuration.camera_count << '}'
          << ",\"threshold_set_id\":{\"status\":\"NOT_APPLICABLE\",\"reason\":\"THRESHOLD_SET_NOT_FROZEN\"}"
-         << ",\"digest_contract_version\":" << quote(options_.digest_contract_version)
-         << '}';
+         << ",\"digest_contract_version\":" << quote(options_.digest_contract_version);
+  if (EventExtensionRequested()) {
+    output << ",\"extensions\":{\"event_extension\":{\"schema\":"
+           << quote(options_.event_extension_schema_version)
+           << ",\"record_version\":1"
+           << ",\"capture_flags\":{\"causal_imu_intervals\":"
+           << (options_.capture_causal_imu_intervals ? "true" : "false")
+           << ",\"outcome_association_keys\":"
+           << (options_.capture_outcome_association_keys ? "true" : "false")
+           << ",\"group_bearing_provenance\":"
+           << (options_.capture_group_bearing_provenance ? "true" : "false")
+           << "},\"integration_method\":\"piecewise_linear_trapezoid.v1\""
+           << ",\"rotation_convention\":\"native_gyroscope_frame_passive_left_exp_minus_omega_diagnostic.v1\""
+           << ",\"gyro_bias_convention\":\"raw_wm_minus_current_callback_bias_g.v1\""
+           << ",\"clock_mapping\":\"t_imu_equals_t_camera_plus_dt_CAMtoIMU.v1\""
+           << ",\"association_version\":\"turnsafe.offline_association.v1\""
+           << ",\"canonical_ordering_version\":\"turnsafe.event_extension.order.v1\""
+           << ",\"image_cell_representation\":\"continuous_pixel_center_fraction.v1\""
+           << ",\"group_hash_algorithm\":\"fnv1a64_binary64_be.v1\"}}";
+  }
+  output << '}';
   return output.str();
 }
 
-void TurnSafeDiagnostics::BeginCallback(double timestamp) noexcept {
-  try {
-    const std::lock_guard<std::mutex> lock(mutex_);
-    if (!active_.load(std::memory_order_acquire)) return;
-    if (current_available_) {
-      Disable(TurnSafeCaptureDisableReason::kNestedCallbackEnvelope);
-      return;
+TurnSafeCausalImuInterval TurnSafeDiagnostics::EvaluateCausalImuInterval(
+    std::uint64_t interval_id, const std::vector<int> &camera_frame_ids,
+    bool previous_timestamp_available, double previous_timestamp,
+    double current_timestamp, bool force_initialization_boundary,
+    bool imu_time_offset_available, double imu_time_offset_s,
+    bool gyro_bias_available,
+    const std::array<double, 3U> &gyro_bias_rad_s,
+    const TurnSafeImuSupportSnapshot &support) {
+  TurnSafeCausalImuInterval output;
+  output.gyro_interval_id = interval_id;
+  output.camera_frame_ids = camera_frame_ids;
+  std::sort(output.camera_frame_ids.begin(), output.camera_frame_ids.end());
+  output.camera_frame_ids.erase(
+      std::unique(output.camera_frame_ids.begin(),
+                  output.camera_frame_ids.end()),
+      output.camera_frame_ids.end());
+  output.previous_callback_timestamp_available = previous_timestamp_available;
+  output.previous_callback_timestamp = previous_timestamp;
+  output.current_callback_timestamp = current_timestamp;
+  output.imu_time_offset_available =
+      imu_time_offset_available && std::isfinite(imu_time_offset_s);
+  output.imu_time_offset_reason = output.imu_time_offset_available
+                                      ? "NONE"
+                                      : (imu_time_offset_available
+                                             ? "IMU_TIME_OFFSET_NONFINITE"
+                                             : "IMU_TIME_OFFSET_UNAVAILABLE");
+  output.imu_time_offset_s = imu_time_offset_s;
+  output.gyro_bias_available =
+      gyro_bias_available && finite_vector3(gyro_bias_rad_s);
+  output.gyro_bias_reason = output.gyro_bias_available
+                                ? "NONE"
+                                : (gyro_bias_available ? "BIAS_NONFINITE"
+                                                       : "BIAS_UNAVAILABLE");
+  output.gyro_bias_rad_s = gyro_bias_rad_s;
+
+  if (!previous_timestamp_available) {
+    output.reason = "FIRST_CALLBACK";
+    output.source_sample_count_reason = output.reason;
+    return output;
+  }
+  if (force_initialization_boundary) {
+    output.reason = "FIRST_CALLBACK_AFTER_INITIALIZATION";
+    output.source_sample_count_reason = output.reason;
+    return output;
+  }
+  if (!std::isfinite(previous_timestamp) ||
+      !std::isfinite(current_timestamp)) {
+    output.reason = "CALLBACK_TIMESTAMP_NONFINITE";
+    output.source_sample_count_reason = output.reason;
+    return output;
+  }
+  if (!(current_timestamp > previous_timestamp)) {
+    output.reason = "CALLBACK_TIMESTAMP_REGRESSION";
+    output.source_sample_count_reason = output.reason;
+    return output;
+  }
+  output.duration_available = true;
+  output.duration_s = current_timestamp - previous_timestamp;
+  if (!imu_time_offset_available) {
+    output.reason = "IMU_TIME_OFFSET_UNAVAILABLE";
+    output.source_sample_count_reason = output.reason;
+    return output;
+  }
+  if (!std::isfinite(imu_time_offset_s)) {
+    output.reason = "IMU_TIME_OFFSET_NONFINITE";
+    output.source_sample_count_reason = output.reason;
+    return output;
+  }
+  output.imu_interval_start_s = previous_timestamp + imu_time_offset_s;
+  output.imu_interval_end_s = current_timestamp + imu_time_offset_s;
+  output.imu_interval_endpoints_available =
+      std::isfinite(output.imu_interval_start_s) &&
+      std::isfinite(output.imu_interval_end_s);
+  if (!output.imu_interval_endpoints_available) {
+    output.reason = "IMU_INTERVAL_ENDPOINT_NONFINITE";
+    output.source_sample_count_reason = output.reason;
+    return output;
+  }
+  if (!support.available) {
+    output.reason = support.reason.empty() ? "NO_CAUSAL_BUFFERED_IMU"
+                                            : support.reason;
+    output.source_sample_count_reason = output.reason;
+    return output;
+  }
+  output.source_sample_count_available = true;
+  output.source_sample_count_reason = "NONE";
+  output.source_sample_count =
+      static_cast<std::uint64_t>(support.samples.size());
+  if (support.samples.empty()) {
+    output.reason = "NO_CAUSAL_BUFFERED_IMU";
+    return output;
+  }
+  for (std::size_t index = 0U; index < support.samples.size(); ++index) {
+    const auto &sample = support.samples[index];
+    if (!std::isfinite(sample.timestamp)) {
+      output.reason = "IMU_TIMESTAMP_NONFINITE";
+      return output;
     }
-    current_ = CallbackRecord();
-    current_.callback_index = next_callback_index_++;
-    current_.timestamp = timestamp;
-    current_available_ = true;
+    if (!finite_vector3(sample.omega_rad_s)) {
+      output.reason = "RAW_GYRO_NONFINITE";
+      return output;
+    }
+    if (index != 0U &&
+        !(sample.timestamp > support.samples[index - 1U].timestamp)) {
+      output.reason = "IMU_TIMESTAMP_NOT_STRICTLY_INCREASING";
+      return output;
+    }
+  }
+  output.first_support_timestamp_available = true;
+  output.first_support_timestamp = support.samples.front().timestamp;
+  output.last_support_timestamp_available = true;
+  output.last_support_timestamp = support.samples.back().timestamp;
+  const double overlap_start =
+      std::max(output.imu_interval_start_s, support.samples.front().timestamp);
+  const double overlap_end =
+      std::min(output.imu_interval_end_s, support.samples.back().timestamp);
+  const double overlap = std::max(0.0, overlap_end - overlap_start);
+  output.coverage_fraction_available = true;
+  output.coverage_fraction =
+      std::max(0.0, std::min(1.0, overlap / output.duration_s));
+
+  const auto endpoint = [&support](double timestamp,
+                                   TurnSafeImuEndpointEvidence &evidence,
+                                   std::array<double, 3U> &omega) {
+    auto upper = std::lower_bound(
+        support.samples.begin(), support.samples.end(), timestamp,
+        [](const TurnSafeImuSampleValue &sample, double time) {
+          return sample.timestamp < time;
+        });
+    if (upper != support.samples.end() && upper->timestamp == timestamp) {
+      evidence.status = "EXACT_SAMPLE";
+      evidence.reason = "NONE";
+      evidence.lower_timestamp_available = true;
+      evidence.upper_timestamp_available = true;
+      evidence.lower_timestamp = upper->timestamp;
+      evidence.upper_timestamp = upper->timestamp;
+      omega = upper->omega_rad_s;
+      return true;
+    }
+    if (upper == support.samples.begin() || upper == support.samples.end()) {
+      if (upper != support.samples.end()) {
+        evidence.upper_timestamp_available = true;
+        evidence.upper_timestamp = upper->timestamp;
+      }
+      if (upper != support.samples.begin()) {
+        const auto lower = upper - 1;
+        evidence.lower_timestamp_available = true;
+        evidence.lower_timestamp = lower->timestamp;
+      }
+      evidence.status = "UNSUPPORTED";
+      evidence.reason = "ENDPOINT_BRACKET_UNAVAILABLE";
+      return false;
+    }
+    const auto lower = upper - 1;
+    evidence.lower_timestamp_available = true;
+    evidence.upper_timestamp_available = true;
+    evidence.lower_timestamp = lower->timestamp;
+    evidence.upper_timestamp = upper->timestamp;
+    evidence.status = "LINEAR_INTERPOLATED";
+    evidence.reason = "NONE";
+    omega = interpolate_omega(*lower, *upper, timestamp);
+    return true;
+  };
+
+  std::array<double, 3U> start_omega{{0.0, 0.0, 0.0}};
+  std::array<double, 3U> end_omega{{0.0, 0.0, 0.0}};
+  inject_diagnostic_fault(TurnSafeDiagnosticFaultStage::kEndpointInterpolation);
+  const bool start_available = endpoint(output.imu_interval_start_s,
+                                        output.start_endpoint, start_omega);
+  const bool end_available = endpoint(output.imu_interval_end_s,
+                                      output.end_endpoint, end_omega);
+  if (!start_available) {
+    output.start_endpoint.reason = "START_ENDPOINT_UNSUPPORTED";
+    output.reason = "START_ENDPOINT_UNSUPPORTED";
+    return output;
+  }
+  if (!end_available) {
+    output.end_endpoint.reason = "END_ENDPOINT_UNSUPPORTED";
+    output.reason = "END_ENDPOINT_UNSUPPORTED";
+    return output;
+  }
+
+  output.knot_timestamps_s.clear();
+  output.raw_omega_rad_s.clear();
+  output.bias_corrected_omega_rad_s.clear();
+  output.knot_timestamps_s.push_back(output.imu_interval_start_s);
+  output.raw_omega_rad_s.push_back(start_omega);
+  for (const auto &sample : support.samples) {
+    if (sample.timestamp > output.imu_interval_start_s &&
+        sample.timestamp < output.imu_interval_end_s) {
+      output.knot_timestamps_s.push_back(sample.timestamp);
+      output.raw_omega_rad_s.push_back(sample.omega_rad_s);
+    }
+  }
+  output.knot_timestamps_s.push_back(output.imu_interval_end_s);
+  output.raw_omega_rad_s.push_back(end_omega);
+  if (output.knot_timestamps_s.size() >= 2U) {
+    output.maximum_internal_gap_s = 0.0;
+    for (std::size_t index = 0U;
+         index + 1U < output.knot_timestamps_s.size(); ++index) {
+      output.maximum_internal_gap_s = std::max(
+          output.maximum_internal_gap_s,
+          output.knot_timestamps_s[index + 1U] -
+              output.knot_timestamps_s[index]);
+    }
+    output.maximum_internal_gap_available =
+        std::isfinite(output.maximum_internal_gap_s);
+  }
+  inject_diagnostic_fault(TurnSafeDiagnosticFaultStage::kGyroIntegration);
+  output.raw_summary = summarize_gyro_series(output.knot_timestamps_s,
+                                             output.raw_omega_rad_s);
+  if (output.gyro_bias_available) {
+    output.bias_corrected_omega_rad_s.reserve(
+        output.raw_omega_rad_s.size());
+    for (const auto &raw : output.raw_omega_rad_s) {
+      output.bias_corrected_omega_rad_s.push_back(
+          {{raw[0] - gyro_bias_rad_s[0], raw[1] - gyro_bias_rad_s[1],
+            raw[2] - gyro_bias_rad_s[2]}});
+    }
+    output.bias_corrected_summary = summarize_gyro_series(
+        output.knot_timestamps_s, output.bias_corrected_omega_rad_s);
+  } else {
+    output.bias_corrected_summary.reason = output.gyro_bias_reason;
+  }
+  if (!output.raw_summary.available) {
+    output.reason = output.raw_summary.reason;
+    return output;
+  }
+  if (!output.gyro_bias_available) {
+    output.reason = output.gyro_bias_reason;
+    return output;
+  }
+  if (!output.bias_corrected_summary.available) {
+    output.reason = output.bias_corrected_summary.reason;
+    return output;
+  }
+  output.available = true;
+  output.reason = "NONE";
+  return output;
+}
+
+void TurnSafeDiagnostics::BeginCallback(double timestamp) noexcept {
+  BeginCallbackImpl(timestamp, nullptr, false, false, nullptr, nullptr);
+}
+
+void TurnSafeDiagnostics::BeginCallback(
+    double timestamp, const std::vector<int> &camera_frame_ids,
+    bool estimator_initialized, bool output_ready, const State *state,
+    Propagator *propagator) noexcept {
+  BeginCallbackImpl(timestamp, &camera_frame_ids, estimator_initialized,
+                    output_ready, state, propagator);
+}
+
+void TurnSafeDiagnostics::BeginCallbackImpl(
+    double timestamp, const std::vector<int> *camera_frame_ids,
+    bool estimator_initialized, bool output_ready, const State *state,
+    Propagator *propagator) noexcept {
+  try {
+    std::uint64_t interval_id = 0U;
+    bool previous_timestamp_available = false;
+    double previous_timestamp = 0.0;
+    bool initialization_boundary = false;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      if (!active_.load(std::memory_order_acquire)) return;
+      if (current_available_) {
+        Disable(TurnSafeCaptureDisableReason::kNestedCallbackEnvelope);
+        return;
+      }
+      current_ = CallbackRecord();
+      current_.callback_index = next_callback_index_++;
+      current_.timestamp = timestamp;
+      current_.event_extension_available = EventExtensionRequested();
+      current_.initialized_before_available = camera_frame_ids != nullptr;
+      current_.initialized_before = estimator_initialized;
+      current_available_ = true;
+      interval_id = current_.callback_index;
+      previous_timestamp_available = previous_processed_callback_available_;
+      previous_timestamp = previous_processed_callback_timestamp_;
+      initialization_boundary = next_callback_initialization_boundary_;
+      next_callback_initialization_boundary_ = false;
+      if (options_.capture_outcome_association_keys) {
+        current_.outcome_association_keys.initialized_before_available = true;
+        current_.outcome_association_keys.initialized_before =
+            estimator_initialized;
+      }
+    }
+
+    if (options_.capture_outcome_association_keys && state != nullptr) {
+      inject_diagnostic_fault(TurnSafeDiagnosticFaultStage::kCallbackMetadata);
+      TurnSafeOutcomeAssociationKeys metadata;
+      metadata.initialized_before_available = true;
+      metadata.initialized_before = estimator_initialized;
+      metadata.state_timestamp_before_available =
+          std::isfinite(state->_timestamp);
+      metadata.state_timestamp_before_reason =
+          metadata.state_timestamp_before_available ? "NONE"
+                                                    : "STATE_TIMESTAMP_NONFINITE";
+      metadata.state_timestamp_before = state->_timestamp;
+      metadata.estimator_valid_before_available = state->_imu != nullptr;
+      metadata.estimator_valid_before =
+          output_ready && state->_imu != nullptr &&
+          state->_imu->value().allFinite() &&
+          std::isfinite(state->_timestamp);
+      const std::lock_guard<std::mutex> lock(mutex_);
+      if (active_.load(std::memory_order_acquire) && current_available_ &&
+          current_.callback_index == interval_id) {
+        current_.outcome_association_keys = metadata;
+      }
+    }
+
+    if (options_.capture_causal_imu_intervals) {
+      bool offset_available = false;
+      double offset = std::numeric_limits<double>::quiet_NaN();
+      bool bias_available = false;
+      std::array<double, 3U> bias{{0.0, 0.0, 0.0}};
+      if (state != nullptr && state->_calib_dt_CAMtoIMU != nullptr) {
+        offset = state->_calib_dt_CAMtoIMU->value()(0);
+        offset_available = true;
+      }
+      if (state != nullptr && state->_imu != nullptr) {
+        const Eigen::Vector3d state_bias = state->_imu->bias_g();
+        bias = {{state_bias(0), state_bias(1), state_bias(2)}};
+        bias_available = true;
+      }
+      TurnSafeImuSupportSnapshot support;
+      if (!previous_timestamp_available) {
+        support.reason = "FIRST_CALLBACK";
+      } else if (initialization_boundary) {
+        support.reason = "FIRST_CALLBACK_AFTER_INITIALIZATION";
+      } else if (propagator == nullptr) {
+        support.reason = "IMU_BUFFER_NOT_EXPOSED";
+      } else if (offset_available && std::isfinite(offset) &&
+                 std::isfinite(previous_timestamp) &&
+                 std::isfinite(timestamp) && timestamp > previous_timestamp) {
+        inject_diagnostic_fault(TurnSafeDiagnosticFaultStage::kImuSupportCopy);
+        support = propagator->turnsafe_copy_imu_support(
+            previous_timestamp + offset, timestamp + offset);
+      } else {
+        support.reason = "INTERVAL_PREREQUISITE_UNAVAILABLE";
+      }
+      const std::vector<int> empty_ids;
+      TurnSafeCausalImuInterval interval = EvaluateCausalImuInterval(
+          interval_id,
+          camera_frame_ids == nullptr ? empty_ids : *camera_frame_ids,
+          previous_timestamp_available, previous_timestamp, timestamp,
+          initialization_boundary, offset_available, offset, bias_available,
+          bias, support);
+      const std::lock_guard<std::mutex> lock(mutex_);
+      if (active_.load(std::memory_order_acquire) && current_available_ &&
+          current_.callback_index == interval_id) {
+        current_.causal_imu_interval = std::move(interval);
+      }
+    }
   } catch (...) {
     DisableForCurrentException();
   }
@@ -839,9 +1845,120 @@ void TurnSafeDiagnostics::RecordUpdate(TurnSafeUpdateRecord &&record) noexcept {
 }
 
 void TurnSafeDiagnostics::EndCallback() noexcept {
+  EndCallbackImpl(false, false, false, nullptr, false);
+}
+
+void TurnSafeDiagnostics::EndCallback(bool estimator_initialized,
+                                      bool output_ready, const State *state,
+                                      bool callback_incomplete) noexcept {
+  EndCallbackImpl(true, estimator_initialized, output_ready, state,
+                  callback_incomplete);
+}
+
+void TurnSafeDiagnostics::EndCallbackImpl(bool initialized_available,
+                                          bool estimator_initialized,
+                                          bool output_ready,
+                                          const State *state,
+                                          bool callback_incomplete) noexcept {
   try {
+    TurnSafeOutcomeAssociationKeys after;
+    bool after_metadata_available = false;
+    double callback_timestamp = std::numeric_limits<double>::quiet_NaN();
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      if (!active_.load(std::memory_order_acquire) || !current_available_)
+        return;
+      callback_timestamp = current_.timestamp;
+    }
+    if (options_.capture_outcome_association_keys) {
+      inject_diagnostic_fault(TurnSafeDiagnosticFaultStage::kCallbackMetadata);
+      after.initialized_after_available = initialized_available;
+      after.initialized_after = estimator_initialized;
+      after.callback_incomplete = callback_incomplete;
+      after.callback_completion_reason =
+          callback_incomplete ? "EXCEPTION_SCOPE_EXIT" : "NORMAL_SCOPE_EXIT";
+      if (state != nullptr) {
+        after.state_timestamp_after_available =
+            std::isfinite(state->_timestamp);
+        after.state_timestamp_after_reason =
+            after.state_timestamp_after_available ? "NONE"
+                                                  : "STATE_TIMESTAMP_NONFINITE";
+        after.state_timestamp_after = state->_timestamp;
+        after.estimator_valid_after_available = state->_imu != nullptr;
+        after.estimator_valid_after =
+            output_ready && state->_imu != nullptr &&
+            state->_imu->value().allFinite() &&
+            std::isfinite(state->_timestamp);
+        after.nonfinite_observed_available = state->_imu != nullptr;
+        after.nonfinite_observed_reason =
+            after.nonfinite_observed_available ? "NONE"
+                                               : "NOMINAL_IMU_NOT_EXPOSED";
+        after.nonfinite_observed = !std::isfinite(state->_timestamp) ||
+            (state->_imu != nullptr && !state->_imu->value().allFinite());
+        after.expected_output_timestamp_reason =
+            "EXPECTED_OUTPUT_TIMESTAMP_UNAVAILABLE";
+        if (!initialized_available || !estimator_initialized) {
+          after.expected_output_timestamp_reason = "ESTIMATOR_NOT_INITIALIZED";
+        } else if (!output_ready) {
+          after.expected_output_timestamp_reason = "OUTPUT_NOT_READY";
+        } else if (callback_incomplete) {
+          after.expected_output_timestamp_reason = "CALLBACK_INCOMPLETE";
+        } else if (!after.estimator_valid_after) {
+          after.expected_output_timestamp_reason = "ESTIMATOR_STATE_INVALID";
+        } else if (!same_timestamp(state->_timestamp, callback_timestamp)) {
+          after.expected_output_timestamp_reason =
+              "STATE_TIMESTAMP_NOT_CURRENT_CALLBACK";
+        } else if (state->_calib_dt_CAMtoIMU == nullptr) {
+          after.expected_output_timestamp_reason = "IMU_TIME_OFFSET_UNAVAILABLE";
+        } else if (!std::isfinite(state->_calib_dt_CAMtoIMU->value()(0))) {
+          after.expected_output_timestamp_reason = "IMU_TIME_OFFSET_NONFINITE";
+        } else {
+          after.expected_output_timestamp =
+              state->_timestamp + state->_calib_dt_CAMtoIMU->value()(0);
+          after.expected_output_timestamp_available =
+              std::isfinite(after.expected_output_timestamp);
+          after.expected_output_timestamp_reason =
+              after.expected_output_timestamp_available
+                  ? "NONE"
+                  : "EXPECTED_OUTPUT_TIMESTAMP_NONFINITE";
+        }
+      }
+      after_metadata_available = true;
+    }
     const std::lock_guard<std::mutex> lock(mutex_);
     if (!active_.load(std::memory_order_acquire) || !current_available_) return;
+    if (after_metadata_available) {
+      current_.outcome_association_keys.initialized_after_available =
+          after.initialized_after_available;
+      current_.outcome_association_keys.initialized_after =
+          after.initialized_after;
+      current_.outcome_association_keys.state_timestamp_after_available =
+          after.state_timestamp_after_available;
+      current_.outcome_association_keys.state_timestamp_after =
+          after.state_timestamp_after;
+      current_.outcome_association_keys.state_timestamp_after_reason =
+          after.state_timestamp_after_reason;
+      current_.outcome_association_keys.expected_output_timestamp_available =
+          after.expected_output_timestamp_available;
+      current_.outcome_association_keys.expected_output_timestamp =
+          after.expected_output_timestamp;
+      current_.outcome_association_keys.expected_output_timestamp_reason =
+          after.expected_output_timestamp_reason;
+      current_.outcome_association_keys.estimator_valid_after_available =
+          after.estimator_valid_after_available;
+      current_.outcome_association_keys.estimator_valid_after =
+          after.estimator_valid_after;
+      current_.outcome_association_keys.nonfinite_observed =
+          after.nonfinite_observed;
+      current_.outcome_association_keys.nonfinite_observed_available =
+          after.nonfinite_observed_available;
+      current_.outcome_association_keys.nonfinite_observed_reason =
+          after.nonfinite_observed_reason;
+      current_.outcome_association_keys.callback_incomplete =
+          after.callback_incomplete;
+      current_.outcome_association_keys.callback_completion_reason =
+          std::move(after.callback_completion_reason);
+    }
     std::sort(current_.frontend.begin(), current_.frontend.end(),
               [](const ov_core::TrackKLTFrameDiagnostics &left,
                  const ov_core::TrackKLTFrameDiagnostics &right) {
@@ -884,6 +2001,27 @@ void TurnSafeDiagnostics::EndCallback() noexcept {
          timestamp >= last_camera_timestamp_)) {
       last_camera_timestamp_available_ = true;
       last_camera_timestamp_ = timestamp;
+    }
+    if (std::isfinite(timestamp) &&
+        (!previous_processed_callback_available_ ||
+         timestamp > previous_processed_callback_timestamp_)) {
+      previous_processed_callback_available_ = true;
+      previous_processed_callback_timestamp_ = timestamp;
+    } else {
+      previous_processed_callback_available_ = false;
+    }
+    if (initialized_available) {
+      const bool initialized_during_callback =
+          current_.initialized_before_available &&
+          !current_.initialized_before && estimator_initialized;
+      const bool initialized_since_previous_callback =
+          previous_initialized_after_available_ &&
+          !previous_initialized_after_ && estimator_initialized;
+      if (initialized_during_callback || initialized_since_previous_callback) {
+        next_callback_initialization_boundary_ = true;
+      }
+      previous_initialized_after_available_ = true;
+      previous_initialized_after_ = estimator_initialized;
     }
     inject_diagnostic_fault(
         TurnSafeDiagnosticFaultStage::kCallbackSerialization);
@@ -1184,7 +2322,14 @@ std::string TurnSafeDiagnostics::SerializeCallback(
       if (id != 0U) output << ',';
       output << frame.native_accepted_feature_ids[id];
     }
-    output << "]}";
+    output << ']';
+    if (options_.capture_causal_imu_intervals) {
+      output << ",\"extensions\":{\"event_extension\":{\"schema\":"
+             << quote(options_.event_extension_schema_version)
+             << ",\"gyro_interval_id\":"
+             << record.causal_imu_interval.gyro_interval_id << "}}";
+    }
+    output << '}';
   }
   output << ']';
 
@@ -1832,7 +2977,278 @@ std::string TurnSafeDiagnostics::SerializeCallback(
          << ",\"foregone_eligible_groups\":0,\"foregone_eligible_features\":0"
          << ",\"no_runner_up_gate_shopping\":true,\"translation_covariance_scale\":2.0}"
          << ",\"completeness\":{\"status\":\"PARTIAL_SHADOW_BY_CONTRACT\""
-         << ",\"typed_reasons\":[\"SHADOW_NOT_COMPUTED_STEREO_RANGE_COVARIANCE_NOT_ESTABLISHED\",\"SHADOW_NOT_COMPUTED_RELATIVE_CAMERA_CENTER_JACOBIAN_NOT_CERTIFIED\",\"SHADOW_NOT_COMPUTED_PIXEL_TO_BEARING_JACOBIAN_NOT_CERTIFIED\",\"SHADOW_NOT_COMPUTED_THRESHOLD_SET_NOT_FROZEN\"]}}";
+         << ",\"typed_reasons\":[\"SHADOW_NOT_COMPUTED_STEREO_RANGE_COVARIANCE_NOT_ESTABLISHED\",\"SHADOW_NOT_COMPUTED_RELATIVE_CAMERA_CENTER_JACOBIAN_NOT_CERTIFIED\",\"SHADOW_NOT_COMPUTED_PIXEL_TO_BEARING_JACOBIAN_NOT_CERTIFIED\",\"SHADOW_NOT_COMPUTED_THRESHOLD_SET_NOT_FROZEN\"]}";
+  if (EventExtensionRequested()) {
+    inject_diagnostic_fault(TurnSafeDiagnosticFaultStage::kExtensionSerialization);
+    output << ",\"extensions\":{\"event_extension\":{\"schema\":"
+           << quote(options_.event_extension_schema_version)
+           << ",\"record_version\":1";
+    if (options_.capture_causal_imu_intervals) {
+      output << ",\"causal_imu_interval\":";
+      write_causal_interval(output, record.causal_imu_interval,
+                            record.callback_index);
+    }
+    if (options_.capture_outcome_association_keys) {
+      output << ",\"outcome_association_keys\":";
+      write_outcome_association_keys(
+          output, options_, record.callback_index, record.timestamp,
+          record.outcome_association_keys, record.update_available,
+          record.update, record.no_full_visual_update_duration_available,
+          record.no_full_visual_update_duration);
+    }
+    if (options_.capture_group_bearing_provenance) {
+      inject_diagnostic_fault(TurnSafeDiagnosticFaultStage::kGroupProvenance);
+      const bool prior_available =
+          record.update_available && record.update.prior.available;
+      output << ",\"group_bearing_provenance\":{\"status\":"
+             << quote(prior_available ? "AVAILABLE" : "NOT_AVAILABLE")
+             << ",\"reason\":"
+             << quote(prior_available
+                          ? "NONE"
+                          : (record.update_available &&
+                                     !record.update.prior.reason.empty()
+                                 ? record.update.prior.reason
+                                 : "UPDATER_PRIOR_NOT_CAPTURED"))
+             << ",\"schema_version\":\"turnsafe.t0.event_extension.v1\""
+             << ",\"canonical_ordering_version\":\"turnsafe.event_extension.order.v1\""
+             << ",\"shared_field_encoding\":\"one_group_record_plus_member_array.v1\""
+             << ",\"groups\":[";
+      const auto find_clone = [&record](double timestamp)
+          -> const TurnSafePriorCloneValue * {
+        if (!record.update_available) return nullptr;
+        for (const auto &clone : record.update.prior.clones) {
+          if (same_timestamp(clone.timestamp, timestamp)) return &clone;
+        }
+        return nullptr;
+      };
+      std::size_t emitted_groups = 0U;
+      for (const auto &group : grouped_candidates) {
+        if (!prior_available) break;
+        std::vector<std::size_t> members;
+        std::set<std::pair<std::uint64_t, std::uint64_t>> identities;
+        for (const std::size_t callback_candidate_index : group.second) {
+          const CallbackCandidate &candidate_record =
+              callback_candidates.at(callback_candidate_index);
+          const TurnSafeFullTrackAttempt &attempt =
+              attempts.at(candidate_record.attempt_index);
+          const CandidateKey &candidate = candidate_record.key;
+          if (attempt.full_outcome_mapping != TurnSafeOutcomeMapping::kExact ||
+              !turnsafe_shadow_eligible_outcome(attempt.full_outcome) ||
+              find_target_stereo(
+                  attempt, candidate,
+                  options_.resolved_configuration.camera_count) == nullptr) {
+            continue;
+          }
+          const auto identity =
+              std::make_pair(candidate.feature_id, candidate.detached_index);
+          if (!identities.insert(identity).second) {
+            throw std::runtime_error(
+                "duplicate canonical group member identity");
+          }
+          members.push_back(callback_candidate_index);
+        }
+        if (members.size() < 2U) continue;
+        if (emitted_groups++ != 0U) output << ',';
+        const TurnSafePriorCameraValue *camera = find_camera(group.first.camera_id);
+        const TurnSafePriorCloneValue *source_clone =
+            find_clone(group.first.source);
+        const TurnSafePriorCloneValue *target_clone =
+            find_clone(group.first.target);
+        const CallbackCandidate &first_candidate_record =
+            callback_candidates.at(members.front());
+        const TurnSafeFullTrackAttempt &first_attempt =
+            attempts.at(first_candidate_record.attempt_index);
+        const TurnSafeObservationValue *first_stereo = find_target_stereo(
+            first_attempt, first_candidate_record.key,
+            options_.resolved_configuration.camera_count);
+        const TurnSafePriorCameraValue *shared_stereo_camera =
+            first_stereo == nullptr ? nullptr
+                                    : find_camera(first_stereo->camera_id);
+        output << "{\"group_key\":{\"camera_id\":"
+               << group.first.camera_id
+               << ",\"source_timestamp_key\":"
+               << quote(timestamp_key(group.first.source))
+               << ",\"target_timestamp_key\":"
+               << quote(timestamp_key(group.first.target)) << '}'
+               << ",\"member_count\":" << members.size()
+               << ",\"member_key_list\":[";
+        for (std::size_t member = 0U; member < members.size(); ++member) {
+          if (member != 0U) output << ',';
+          write_candidate_key(callback_candidates.at(members[member]).key);
+        }
+        output << "],\"camera\":{\"camera_id\":" << group.first.camera_id;
+        if (camera == nullptr || !camera_provenance_valid(*camera)) {
+          output << ",\"status\":\"NOT_AVAILABLE\",\"reason\":\"CAMERA_CALIBRATION_UNAVAILABLE\"}";
+        } else {
+          output << ",\"status\":\"AVAILABLE\",\"reason\":\"NONE\",\"model\":"
+                 << quote(camera->model) << ",\"image_width\":"
+                 << camera->width << ",\"image_height\":" << camera->height
+                 << ",\"intrinsics_distortion_hash\":"
+                 << quote(canonical_matrix_hash(camera->intrinsic_value))
+                 << ",\"camera_extrinsic_hash\":"
+                 << quote(canonical_matrix_hash(camera->extrinsic_value))
+                 << ",\"hash_algorithm\":\"fnv1a64_binary64_be.v1\"}";
+        }
+        output << ",\"target_stereo_camera\":{";
+        if (shared_stereo_camera == nullptr ||
+            !camera_provenance_valid(*shared_stereo_camera)) {
+          output << "\"status\":\"NOT_AVAILABLE\",\"reason\":\"TARGET_STEREO_CAMERA_CALIBRATION_UNAVAILABLE\"}";
+        } else {
+          output << "\"status\":\"AVAILABLE\",\"reason\":\"NONE\",\"camera_id\":"
+                 << shared_stereo_camera->camera_id
+                 << ",\"model\":" << quote(shared_stereo_camera->model)
+                 << ",\"image_width\":" << shared_stereo_camera->width
+                 << ",\"image_height\":" << shared_stereo_camera->height
+                 << ",\"intrinsics_distortion_hash\":"
+                 << quote(canonical_matrix_hash(
+                        shared_stereo_camera->intrinsic_value))
+                 << ",\"camera_extrinsic_hash\":"
+                 << quote(canonical_matrix_hash(
+                        shared_stereo_camera->extrinsic_value))
+                 << ",\"hash_algorithm\":\"fnv1a64_binary64_be.v1\"}";
+        }
+        output << ",\"bearing_provenance\":\"direct_native_normalized_unit_ray.v1\""
+               << ",\"source_clone_timestamp_value\":"
+               << double_json(group.first.source)
+               << ",\"target_clone_timestamp_value\":"
+               << double_json(group.first.target)
+               << ",\"source_current_R_GtoI\":";
+        write_rotation(output,
+                       source_clone == nullptr ? nullptr
+                                               : &source_clone->nominal_pose,
+                       "SOURCE_CURRENT_CLONE_ROTATION_UNAVAILABLE");
+        output << ",\"source_fej_R_GtoI\":";
+        write_rotation(output,
+                       source_clone == nullptr ? nullptr
+                                               : &source_clone->fej_pose,
+                       "SOURCE_FEJ_CLONE_ROTATION_UNAVAILABLE");
+        output << ",\"target_current_R_GtoI\":";
+        write_rotation(output,
+                       target_clone == nullptr ? nullptr
+                                               : &target_clone->nominal_pose,
+                       "TARGET_CURRENT_CLONE_ROTATION_UNAVAILABLE");
+        output << ",\"target_fej_R_GtoI\":";
+        write_rotation(output,
+                       target_clone == nullptr ? nullptr
+                                               : &target_clone->fej_pose,
+                       "TARGET_FEJ_CLONE_ROTATION_UNAVAILABLE");
+        output << ",\"fixed_R_ItoC\":";
+        write_rotation(output,
+                       camera == nullptr ? nullptr
+                                         : &camera->extrinsic_value,
+                       "CAMERA_EXTRINSIC_ROTATION_UNAVAILABLE");
+        output << ",\"supported_configuration\":{\"value\":"
+               << (options_.resolved_configuration.supported ? "true" : "false")
+               << ",\"reasons\":[";
+        for (std::size_t reason = 0U;
+             reason < options_.resolved_configuration.unsupported_reasons.size();
+             ++reason) {
+          if (reason != 0U) output << ',';
+          output << quote(
+              options_.resolved_configuration.unsupported_reasons[reason]);
+        }
+        output << "]},\"members\":[";
+        for (std::size_t member = 0U; member < members.size(); ++member) {
+          if (member != 0U) output << ',';
+          const CallbackCandidate &candidate_record =
+              callback_candidates.at(members[member]);
+          const CandidateKey &candidate = candidate_record.key;
+          const TurnSafeFullTrackAttempt &attempt =
+              attempts.at(candidate_record.attempt_index);
+          const TurnSafeObservationValue &source =
+              attempt.ordered_observations.at(
+                  candidate.source_observation_index);
+          const TurnSafeObservationValue &target =
+              attempt.ordered_observations.at(
+                  candidate.target_observation_index);
+          const TurnSafeObservationValue *stereo = find_target_stereo(
+              attempt, candidate,
+              options_.resolved_configuration.camera_count);
+          const TurnSafePriorCameraValue *stereo_camera =
+              stereo == nullptr ? nullptr : find_camera(stereo->camera_id);
+          if (stereo != nullptr && first_stereo != nullptr &&
+              stereo->camera_id != first_stereo->camera_id) {
+            throw std::runtime_error(
+                "group target-stereo camera identity is not shared");
+          }
+          const bool finite = source.uv_available &&
+              std::isfinite(source.uv[0]) && std::isfinite(source.uv[1]) &&
+              source.uv_normalized_available &&
+              std::isfinite(source.uv_normalized[0]) &&
+              std::isfinite(source.uv_normalized[1]) &&
+              target.uv_available && std::isfinite(target.uv[0]) &&
+              std::isfinite(target.uv[1]) &&
+              target.uv_normalized_available &&
+              std::isfinite(target.uv_normalized[0]) &&
+              std::isfinite(target.uv_normalized[1]) && stereo != nullptr &&
+              stereo->uv_available && std::isfinite(stereo->uv[0]) &&
+              std::isfinite(stereo->uv[1]);
+          output << "{\"member_key\":";
+          write_candidate_key(candidate);
+          output << ",\"feature_id\":" << candidate.feature_id
+                 << ",\"detached_index\":" << candidate.detached_index
+                 << ",\"source_observation_key\":";
+          write_observation_key(source, attempt);
+          output << ",\"target_observation_key\":";
+          write_observation_key(target, attempt);
+          output << ",\"target_stereo_observation_key\":";
+          if (stereo != nullptr) write_observation_key(*stereo, attempt);
+          else output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":\"TARGET_STEREO_UNAVAILABLE\"}";
+          output << ",\"source_raw_pixel\":";
+          write_pixel_value(output, source.uv_available, source.uv,
+                            "SOURCE_RAW_PIXEL_UNAVAILABLE",
+                            "SOURCE_RAW_PIXEL_NONFINITE");
+          output << ",\"target_raw_pixel\":";
+          write_pixel_value(output, target.uv_available, target.uv,
+                            "TARGET_RAW_PIXEL_UNAVAILABLE",
+                            "TARGET_RAW_PIXEL_NONFINITE");
+          output << ",\"source_normalized_coordinates\":";
+          write_pixel_value(output, source.uv_normalized_available,
+                            source.uv_normalized,
+                            "SOURCE_NORMALIZED_UNAVAILABLE",
+                            "SOURCE_NORMALIZED_NONFINITE");
+          output << ",\"target_normalized_coordinates\":";
+          write_pixel_value(output, target.uv_normalized_available,
+                            target.uv_normalized,
+                            "TARGET_NORMALIZED_UNAVAILABLE",
+                            "TARGET_NORMALIZED_NONFINITE");
+          output << ",\"source_unit_bearing\":";
+          write_unit_bearing(output, source, "SOURCE_BEARING_UNAVAILABLE",
+                             "SOURCE_BEARING_NONFINITE");
+          output << ",\"target_unit_bearing\":";
+          write_unit_bearing(output, target, "TARGET_BEARING_UNAVAILABLE",
+                             "TARGET_BEARING_NONFINITE");
+          output << ",\"target_stereo_raw_pixel\":";
+          if (stereo == nullptr)
+            output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":\"TARGET_STEREO_UNAVAILABLE\"}";
+          else
+            write_pixel_value(output, stereo->uv_available, stereo->uv,
+                              "TARGET_STEREO_RAW_PIXEL_UNAVAILABLE",
+                              "TARGET_STEREO_RAW_PIXEL_NONFINITE");
+          output << ",\"source_image_cell\":";
+          write_image_cell(output, source, camera);
+          output << ",\"target_image_cell\":";
+          write_image_cell(output, target, camera);
+          output << ",\"target_stereo_image_cell\":";
+          if (stereo == nullptr)
+            output << "{\"status\":\"NOT_AVAILABLE\",\"reason\":\"TARGET_STEREO_UNAVAILABLE\"}";
+          else
+            write_image_cell(output, *stereo, stereo_camera);
+          output << ",\"native_source_status\":{\"status\":\"AVAILABLE\",\"reason\":\"TYPED_T1_SOURCE_OUTCOME\",\"full_outcome\":"
+                 << quote(turnsafe_full_outcome_name(attempt.full_outcome))
+                 << "},\"finite_validation\":{\"status\":"
+                 << quote(finite ? "AVAILABLE" : "NOT_AVAILABLE")
+                 << ",\"reason\":"
+                 << quote(finite ? "NONE" : "MEMBER_PRIMITIVE_MISSING_OR_NONFINITE")
+                 << "}}";
+        }
+        output << "]}";
+      }
+      output << "],\"group_count\":" << emitted_groups << '}';
+    }
+    output << "}}";
+  }
+  output << '}';
   return output.str();
 }
 

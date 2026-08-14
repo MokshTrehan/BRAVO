@@ -398,3 +398,49 @@ Run the human-side recertification commit script using the recorded commit
 message `fix(turnsafe): align T0 terminal reason schema`. After that commit,
 request the exact token `APPROVE_SESSION_2_T0_DECISION_ONLY`. Session 2 has not
 begun in this session.
+
+---
+
+# TurnSafe v6 Session 1E event-ready instrumentation handover
+
+Authorization: `APPROVE_SESSION_1E_EVENT_INSTRUMENTATION_EXTENSION`
+
+Session 1E starts from committed HEAD
+`8d0e07bc262244b076606eb7a64f172e4619af79`, tree
+`a6796c105309ec85012e5fcc378ef5b495c2586b`, on
+`schurvio-lite/turnsafe-primary`. Its only decision source is the Session-2A
+PASS result `T0_EVENT_INSTRUMENTATION_EXTENSION`.
+
+The implementation retains `turnsafe.t0.v1` and adds the backward-readable,
+default-off `turnsafe.t0.event_extension.v1` object. It records one exact
+causal IMU interval per processed camera callback, raw and callback-entry
+bias-only gyro integrals, a native-gyro-frame SO(3) diagnostic, stable causal
+output-association keys, and compact canonical group pixel/bearing/clone/
+fixed-calibration provenance. Reference association occurs only in the
+post-close offline tool. All absence is typed; the native estimator has no
+reset path, so reset remains explicitly not exposed and the only observed
+lifecycle boundary is first callback after initialization.
+
+The extension does not add a factor or measurement row and does not alter
+tracking, masking, feature order, proposal construction, FEJ, Schur, NIS,
+state, covariance, lifecycle, or output decisions. It defines no event,
+degradation, consensus, spatial, rank, conditioning, certificate, T1/T3, or
+branch threshold/result. Ground truth, reference content, sequence identity,
+future data, and final errors remain outside the estimator process.
+
+The exact dirty-source snapshot, build, replay commands, local-test results,
+minimum parity results, ordered eleven-sequence campaign, repeats, dataset
+before/after ledgers, compressed archive identities, corpus derivatives,
+independent final review, commit manifest, and final classification are
+authoritatively recorded under `artifacts/turnsafe/session_01e/`. Scratch and
+per-run replay evidence is under `.turnsafe-work/session_01e/` and
+`artifacts/turnsafe/session_01e/replay/`. This handover deliberately references
+those immutable ledgers rather than duplicating post-freeze dynamic counts,
+so its bytes are included in the single source snapshot used by every replay.
+
+Nothing is staged or committed in Session 1E. A PASS stop packet requires the
+human commit manifest message
+`feat(turnsafe): add causal event-ready T0 capture`; the human-side commit must
+reproduce the recorded dirty snapshot byte-for-byte before requesting
+`APPROVE_SESSION_2B_EVENT_CONTRACT_AND_BRANCH_DECISION`. Any non-PASS packet
+retains `SESSION_1_REVIEW_REQUIRED` and authorizes no Session-2B work.

@@ -1,8 +1,9 @@
 # TurnSafe T0 diagnostic schema
 
-Status: Session 1R repair contract; replay validation pending
+Status: Session 1E passive event-extension contract; replay validation pending
 
-Schema identifier: `turnsafe.t0.v1`
+Schema identifiers: `turnsafe.t0.v1` and additive
+`turnsafe.t0.event_extension.v1`
 
 Authority: v6 plan Sections 5.6, 7, 8.7--8.11, 12.1, 12.3, and 15
 
@@ -11,11 +12,12 @@ not authorize factor rows, proposal changes, new gates, fallback behavior, or
 live-state mutation. A missing diagnostic is represented explicitly; estimator
 behavior is never changed to manufacture a value.
 
-Session 1R repairs the passive candidate against the eight findings in the
-Session-1 final review. Until its precommit and clean-postcommit replay gates
-finish, this document makes no parity or campaign claim. The repaired path
-fails closed for diagnostic exceptions, binds runtime support and build/source
-identity independently, and retains the raw evidence required by this schema.
+Session 1E retains every `turnsafe.t0.v1` field and adds an optional event-ready
+extension under the compatibility surface already reserved by `extensions`.
+Until the Session-1E precommit replay gates finish, this document makes no new
+parity or campaign claim. The extension records causal primitives and stable
+offline association inputs only; it does not segment events, assign outcomes,
+choose thresholds or branches, or construct a factor.
 
 The repository-convention tests needed for stereo range covariance, relative camera-center
 translation covariance, and CamRadtan inverse bearing covariance were not
@@ -118,7 +120,7 @@ within each camera. Those positions define the observation ordinals.
 | `frozen_base_sha` | string | Frozen repository identity |
 | `source_sha` | string | Git HEAD independently resolved by the source-snapshot tool at configure time |
 | `tree_sha` | string | Git `HEAD^{tree}` independently resolved at configure time |
-| `source_snapshot_sha256` | SHA-256 | Aggregate identity of HEAD/tree, porcelain state, tracked diff, compiled inputs, and untracked compiled inputs |
+| `source_snapshot_sha256` | SHA-256 | Aggregate identity of HEAD/tree, porcelain state, tracked diff, compiled inputs, untracked compiled inputs, and curated replay/provenance tooling inputs |
 | `source_dirty` | boolean | True only for an explicit precommit dirty snapshot identity |
 | `build_provenance_id` | SHA-256 | Configure descriptor ID compiled into the TurnSafe-owning shared library |
 | `configure_manifest_sha256` | SHA-256 | Hash of the configure manifest used to generate the compiled identity |
@@ -630,3 +632,156 @@ missing counts are always reported.
 Telemetry or aggregates containing holdout identifiers are invalid before the
 Session 7 unlock. The branch report must follow Sections 7.7--7.8 and may not
 turn an unavailable field into evidence for later-stage implementation.
+
+## 13. Passive event-ready extension
+
+### 13.1 Versioning and activation
+
+The base stream remains one `turnsafe.t0.v1` `run_header` followed by one
+`turnsafe.t0.v1` `callback` per processed visual callback. When any Session-1E
+capture flag is true, both records add:
+
+```text
+extensions.event_extension.schema = turnsafe.t0.event_extension.v1
+extensions.event_extension.record_version = 1
+```
+
+Old readers may ignore `extensions`; no v1 field becomes newly required. The
+three independent flags default false:
+
+```text
+capture_causal_imu_intervals
+capture_outcome_association_keys
+capture_group_bearing_provenance
+```
+
+A true extension flag requires passive T0 capture. The header binds their
+resolved Boolean vector plus the integration, rotation, gyro-bias, clock,
+association, ordering, image-cell, and calibration-hash convention IDs. The
+configure/build descriptor binds both schema identifiers and the bytes of this
+document. Capture off calls no extension provider and performs no extension
+allocation.
+
+### 13.2 One causal IMU interval per callback
+
+When interval capture is enabled, each callback has exactly one
+`causal_imu_interval`; `gyro_interval_id` equals the zero-based `callback_id`
+within the opaque run namespace. `camera_frame_ids` is globally sorted and
+unique. Every emitted frontend frame has only an additive interval reference,
+and all frames from a stereo callback reference that same interval.
+
+The camera-clock interval is the previous processed callback timestamp through
+the current callback timestamp. The recorded mapping is:
+
+```text
+t_imu = t_camera + dt_CAMtoIMU
+```
+
+Both camera and IMU endpoints, duration, offset, bit-preserving timestamp keys,
+units, and frame/convention strings are explicit. The first callback and the
+first callback after an observed uninitialized-to-initialized boundary are
+unavailable with typed reasons. Timestamp regression/nonfiniteness and an
+unexposed reset likewise cannot fabricate an interval.
+
+Only already-buffered causal `ImuData::wm` samples may be copied. The read-only
+copy holds the native IMU-buffer lock only while validating native order and
+copying the endpoint brackets/interior support; it never consumes, erases,
+sorts, extrapolates, or retains a buffer pointer. Endpoint status is exactly
+`EXACT_SAMPLE`, `LINEAR_INTERPOLATED`, or `UNSUPPORTED`. Linear interpolation
+requires two finite, strictly ordered native samples. Missing either bracket
+makes the interval unavailable.
+
+Support fields record the first/last copied IMU timestamps, source sample
+count, both endpoint/bracket records, maximum consecutive copied-sample gap,
+coverage fraction, and endpoint-policy version. Large gaps remain measured
+numbers, not a gate. The canonical knot arrays contain the exact interpolated
+endpoints and native interior samples in strictly increasing time order.
+
+Raw angular velocity is native `ImuData::wm` in rad/s. The read-only bias
+snapshot is callback-entry `state->_imu->bias_g()` in the same bias convention;
+the separately named bias-only series is `wm-bias_g`, not the fully calibrated
+propagation-equivalent rate. Both series record maximum norm, time-weighted RMS
+norm, time-weighted mean vector, trapezoidal integral of norm, trapezoidal
+integral vector, SO(3) delta matrix, canonical scalar-last JPL quaternion,
+principal rotation angle, and a typed axis. The method identifiers are:
+
+```text
+piecewise_linear_trapezoid.v1
+native_gyroscope_frame_passive_left_exp_minus_omega_diagnostic.v1
+raw_wm_minus_current_callback_bias_g.v1
+```
+
+For each chronological segment the diagnostic composes
+`Exp(-0.5*(omega_k+omega_{k+1})*dt)` on the left. This freezes a passive
+native-gyro-frame diagnostic direction only; it is not the fully calibrated
+propagation-equivalent `R_GtoI` delta because gyro intrinsics, g-sensitivity,
+and `R_GYROtoIMU` are intentionally not applied. All interpolation,
+integration, SO(3), and
+numeric serialization execute in a strict-floating-point diagnostic unit.
+
+### 13.3 Causal output-association keys and offline joins
+
+`outcome_association_keys` contains only callback/estimator metadata available
+without reference data: callback ID/time, initialized and finite/valid status,
+state timestamp, deterministic expected state/deviation/pose timestamp keys,
+ordinary accepted-full factor count, ordinary full-update acceptance, camera
+time since that acceptance, incomplete/nonfinite observations, and opaque
+run/source/tree/snapshot/build/config/calibration identities. Actual output row
+ordinals, pose-write status, reset status when unexposed, run completion, and
+reference association remain typed offline-only or not-exposed values.
+
+After ROS and the estimator writers close, the byte-bound tool
+`turnsafe.offline_association.v1` performs unique-nearest deterministic joins.
+State, deviation, and trajectory use the expected IMU-clock output timestamp
+and maximum absolute residual 5.1e-6 s, covering the native five-decimal output
+format. The permissible development reference is first opened offline and uses
+that same expected IMU-clock timestamp with maximum absolute residual 0.01 s,
+matching the frozen KAIST evaluation association. Duplicate/equidistant rows
+are `AMBIGUOUS`; absence is `MISSING`. Rows include matched source ordinals,
+line numbers, timestamps/keys, signed residuals, reference hash/time base, and
+association version. No time-offset search, cropping, error, event ID, outcome,
+or degradation label is produced.
+
+### 13.4 Compact group-bearing provenance
+
+Full provenance is emitted only for a same-camera source/target group whose
+members have live clones, exact target-time stereo support, an exact typed
+T1-source outcome, and at least two distinct canonical member identities.
+`n=1` is omitted; `n=2`, `n=3`, and `n>=4` remain as structural populations
+without acceptance meaning.
+
+Groups sort globally by `(camera_id,source_timestamp_key,target_timestamp_key)`;
+members sort by the complete v1 candidate key. Duplicates disable diagnostics
+as ownership failures. Each group writes shared clone/calibration values once:
+member keys/count, camera model/dimensions, canonical binary64 calibration and
+extrinsic hashes, source/target clone timestamps, current and FEJ `R_GtoI`,
+fixed `R_ItoC`, and supported-configuration status/reasons. The compact member
+array then contains feature/detached identity, source/target/stereo observation
+keys, raw pixels, native-normalized coordinates, camera-frame unit bearings,
+target-stereo pixels, and threshold-free continuous pixel-center fractions.
+Each conditional member value is a typed status/reason/value object; an
+unavailable value omits `value`.
+
+The extension intentionally contains no consensus, spatial acceptance, rank or
+conditioning acceptance, winner, certificate, event, severity, outcome, T1,
+T2, T3, or branch field. Its primitives are sufficient for a later offline
+oracle to reconstruct target spatial inputs, relative-rotation residual inputs,
+and the local rotation stack without selecting an oracle threshold here.
+
+### 13.5 Failure isolation, validation, and storage
+
+Expected unavailable support is record missingness, not a diagnostic exception.
+Unexpected support-copy, allocation, interpolation, integration, SO(3),
+metadata, provenance, serialization, sink, or publication failures cross the
+existing no-throw boundary, latch only a fixed reason/saturating counter, and
+disable diagnostics without retry or native-state effect.
+
+The replay validator accepts old v1 streams unchanged and validates extension
+streams in bounded memory. It reconciles one interval per callback, stereo
+references, typed availability, knots/summaries, runtime identity/firewall,
+group/member ordering and geometry, and post-close association coverage. After
+validation and derivative generation, raw telemetry is compressed with
+single-threaded zstd (`-T1 -9`) or deterministic gzip (`-9 -n`), archive-tested,
+and decompressed through a bounded SHA-256/byte-count round trip. Raw bytes are
+removed only after exact equality. Extension archives and derivatives are
+separately hash-bound and remain outside the frozen estimator-parity digest.

@@ -15,6 +15,10 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 CONFIGURE_SCHEMA = "turnsafe.configure_provenance.v1"
 BUILD_SCHEMA = "turnsafe.build_manifest.v1"
+DIAGNOSTIC_SCHEMA_IDENTIFIERS = {
+    "base": "turnsafe.t0.v1",
+    "event_extension": "turnsafe.t0.event_extension.v1",
+}
 
 
 class ManifestError(RuntimeError):
@@ -217,6 +221,10 @@ def finalize(args: argparse.Namespace) -> Dict[str, Any]:
     expected_schema = configure["descriptor"].get(
         "diagnostic_schema_sha256"
     )
+    if configure["descriptor"].get(
+        "diagnostic_schema_identifiers"
+    ) != DIAGNOSTIC_SCHEMA_IDENTIFIERS:
+        raise ManifestError("diagnostic schema identifiers are missing or invalid")
     if _sha256_file(schema_path) != expected_schema:
         raise ManifestError("diagnostic schema differs from configured schema")
     artifacts: Dict[str, Any] = {}
@@ -228,10 +236,12 @@ def finalize(args: argparse.Namespace) -> Dict[str, Any]:
         "estimator_binary",
         "ov_msckf_library",
         "ov_core_library",
+        "ov_init_library",
     }
     if not required_artifacts.issubset(artifacts):
         raise ManifestError(
-            "estimator_binary, ov_msckf_library, and ov_core_library "
+            "estimator_binary, ov_msckf_library, ov_core_library, and "
+            "ov_init_library "
             "artifacts are required"
         )
     expected_artifacts = {
@@ -239,6 +249,7 @@ def finalize(args: argparse.Namespace) -> Dict[str, Any]:
         / "devel/lib/ov_msckf/ros1_serial_msckf",
         "ov_msckf_library": workspace_root / "devel/lib/libov_msckf_lib.so",
         "ov_core_library": workspace_root / "devel/lib/libov_core_lib.so",
+        "ov_init_library": workspace_root / "devel/lib/libov_init_lib.so",
     }
     for name, expected in expected_artifacts.items():
         if Path(str(artifacts[name]["path"])).resolve(strict=True) != expected:

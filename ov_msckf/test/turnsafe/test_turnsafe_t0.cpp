@@ -9,6 +9,8 @@
 #include "feat/FeatureInitializer.h"
 #include "track/TrackKLT.h"
 #include "track/TrackKLTDiagnostics.h"
+#include "state/Propagator.h"
+#include "state/State.h"
 #include "update/TurnSafeDiagnostics.h"
 #include "update/UpdaterMSCKF.h"
 #include "update/UpdaterMSCKFPreview.h"
@@ -20,6 +22,7 @@
 #include <cstdio>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -175,6 +178,102 @@ ov_msckf::MSCKFUpdatePriorSnapshot MinimalPrior() {
   return prior;
 }
 
+ov_msckf::TurnSafeImuSupportSnapshot ImuSupport(
+    const std::vector<double> &timestamps,
+    const std::vector<std::array<double, 3U>> &omega) {
+  EXPECT_EQ(timestamps.size(), omega.size());
+  ov_msckf::TurnSafeImuSupportSnapshot support;
+  support.available = true;
+  support.reason = "NONE";
+  for (std::size_t index = 0U;
+       index < timestamps.size() && index < omega.size(); ++index) {
+    ov_msckf::TurnSafeImuSampleValue sample;
+    sample.timestamp = timestamps[index];
+    sample.omega_rad_s = omega[index];
+    support.samples.push_back(sample);
+  }
+  return support;
+}
+
+ov_msckf::MSCKFUpdatePriorSnapshot EventReadyPrior(
+    const std::vector<double> &timestamps) {
+  ov_msckf::MSCKFUpdatePriorSnapshot prior;
+  prior.timestamp = timestamps.empty() ? 0.0 : timestamps.back();
+  const Eigen::Index dimension =
+      static_cast<Eigen::Index>(timestamps.size() * 6U);
+  prior.filter.covariance = Eigen::MatrixXd::Identity(dimension, dimension);
+  for (std::size_t index = 0U; index < timestamps.size(); ++index) {
+    const Eigen::Index covariance_id =
+        static_cast<Eigen::Index>(index * 6U);
+    prior.filter.state_blocks.push_back({covariance_id, 6, covariance_id});
+    ov_msckf::MSCKFUpdatePriorNominalBlock block;
+    block.covariance_id = covariance_id;
+    block.size = 6;
+    block.value = Eigen::MatrixXd::Zero(7, 1);
+    block.fej = Eigen::MatrixXd::Zero(7, 1);
+    const double angle = 0.05 * static_cast<double>(index + 1U);
+    block.value(2, 0) = std::sin(0.5 * angle);
+    block.value(3, 0) = std::cos(0.5 * angle);
+    block.fej(1, 0) = std::sin(0.5 * (angle + 0.01));
+    block.fej(3, 0) = std::cos(0.5 * (angle + 0.01));
+    prior.nominal_blocks.push_back(block);
+    prior.clone_bindings.push_back({timestamps[index], covariance_id});
+  }
+  for (std::size_t camera_id = 0U; camera_id < 2U; ++camera_id) {
+    ov_msckf::MSCKFUpdatePriorCamera camera;
+    camera.camera_id = camera_id;
+    camera.extrinsic_id = -1;
+    camera.intrinsic_id = -1;
+    camera.extrinsic_value = Eigen::MatrixXd::Zero(7, 1);
+    camera.extrinsic_value(2, 0) =
+        std::sin(0.025 * static_cast<double>(camera_id));
+    camera.extrinsic_value(3, 0) =
+        std::cos(0.025 * static_cast<double>(camera_id));
+    camera.extrinsic_fej = camera.extrinsic_value;
+    camera.intrinsic_value = Eigen::MatrixXd::Zero(8, 1);
+    camera.intrinsic_value <<
+        100.0 + 10.0 * camera_id, 101.0 + 10.0 * camera_id,
+        50.0 + camera_id, 40.0 + camera_id,
+        0.01 * (camera_id + 1U), -0.001 * (camera_id + 1U),
+        0.0001 * (camera_id + 1U), -0.0002 * (camera_id + 1U);
+    camera.intrinsic_fej = camera.intrinsic_value;
+    camera.cache_value = Eigen::MatrixXd::Identity(3, 3);
+    camera.width = camera_id == 0U ? 100 : 120;
+    camera.height = camera_id == 0U ? 80 : 90;
+    camera.model = ov_msckf::MSCKFUpdatePriorCameraModel::kRadtan;
+    prior.cameras.push_back(camera);
+  }
+  return prior;
+}
+
+std::string SerializeEventGroups(
+    std::vector<ov_msckf::TurnSafeFullTrackAttempt> attempts,
+    const std::vector<double> &clone_timestamps) {
+  const std::string path = TemporaryPath();
+  auto options = Options(path);
+  options.capture_group_bearing_provenance = true;
+  options.run_identity = "opaque-test-run";
+  const auto sink = ov_msckf::TurnSafeDiagnostics::Create(options);
+  EXPECT_TRUE(sink && sink->active());
+  if (!sink || !sink->active()) return std::string();
+  ov_msckf::TurnSafePriorPrimitives prior;
+  ov_msckf::TurnSafeDiagnostics::CapturePriorPrimitives(
+      EventReadyPrior(clone_timestamps), attempts, prior);
+  EXPECT_TRUE(prior.available);
+  sink->BeginCallback(10.0);
+  ov_msckf::TurnSafeUpdateRecord update;
+  update.callback_timestamp = 10.0;
+  update.native_terminal_status = "TEST";
+  update.attempts = std::move(attempts);
+  update.prior = std::move(prior);
+  sink->RecordUpdate(std::move(update));
+  sink->EndCallback();
+  EXPECT_TRUE(sink->Finalize());
+  const std::string bytes = ReadAll(path);
+  ::unlink(path.c_str());
+  return bytes;
+}
+
 class FaultReset {
 public:
   ~FaultReset() {
@@ -321,6 +420,156 @@ TEST(TurnSafeT0, InvalidAndUnsupportedPathsDisableOnlyTheSink) {
                "UNSUPPORTED_SCHEMA_VERSION");
 }
 
+TEST(TurnSafeT0, ExtensionFlagsRequireActivePassiveCapture) {
+  for (int flag = 0; flag < 3; ++flag) {
+    ov_msckf::TurnSafeDiagnosticsOptions options;
+    if (flag == 0) options.capture_causal_imu_intervals = true;
+    if (flag == 1) options.capture_outcome_association_keys = true;
+    if (flag == 2) options.capture_group_bearing_provenance = true;
+    const auto sink = ov_msckf::TurnSafeDiagnostics::Create(options);
+    ASSERT_TRUE(sink);
+    EXPECT_FALSE(sink->active());
+    EXPECT_STREQ(sink->failure_reason(),
+                 "EVENT_EXTENSION_REQUIRES_ACTIVE_PASSIVE_CAPTURE");
+    EXPECT_EQ(sink->failure_count(), 1U);
+  }
+
+  const std::string path = TemporaryPath();
+  auto unsupported = Options(path);
+  unsupported.capture_causal_imu_intervals = true;
+  unsupported.event_extension_schema_version =
+      "turnsafe.t0.event_extension.unsupported";
+  const auto sink = ov_msckf::TurnSafeDiagnostics::Create(unsupported);
+  ASSERT_TRUE(sink);
+  EXPECT_FALSE(sink->active());
+  EXPECT_STREQ(sink->failure_reason(), "UNSUPPORTED_SCHEMA_VERSION");
+  ::unlink((path + ".tmp").c_str());
+}
+
+TEST(TurnSafeT0, CausalImuConstantRateInterpolationBiasAndSo3AreExact) {
+  const auto support = ImuSupport(
+      {0.0, 1.0, 2.0},
+      {{{2.0, 0.0, 0.0}}, {{2.0, 0.0, 0.0}},
+       {{2.0, 0.0, 0.0}}});
+  const auto interval =
+      ov_msckf::TurnSafeDiagnostics::EvaluateCausalImuInterval(
+          7U, {1, 0}, true, 0.5, 1.5, false, true, 0.0, true,
+          {{0.5, 0.0, 0.0}}, support);
+  ASSERT_TRUE(interval.available) << interval.reason;
+  EXPECT_EQ(interval.gyro_interval_id, 7U);
+  EXPECT_EQ(interval.camera_frame_ids, (std::vector<int>{0, 1}));
+  EXPECT_EQ(interval.start_endpoint.status, "LINEAR_INTERPOLATED");
+  EXPECT_EQ(interval.end_endpoint.status, "LINEAR_INTERPOLATED");
+  EXPECT_EQ(interval.source_sample_count, 3U);
+  ASSERT_EQ(interval.knot_timestamps_s.size(), 3U);
+  EXPECT_DOUBLE_EQ(interval.knot_timestamps_s.front(), 0.5);
+  EXPECT_DOUBLE_EQ(interval.knot_timestamps_s.back(), 1.5);
+  EXPECT_DOUBLE_EQ(interval.duration_s, 1.0);
+  EXPECT_DOUBLE_EQ(interval.coverage_fraction, 1.0);
+  EXPECT_DOUBLE_EQ(interval.maximum_internal_gap_s, 0.5);
+  ASSERT_TRUE(interval.raw_summary.available);
+  EXPECT_DOUBLE_EQ(interval.raw_summary.max_norm_rad_s, 2.0);
+  EXPECT_DOUBLE_EQ(interval.raw_summary.rms_norm_rad_s, 2.0);
+  EXPECT_DOUBLE_EQ(interval.raw_summary.mean_omega_rad_s[0], 2.0);
+  EXPECT_DOUBLE_EQ(interval.raw_summary.integral_norm_rad, 2.0);
+  EXPECT_DOUBLE_EQ(interval.raw_summary.integral_omega_rad[0], 2.0);
+  EXPECT_NEAR(interval.raw_summary.delta_rotation_angle_rad, 2.0, 1.0e-14);
+  ASSERT_TRUE(interval.raw_summary.delta_rotation_axis_available);
+  EXPECT_NEAR(interval.raw_summary.delta_rotation_axis[0], -1.0, 1.0e-14);
+  ASSERT_TRUE(interval.bias_corrected_summary.available);
+  EXPECT_DOUBLE_EQ(interval.bias_corrected_summary.max_norm_rad_s, 1.5);
+  EXPECT_DOUBLE_EQ(interval.bias_corrected_summary.rms_norm_rad_s, 1.5);
+  EXPECT_DOUBLE_EQ(interval.bias_corrected_summary.integral_norm_rad, 1.5);
+  EXPECT_NEAR(interval.bias_corrected_summary.delta_rotation_angle_rad,
+              1.5, 1.0e-14);
+}
+
+TEST(TurnSafeT0, CausalImuRampIrregularCadenceAndOrderAreDeterministic) {
+  const auto ramp = ImuSupport(
+      {0.0, 0.4, 1.0, 2.0},
+      {{{0.0, 0.0, 0.0}}, {{0.4, 0.0, 0.0}},
+       {{1.0, 0.0, 0.0}}, {{2.0, 0.0, 0.0}}});
+  const auto first =
+      ov_msckf::TurnSafeDiagnostics::EvaluateCausalImuInterval(
+          8U, {0}, true, 0.2, 1.5, false, true, 0.0, true,
+          {{0.0, 0.0, 0.0}}, ramp);
+  const auto second =
+      ov_msckf::TurnSafeDiagnostics::EvaluateCausalImuInterval(
+          8U, {0}, true, 0.2, 1.5, false, true, 0.0, true,
+          {{0.0, 0.0, 0.0}}, ramp);
+  ASSERT_TRUE(first.available) << first.reason;
+  ASSERT_TRUE(second.available) << second.reason;
+  EXPECT_NEAR(first.raw_summary.integral_omega_rad[0],
+              0.5 * (1.5 * 1.5 - 0.2 * 0.2), 1.0e-15);
+  EXPECT_NEAR(first.raw_summary.integral_norm_rad,
+              first.raw_summary.integral_omega_rad[0], 1.0e-15);
+  EXPECT_EQ(first.knot_timestamps_s, second.knot_timestamps_s);
+  EXPECT_EQ(first.raw_omega_rad_s, second.raw_omega_rad_s);
+  EXPECT_EQ(first.raw_summary.delta_rotation_matrix_row_major,
+            second.raw_summary.delta_rotation_matrix_row_major);
+
+  auto regressed = ramp;
+  std::swap(regressed.samples[1], regressed.samples[2]);
+  const auto rejected =
+      ov_msckf::TurnSafeDiagnostics::EvaluateCausalImuInterval(
+          8U, {0}, true, 0.2, 1.5, false, true, 0.0, true,
+          {{0.0, 0.0, 0.0}}, regressed);
+  EXPECT_FALSE(rejected.available);
+  EXPECT_EQ(rejected.reason, "IMU_TIMESTAMP_NOT_STRICTLY_INCREASING");
+}
+
+TEST(TurnSafeT0, CausalImuMissingnessAndGapReasonsAreTyped) {
+  const auto support = ImuSupport(
+      {1.0, 3.0},
+      {{{0.0, 1.0, 0.0}}, {{0.0, 1.0, 0.0}}});
+  const auto first =
+      ov_msckf::TurnSafeDiagnostics::EvaluateCausalImuInterval(
+          0U, {0}, false, 0.0, 2.0, false, true, 0.0, true,
+          {{0.0, 0.0, 0.0}}, support);
+  EXPECT_FALSE(first.available);
+  EXPECT_EQ(first.reason, "FIRST_CALLBACK");
+
+  const auto after_initialization =
+      ov_msckf::TurnSafeDiagnostics::EvaluateCausalImuInterval(
+          1U, {0}, true, 1.0, 2.0, true, true, 0.0, true,
+          {{0.0, 0.0, 0.0}}, support);
+  EXPECT_FALSE(after_initialization.available);
+  EXPECT_EQ(after_initialization.reason,
+            "FIRST_CALLBACK_AFTER_INITIALIZATION");
+
+  const auto regression =
+      ov_msckf::TurnSafeDiagnostics::EvaluateCausalImuInterval(
+          2U, {0}, true, 2.0, 1.0, false, true, 0.0, true,
+          {{0.0, 0.0, 0.0}}, support);
+  EXPECT_FALSE(regression.available);
+  EXPECT_EQ(regression.reason, "CALLBACK_TIMESTAMP_REGRESSION");
+
+  const auto missing_start =
+      ov_msckf::TurnSafeDiagnostics::EvaluateCausalImuInterval(
+          3U, {0}, true, 0.0, 2.0, false, true, 0.0, true,
+          {{0.0, 0.0, 0.0}}, support);
+  EXPECT_FALSE(missing_start.available);
+  EXPECT_EQ(missing_start.reason, "START_ENDPOINT_UNSUPPORTED");
+  EXPECT_EQ(missing_start.start_endpoint.status, "UNSUPPORTED");
+  EXPECT_GT(missing_start.source_sample_count, 0U);
+
+  const auto missing_end =
+      ov_msckf::TurnSafeDiagnostics::EvaluateCausalImuInterval(
+          4U, {0}, true, 2.0, 4.0, false, true, 0.0, true,
+          {{0.0, 0.0, 0.0}}, support);
+  EXPECT_FALSE(missing_end.available);
+  EXPECT_EQ(missing_end.reason, "END_ENDPOINT_UNSUPPORTED");
+  EXPECT_EQ(missing_end.end_endpoint.status, "UNSUPPORTED");
+
+  const auto large_gap =
+      ov_msckf::TurnSafeDiagnostics::EvaluateCausalImuInterval(
+          5U, {0}, true, 1.0, 3.0, false, true, 0.0, true,
+          {{0.0, 0.0, 0.0}}, support);
+  ASSERT_TRUE(large_gap.available) << large_gap.reason;
+  EXPECT_DOUBLE_EQ(large_gap.maximum_internal_gap_s, 2.0);
+  EXPECT_DOUBLE_EQ(large_gap.coverage_fraction, 1.0);
+}
+
 TEST(TurnSafeT0, SerializationIsDeterministicFiniteAndSequenceFree) {
   const std::string first_path = TemporaryPath();
   const std::string second_path = TemporaryPath();
@@ -345,6 +594,276 @@ TEST(TurnSafeT0, SerializationIsDeterministicFiniteAndSequenceFree) {
             std::string::npos);
   ::unlink(first_path.c_str());
   ::unlink(second_path.c_str());
+}
+
+TEST(TurnSafeT0, StereoFramesShareOneCanonicalCallbackInterval) {
+  const std::string path = TemporaryPath();
+  auto options = Options(path);
+  options.capture_causal_imu_intervals = true;
+  const auto sink = ov_msckf::TurnSafeDiagnostics::Create(options);
+  ASSERT_TRUE(sink && sink->active());
+  sink->BeginCallback(1.0, {1, 0}, false, false, nullptr, nullptr);
+  ov_core::TrackKLTFrameDiagnostics camera_one;
+  camera_one.camera_id = 1U;
+  camera_one.target_timestamp = 1.0;
+  sink->RecordFrontend(std::move(camera_one));
+  ov_core::TrackKLTFrameDiagnostics camera_zero;
+  camera_zero.camera_id = 0U;
+  camera_zero.target_timestamp = 1.0;
+  sink->RecordFrontend(std::move(camera_zero));
+  sink->EndCallback(false, false, nullptr);
+  ASSERT_TRUE(sink->Finalize());
+  const std::string bytes = ReadAll(path);
+  EXPECT_EQ(CountSubstring(bytes, "\"causal_imu_interval\""), 1U);
+  EXPECT_EQ(CountSubstring(bytes, "\"gyro_interval_id\":0"), 3U);
+  EXPECT_NE(bytes.find("\"camera_frame_ids\":[0,1]"),
+            std::string::npos);
+  EXPECT_NE(bytes.find("\"reason\":\"FIRST_CALLBACK\""),
+            std::string::npos);
+  const std::size_t camera_zero_position =
+      bytes.find("\"camera_id\":0");
+  const std::size_t camera_one_position =
+      bytes.find("\"camera_id\":1");
+  EXPECT_LT(camera_zero_position, camera_one_position);
+  ::unlink(path.c_str());
+}
+
+TEST(TurnSafeT0, FirstCallbackAfterInitializationTransitionIsUnavailable) {
+  const std::string path = TemporaryPath();
+  auto options = Options(path);
+  options.capture_causal_imu_intervals = true;
+  const auto sink = ov_msckf::TurnSafeDiagnostics::Create(options);
+  ASSERT_TRUE(sink && sink->active());
+
+  ov_msckf::StateOptions state_options;
+  ov_msckf::State state(state_options);
+  Eigen::VectorXd offset(1);
+  offset << 0.0;
+  state._calib_dt_CAMtoIMU->set_value(offset);
+  ov_msckf::Propagator propagator(ov_msckf::NoiseManager(), 9.81);
+  for (int index = 0; index <= 4; ++index) {
+    ov_core::ImuData sample;
+    sample.timestamp = static_cast<double>(index);
+    sample.wm = Eigen::Vector3d(0.0, 0.0, 1.0);
+    sample.am = Eigen::Vector3d::Zero();
+    propagator.feed_imu(sample);
+  }
+
+  sink->BeginCallback(1.0, {0, 1}, false, false, &state, &propagator);
+  sink->EndCallback(true, true, &state);
+  sink->BeginCallback(2.0, {0, 1}, true, true, &state, &propagator);
+  sink->EndCallback(true, true, &state);
+  sink->BeginCallback(3.0, {0, 1}, true, true, &state, &propagator);
+  sink->EndCallback(true, true, &state);
+  ASSERT_TRUE(sink->Finalize());
+  const std::string bytes = ReadAll(path);
+  EXPECT_NE(bytes.find(
+                "\"reason\":\"FIRST_CALLBACK_AFTER_INITIALIZATION\""),
+            std::string::npos);
+  EXPECT_NE(bytes.find(
+                "\"gyro_interval_id\":2,\"callback_id\":2,\"status\":\"AVAILABLE\""),
+            std::string::npos);
+  ::unlink(path.c_str());
+}
+
+TEST(TurnSafeT0, CallbackAssociationKeysAreCausalStableAndReferenceFree) {
+  const std::string path = TemporaryPath();
+  auto options = Options(path);
+  options.capture_outcome_association_keys = true;
+  options.run_identity = "opaque-run-001";
+  const auto sink = ov_msckf::TurnSafeDiagnostics::Create(options);
+  ASSERT_TRUE(sink && sink->active());
+
+  ov_msckf::StateOptions state_options;
+  ov_msckf::State state(state_options);
+  state._timestamp = 4.0;
+  Eigen::VectorXd offset(1);
+  offset << 0.125;
+  state._calib_dt_CAMtoIMU->set_value(offset);
+  sink->BeginCallback(4.0, {0, 1}, true, true, &state, nullptr);
+  ov_msckf::TurnSafeUpdateRecord update;
+  update.callback_timestamp = 4.0;
+  update.baseline_commit_occurred = true;
+  update.baseline_accepted_ids = {17U};
+  auto attempt = PairAttempt(17U, 0U);
+  attempt.accepted_full_factor = true;
+  update.attempts.push_back(attempt);
+  sink->RecordUpdate(std::move(update));
+  sink->EndCallback(true, true, &state, false);
+  ASSERT_TRUE(sink->Finalize());
+  const std::string bytes = ReadAll(path);
+  EXPECT_NE(bytes.find("\"outcome_association_keys\""),
+            std::string::npos);
+  EXPECT_NE(bytes.find("\"expected_state_row_key\":{\"status\":\"AVAILABLE\""),
+            std::string::npos);
+  EXPECT_NE(bytes.find("\"timestamp_value\":4.125"),
+            std::string::npos);
+  EXPECT_NE(bytes.find("\"ordinary_accepted_full_factor_count\":{\"status\":\"AVAILABLE\",\"value\":1,\"reason\":\"NONE\"}"),
+            std::string::npos);
+  EXPECT_NE(bytes.find("\"ordinary_full_visual_update_accepted\":{\"status\":\"AVAILABLE\",\"value\":true,\"reason\":\"NONE\"}"),
+            std::string::npos);
+  EXPECT_NE(bytes.find("\"run_identity\":\"opaque-run-001\""),
+            std::string::npos);
+  EXPECT_NE(bytes.find("REFERENCE_ASSOCIATION_OFFLINE_ONLY"),
+            std::string::npos);
+  EXPECT_EQ(bytes.find("ground_truth"), std::string::npos);
+  EXPECT_EQ(bytes.find("reference_path"), std::string::npos);
+  EXPECT_EQ(bytes.find("final_error"), std::string::npos);
+  EXPECT_EQ(bytes.find("degraded_label"), std::string::npos);
+  EXPECT_EQ(bytes.find("outcome_label"), std::string::npos);
+  EXPECT_EQ(bytes.find("event_id"), std::string::npos);
+  ::unlink(path.c_str());
+}
+
+TEST(TurnSafeT0, CallbackAssociationUnavailableReasonsAreTypedAndExact) {
+  const auto serialize_case = [](bool initialized, bool output_ready,
+                                 double state_timestamp, double offset,
+                                 bool incomplete) {
+    const std::string path = TemporaryPath();
+    auto options = Options(path);
+    options.capture_outcome_association_keys = true;
+    const auto sink = ov_msckf::TurnSafeDiagnostics::Create(options);
+    EXPECT_TRUE(sink && sink->active());
+    ov_msckf::StateOptions state_options;
+    ov_msckf::State state(state_options);
+    state._timestamp = state_timestamp;
+    Eigen::VectorXd offset_value(1);
+    offset_value << offset;
+    state._calib_dt_CAMtoIMU->set_value(offset_value);
+    sink->BeginCallback(4.0, {0, 1}, initialized, output_ready, &state,
+                        nullptr);
+    sink->EndCallback(initialized, output_ready, &state, incomplete);
+    EXPECT_TRUE(sink->Finalize());
+    const std::string bytes = ReadAll(path);
+    ::unlink(path.c_str());
+    return bytes;
+  };
+
+  const std::string not_ready =
+      serialize_case(true, false, 4.0, 0.125, false);
+  EXPECT_NE(not_ready.find("\"reason\":\"OUTPUT_NOT_READY\""),
+            std::string::npos);
+  EXPECT_NE(not_ready.find(
+                "\"pose_stream_write_status\":{\"status\":\"NOT_EXPOSED\",\"reason\":\"POSE_WRITE_STATUS_OFFLINE_ONLY\"}"),
+            std::string::npos);
+  EXPECT_NE(not_ready.find(
+                "\"reset_status\":{\"status\":\"NOT_EXPOSED\",\"reason\":\"RESET_STATUS_NOT_EXPOSED_BY_NATIVE_PATH\"}"),
+            std::string::npos);
+  EXPECT_NE(not_ready.find(
+                "\"ordinary_accepted_full_factor_count\":{\"status\":\"NOT_AVAILABLE\",\"reason\":\"UPDATER_NOT_REACHED\"}"),
+            std::string::npos);
+  EXPECT_NE(not_ready.find(
+                "\"ordinary_full_visual_update_accepted\":{\"status\":\"NOT_AVAILABLE\",\"reason\":\"UPDATER_NOT_REACHED\"}"),
+            std::string::npos);
+
+  const std::string uninitialized =
+      serialize_case(false, false, 4.0, 0.125, false);
+  EXPECT_NE(uninitialized.find("\"reason\":\"ESTIMATOR_NOT_INITIALIZED\""),
+            std::string::npos);
+  const std::string stale =
+      serialize_case(true, true, 3.0, 0.125, false);
+  EXPECT_NE(stale.find(
+                "\"reason\":\"STATE_TIMESTAMP_NOT_CURRENT_CALLBACK\""),
+            std::string::npos);
+  const std::string incomplete =
+      serialize_case(true, true, 4.0, 0.125, true);
+  EXPECT_NE(incomplete.find("\"reason\":\"CALLBACK_INCOMPLETE\""),
+            std::string::npos);
+  EXPECT_NE(incomplete.find(
+                "\"completion_reason\":\"EXCEPTION_SCOPE_EXIT\""),
+            std::string::npos);
+  const std::string nonfinite_state = serialize_case(
+      true, true, std::numeric_limits<double>::quiet_NaN(), 0.125, false);
+  EXPECT_NE(nonfinite_state.find("STATE_TIMESTAMP_NONFINITE"),
+            std::string::npos);
+  EXPECT_NE(nonfinite_state.find("\"reason\":\"ESTIMATOR_STATE_INVALID\""),
+            std::string::npos);
+  const std::string nonfinite_offset = serialize_case(
+      true, true, 4.0, std::numeric_limits<double>::quiet_NaN(), false);
+  EXPECT_NE(nonfinite_offset.find("\"reason\":\"IMU_TIME_OFFSET_NONFINITE\""),
+            std::string::npos);
+}
+
+TEST(TurnSafeT0, EventGroupPopulationKeepsN2N3AndN4ButOmitsN1) {
+  for (std::size_t count = 1U; count <= 4U; ++count) {
+    std::vector<ov_msckf::TurnSafeFullTrackAttempt> attempts;
+    for (std::size_t index = 0U; index < count; ++index) {
+      attempts.push_back(PairAttempt(100U + index, index));
+    }
+    const std::string bytes = SerializeEventGroups(
+        std::move(attempts), {1.0, 2.0});
+    if (count == 1U) {
+      EXPECT_NE(bytes.find("\"group_count\":0"), std::string::npos);
+      EXPECT_EQ(bytes.find("\"member_count\":1"), std::string::npos);
+    } else {
+      EXPECT_NE(bytes.find("\"group_count\":1"), std::string::npos);
+      EXPECT_NE(bytes.find("\"member_count\":" +
+                           std::to_string(count)), std::string::npos);
+    }
+  }
+
+  auto full_accepted = PairAttempt(
+      201U, 0U, 1.0, 2.0,
+      ov_msckf::TurnSafeFullOutcome::kFullAccepted);
+  auto full_nis_rejected = PairAttempt(
+      202U, 1U, 1.0, 2.0,
+      ov_msckf::TurnSafeFullOutcome::kFullNisRejected);
+  const std::string rejected = SerializeEventGroups(
+      {full_accepted, full_nis_rejected}, {1.0, 2.0});
+  EXPECT_NE(rejected.find("\"group_count\":0"), std::string::npos);
+}
+
+TEST(TurnSafeT0, EventGroupProvenanceIsCompactGeometricAndPermutationStable) {
+  std::vector<ov_msckf::TurnSafeFullTrackAttempt> attempts{
+      PairAttempt(301U, 0U), PairAttempt(302U, 1U),
+      PairAttempt(303U, 2U)};
+  const std::string canonical =
+      SerializeEventGroups(attempts, {1.0, 2.0});
+  std::reverse(attempts.begin(), attempts.end());
+  const std::string permuted =
+      SerializeEventGroups(attempts, {1.0, 2.0});
+  EXPECT_EQ(canonical, permuted);
+  EXPECT_EQ(CountSubstring(canonical, "\"intrinsics_distortion_hash\""),
+            2U);  // primary and shared target-stereo calibration
+  EXPECT_EQ(CountSubstring(canonical, "\"source_current_R_GtoI\""), 1U);
+  EXPECT_EQ(CountSubstring(canonical, "\"target_current_R_GtoI\""), 1U);
+  EXPECT_EQ(CountSubstring(canonical, "\"members\""), 1U);
+  EXPECT_EQ(CountSubstring(canonical, "\"source_unit_bearing\""), 3U);
+  EXPECT_EQ(CountSubstring(canonical, "\"target_unit_bearing\""), 3U);
+  EXPECT_EQ(CountSubstring(canonical, "\"target_stereo_raw_pixel\""), 3U);
+  EXPECT_EQ(CountSubstring(canonical,
+                           "direct_native_normalized_unit_ray.v1"),
+            1U);
+  EXPECT_EQ(CountSubstring(canonical, "continuous_pixel_center_fraction.v1"),
+            10U);  // header plus three cells for each of three members
+  EXPECT_NE(canonical.find("\"finite_validation\":{\"status\":\"AVAILABLE\""),
+            std::string::npos);
+  EXPECT_EQ(canonical.find("consensus_accept"), std::string::npos);
+  EXPECT_EQ(canonical.find("spatial_accept"), std::string::npos);
+  EXPECT_EQ(canonical.find("conditioning_accept"), std::string::npos);
+}
+
+TEST(TurnSafeT0, EventGroupsRetainDistinctTwoCameraCalibrationIdentity) {
+  std::vector<ov_msckf::TurnSafeFullTrackAttempt> attempts{
+      PairAttempt(401U, 0U), PairAttempt(402U, 1U)};
+  for (std::uint64_t index = 0U; index < 2U; ++index) {
+    auto swapped = PairAttempt(410U + index, 2U + index);
+    swapped.ordered_observations = {
+        Observation(1U, 1.0, 0U, 20.0 + index, 30.0),
+        Observation(1U, 2.0, 1U, 21.0 + index, 31.0),
+        Observation(0U, 2.0, 2U, 22.0 + index, 32.0),
+    };
+    attempts.push_back(swapped);
+  }
+  const std::string bytes = SerializeEventGroups(attempts, {1.0, 2.0});
+  EXPECT_NE(bytes.find("\"group_count\":2"), std::string::npos);
+  EXPECT_NE(bytes.find("\"image_width\":100,\"image_height\":80"),
+            std::string::npos);
+  EXPECT_NE(bytes.find("\"image_width\":120,\"image_height\":90"),
+            std::string::npos);
+  EXPECT_EQ(CountSubstring(bytes, "\"intrinsics_distortion_hash\""), 4U);
+  EXPECT_EQ(CountSubstring(bytes, "\"camera_extrinsic_hash\""), 4U);
+  EXPECT_EQ(CountSubstring(bytes, "\"fixed_R_ItoC\""), 2U);
 }
 
 TEST(TurnSafeT0, InjectedWriteFailureCannotPublishAClaimedFinalFile) {
@@ -1261,6 +1780,103 @@ TEST(TurnSafeT0, SinkFaultInjectionIsContainedAtEveryStage) {
       EXPECT_FALSE(std::ifstream(final_path).good());
       ExpectNativeKltEquals(native_oracle);
       ov_msckf::clear_turnsafe_diagnostic_fault_for_test();
+    }
+  }
+}
+
+TEST(TurnSafeT0, EventExtensionFaultsDisableOnlyDiagnostics) {
+  FaultReset reset;
+  const NativeKltOracle native_oracle = CaptureNativeKltOracle();
+  const std::array<ov_msckf::TurnSafeDiagnosticFaultKind, 3U> kinds{{
+      ov_msckf::TurnSafeDiagnosticFaultKind::kBadAlloc,
+      ov_msckf::TurnSafeDiagnosticFaultKind::kStdException,
+      ov_msckf::TurnSafeDiagnosticFaultKind::kUnknown,
+  }};
+  const std::array<ov_msckf::TurnSafeDiagnosticFaultStage, 4U> interval_stages{{
+      ov_msckf::TurnSafeDiagnosticFaultStage::kImuSupportCopy,
+      ov_msckf::TurnSafeDiagnosticFaultStage::kEndpointInterpolation,
+      ov_msckf::TurnSafeDiagnosticFaultStage::kGyroIntegration,
+      ov_msckf::TurnSafeDiagnosticFaultStage::kSo3Composition,
+  }};
+  for (const auto stage : interval_stages) {
+    for (const auto kind : kinds) {
+      SCOPED_TRACE(static_cast<int>(stage));
+      SCOPED_TRACE(static_cast<int>(kind));
+      const std::string path = TemporaryPath();
+      auto options = Options(path);
+      options.capture_causal_imu_intervals = true;
+      const auto sink = ov_msckf::TurnSafeDiagnostics::Create(options);
+      ASSERT_TRUE(sink && sink->active());
+      ov_msckf::StateOptions state_options;
+      ov_msckf::State state(state_options);
+      Eigen::VectorXd offset(1);
+      offset << 0.0;
+      state._calib_dt_CAMtoIMU->set_value(offset);
+      ov_msckf::Propagator propagator(ov_msckf::NoiseManager(), 9.81);
+      for (int index = 0; index <= 3; ++index) {
+        ov_core::ImuData sample;
+        sample.timestamp = static_cast<double>(index);
+        sample.wm = Eigen::Vector3d(1.0, 0.0, 0.0);
+        sample.am = Eigen::Vector3d::Zero();
+        propagator.feed_imu(sample);
+      }
+      sink->BeginCallback(1.0, {0, 1}, false, false, &state, &propagator);
+      sink->EndCallback(false, false, &state);
+      ASSERT_TRUE(sink->active());
+      ov_msckf::set_turnsafe_diagnostic_fault_for_test(stage, kind);
+      sink->BeginCallback(2.0, {0, 1}, false, false, &state, &propagator);
+      EXPECT_FALSE(sink->active());
+      EXPECT_EQ(sink->failure_count(), 1U);
+      EXPECT_FALSE(sink->Finalize());
+      EXPECT_FALSE(std::ifstream(path).good());
+      ExpectNativeKltEquals(native_oracle);
+      ov_msckf::clear_turnsafe_diagnostic_fault_for_test();
+      ::unlink((path + ".tmp").c_str());
+    }
+  }
+
+  for (const auto stage : {
+           ov_msckf::TurnSafeDiagnosticFaultStage::kCallbackMetadata,
+           ov_msckf::TurnSafeDiagnosticFaultStage::kGroupProvenance,
+           ov_msckf::TurnSafeDiagnosticFaultStage::kExtensionSerialization}) {
+    for (const auto kind : kinds) {
+      SCOPED_TRACE(static_cast<int>(stage));
+      SCOPED_TRACE(static_cast<int>(kind));
+      const std::string path = TemporaryPath();
+      auto options = Options(path);
+      options.capture_outcome_association_keys =
+          stage == ov_msckf::TurnSafeDiagnosticFaultStage::kCallbackMetadata;
+      options.capture_group_bearing_provenance =
+          stage != ov_msckf::TurnSafeDiagnosticFaultStage::kCallbackMetadata;
+      const auto sink = ov_msckf::TurnSafeDiagnostics::Create(options);
+      ASSERT_TRUE(sink && sink->active());
+      if (stage == ov_msckf::TurnSafeDiagnosticFaultStage::kCallbackMetadata) {
+        ov_msckf::StateOptions state_options;
+        ov_msckf::State state(state_options);
+        ov_msckf::set_turnsafe_diagnostic_fault_for_test(stage, kind);
+        sink->BeginCallback(1.0, {0}, false, false, &state, nullptr);
+      } else {
+        auto attempts = std::vector<ov_msckf::TurnSafeFullTrackAttempt>{
+            PairAttempt(1U, 0U), PairAttempt(2U, 1U)};
+        ov_msckf::TurnSafePriorPrimitives prior;
+        ov_msckf::TurnSafeDiagnostics::CapturePriorPrimitives(
+            EventReadyPrior({1.0, 2.0}), attempts, prior);
+        sink->BeginCallback(3.0);
+        ov_msckf::TurnSafeUpdateRecord update;
+        update.callback_timestamp = 3.0;
+        update.attempts = std::move(attempts);
+        update.prior = std::move(prior);
+        sink->RecordUpdate(std::move(update));
+        ov_msckf::set_turnsafe_diagnostic_fault_for_test(stage, kind);
+        sink->EndCallback();
+      }
+      EXPECT_FALSE(sink->active());
+      EXPECT_EQ(sink->failure_count(), 1U);
+      EXPECT_FALSE(sink->Finalize());
+      ExpectNativeKltEquals(native_oracle);
+      ov_msckf::clear_turnsafe_diagnostic_fault_for_test();
+      ::unlink(path.c_str());
+      ::unlink((path + ".tmp").c_str());
     }
   }
 }

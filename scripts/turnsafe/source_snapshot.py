@@ -175,16 +175,32 @@ def create_snapshot(repository: Path) -> Dict[str, Any]:
         for code, path in status_entries
         if code == "??" and _is_compiled_input(path)
     ]
-    tracked_dirty = any(code not in ("??", "OR") for code, _ in status_entries)
-    source_dirty = tracked_dirty or bool(untracked_compiled_paths)
     provenance_paths = [
         "docs/turnsafe/t0_schema.md",
         "scripts/turnsafe/source_snapshot.py",
         "scripts/turnsafe/generate_build_provenance.py",
         "scripts/turnsafe/finalize_build_manifest.py",
         "scripts/turnsafe/kaist_vio_campaign.py",
+        "scripts/turnsafe/test_kaist_vio_campaign.py",
+        "scripts/turnsafe/event_ready_association.py",
+        "scripts/turnsafe/test_event_ready_association.py",
+        "scripts/turnsafe/event_ready_corpus.py",
+        "scripts/turnsafe/test_event_ready_corpus.py",
+        "scripts/turnsafe/baseline_digest.py",
+        "scripts/turnsafe/test_baseline_digest.py",
         "scripts/turnsafe/test_source_provenance.py",
     ]
+    tracked_dirty = any(code not in ("??", "OR") for code, _ in status_entries)
+    untracked_provenance_paths = [
+        path
+        for code, path in status_entries
+        if code == "??" and path in provenance_paths
+    ]
+    source_dirty = (
+        tracked_dirty
+        or bool(untracked_compiled_paths)
+        or bool(untracked_provenance_paths)
+    )
 
     snapshot: Dict[str, Any] = {
         "schema_version": SCHEMA,
@@ -201,6 +217,9 @@ def create_snapshot(repository: Path) -> Dict[str, Any]:
         "provenance_inputs": _file_records(repository, provenance_paths),
         "untracked_compiled_inputs": _file_records(
             repository, untracked_compiled_paths
+        ),
+        "untracked_provenance_inputs": _file_records(
+            repository, untracked_provenance_paths
         ),
         "source_dirty": source_dirty,
         "protected_cp2_excluded": True,

@@ -57,6 +57,24 @@ class BaselineDigestTest(unittest.TestCase):
                 second_manifest["input_file_sha256"]["timing_openvins.csv"],
             )
 
+    def test_event_extension_derivatives_do_not_enter_estimator_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_run(root)
+            before = baseline_digest.build_manifest(root, SOURCE_SHA)
+            (root / "t0_events.jsonl.zst").write_bytes(b"event telemetry")
+            (root / "CALLBACK_STATE_ASSOCIATION.csv").write_text(
+                "callback_id,state_status\n0,MATCHED\n", encoding="utf-8"
+            )
+            (root / "ASSOCIATION_COVERAGE.json").write_text(
+                '{"schema_version":"turnsafe.association_coverage.v1"}\n',
+                encoding="utf-8",
+            )
+            after = baseline_digest.build_manifest(root, SOURCE_SHA)
+            self.assertEqual(before["combined_stable_sha256"],
+                             after["combined_stable_sha256"])
+            self.assertEqual(before["stable_fields"], after["stable_fields"])
+
     def test_nonfinite_input_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

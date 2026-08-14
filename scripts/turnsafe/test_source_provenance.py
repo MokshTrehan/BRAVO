@@ -33,6 +33,13 @@ class SourceProvenanceTest(unittest.TestCase):
             "scripts/turnsafe/generate_build_provenance.py": "generate fixture\n",
             "scripts/turnsafe/finalize_build_manifest.py": "finalize fixture\n",
             "scripts/turnsafe/kaist_vio_campaign.py": "campaign fixture\n",
+            "scripts/turnsafe/test_kaist_vio_campaign.py": "campaign test fixture\n",
+            "scripts/turnsafe/event_ready_association.py": "association fixture\n",
+            "scripts/turnsafe/test_event_ready_association.py": "association test fixture\n",
+            "scripts/turnsafe/event_ready_corpus.py": "corpus fixture\n",
+            "scripts/turnsafe/test_event_ready_corpus.py": "corpus test fixture\n",
+            "scripts/turnsafe/baseline_digest.py": "digest fixture\n",
+            "scripts/turnsafe/test_baseline_digest.py": "digest test fixture\n",
             "scripts/turnsafe/test_source_provenance.py": "test fixture\n",
         }
         for relative, payload in files.items():
@@ -99,12 +106,14 @@ class SourceProvenanceTest(unittest.TestCase):
         binary = output / "devel/lib/ov_msckf/ros1_serial_msckf"
         msckf = output / "devel/lib/libov_msckf_lib.so"
         core = output / "devel/lib/libov_core_lib.so"
+        init = output / "devel/lib/libov_init_lib.so"
         cache = binary_directory / "CMakeCache.txt"
         flags = binary_directory / "CMakeFiles/ov_msckf_lib.dir/flags.make"
         for path, payload in (
             (binary, b"binary fixture"),
             (msckf, b"msckf fixture"),
             (core, b"core fixture"),
+            (init, b"init fixture"),
             (
                 cache,
                 (
@@ -137,6 +146,7 @@ class SourceProvenanceTest(unittest.TestCase):
                     ("estimator_binary", binary),
                     ("ov_msckf_library", msckf),
                     ("ov_core_library", core),
+                    ("ov_init_library", init),
                 ],
             )
         )
@@ -146,6 +156,7 @@ class SourceProvenanceTest(unittest.TestCase):
         first = source_snapshot.create_snapshot(self.repository)
         self.assertFalse(first["source_dirty"])
         self.assertEqual(first["untracked_compiled_inputs"], [])
+        self.assertEqual(first["untracked_provenance_inputs"], [])
         evidence = self.repository / "artifacts" / "turnsafe" / "result.json"
         evidence.parent.mkdir(parents=True)
         evidence.write_text("{}\n", encoding="ascii")
@@ -179,6 +190,23 @@ class SourceProvenanceTest(unittest.TestCase):
             dirty["aggregate_source_snapshot_sha256"],
         )
 
+    def test_untracked_curated_python_is_byte_bound_and_marks_source_dirty(self) -> None:
+        clean = source_snapshot.create_snapshot(self.repository)
+        relative = "scripts/turnsafe/event_ready_association.py"
+        self._git("rm", "--cached", relative)
+        path = self.repository / relative
+        path.write_text("association changed while untracked\n", encoding="utf-8")
+        dirty = source_snapshot.create_snapshot(self.repository)
+        self.assertTrue(dirty["source_dirty"])
+        self.assertEqual(
+            [item["path"] for item in dirty["untracked_provenance_inputs"]],
+            [relative],
+        )
+        self.assertNotEqual(
+            clean["aggregate_source_snapshot_sha256"],
+            dirty["aggregate_source_snapshot_sha256"],
+        )
+
     def test_configure_provenance_rejects_snapshot_aggregate_tamper(self) -> None:
         output, snapshot_path, _ = self._configure()
         value = json.loads(snapshot_path.read_text(encoding="ascii"))
@@ -208,6 +236,22 @@ class SourceProvenanceTest(unittest.TestCase):
                     cmake_binary_directory=str(output / "build" / "ov_msckf"),
                 )
             )
+
+    def test_configure_binds_base_and_event_extension_schema_identifiers(self) -> None:
+        output, _, configure = self._configure()
+        self.assertEqual(
+            configure["descriptor"]["diagnostic_schema_identifiers"],
+            {
+                "base": "turnsafe.t0.v1",
+                "event_extension": "turnsafe.t0.event_extension.v1",
+            },
+        )
+        header = (
+            output / "build" / "ov_msckf" / "turnsafe-generated" /
+            "TurnSafeBuildProvenance.generated.h"
+        ).read_text(encoding="ascii")
+        self.assertIn("kDiagnosticBaseSchema", header)
+        self.assertIn("kDiagnosticEventExtensionSchema", header)
 
     def test_parser_accepts_leading_dash_and_empty_cxx_flags(self) -> None:
         parser = generate_build_provenance._parser()
@@ -270,6 +314,10 @@ class SourceProvenanceTest(unittest.TestCase):
                         (
                             "ov_core_library",
                             output / "devel/lib/libov_core_lib.so",
+                        ),
+                        (
+                            "ov_init_library",
+                            output / "devel/lib/libov_init_lib.so",
                         ),
                     ],
                 )

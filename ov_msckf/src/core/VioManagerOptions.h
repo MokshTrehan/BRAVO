@@ -140,8 +140,18 @@ struct VioManagerOptions {
       parser->parse_config("record_timing_information", record_timing_information);
       parser->parse_config("record_timing_filepath", record_timing_filepath);
       parser->parse_config("turnsafe_t0_capture", turnsafe_t0.capture_requested, false);
+      parser->parse_config("turnsafe_t0_capture_causal_imu_intervals",
+                           turnsafe_t0.capture_causal_imu_intervals, false);
+      parser->parse_config("turnsafe_t0_capture_outcome_association_keys",
+                           turnsafe_t0.capture_outcome_association_keys, false);
+      parser->parse_config("turnsafe_t0_capture_group_bearing_provenance",
+                           turnsafe_t0.capture_group_bearing_provenance, false);
       parser->parse_config("turnsafe_t0_output_path", turnsafe_t0.output_path, false);
       parser->parse_config("turnsafe_t0_schema", turnsafe_t0.schema_version, false);
+      parser->parse_config("turnsafe_t0_event_extension_schema",
+                           turnsafe_t0.event_extension_schema_version, false);
+      parser->parse_config("turnsafe_t0_run_identity",
+                           turnsafe_t0.run_identity, false);
       parser->parse_config("turnsafe_t0_frozen_base_sha", turnsafe_t0.frozen_base_sha, false);
       parser->parse_config("turnsafe_t0_source_sha", turnsafe_t0.expected_source_sha, false);
       parser->parse_config("turnsafe_t0_source_tree", turnsafe_t0.expected_source_tree, false);
@@ -167,6 +177,12 @@ struct VioManagerOptions {
     PRINT_DEBUG("  - record timing?: %d\n", (int)record_timing_information);
     PRINT_DEBUG("  - record timing filepath: %s\n", record_timing_filepath.c_str());
     PRINT_DEBUG("  - TurnSafe T0 capture requested?: %d\n", (int)turnsafe_t0.capture_requested);
+    PRINT_DEBUG("  - TurnSafe event causal-IMU capture?: %d\n",
+                (int)turnsafe_t0.capture_causal_imu_intervals);
+    PRINT_DEBUG("  - TurnSafe event association-key capture?: %d\n",
+                (int)turnsafe_t0.capture_outcome_association_keys);
+    PRINT_DEBUG("  - TurnSafe event group-bearing capture?: %d\n",
+                (int)turnsafe_t0.capture_group_bearing_provenance);
     PRINT_DEBUG("  - TurnSafe T0 output configured?: %d\n", (int)!turnsafe_t0.output_path.empty());
     PRINT_DEBUG("  - TurnSafe T0 schema: %s\n", turnsafe_t0.schema_version.c_str());
     PRINT_DEBUG("  - TurnSafe T0 target-stereo range required?: %d\n",

@@ -20,6 +20,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kaist_vio_campaign as campaign  # noqa: E402
+import event_ready_association as association  # noqa: E402
 
 
 class KaistVioCampaignTest(unittest.TestCase):
@@ -142,6 +143,19 @@ class KaistVioCampaignTest(unittest.TestCase):
             ros_port=None if prepare_only else 15432,
             timeout_seconds=10.0,
             prepare_only=prepare_only,
+            turnsafe_t0_capture=False,
+            turnsafe_t0_capture_causal_imu_intervals=False,
+            turnsafe_t0_capture_outcome_association_keys=False,
+            turnsafe_t0_capture_group_bearing_provenance=False,
+            turnsafe_t0_provenance=False,
+            turnsafe_t0_frozen_base_sha="",
+            turnsafe_t0_source_sha="",
+            turnsafe_t0_source_tree="",
+            turnsafe_t0_build_provenance_id="",
+            turnsafe_t0_expected_source_state=None,
+            turnsafe_t0_repository=None,
+            turnsafe_t0_build_manifest=None,
+            turnsafe_t0_schema_file=None,
         )
 
     @staticmethod
@@ -635,7 +649,6 @@ class KaistVioCampaignTest(unittest.TestCase):
             self.config,
             self.config.parent / "kalibr_imu_chain.yaml",
             self.config.parent / "kalibr_imucam_chain.yaml",
-            self.reference,
         )
         for index, path in enumerate(cases):
             with self.subTest(path=path):
@@ -777,6 +790,181 @@ class KaistVioCampaignTest(unittest.TestCase):
             campaign._strict_json('{"value":NaN}', "fixture")
         with self.assertRaisesRegex(campaign.CampaignError, "nonfinite number"):
             campaign._strict_json('{"value":1e400}', "fixture")
+
+    def test_event_extension_flags_require_active_passive_capture(self) -> None:
+        flag_names = (
+            "turnsafe_t0_capture_causal_imu_intervals",
+            "turnsafe_t0_capture_outcome_association_keys",
+            "turnsafe_t0_capture_group_bearing_provenance",
+        )
+        for flag_name in flag_names:
+            arguments = self.arguments(prepare_only=True)
+            setattr(arguments, flag_name, True)
+            with self.subTest(flag=flag_name), self.assertRaisesRegex(
+                campaign.CampaignError, "requires --turnsafe-t0-capture"
+            ):
+                campaign.run_campaign(arguments)
+            self.assertFalse(arguments.output_dir.exists())
+
+    def test_post_close_association_outputs_bind_every_input_and_callback(self) -> None:
+        telemetry = self.root / "t0_events.jsonl"
+        telemetry.write_text(
+            json.dumps({
+                "schema": "turnsafe.t0.v1", "record_type": "run_header"
+            }) + "\n" +
+            json.dumps({
+                "schema": "turnsafe.t0.v1", "record_type": "callback",
+                "callback_index": 0, "callback_timestamp_value": 1.0,
+                "callback_timestamp_key": "f64:0x3ff0000000000000",
+                "extensions": {"event_extension": {
+                    "schema": campaign.T0_EVENT_EXTENSION_SCHEMA,
+                    "record_version": 1,
+                    "outcome_association_keys": {
+                        "callback_id": 0,
+                        "callback_camera_timestamp_value": 1.0,
+                        "callback_camera_timestamp_key": (
+                            "f64:0x3ff0000000000000"),
+                        "estimator_initialized_before": {
+                            "status": "AVAILABLE", "reason": "NONE",
+                            "value": True},
+                        "estimator_initialized_after": {
+                            "status": "AVAILABLE", "reason": "NONE",
+                            "value": True},
+                        "estimator_valid_before": {
+                            "status": "AVAILABLE", "reason": "NONE",
+                            "value": True},
+                        "estimator_valid_after": {
+                            "status": "AVAILABLE", "reason": "NONE",
+                            "value": True},
+                        "state_timestamp_before": {
+                            "status": "AVAILABLE", "reason": "NONE",
+                            "value": 1.0},
+                        "state_timestamp_after": {
+                            "status": "AVAILABLE", "reason": "NONE",
+                            "value": 1.0},
+                        "expected_state_row_key": {
+                            "status": "AVAILABLE", "reason": "NONE",
+                            "stream_id": "state_estimate",
+                            "timestamp_value": 1.0,
+                            "timestamp_key": "f64:0x3ff0000000000000",
+                            "row_ordinal": {
+                                "status": "NOT_AVAILABLE",
+                                "reason": "ROW_ORDINAL_OFFLINE_ONLY"}},
+                        "expected_deviation_row_key": {
+                            "status": "AVAILABLE", "reason": "NONE",
+                            "stream_id": "state_deviation",
+                            "timestamp_value": 1.0,
+                            "timestamp_key": "f64:0x3ff0000000000000",
+                            "row_ordinal": {
+                                "status": "NOT_AVAILABLE",
+                                "reason": "ROW_ORDINAL_OFFLINE_ONLY"}},
+                        "expected_pose_row_key": {
+                            "status": "AVAILABLE", "reason": "NONE",
+                            "stream_id": "trajectory_tum",
+                            "timestamp_value": 1.0,
+                            "timestamp_key": "f64:0x3ff0000000000000",
+                            "row_ordinal": {
+                                "status": "NOT_AVAILABLE",
+                                "reason": "ROW_ORDINAL_OFFLINE_ONLY"}},
+                        "pose_stream_write_status": {
+                            "status": "NOT_EXPOSED",
+                            "reason": "POSE_WRITE_STATUS_OFFLINE_ONLY"},
+                        "reset_status": {
+                            "status": "NOT_EXPOSED",
+                            "reason": (
+                                "RESET_STATUS_NOT_EXPOSED_BY_NATIVE_PATH")},
+                        "nonfinite_observed": {
+                            "status": "AVAILABLE", "reason": "NONE",
+                            "value": False},
+                        "callback_incomplete": {
+                            "status": "AVAILABLE", "reason": "NONE",
+                            "value": False,
+                            "completion_reason": "NORMAL_SCOPE_EXIT"},
+                        "run_completeness": {
+                            "status": "NOT_AVAILABLE",
+                            "reason": "RUN_COMPLETENESS_POST_CLOSE_ONLY"},
+                        "ordinary_accepted_full_factor_count": {
+                            "status": "AVAILABLE", "reason": "NONE",
+                            "value": 0},
+                        "ordinary_full_visual_update_accepted": {
+                            "status": "AVAILABLE", "reason": "NONE",
+                            "value": False},
+                        "time_since_last_accepted_ordinary_full_update_camera_s": {
+                            "status": "NOT_AVAILABLE",
+                            "reason": "NO_PRIOR_ACCEPTED_FULL_UPDATE"},
+                        "reference_association": {
+                            "status": "NOT_AVAILABLE",
+                            "reason": "REFERENCE_ASSOCIATION_OFFLINE_ONLY"},
+                        "identity": {
+                            "run_identity": "opaque-fixture",
+                            "source_sha": "a" * 40,
+                            "source_tree": "b" * 40,
+                            "source_snapshot_sha256": "c" * 64,
+                            "build_provenance_id": "d" * 64,
+                            "config_sha256": "e" * 64,
+                            "calibration_sha256": "f" * 64}
+                    },
+                }},
+            }) + "\n",
+            encoding="utf-8",
+        )
+        state = self.root / "state.txt"
+        deviation = self.root / "deviation.txt"
+        trajectory = self.root / "trajectory.txt"
+        reference = self.root / "reference.txt"
+        for path in (state, deviation, trajectory, reference):
+            path.write_text("1 0\n", encoding="utf-8")
+        output = self.root / "association"
+        association.associate(
+            telemetry, state, deviation, trajectory, reference, output
+        )
+        binding = campaign._validate_association_outputs(
+            output, 1, telemetry, state, deviation, trajectory, reference
+        )
+        self.assertEqual(binding["callback_count"], 1)
+        self.assertEqual(binding["coverage"]["streams"]["reference"]["counts"], {
+            "MATCHED": 1, "MISSING": 0, "AMBIGUOUS": 0,
+        })
+        coverage_path = output / "ASSOCIATION_COVERAGE.json"
+        coverage = json.loads(coverage_path.read_text(encoding="utf-8"))
+        coverage["callback_count"] = 2
+        coverage_path.write_text(json.dumps(coverage), encoding="utf-8")
+        with self.assertRaisesRegex(campaign.CampaignError, "does not reconcile"):
+            campaign._validate_association_outputs(
+                output, 1, telemetry, state, deviation, trajectory, reference
+            )
+
+    def test_lossless_compression_roundtrip_and_failure_preserves_raw(self) -> None:
+        gzip = Path("/usr/bin/gzip")
+        if not gzip.is_file():
+            self.skipTest("/usr/bin/gzip is unavailable")
+        environment = dict(os.environ)
+        first_dir = self.root / "compress-success"
+        first_dir.mkdir()
+        raw = first_dir / "t0_events.jsonl"
+        payload = (b'{"record_type":"callback"}\n' * 1000)
+        raw.write_bytes(payload)
+        result = campaign._compress_verified_jsonl(
+            raw, gzip, environment, 30.0
+        )
+        self.assertFalse(raw.exists())
+        self.assertTrue(Path(result["archive"]["path"]).is_file())
+        self.assertEqual(result["roundtrip"]["sha256"], hashlib.sha256(payload).hexdigest())
+        self.assertEqual(result["roundtrip"]["size_bytes"], len(payload))
+
+        second_dir = self.root / "compress-failure"
+        second_dir.mkdir()
+        retained = second_dir / "t0_events.jsonl"
+        retained.write_bytes(payload)
+        with mock.patch.object(
+            campaign,
+            "_stream_decompressed_identity",
+            return_value={"sha256": "0" * 64, "size_bytes": len(payload)},
+        ), self.assertRaisesRegex(campaign.CampaignError, "differs; raw retained"):
+            campaign._compress_verified_jsonl(
+                retained, gzip, environment, 30.0
+            )
+        self.assertEqual(retained.read_bytes(), payload)
 
     def test_t0_jsonl_validator_binds_header_order_and_runtime_firewall(self) -> None:
         path = self.root / "t0.jsonl"
@@ -995,6 +1183,346 @@ class KaistVioCampaignTest(unittest.TestCase):
         result = campaign._validate_t0_jsonl(path, expected)
         self.assertEqual(result["callback_count"], 1)
         self.assertTrue(result["runtime_sequence_identity_absent"])
+
+        event_header = {
+            "schema": campaign.T0_EVENT_EXTENSION_SCHEMA,
+            "record_version": 1,
+            "capture_flags": {
+                "causal_imu_intervals": True,
+                "outcome_association_keys": True,
+                "group_bearing_provenance": True,
+            },
+            "integration_method": "piecewise_linear_trapezoid.v1",
+            "rotation_convention": (
+                "native_gyroscope_frame_passive_left_exp_minus_"
+                "omega_diagnostic.v1"),
+            "gyro_bias_convention": "raw_wm_minus_current_callback_bias_g.v1",
+            "clock_mapping": "t_imu_equals_t_camera_plus_dt_CAMtoIMU.v1",
+            "association_version": "turnsafe.offline_association.v1",
+            "canonical_ordering_version": "turnsafe.event_extension.order.v1",
+            "image_cell_representation": "continuous_pixel_center_fraction.v1",
+            "group_hash_algorithm": "fnv1a64_binary64_be.v1",
+        }
+        expected["extensions"] = {"event_extension": event_header}
+        header["extensions"] = {"event_extension": event_header}
+        for frame in callback["frontend_cameras"]:
+            frame["extensions"] = {
+                "event_extension": {
+                    "schema": campaign.T0_EVENT_EXTENSION_SCHEMA,
+                    "gyro_interval_id": 0,
+                }
+            }
+        member_keys = [
+            {
+                "camera_id": 0,
+                "source_timestamp_key": "f64:0x3fe0000000000000",
+                "target_timestamp_key": "f64:0x3ff0000000000000",
+                "feature_id": feature_id,
+                "detached_index": feature_id - 1,
+                "source_observation_ordinal": 0,
+                "target_observation_ordinal": 1,
+            }
+            for feature_id in (1, 2)
+        ]
+        status_value = {
+            "status": "AVAILABLE", "reason": "NONE", "value": [0.0, 0.0]
+        }
+        image_cell = {
+            "status": "AVAILABLE", "reason": "NONE",
+            "representation": "continuous_pixel_center_fraction.v1",
+            "value": [0.5 / 640.0, 0.5 / 480.0],
+        }
+        provenance_members = []
+        for member_index, member_key in enumerate(member_keys):
+            def observation_key(camera_id, timestamp, ordinal):
+                return {
+                    "camera_id": camera_id,
+                    "timestamp_value": timestamp,
+                    "timestamp_key": (
+                        "f64:0x3fe0000000000000" if timestamp == 0.5 else
+                        "f64:0x3ff0000000000000"
+                    ),
+                    "feature_id": member_key["feature_id"],
+                    "detached_index": member_key["detached_index"],
+                    "observation_ordinal": ordinal,
+                }
+            provenance_members.append({
+                "member_key": member_key,
+                "feature_id": member_key["feature_id"],
+                "detached_index": member_key["detached_index"],
+                "source_observation_key": observation_key(0, 0.5, 0),
+                "target_observation_key": observation_key(0, 1.0, 1),
+                "target_stereo_observation_key": observation_key(1, 1.0, 2),
+                "source_raw_pixel": status_value,
+                "target_raw_pixel": status_value,
+                "source_normalized_coordinates": status_value,
+                "target_normalized_coordinates": status_value,
+                "source_unit_bearing": {
+                    "status": "AVAILABLE", "reason": "NONE",
+                    "frame": "camera",
+                    "value": [0.0, 0.0, 1.0],
+                },
+                "target_unit_bearing": {
+                    "status": "AVAILABLE", "reason": "NONE",
+                    "frame": "camera",
+                    "value": [0.0, 0.0, 1.0],
+                },
+                "target_stereo_raw_pixel": status_value,
+                "source_image_cell": image_cell,
+                "target_image_cell": image_cell,
+                "target_stereo_image_cell": image_cell,
+                "native_source_status": {
+                    "status": "AVAILABLE", "reason": "TYPED_T1_SOURCE_OUTCOME",
+                    "full_outcome": "INIT_TOO_FAR",
+                },
+                "finite_validation": {"status": "AVAILABLE", "reason": "NONE"},
+            })
+        event_callback = {
+            "schema": campaign.T0_EVENT_EXTENSION_SCHEMA,
+            "record_version": 1,
+            "causal_imu_interval": {
+                "gyro_interval_id": 0,
+                "callback_id": 0,
+                "status": "NOT_AVAILABLE",
+                "reason": "FIRST_CALLBACK",
+                "units": {
+                    "time": "s", "angular_rate": "rad/s", "rotation": "rad"
+                },
+                "frame_convention": {
+                    "raw": "native_gyroscope_measurement_frame",
+                    "bias_corrected": (
+                        "native_gyroscope_measurement_frame_wm_minus_bias_g"),
+                    "delta": (
+                        "native_gyroscope_frame_passive_left_composed_"
+                        "Exp_minus_omega_dt_diagnostic"),
+                },
+                "camera_frame_ids": [0, 1],
+                "current_callback_camera_timestamp": {
+                    "status": "AVAILABLE", "reason": "NONE", "value": 1.0,
+                },
+                "previous_processed_callback_camera_timestamp": {
+                    "status": "NOT_AVAILABLE", "reason": "FIRST_CALLBACK",
+                },
+                "interval_start_camera_s": {
+                    "status": "NOT_AVAILABLE", "reason": "FIRST_CALLBACK",
+                },
+                "interval_end_camera_s": {
+                    "status": "AVAILABLE", "reason": "NONE", "value": 1.0,
+                },
+                "duration_s": {
+                    "status": "NOT_AVAILABLE", "reason": "FIRST_CALLBACK",
+                },
+                "dt_CAMtoIMU_s": {
+                    "status": "AVAILABLE", "reason": "NONE", "value": 0.0,
+                },
+                "clock_equation": "t_imu=t_camera+dt_CAMtoIMU",
+                "interval_start_imu_s": {
+                    "status": "NOT_AVAILABLE", "reason": "FIRST_CALLBACK",
+                },
+                "interval_end_imu_s": {
+                    "status": "NOT_AVAILABLE", "reason": "FIRST_CALLBACK",
+                },
+                "support": {
+                    "first_timestamp_s": {
+                        "status": "NOT_AVAILABLE",
+                        "reason": "NO_CAUSAL_BUFFERED_IMU",
+                    },
+                    "last_timestamp_s": {
+                        "status": "NOT_AVAILABLE",
+                        "reason": "NO_CAUSAL_BUFFERED_IMU",
+                    },
+                    "source_sample_count": {
+                        "status": "NOT_AVAILABLE",
+                        "reason": "FIRST_CALLBACK"
+                    },
+                    "start_endpoint": {
+                        "status": "UNSUPPORTED", "reason": "FIRST_CALLBACK",
+                        "lower_timestamp": {"status": "NOT_AVAILABLE", "reason": "LOWER_BRACKET_UNAVAILABLE"},
+                        "upper_timestamp": {"status": "NOT_AVAILABLE", "reason": "UPPER_BRACKET_UNAVAILABLE"},
+                    },
+                    "end_endpoint": {
+                        "status": "UNSUPPORTED", "reason": "FIRST_CALLBACK",
+                        "lower_timestamp": {"status": "NOT_AVAILABLE", "reason": "LOWER_BRACKET_UNAVAILABLE"},
+                        "upper_timestamp": {"status": "NOT_AVAILABLE", "reason": "UPPER_BRACKET_UNAVAILABLE"},
+                    },
+                    "maximum_internal_sample_gap_s": {"status": "NOT_AVAILABLE", "reason": "INSUFFICIENT_SUPPORT_FOR_GAP"},
+                    "coverage_fraction": {"status": "NOT_AVAILABLE", "reason": "INTERVAL_ENDPOINTS_UNAVAILABLE"},
+                    "endpoint_policy": "exact_or_linear_bracket_no_extrapolation.v1",
+                },
+                "gyro_bias_snapshot_xyz_rad_s": {
+                    "status": "AVAILABLE", "reason": "NONE",
+                    "value": [0.0, 0.0, 0.0],
+                },
+                "knots": {"status": "NOT_AVAILABLE", "reason": "FIRST_CALLBACK"},
+                "integration_method": "piecewise_linear_trapezoid.v1",
+                "raw_summary": {"status": "NOT_AVAILABLE", "reason": "FIRST_CALLBACK"},
+                "bias_corrected_summary": {"status": "NOT_AVAILABLE", "reason": "FIRST_CALLBACK"},
+            },
+            "outcome_association_keys": {
+                "callback_id": 0,
+                "callback_camera_timestamp_value": 1.0,
+                "callback_camera_timestamp_key": "f64:0x3ff0000000000000",
+                "estimator_initialized_before": {
+                    "status": "AVAILABLE", "reason": "NONE", "value": False,
+                },
+                "estimator_initialized_after": {
+                    "status": "AVAILABLE", "reason": "NONE", "value": False,
+                },
+                "estimator_valid_before": {
+                    "status": "AVAILABLE", "reason": "NONE", "value": False,
+                },
+                "estimator_valid_after": {
+                    "status": "AVAILABLE", "reason": "NONE", "value": False,
+                },
+                "state_timestamp_before": {
+                    "status": "AVAILABLE", "reason": "NONE", "value": 1.0,
+                },
+                "state_timestamp_after": {
+                    "status": "AVAILABLE", "reason": "NONE", "value": 1.0,
+                },
+                "expected_state_row_key": {"status": "NOT_AVAILABLE", "reason": "OUTPUT_NOT_READY"},
+                "expected_deviation_row_key": {"status": "NOT_AVAILABLE", "reason": "OUTPUT_NOT_READY"},
+                "expected_pose_row_key": {"status": "NOT_AVAILABLE", "reason": "OUTPUT_NOT_READY"},
+                "pose_stream_write_status": {"status": "NOT_EXPOSED", "reason": "POSE_WRITE_STATUS_OFFLINE_ONLY"},
+                "reset_status": {"status": "NOT_EXPOSED", "reason": "RESET_STATUS_NOT_EXPOSED_BY_NATIVE_PATH"},
+                "nonfinite_observed": {
+                    "status": "AVAILABLE", "reason": "NONE", "value": False,
+                },
+                "callback_incomplete": {
+                    "status": "AVAILABLE", "reason": "NONE",
+                    "completion_reason": "NORMAL_SCOPE_EXIT", "value": False,
+                },
+                "time_since_last_accepted_ordinary_full_update_camera_s": {
+                    "status": "NOT_AVAILABLE",
+                    "reason": "SEE_BASELINE_DECISION_TYPED_REASON",
+                },
+                "run_completeness": {
+                    "status": "NOT_AVAILABLE",
+                    "reason": "RUN_COMPLETENESS_POST_CLOSE_ONLY",
+                },
+                "ordinary_accepted_full_factor_count": {
+                    "status": "AVAILABLE", "reason": "NONE", "value": 0,
+                },
+                "ordinary_full_visual_update_accepted": {
+                    "status": "AVAILABLE", "reason": "NONE", "value": False,
+                },
+                "reference_association": {"status": "NOT_AVAILABLE", "reason": "REFERENCE_ASSOCIATION_OFFLINE_ONLY"},
+                "identity": {
+                    "run_identity": "sha256:" + "9" * 64,
+                    "source_sha": "b" * 40,
+                    "source_tree": "c" * 40,
+                    "source_snapshot_sha256": "3" * 64,
+                    "build_provenance_id": "4" * 64,
+                    "config_sha256": "f" * 64,
+                    "calibration_sha256": "1" * 64,
+                },
+            },
+            "group_bearing_provenance": {
+                "status": "AVAILABLE", "reason": "NONE",
+                "schema_version": campaign.T0_EVENT_EXTENSION_SCHEMA,
+                "canonical_ordering_version": "turnsafe.event_extension.order.v1",
+                "shared_field_encoding": "one_group_record_plus_member_array.v1",
+                "group_count": 1,
+                "groups": [{
+                    "group_key": {
+                        "camera_id": 0,
+                        "source_timestamp_key": "f64:0x3fe0000000000000",
+                        "target_timestamp_key": "f64:0x3ff0000000000000",
+                    },
+                    "member_count": 2,
+                    "member_key_list": member_keys,
+                    "bearing_provenance": (
+                        "direct_native_normalized_unit_ray.v1"),
+                    "source_clone_timestamp_value": 0.5,
+                    "target_clone_timestamp_value": 1.0,
+                    "camera": {
+                        "status": "AVAILABLE", "reason": "NONE",
+                        "camera_id": 0, "model": "RADTAN",
+                        "image_width": 640, "image_height": 480,
+                        "intrinsics_distortion_hash": "fnv1a64:0000000000000001",
+                        "camera_extrinsic_hash": "fnv1a64:0000000000000002",
+                        "hash_algorithm": "fnv1a64_binary64_be.v1",
+                    },
+                    "target_stereo_camera": {
+                        "status": "AVAILABLE", "reason": "NONE",
+                        "camera_id": 1, "model": "RADTAN",
+                        "image_width": 640, "image_height": 480,
+                        "intrinsics_distortion_hash": (
+                            "fnv1a64:0000000000000003"),
+                        "camera_extrinsic_hash": (
+                            "fnv1a64:0000000000000004"),
+                        "hash_algorithm": "fnv1a64_binary64_be.v1",
+                    },
+                    "source_current_R_GtoI": {
+                        "status": "AVAILABLE", "reason": "NONE",
+                        "rows": 3, "cols": 3,
+                        "values_row_major": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                    },
+                    "source_fej_R_GtoI": {
+                        "status": "AVAILABLE", "reason": "NONE",
+                        "rows": 3, "cols": 3,
+                        "values_row_major": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                    },
+                    "target_current_R_GtoI": {
+                        "status": "AVAILABLE", "reason": "NONE",
+                        "rows": 3, "cols": 3,
+                        "values_row_major": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                    },
+                    "target_fej_R_GtoI": {
+                        "status": "AVAILABLE", "reason": "NONE",
+                        "rows": 3, "cols": 3,
+                        "values_row_major": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                    },
+                    "fixed_R_ItoC": {
+                        "status": "AVAILABLE", "reason": "NONE",
+                        "rows": 3, "cols": 3,
+                        "values_row_major": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                    },
+                    "supported_configuration": {"value": True, "reasons": []},
+                    "members": provenance_members,
+                }],
+            },
+        }
+        callback["extensions"] = {"event_extension": event_callback}
+        path.write_text(
+            json.dumps(header, sort_keys=True) + "\n" +
+            json.dumps(callback, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        extension_result = campaign._validate_t0_jsonl(
+            path, expected, "sha256:" + "9" * 64
+        )
+        self.assertEqual(extension_result["event_extension"]["interval_count"], 1)
+        self.assertEqual(extension_result["event_extension"]["group_provenance_count"], 1)
+        self.assertEqual(extension_result["event_extension"]["group_member_count"], 2)
+
+        event_callback["causal_imu_interval"]["gyro_interval_id"] = 1
+        path.write_text(json.dumps(header) + "\n" + json.dumps(callback) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(campaign.CampaignError, "identity mismatch"):
+            campaign._validate_t0_jsonl(path, expected, "sha256:" + "9" * 64)
+        event_callback["causal_imu_interval"]["gyro_interval_id"] = 0
+        event_callback["group_bearing_provenance"]["groups"][0]["member_key_list"].reverse()
+        path.write_text(json.dumps(header) + "\n" + json.dumps(callback) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(campaign.CampaignError, "not canonical"):
+            campaign._validate_t0_jsonl(path, expected, "sha256:" + "9" * 64)
+        event_callback["group_bearing_provenance"]["groups"][0]["member_key_list"].reverse()
+
+        event_callback["schema"] = "turnsafe.t0.event_extension.future"
+        path.write_text(json.dumps(header) + "\n" + json.dumps(callback) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(campaign.CampaignError, "version mismatch"):
+            campaign._validate_t0_jsonl(path, expected, "sha256:" + "9" * 64)
+        event_callback["schema"] = campaign.T0_EVENT_EXTENSION_SCHEMA
+        event_callback["causal_imu_interval"]["duration_s"]["value"] = 0.0
+        path.write_text(json.dumps(header) + "\n" + json.dumps(callback) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(campaign.CampaignError, "hides unavailable"):
+            campaign._validate_t0_jsonl(path, expected, "sha256:" + "9" * 64)
+        event_callback["causal_imu_interval"]["duration_s"].pop("value")
+
+        callback.pop("extensions")
+        for frame in callback["frontend_cameras"]:
+            frame.pop("extensions")
+        header.pop("extensions")
+        expected.pop("extensions")
 
         callback["sequence_id"] = "forbidden"
         path.write_text(

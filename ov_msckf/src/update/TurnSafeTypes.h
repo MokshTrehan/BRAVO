@@ -216,6 +216,116 @@ struct TurnSafeUpdateRecord {
   TurnSafePriorPrimitives prior;
 };
 
+/** One raw, value-only IMU sample copied without consuming the native buffer. */
+struct TurnSafeImuSampleValue {
+  double timestamp = std::numeric_limits<double>::quiet_NaN();
+  std::array<double, 3U> omega_rad_s{{0.0, 0.0, 0.0}};
+};
+
+/** Bounded causal support copied from the native IMU buffer in native order. */
+struct TurnSafeImuSupportSnapshot {
+  bool available = false;
+  std::string reason = "NOT_CAPTURED";
+  std::vector<TurnSafeImuSampleValue> samples;
+};
+
+struct TurnSafeImuEndpointEvidence {
+  std::string status = "UNSUPPORTED";
+  std::string reason = "NOT_CAPTURED";
+  bool lower_timestamp_available = false;
+  double lower_timestamp = std::numeric_limits<double>::quiet_NaN();
+  bool upper_timestamp_available = false;
+  double upper_timestamp = std::numeric_limits<double>::quiet_NaN();
+};
+
+struct TurnSafeGyroSummary {
+  bool available = false;
+  std::string reason = "NOT_CAPTURED";
+  double max_norm_rad_s = std::numeric_limits<double>::quiet_NaN();
+  double rms_norm_rad_s = std::numeric_limits<double>::quiet_NaN();
+  std::array<double, 3U> mean_omega_rad_s{{0.0, 0.0, 0.0}};
+  double integral_norm_rad = std::numeric_limits<double>::quiet_NaN();
+  std::array<double, 3U> integral_omega_rad{{0.0, 0.0, 0.0}};
+  std::array<double, 9U> delta_rotation_matrix_row_major{{
+      1.0, 0.0, 0.0,
+      0.0, 1.0, 0.0,
+      0.0, 0.0, 1.0}};
+  std::array<double, 4U> delta_rotation_jpl_xyzw{{0.0, 0.0, 0.0, 1.0}};
+  double delta_rotation_angle_rad = std::numeric_limits<double>::quiet_NaN();
+  bool delta_rotation_axis_available = false;
+  std::array<double, 3U> delta_rotation_axis{{0.0, 0.0, 0.0}};
+  std::string delta_rotation_axis_reason = "ROTATION_AXIS_UNDEFINED";
+};
+
+/** Exactly one passive causal interval owned by one visual callback. */
+struct TurnSafeCausalImuInterval {
+  std::uint64_t gyro_interval_id = 0U;
+  std::vector<int> camera_frame_ids;
+  bool available = false;
+  std::string reason = "NOT_CAPTURED";
+  bool previous_callback_timestamp_available = false;
+  double previous_callback_timestamp =
+      std::numeric_limits<double>::quiet_NaN();
+  double current_callback_timestamp =
+      std::numeric_limits<double>::quiet_NaN();
+  bool imu_time_offset_available = false;
+  std::string imu_time_offset_reason = "NOT_CAPTURED";
+  double imu_time_offset_s = std::numeric_limits<double>::quiet_NaN();
+  bool imu_interval_endpoints_available = false;
+  double imu_interval_start_s = std::numeric_limits<double>::quiet_NaN();
+  double imu_interval_end_s = std::numeric_limits<double>::quiet_NaN();
+  bool duration_available = false;
+  double duration_s = std::numeric_limits<double>::quiet_NaN();
+  TurnSafeImuEndpointEvidence start_endpoint;
+  TurnSafeImuEndpointEvidence end_endpoint;
+  bool first_support_timestamp_available = false;
+  double first_support_timestamp = std::numeric_limits<double>::quiet_NaN();
+  bool last_support_timestamp_available = false;
+  double last_support_timestamp = std::numeric_limits<double>::quiet_NaN();
+  bool source_sample_count_available = false;
+  std::string source_sample_count_reason = "NOT_CAPTURED";
+  std::uint64_t source_sample_count = 0U;
+  bool maximum_internal_gap_available = false;
+  double maximum_internal_gap_s = std::numeric_limits<double>::quiet_NaN();
+  bool coverage_fraction_available = false;
+  double coverage_fraction = std::numeric_limits<double>::quiet_NaN();
+  bool gyro_bias_available = false;
+  std::string gyro_bias_reason = "NOT_CAPTURED";
+  std::array<double, 3U> gyro_bias_rad_s{{0.0, 0.0, 0.0}};
+  std::vector<double> knot_timestamps_s;
+  std::vector<std::array<double, 3U>> raw_omega_rad_s;
+  std::vector<std::array<double, 3U>> bias_corrected_omega_rad_s;
+  TurnSafeGyroSummary raw_summary;
+  TurnSafeGyroSummary bias_corrected_summary;
+};
+
+/** Causal callback metadata used only as stable post-run association keys. */
+struct TurnSafeOutcomeAssociationKeys {
+  bool initialized_before_available = false;
+  bool initialized_before = false;
+  bool initialized_after_available = false;
+  bool initialized_after = false;
+  bool state_timestamp_before_available = false;
+  std::string state_timestamp_before_reason = "STATE_NOT_EXPOSED";
+  double state_timestamp_before = std::numeric_limits<double>::quiet_NaN();
+  bool state_timestamp_after_available = false;
+  std::string state_timestamp_after_reason = "STATE_NOT_EXPOSED";
+  double state_timestamp_after = std::numeric_limits<double>::quiet_NaN();
+  bool expected_output_timestamp_available = false;
+  std::string expected_output_timestamp_reason =
+      "EXPECTED_OUTPUT_TIMESTAMP_UNAVAILABLE";
+  double expected_output_timestamp = std::numeric_limits<double>::quiet_NaN();
+  bool estimator_valid_before_available = false;
+  bool estimator_valid_before = false;
+  bool estimator_valid_after_available = false;
+  bool estimator_valid_after = false;
+  bool nonfinite_observed_available = false;
+  std::string nonfinite_observed_reason = "STATE_NOT_EXPOSED";
+  bool nonfinite_observed = false;
+  bool callback_incomplete = false;
+  std::string callback_completion_reason = "NORMAL_SCOPE_EXIT";
+};
+
 struct TurnSafeAcuteCertificateResult {
   std::string status = "INVALID_INPUT";
   bool is_acute = false;

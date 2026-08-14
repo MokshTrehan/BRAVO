@@ -23,6 +23,11 @@
     <arg name="turnsafe_t0_calibration_sha256" default="" />
     <arg name="turnsafe_t0_diagnostic_schema_sha256" default="" />
     <arg name="turnsafe_t0_require_target_stereo_range" default="true" />
+    <arg name="turnsafe_t0_capture_causal_imu_intervals" default="false" />
+    <arg name="turnsafe_t0_capture_outcome_association_keys" default="false" />
+    <arg name="turnsafe_t0_capture_group_bearing_provenance" default="false" />
+    <arg name="turnsafe_t0_event_extension_schema" default="turnsafe.t0.event_extension.v1" />
+    <arg name="turnsafe_t0_run_identity" default="" />
     <node name="cp0_vio" pkg="ov_msckf" type="ros1_serial_msckf"
           output="screen" clear_params="true" required="true">
         <param name="path_bag" type="str" value="$(arg bag)" />
@@ -52,6 +57,11 @@
         <param name="turnsafe_t0_calibration_sha256" type="str" value="$(arg turnsafe_t0_calibration_sha256)" />
         <param name="turnsafe_t0_diagnostic_schema_sha256" type="str" value="$(arg turnsafe_t0_diagnostic_schema_sha256)" />
         <param name="turnsafe_t0_require_target_stereo_range" type="bool" value="$(arg turnsafe_t0_require_target_stereo_range)" />
+        <param name="turnsafe_t0_capture_causal_imu_intervals" type="bool" value="$(arg turnsafe_t0_capture_causal_imu_intervals)" />
+        <param name="turnsafe_t0_capture_outcome_association_keys" type="bool" value="$(arg turnsafe_t0_capture_outcome_association_keys)" />
+        <param name="turnsafe_t0_capture_group_bearing_provenance" type="bool" value="$(arg turnsafe_t0_capture_group_bearing_provenance)" />
+        <param name="turnsafe_t0_event_extension_schema" type="str" value="$(arg turnsafe_t0_event_extension_schema)" />
+        <param name="turnsafe_t0_run_identity" type="str" value="$(arg turnsafe_t0_run_identity)" />
         <param name="save_total_state" type="bool" value="true" />
         <param name="filepath_est" type="str" value="$(arg path_state)" />
         <param name="filepath_std" type="str" value="$(arg path_std)" />

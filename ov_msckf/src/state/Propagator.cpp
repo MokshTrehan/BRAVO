@@ -30,6 +30,73 @@ using namespace ov_core;
 using namespace ov_type;
 using namespace ov_msckf;
 
+TurnSafeImuSupportSnapshot Propagator::turnsafe_copy_imu_support(
+    double start, double end) {
+  TurnSafeImuSupportSnapshot output;
+  if (!std::isfinite(start) || !std::isfinite(end)) {
+    output.reason = "INTERVAL_ENDPOINT_NONFINITE";
+    return output;
+  }
+  if (!(end > start)) {
+    output.reason = "INTERVAL_ENDPOINT_REGRESSION";
+    return output;
+  }
+  std::lock_guard<std::mutex> lock(imu_data_mtx);
+  if (imu_data.empty()) {
+    output.reason = "NO_CAUSAL_BUFFERED_IMU";
+    return output;
+  }
+  for (std::size_t index = 0U; index < imu_data.size(); ++index) {
+    const ov_core::ImuData &sample = imu_data[index];
+    if (!std::isfinite(sample.timestamp)) {
+      output.reason = "IMU_TIMESTAMP_NONFINITE";
+      return output;
+    }
+    if (!sample.wm.allFinite()) {
+      output.reason = "RAW_GYRO_NONFINITE";
+      return output;
+    }
+    if (index != 0U &&
+        !(sample.timestamp > imu_data[index - 1U].timestamp)) {
+      output.reason = "IMU_TIMESTAMP_NOT_STRICTLY_INCREASING";
+      return output;
+    }
+  }
+
+  auto first = std::lower_bound(
+      imu_data.begin(), imu_data.end(), start,
+      [](const ov_core::ImuData &sample, double time) {
+        return sample.timestamp < time;
+      });
+  if (first != imu_data.begin() &&
+      (first == imu_data.end() || first->timestamp != start)) {
+    --first;
+  }
+  auto last = std::lower_bound(
+      imu_data.begin(), imu_data.end(), end,
+      [](const ov_core::ImuData &sample, double time) {
+        return sample.timestamp < time;
+      });
+  if (last == imu_data.end()) --last;
+  if (first == imu_data.end() || first > last) {
+    output.reason = "NO_CAUSAL_BUFFERED_IMU";
+    return output;
+  }
+
+  output.samples.reserve(
+      static_cast<std::size_t>(std::distance(first, last)) + 1U);
+  for (auto current = first;; ++current) {
+    TurnSafeImuSampleValue copied;
+    copied.timestamp = current->timestamp;
+    copied.omega_rad_s = {{current->wm(0), current->wm(1), current->wm(2)}};
+    output.samples.push_back(copied);
+    if (current == last) break;
+  }
+  output.available = true;
+  output.reason = "NONE";
+  return output;
+}
+
 void Propagator::propagate_and_clone(std::shared_ptr<State> state, double timestamp) {
 
   // If the difference between the current update time and state is zero

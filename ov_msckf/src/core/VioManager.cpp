@@ -47,6 +47,7 @@
 #include "update/UpdaterZeroVelocity.h"
 
 #include <new>
+#include <exception>
 #include <stdexcept>
 #include <utility>
 
@@ -61,19 +62,37 @@ public:
   TurnSafeCallbackEnvelope(
       const std::shared_ptr<TurnSafeDiagnostics> &diagnostics,
       const TrackKLT *tracker, const UpdaterMSCKF *updater,
-      double timestamp) noexcept
-      : diagnostics_(diagnostics), tracker_(tracker), updater_(updater) {
+      double timestamp, const std::vector<int> &camera_frame_ids,
+      State *state, Propagator *propagator,
+      const bool *estimator_initialized,
+      const double *last_update_timestamp) noexcept
+      : diagnostics_(diagnostics), tracker_(tracker), updater_(updater),
+        state_(state), estimator_initialized_(estimator_initialized),
+        last_update_timestamp_(last_update_timestamp) {
     PollComponentFailures();
-    if (diagnostics_ && diagnostics_->active())
-      diagnostics_->BeginCallback(timestamp);
+    if (diagnostics_ && diagnostics_->active()) {
+      diagnostics_->BeginCallback(
+          timestamp, camera_frame_ids,
+          estimator_initialized_ != nullptr && *estimator_initialized_,
+          OutputReady(), state_, propagator);
+    }
   }
 
   ~TurnSafeCallbackEnvelope() noexcept {
     PollComponentFailures();
-    if (diagnostics_) diagnostics_->EndCallback();
+    if (diagnostics_) {
+      diagnostics_->EndCallback(
+          estimator_initialized_ != nullptr && *estimator_initialized_,
+          OutputReady(), state_, std::uncaught_exception());
+    }
   }
 
 private:
+  bool OutputReady() const noexcept {
+    return estimator_initialized_ != nullptr && *estimator_initialized_ &&
+           last_update_timestamp_ != nullptr && *last_update_timestamp_ != -1.0;
+  }
+
   void PollComponentFailures() noexcept {
     if (!diagnostics_ || !diagnostics_->active()) return;
     if (tracker_ && tracker_->turnsafe_diagnostic_failure_reason() !=
@@ -92,6 +111,9 @@ private:
   std::shared_ptr<TurnSafeDiagnostics> diagnostics_;
   const TrackKLT *tracker_ = nullptr;
   const UpdaterMSCKF *updater_ = nullptr;
+  State *state_ = nullptr;
+  const bool *estimator_initialized_ = nullptr;
+  const double *last_update_timestamp_ = nullptr;
 };
 
 } // namespace
@@ -347,8 +369,11 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
                     "[TURNSAFE-T0]: status=installation_rejected "
                     "baseline_unchanged=1\n" RESET);
     }
-  } else if (params.turnsafe_t0.capture_requested &&
-             !params.turnsafe_t0.output_path.empty()) {
+  } else if ((params.turnsafe_t0.capture_requested &&
+              !params.turnsafe_t0.output_path.empty()) ||
+             params.turnsafe_t0.capture_causal_imu_intervals ||
+             params.turnsafe_t0.capture_outcome_association_keys ||
+             params.turnsafe_t0.capture_group_bearing_provenance) {
     PRINT_WARNING(YELLOW
                   "[TURNSAFE-T0]: status=disabled reason=%s "
                   "baseline_unchanged=1\n" RESET,
@@ -521,7 +546,8 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
   rT1 = boost::posix_time::microsec_clock::local_time();
   const TurnSafeCallbackEnvelope turnsafe_callback_envelope(
       turnsafe_t0_diagnostics, dynamic_cast<const TrackKLT *>(trackFEATS.get()),
-      updaterMSCKF.get(), message_const.timestamp);
+      updaterMSCKF.get(), message_const.timestamp, message_const.sensor_ids,
+      state.get(), propagator.get(), &is_initialized_vio, &timelastupdate);
 
   // Assert we have valid measurement data and ids
   assert(!message_const.sensor_ids.empty());

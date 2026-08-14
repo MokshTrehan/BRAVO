@@ -20,6 +20,7 @@ import math
 import os
 from pathlib import Path
 import re
+import selectors
 import shlex
 import shutil
 import signal
@@ -70,6 +71,14 @@ SEQUENCE_ORDER: Tuple[str, ...] = (
 
 SCHEMA = "turnsafe.kaist_vio_campaign.sequence.v1"
 T0_SCHEMA = "turnsafe.t0.v1"
+T0_EVENT_EXTENSION_SCHEMA = "turnsafe.t0.event_extension.v1"
+T0_SCHEMA_IDENTIFIERS = {
+    "base": T0_SCHEMA,
+    "event_extension": T0_EVENT_EXTENSION_SCHEMA,
+}
+EVENT_ASSOCIATION_PATH = SCRIPT_DIR / "event_ready_association.py"
+EVENT_CORPUS_PATH = SCRIPT_DIR / "event_ready_corpus.py"
+BASELINE_DIGEST_PATH = SCRIPT_DIR / "baseline_digest.py"
 STABLE_TERMINAL_REASON_ORDER: Tuple[str, ...] = (
     "FULL_OUTCOME_INELIGIBLE",
     "FULL_OUTCOME_UNMAPPED",
@@ -400,6 +409,8 @@ def _validate_build_manifest(
     descriptor = value.get("descriptor")
     if not isinstance(descriptor, dict):
         raise CampaignError("TurnSafe build descriptor is missing")
+    if descriptor.get("diagnostic_schema_identifiers") != T0_SCHEMA_IDENTIFIERS:
+        raise CampaignError("TurnSafe diagnostic schema identifiers mismatch")
     build_id = _sha256_canonical_json(descriptor)
     if value.get("build_provenance_id") != build_id:
         raise CampaignError("TurnSafe build-provenance ID mismatch")
@@ -468,6 +479,7 @@ def _validate_build_manifest(
         "estimator_binary",
         "ov_msckf_library",
         "ov_core_library",
+        "ov_init_library",
     ):
         if required not in artifacts:
             raise CampaignError("build artifact {} is missing".format(required))
@@ -481,6 +493,7 @@ def _validate_build_manifest(
         / "devel/lib/ov_msckf/ros1_serial_msckf",
         "ov_msckf_library": workspace_root / "devel/lib/libov_msckf_lib.so",
         "ov_core_library": workspace_root / "devel/lib/libov_core_lib.so",
+        "ov_init_library": workspace_root / "devel/lib/libov_init_lib.so",
     }
     for name, expected in expected_artifacts.items():
         if artifact_paths[name] != expected:
@@ -555,21 +568,21 @@ def _strict_json(line: str, label: str) -> Mapping[str, Any]:
 
 
 def _validate_t0_jsonl(
-    path: Path, expected_header: Mapping[str, Any]
+    path: Path,
+    expected_header: Mapping[str, Any],
+    expected_run_identity: str = "",
 ) -> Dict[str, Any]:
     """Open and validate the actual atomically published estimator log."""
 
     if not path.is_file() or path.stat().st_size == 0:
         raise CampaignError("TurnSafe T0 JSONL was not atomically published")
-    records: List[Mapping[str, Any]] = []
     with path.open("r", encoding="utf-8", newline="") as stream:
-        for line_number, raw in enumerate(stream, 1):
-            if not raw.endswith("\n"):
-                raise CampaignError("T0 JSONL final line is not newline terminated")
-            records.append(_strict_json(raw, "T0 JSONL line {}".format(line_number)))
-    if not records or records[0].get("record_type") != "run_header":
+        raw_header = stream.readline()
+    if not raw_header or not raw_header.endswith("\n"):
         raise CampaignError("T0 JSONL is missing its run header")
-    header = records[0]
+    header = _strict_json(raw_header, "T0 JSONL line 1")
+    if header.get("record_type") != "run_header":
+        raise CampaignError("T0 JSONL is missing its run header")
     if header.get("schema") != T0_SCHEMA:
         raise CampaignError("T0 run-header schema mismatch")
     for key, expected in sorted(expected_header.items()):
@@ -601,6 +614,31 @@ def _validate_t0_jsonl(
         raise CampaignError("T0 supported-configuration claim is inconsistent")
     if not supported:
         raise CampaignError("fixed KAIST replay is not a supported configuration")
+    header_event_extension: Optional[Mapping[str, Any]] = None
+    header_extensions = header.get("extensions")
+    if header_extensions is not None:
+        header_extensions = require_header_extensions = header_extensions
+        if not isinstance(require_header_extensions, dict):
+            raise CampaignError("T0 run-header extensions is not an object")
+        candidate = require_header_extensions.get("event_extension")
+        if candidate is not None:
+            if not isinstance(candidate, dict):
+                raise CampaignError("T0 event-extension header is not an object")
+            if (candidate.get("schema") != T0_EVENT_EXTENSION_SCHEMA or
+                    candidate.get("record_version") != 1):
+                raise CampaignError("T0 event-extension header version mismatch")
+            capture_flags = candidate.get("capture_flags")
+            required_flags = {
+                "causal_imu_intervals",
+                "outcome_association_keys",
+                "group_bearing_provenance",
+            }
+            if (not isinstance(capture_flags, dict) or
+                    set(capture_flags) != required_flags or
+                    not all(isinstance(value, bool)
+                            for value in capture_flags.values())):
+                raise CampaignError("T0 event-extension flags are not canonical")
+            header_event_extension = candidate
 
     forbidden_keys = {
         "sequence",
@@ -703,6 +741,146 @@ def _validate_t0_jsonl(
         require_string(status.get("reason"), label + ".reason")
         return status
 
+    def require_typed_number(value: Any, label: str) -> Mapping[str, Any]:
+        status = require_status(value, label)
+        if status["status"] == "AVAILABLE":
+            if status["reason"] != "NONE":
+                raise CampaignError("{} AVAILABLE reason is not NONE".format(label))
+            if "value" not in status:
+                raise CampaignError("{} AVAILABLE value is missing".format(label))
+            require_finite_number(status["value"], label + ".value")
+        else:
+            if status["reason"] == "NONE":
+                raise CampaignError("{} unavailable reason is NONE".format(label))
+            if "value" in status:
+                raise CampaignError("{} hides unavailable data behind a value".format(label))
+        return status
+
+    def require_typed_uint(value: Any, label: str) -> Mapping[str, Any]:
+        status = require_status(value, label)
+        if status["status"] == "AVAILABLE":
+            if status["reason"] != "NONE":
+                raise CampaignError("{} AVAILABLE reason is not NONE".format(label))
+            if "value" not in status:
+                raise CampaignError("{} AVAILABLE value is missing".format(label))
+            require_nonnegative_integer(status["value"], label + ".value")
+        else:
+            if status["reason"] == "NONE" or "value" in status:
+                raise CampaignError("{} unavailable typed integer is malformed".format(label))
+        return status
+
+    def require_typed_bool(value: Any, label: str) -> Mapping[str, Any]:
+        status = require_status(value, label)
+        if status["status"] == "AVAILABLE":
+            if status["reason"] != "NONE":
+                raise CampaignError("{} AVAILABLE reason is not NONE".format(label))
+            if "value" not in status:
+                raise CampaignError("{} AVAILABLE value is missing".format(label))
+            require_bool(status["value"], label + ".value")
+        else:
+            if status["reason"] == "NONE":
+                raise CampaignError("{} unavailable reason is NONE".format(label))
+            if "value" in status:
+                raise CampaignError("{} hides unavailable data behind a value".format(label))
+        return status
+
+    def require_finite_vector(value: Any, length: int, label: str) -> None:
+        vector = require_array(value, label)
+        if len(vector) != length:
+            raise CampaignError("{} has the wrong vector length".format(label))
+        for index, item in enumerate(vector):
+            require_finite_number(item, "{}[{}]".format(label, index))
+
+    def require_typed_vector(
+        value: Any, length: int, label: str
+    ) -> Mapping[str, Any]:
+        status = require_status(value, label)
+        if status["status"] == "AVAILABLE":
+            if status["reason"] != "NONE":
+                raise CampaignError("{} AVAILABLE reason is not NONE".format(label))
+            if "value" not in status:
+                raise CampaignError("{} AVAILABLE value is missing".format(label))
+            require_finite_vector(status["value"], length, label + ".value")
+        else:
+            if status["reason"] == "NONE":
+                raise CampaignError("{} unavailable reason is NONE".format(label))
+            if "value" in status:
+                raise CampaignError("{} hides unavailable data behind a value".format(label))
+        return status
+
+    def expected_f64_key(value: float) -> str:
+        bits = struct.unpack(">Q", struct.pack(">d", value))[0]
+        return "f64:0x{:016x}".format(bits)
+
+    def require_timestamp_key(value: Any, timestamp: float, label: str) -> None:
+        require_string(value, label)
+        if value != expected_f64_key(timestamp):
+            raise CampaignError("{} does not bind its binary64 value".format(label))
+
+    def require_rotation(value: Any, label: str) -> Mapping[str, Any]:
+        status = require_status(value, label)
+        if status["status"] != "AVAILABLE":
+            if any(key in status for key in ("rows", "cols", "values_row_major")):
+                raise CampaignError("{} contains unavailable rotation values".format(label))
+            return status
+        if status.get("rows") != 3 or status.get("cols") != 3:
+            raise CampaignError("{} rotation dimensions are invalid".format(label))
+        require_finite_vector(status.get("values_row_major"), 9,
+                              label + ".values_row_major")
+        matrix = status["values_row_major"]
+        rows = [matrix[0:3], matrix[3:6], matrix[6:9]]
+        for left in range(3):
+            for right in range(3):
+                dot = sum(rows[left][axis] * rows[right][axis]
+                          for axis in range(3))
+                expected = 1.0 if left == right else 0.0
+                if abs(dot - expected) > 1.0e-9:
+                    raise CampaignError("{} is not orthonormal".format(label))
+        determinant = (
+            matrix[0] * (matrix[4] * matrix[8] - matrix[5] * matrix[7]) -
+            matrix[1] * (matrix[3] * matrix[8] - matrix[5] * matrix[6]) +
+            matrix[2] * (matrix[3] * matrix[7] - matrix[4] * matrix[6]))
+        if abs(determinant - 1.0) > 1.0e-9:
+            raise CampaignError("{} determinant is not +1".format(label))
+        return status
+
+    def require_gyro_summary(value: Any, label: str) -> None:
+        summary = require_status(value, label)
+        fields = (
+            "max_norm_rad_s", "rms_norm_rad_s", "mean_omega_xyz_rad_s",
+            "integral_norm_rad", "integral_omega_xyz_rad",
+            "delta_rotation_matrix_row_major", "delta_rotation_jpl_xyzw",
+            "delta_rotation_angle_rad", "delta_rotation_axis",
+        )
+        if summary["status"] != "AVAILABLE":
+            if any(field in summary for field in fields):
+                raise CampaignError("{} contains unavailable summary values".format(label))
+            return
+        for field in ("max_norm_rad_s", "rms_norm_rad_s",
+                      "integral_norm_rad", "delta_rotation_angle_rad"):
+            require_finite_number(summary.get(field), label + "." + field)
+        require_finite_vector(summary.get("mean_omega_xyz_rad_s"), 3,
+                              label + ".mean_omega_xyz_rad_s")
+        require_finite_vector(summary.get("integral_omega_xyz_rad"), 3,
+                              label + ".integral_omega_xyz_rad")
+        require_finite_vector(summary.get("delta_rotation_matrix_row_major"), 9,
+                              label + ".delta_rotation_matrix_row_major")
+        require_finite_vector(summary.get("delta_rotation_jpl_xyzw"), 4,
+                              label + ".delta_rotation_jpl_xyzw")
+        quaternion = summary["delta_rotation_jpl_xyzw"]
+        if abs(sum(item * item for item in quaternion) - 1.0) > 1.0e-9:
+            raise CampaignError("{} quaternion is not unit".format(label))
+        if quaternion[3] < 0.0:
+            raise CampaignError("{} quaternion sign is not canonical".format(label))
+        angle = summary["delta_rotation_angle_rad"]
+        expected_angle = 2.0 * math.atan2(
+            math.sqrt(sum(item * item for item in quaternion[:3])),
+            abs(quaternion[3]))
+        if not 0.0 <= angle <= math.pi or abs(angle - expected_angle) > 1.0e-9:
+            raise CampaignError("{} rotation angle is inconsistent".format(label))
+        require_typed_vector(summary.get("delta_rotation_axis"), 3,
+                             label + ".delta_rotation_axis")
+
     def require_pixel(value: Any, label: str) -> None:
         if isinstance(value, list):
             if len(value) != 2:
@@ -731,7 +909,9 @@ def _validate_t0_jsonl(
                       "observation_ordinal"):
             require_nonnegative_integer(key[field], label + "." + field)
         require_finite_number(key["timestamp_value"], label + ".timestamp_value")
-        require_string(key["timestamp_key"], label + ".timestamp_key")
+        require_timestamp_key(
+            key["timestamp_key"], key["timestamp_value"],
+            label + ".timestamp_key")
         return key
 
     def require_observation_evidence(value: Any, label: str) -> None:
@@ -883,9 +1063,21 @@ def _validate_t0_jsonl(
         "winner_shadow_rows_passing_nis",
     )
 
+    record_count = 0
     callback_count = 0
     updater_callback_count = 0
-    for record_index, record in enumerate(records):
+    interval_count = 0
+    interval_available_count = 0
+    interval_unavailable_reasons: Dict[str, int] = {}
+    group_provenance_count = 0
+    group_member_count = 0
+    with path.open("r", encoding="utf-8", newline="") as stream:
+      for record_index, raw in enumerate(stream):
+        if not raw.endswith("\n"):
+            raise CampaignError("T0 JSONL final line is not newline terminated")
+        record = _strict_json(
+            raw, "T0 JSONL line {}".format(record_index + 1))
+        record_count += 1
         inspect(record, "record[{}]".format(record_index))
         if record_index == 0:
             continue
@@ -914,6 +1106,9 @@ def _validate_t0_jsonl(
                 "completeness",
             ),
         )
+        require_timestamp_key(
+            record["callback_timestamp_key"], timestamp,
+            "T0 callback.callback_timestamp_key")
         cameras = require_array(record.get("frontend_cameras"), "T0 frontend_cameras")
         camera_fields = (
             "camera_id",
@@ -1626,13 +1821,838 @@ def _validate_t0_jsonl(
                 reason,
                 "T0 completeness.typed_reasons[{}]".format(reason_index),
             )
+        if header_event_extension is not None:
+            extension = require_object(
+                record.get("extensions"), "T0 callback.extensions",
+                ("event_extension",),
+            )
+            event = require_object(
+                extension["event_extension"],
+                "T0 callback event_extension",
+                ("schema", "record_version"),
+            )
+            if (event["schema"] != T0_EVENT_EXTENSION_SCHEMA or
+                    event["record_version"] != 1):
+                raise CampaignError("T0 callback event-extension version mismatch")
+            scientific_extension_keys = {
+                "event_id", "event_severity", "severity", "outcome_label",
+                "degraded_label", "failure_label", "consensus",
+                "spatial_acceptance", "spatial_coverage_acceptance",
+                "rank_acceptance", "conditioning_acceptance", "winner",
+                "certificate", "t1", "t2", "t3", "branch",
+            }
+
+            def inspect_extension_science(value: Any) -> None:
+                if isinstance(value, dict):
+                    for key, child in value.items():
+                        if key.lower() in scientific_extension_keys:
+                            raise CampaignError(
+                                "T0 event extension contains scientific field {}".format(
+                                    key
+                                )
+                            )
+                        inspect_extension_science(child)
+                elif isinstance(value, list):
+                    for child in value:
+                        inspect_extension_science(child)
+
+            inspect_extension_science(event)
+            flags = header_event_extension["capture_flags"]
+            if flags["causal_imu_intervals"]:
+                interval = require_object(
+                    event.get("causal_imu_interval"),
+                    "T0 causal_imu_interval",
+                    ("gyro_interval_id", "callback_id", "status", "reason",
+                     "units", "frame_convention", "camera_frame_ids",
+                     "current_callback_camera_timestamp",
+                     "previous_processed_callback_camera_timestamp",
+                     "interval_start_camera_s", "interval_end_camera_s",
+                     "duration_s", "dt_CAMtoIMU_s", "clock_equation",
+                     "interval_start_imu_s", "interval_end_imu_s", "support",
+                     "gyro_bias_snapshot_xyz_rad_s", "knots",
+                     "integration_method", "raw_summary",
+                     "bias_corrected_summary"),
+                )
+                if (interval["gyro_interval_id"] != record["callback_index"] or
+                        interval["callback_id"] != record["callback_index"]):
+                    raise CampaignError("T0 callback/interval identity mismatch")
+                camera_frame_ids = require_array(
+                    interval["camera_frame_ids"],
+                    "T0 causal_imu_interval.camera_frame_ids")
+                for frame_id in camera_frame_ids:
+                    require_nonnegative_integer(
+                        frame_id, "T0 causal_imu_interval.camera_frame_id")
+                if camera_frame_ids != sorted(set(camera_frame_ids)):
+                    raise CampaignError("T0 interval camera frame IDs are not canonical")
+                frontend_ids = [frame["camera_id"] for frame in cameras]
+                if frontend_ids != camera_frame_ids:
+                    raise CampaignError("T0 interval/frontend camera IDs do not reconcile")
+                for frame in cameras:
+                    frame_event = require_object(
+                        require_object(
+                            frame.get("extensions"),
+                            "T0 frontend extensions", ("event_extension",)
+                        )["event_extension"],
+                        "T0 frontend event extension",
+                        ("schema", "gyro_interval_id"),
+                    )
+                    if (frame_event["schema"] != T0_EVENT_EXTENSION_SCHEMA or
+                            frame_event["gyro_interval_id"] != interval["gyro_interval_id"]):
+                        raise CampaignError("stereo frame interval reference mismatch")
+                require_string(interval["status"], "T0 interval.status")
+                require_string(interval["reason"], "T0 interval.reason")
+                if interval["status"] not in ("AVAILABLE", "NOT_AVAILABLE"):
+                    raise CampaignError("T0 interval has invalid status")
+                if ((interval["status"] == "AVAILABLE") !=
+                        (interval["reason"] == "NONE")):
+                    raise CampaignError("T0 interval status/reason is inconsistent")
+                if interval["units"] != {
+                    "time": "s", "angular_rate": "rad/s", "rotation": "rad"
+                }:
+                    raise CampaignError("T0 interval units are invalid")
+                if interval["frame_convention"] != {
+                    "raw": "native_gyroscope_measurement_frame",
+                    "bias_corrected": (
+                        "native_gyroscope_measurement_frame_wm_minus_bias_g"),
+                    "delta": (
+                        "native_gyroscope_frame_passive_left_composed_"
+                        "Exp_minus_omega_dt_diagnostic"),
+                }:
+                    raise CampaignError("T0 interval frame convention is invalid")
+                if interval["clock_equation"] != "t_imu=t_camera+dt_CAMtoIMU":
+                    raise CampaignError("T0 interval clock equation is invalid")
+                if interval["integration_method"] != "piecewise_linear_trapezoid.v1":
+                    raise CampaignError("T0 interval integration method is invalid")
+                for typed_timestamp in (
+                    "current_callback_camera_timestamp",
+                    "previous_processed_callback_camera_timestamp",
+                    "interval_start_camera_s", "interval_end_camera_s",
+                    "duration_s", "dt_CAMtoIMU_s", "interval_start_imu_s",
+                    "interval_end_imu_s",
+                ):
+                    require_typed_number(
+                        interval[typed_timestamp],
+                        "T0 interval." + typed_timestamp,
+                    )
+                require_typed_vector(
+                    interval["gyro_bias_snapshot_xyz_rad_s"], 3,
+                    "T0 interval.gyro_bias_snapshot_xyz_rad_s",
+                )
+                support = require_object(
+                    interval["support"], "T0 interval.support",
+                    ("source_sample_count", "start_endpoint", "end_endpoint",
+                     "maximum_internal_sample_gap_s", "coverage_fraction"),
+                )
+                require_typed_uint(
+                    support["source_sample_count"],
+                    "T0 interval.support.source_sample_count")
+                for endpoint_name in ("start_endpoint", "end_endpoint"):
+                    endpoint = require_object(
+                        support[endpoint_name],
+                        "T0 interval.support." + endpoint_name,
+                        ("status", "reason", "lower_timestamp",
+                         "upper_timestamp"),
+                    )
+                    if endpoint["status"] not in (
+                            "EXACT_SAMPLE", "LINEAR_INTERPOLATED", "UNSUPPORTED"):
+                        raise CampaignError("T0 interval endpoint status is invalid")
+                    require_string(
+                        endpoint["reason"],
+                        "T0 interval.support." + endpoint_name + ".reason",
+                    )
+                    require_typed_number(
+                        endpoint["lower_timestamp"],
+                        "T0 interval.support." + endpoint_name +
+                        ".lower_timestamp",
+                    )
+                    require_typed_number(
+                        endpoint["upper_timestamp"],
+                        "T0 interval.support." + endpoint_name +
+                        ".upper_timestamp",
+                    )
+                for support_field in (
+                    "first_timestamp_s", "last_timestamp_s",
+                    "maximum_internal_sample_gap_s", "coverage_fraction",
+                ):
+                    if support_field not in support:
+                        raise CampaignError(
+                            "T0 interval.support is missing required field {}".format(
+                                support_field
+                            )
+                        )
+                    require_typed_number(
+                        support[support_field],
+                        "T0 interval.support." + support_field,
+                    )
+                coverage_status = support["coverage_fraction"]
+                if (coverage_status["status"] == "AVAILABLE" and
+                        not 0.0 <= coverage_status["value"] <= 1.0):
+                    raise CampaignError("T0 interval coverage is outside [0,1]")
+                endpoint_policy = support.get("endpoint_policy")
+                if endpoint_policy != "exact_or_linear_bracket_no_extrapolation.v1":
+                    raise CampaignError("T0 interval endpoint policy is invalid")
+                knots = require_object(
+                    interval["knots"], "T0 interval.knots", ("status", "reason"))
+                if knots["status"] not in ("AVAILABLE", "NOT_AVAILABLE"):
+                    raise CampaignError("T0 interval knots have invalid status")
+                if knots["status"] == "AVAILABLE":
+                    timestamp_values = require_array(
+                        knots.get("timestamp_value_s"),
+                        "T0 interval knot timestamps")
+                    timestamp_keys = require_array(
+                        knots.get("timestamp_key"), "T0 interval knot keys")
+                    raw_omega = require_array(
+                        knots.get("raw_omega_xyz_rad_s"),
+                        "T0 interval raw omega")
+                    if not (len(timestamp_values) == len(timestamp_keys) ==
+                            len(raw_omega)):
+                        raise CampaignError("T0 interval knot arrays differ in length")
+                    corrected_value = knots.get(
+                        "bias_corrected_omega_xyz_rad_s"
+                    )
+                    corrected: List[Any] = []
+                    if isinstance(corrected_value, list):
+                        corrected = corrected_value
+                        if len(corrected) != len(timestamp_values):
+                            raise CampaignError(
+                                "T0 corrected knot array differs in length")
+                    else:
+                        corrected_status = require_status(
+                            corrected_value, "T0 interval corrected omega"
+                        )
+                        if corrected_status["status"] == "AVAILABLE":
+                            raise CampaignError(
+                                "T0 corrected knot availability is malformed"
+                            )
+                        if interval["status"] == "AVAILABLE":
+                            raise CampaignError(
+                                "available T0 interval lacks corrected knots"
+                            )
+                    for knot_index, timestamp_value in enumerate(timestamp_values):
+                        require_finite_number(
+                            timestamp_value,
+                            "T0 interval knot timestamp {}".format(knot_index),
+                        )
+                        require_timestamp_key(
+                            timestamp_keys[knot_index], timestamp_value,
+                            "T0 interval knot key {}".format(knot_index),
+                        )
+                        require_finite_vector(
+                            raw_omega[knot_index], 3,
+                            "T0 interval raw omega {}".format(knot_index),
+                        )
+                        if corrected:
+                            require_finite_vector(
+                                corrected[knot_index], 3,
+                                "T0 interval corrected omega {}".format(knot_index),
+                            )
+                    if any(timestamp_values[index] <= timestamp_values[index - 1]
+                           for index in range(1, len(timestamp_values))):
+                        raise CampaignError("T0 interval knots are not ordered")
+                    if interval["status"] != "AVAILABLE":
+                        raise CampaignError(
+                            "unavailable T0 interval exposes canonical knots")
+                    start_imu = interval["interval_start_imu_s"]["value"]
+                    end_imu = interval["interval_end_imu_s"]["value"]
+                    if (len(timestamp_values) < 2 or
+                            timestamp_values[0] != start_imu or
+                            timestamp_values[-1] != end_imu):
+                        raise CampaignError(
+                            "T0 knot endpoints do not equal the exact interval")
+                    bias = interval["gyro_bias_snapshot_xyz_rad_s"]["value"]
+                    for knot_index, (raw, adjusted) in enumerate(
+                            zip(raw_omega, corrected)):
+                        if any(abs(adjusted[axis] -
+                                   (raw[axis] - bias[axis])) > 1.0e-12
+                               for axis in range(3)):
+                            raise CampaignError(
+                                "T0 corrected gyro differs from raw minus bias at {}".format(
+                                    knot_index))
+                else:
+                    for hidden in (
+                        "timestamp_value_s", "timestamp_key",
+                        "raw_omega_xyz_rad_s",
+                        "bias_corrected_omega_xyz_rad_s",
+                    ):
+                        if hidden in knots:
+                            raise CampaignError(
+                                "T0 unavailable interval knots contain values"
+                            )
+                require_gyro_summary(
+                    interval["raw_summary"], "T0 interval.raw_summary"
+                )
+                require_gyro_summary(
+                    interval["bias_corrected_summary"],
+                    "T0 interval.bias_corrected_summary",
+                )
+                if interval["status"] == "AVAILABLE":
+                    current = interval[
+                        "current_callback_camera_timestamp"]["value"]
+                    previous = interval[
+                        "previous_processed_callback_camera_timestamp"]["value"]
+                    start_camera = interval["interval_start_camera_s"]["value"]
+                    end_camera = interval["interval_end_camera_s"]["value"]
+                    duration = interval["duration_s"]["value"]
+                    offset = interval["dt_CAMtoIMU_s"]["value"]
+                    if current != timestamp or start_camera != previous or \
+                            end_camera != current:
+                        raise CampaignError("T0 camera interval endpoints differ")
+                    if abs(duration - (current - previous)) > 1.0e-12:
+                        raise CampaignError("T0 camera interval duration differs")
+                    if (abs(interval["interval_start_imu_s"]["value"] -
+                            (previous + offset)) > 1.0e-12 or
+                            abs(interval["interval_end_imu_s"]["value"] -
+                                (current + offset)) > 1.0e-12):
+                        raise CampaignError("T0 IMU clock mapping differs")
+                interval_count += 1
+                if interval["status"] == "AVAILABLE":
+                    interval_available_count += 1
+                else:
+                    reason = interval["reason"]
+                    interval_unavailable_reasons[reason] = (
+                        interval_unavailable_reasons.get(reason, 0) + 1)
+            if flags["outcome_association_keys"]:
+                association_keys = require_object(
+                    event.get("outcome_association_keys"),
+                    "T0 outcome_association_keys",
+                    ("callback_id", "callback_camera_timestamp_value",
+                     "callback_camera_timestamp_key",
+                     "estimator_initialized_before",
+                     "estimator_initialized_after", "estimator_valid_before",
+                     "estimator_valid_after", "state_timestamp_before",
+                     "state_timestamp_after",
+                     "expected_state_row_key", "expected_deviation_row_key",
+                     "expected_pose_row_key", "pose_stream_write_status",
+                     "reset_status", "nonfinite_observed",
+                     "callback_incomplete", "ordinary_accepted_full_factor_count",
+                     "ordinary_full_visual_update_accepted",
+                     "time_since_last_accepted_ordinary_full_update_camera_s",
+                     "run_completeness", "reference_association", "identity"),
+                )
+                if association_keys["callback_id"] != record["callback_index"]:
+                    raise CampaignError("T0 association callback identity mismatch")
+                identity = require_object(
+                    association_keys["identity"], "T0 association identity",
+                    ("run_identity", "source_sha", "source_tree",
+                     "source_snapshot_sha256", "build_provenance_id",
+                     "config_sha256", "calibration_sha256"),
+                )
+                if expected_run_identity and identity["run_identity"] != expected_run_identity:
+                    raise CampaignError("T0 opaque run identity mismatch")
+                require_finite_number(
+                    association_keys["callback_camera_timestamp_value"],
+                    "T0 association callback timestamp",
+                )
+                if (association_keys["callback_camera_timestamp_value"] != timestamp or
+                        association_keys["callback_camera_timestamp_key"] !=
+                        record["callback_timestamp_key"]):
+                    raise CampaignError("T0 association callback timestamp mismatch")
+                for boolean_key in (
+                    "estimator_initialized_before", "estimator_initialized_after",
+                    "estimator_valid_before", "estimator_valid_after",
+                    "nonfinite_observed", "callback_incomplete",
+                ):
+                    require_typed_bool(
+                        association_keys[boolean_key],
+                        "T0 association." + boolean_key,
+                    )
+                for numeric_key in (
+                    "state_timestamp_before", "state_timestamp_after",
+                    "time_since_last_accepted_ordinary_full_update_camera_s",
+                ):
+                    require_typed_number(
+                        association_keys[numeric_key],
+                        "T0 association." + numeric_key,
+                    )
+
+                def validate_row_key(value: Any, stream_id: str, label: str) -> None:
+                    row_key = require_status(value, label)
+                    if row_key["status"] != "AVAILABLE":
+                        if row_key["reason"] == "NONE":
+                            raise CampaignError(
+                                "{} unavailable reason is NONE".format(label))
+                        for hidden in ("stream_id", "timestamp_value",
+                                       "timestamp_key", "row_ordinal"):
+                            if hidden in row_key:
+                                raise CampaignError(
+                                    "{} contains unavailable row values".format(label)
+                                )
+                        return
+                    if row_key["reason"] != "NONE":
+                        raise CampaignError(
+                            "{} AVAILABLE reason is not NONE".format(label))
+                    if row_key.get("stream_id") != stream_id:
+                        raise CampaignError("{} stream identity mismatch".format(label))
+                    require_finite_number(
+                        row_key.get("timestamp_value"), label + ".timestamp_value"
+                    )
+                    require_timestamp_key(
+                        row_key.get("timestamp_key"),
+                        row_key["timestamp_value"], label + ".timestamp_key")
+                    ordinal = require_status(
+                        row_key.get("row_ordinal"), label + ".row_ordinal"
+                    )
+                    if ordinal["status"] == "AVAILABLE":
+                        raise CampaignError("runtime row ordinal must remain offline-only")
+
+                validate_row_key(
+                    association_keys["expected_state_row_key"],
+                    "state_estimate", "T0 association.expected_state_row_key",
+                )
+                validate_row_key(
+                    association_keys["expected_deviation_row_key"],
+                    "state_deviation",
+                    "T0 association.expected_deviation_row_key",
+                )
+                validate_row_key(
+                    association_keys["expected_pose_row_key"],
+                    "trajectory_tum", "T0 association.expected_pose_row_key",
+                )
+                for offline_key in (
+                    "pose_stream_write_status", "reset_status",
+                    "run_completeness", "reference_association",
+                ):
+                    offline = require_status(
+                        association_keys[offline_key],
+                        "T0 association." + offline_key,
+                    )
+                    if offline["status"] == "AVAILABLE":
+                        raise CampaignError(
+                            "runtime association exposed offline-only data"
+                        )
+                expected_identity = {
+                    "source_sha": expected_header.get("source_sha"),
+                    "source_tree": expected_header.get("tree_sha"),
+                    "source_snapshot_sha256": expected_header.get(
+                        "source_snapshot_sha256"
+                    ),
+                    "build_provenance_id": expected_header.get(
+                        "build_provenance_id"
+                    ),
+                    "config_sha256": expected_header.get("config_sha256"),
+                    "calibration_sha256": expected_header.get(
+                        "calibration_sha256"
+                    ),
+                }
+                for identity_key, expected_value in expected_identity.items():
+                    if expected_value is not None and identity[identity_key] != expected_value:
+                        raise CampaignError(
+                            "T0 association {} identity mismatch".format(identity_key)
+                        )
+                require_typed_uint(
+                    association_keys["ordinary_accepted_full_factor_count"],
+                    "T0 accepted full factor count")
+                require_typed_bool(
+                    association_keys["ordinary_full_visual_update_accepted"],
+                    "T0 ordinary full accepted")
+                prohibited = {
+                    "event_id", "severity", "outcome_label", "degraded_label",
+                    "failure_label", "final_error", "ground_truth",
+                }
+                if any(key.lower() in prohibited for key in association_keys):
+                    raise CampaignError("runtime association keys contain a scientific label")
+            if flags["group_bearing_provenance"]:
+                provenance = require_object(
+                    event.get("group_bearing_provenance"),
+                    "T0 group_bearing_provenance",
+                    ("status", "reason", "schema_version", "groups", "group_count",
+                     "canonical_ordering_version", "shared_field_encoding"),
+                )
+                if (provenance["schema_version"] != T0_EVENT_EXTENSION_SCHEMA or
+                        provenance["canonical_ordering_version"] !=
+                        "turnsafe.event_extension.order.v1" or
+                        provenance["shared_field_encoding"] !=
+                        "one_group_record_plus_member_array.v1"):
+                    raise CampaignError("T0 group provenance contract mismatch")
+                groups = require_array(
+                    provenance["groups"], "T0 group provenance groups")
+                if provenance["group_count"] != len(groups):
+                    raise CampaignError("T0 group provenance count mismatch")
+                previous_group_key: Optional[Tuple[int, str, str]] = None
+                for group_index, provenance_group in enumerate(groups):
+                    group_value = require_object(
+                        provenance_group,
+                        "T0 provenance group {}".format(group_index),
+                        ("group_key", "member_count", "member_key_list",
+                         "camera", "target_stereo_camera",
+                         "bearing_provenance", "source_clone_timestamp_value",
+                         "target_clone_timestamp_value", "source_current_R_GtoI",
+                         "source_fej_R_GtoI", "target_current_R_GtoI",
+                         "target_fej_R_GtoI", "fixed_R_ItoC",
+                         "supported_configuration", "members"),
+                    )
+                    group_key = require_object(
+                        group_value["group_key"], "T0 provenance group key",
+                        ("camera_id", "source_timestamp_key",
+                         "target_timestamp_key"),
+                    )
+                    canonical_group_key = (
+                        group_key["camera_id"], group_key["source_timestamp_key"],
+                        group_key["target_timestamp_key"])
+                    require_nonnegative_integer(
+                        group_key["camera_id"], "T0 provenance group camera ID"
+                    )
+                    require_string(
+                        group_key["source_timestamp_key"],
+                        "T0 provenance source timestamp key",
+                    )
+                    require_string(
+                        group_key["target_timestamp_key"],
+                        "T0 provenance target timestamp key",
+                    )
+                    if (previous_group_key is not None and
+                            canonical_group_key <= previous_group_key):
+                        raise CampaignError("T0 provenance groups are not canonical")
+                    previous_group_key = canonical_group_key
+                    require_finite_number(
+                        group_value["source_clone_timestamp_value"],
+                        "T0 provenance source clone timestamp",
+                    )
+                    require_finite_number(
+                        group_value["target_clone_timestamp_value"],
+                        "T0 provenance target clone timestamp",
+                    )
+                    require_timestamp_key(
+                        group_key["source_timestamp_key"],
+                        group_value["source_clone_timestamp_value"],
+                        "T0 provenance source clone timestamp key")
+                    require_timestamp_key(
+                        group_key["target_timestamp_key"],
+                        group_value["target_clone_timestamp_value"],
+                        "T0 provenance target clone timestamp key")
+                    if group_value["bearing_provenance"] != \
+                            "direct_native_normalized_unit_ray.v1":
+                        raise CampaignError("T0 bearing provenance is invalid")
+                    members = require_array(
+                        group_value["members"], "T0 provenance members")
+                    member_keys = require_array(
+                        group_value["member_key_list"],
+                        "T0 provenance member keys")
+                    if (group_value["member_count"] < 2 or
+                            group_value["member_count"] != len(members) or
+                            len(member_keys) != len(members)):
+                        raise CampaignError("T0 provenance member count mismatch")
+                    def validate_group_camera(
+                            raw_camera: Any, label: str,
+                            expected_camera_id: Optional[int]) -> Mapping[str, Any]:
+                        camera = require_status(raw_camera, label)
+                        if (expected_camera_id is not None and
+                                camera.get("camera_id") != expected_camera_id):
+                            raise CampaignError(label + " identity mismatch")
+                        if camera["status"] != "AVAILABLE":
+                            return camera
+                        if camera["reason"] != "NONE":
+                            raise CampaignError(label + " available reason differs")
+                        for camera_field in (
+                            "camera_id", "model", "image_width", "image_height",
+                            "intrinsics_distortion_hash",
+                            "camera_extrinsic_hash", "hash_algorithm",
+                        ):
+                            if camera_field not in camera:
+                                raise CampaignError(
+                                    "T0 provenance camera is missing {}".format(
+                                        camera_field
+                                    )
+                                )
+                        require_nonnegative_integer(
+                            camera["camera_id"], label + ".camera_id")
+                        if camera["model"] != "RADTAN":
+                            raise CampaignError(label + " model is not RADTAN")
+                        require_nonnegative_integer(
+                            camera["image_width"], "T0 provenance image width"
+                        )
+                        require_nonnegative_integer(
+                            camera["image_height"], "T0 provenance image height"
+                        )
+                        if camera["image_width"] == 0 or camera["image_height"] == 0:
+                            raise CampaignError("T0 provenance image dimensions are zero")
+                        for hash_field in (
+                            "intrinsics_distortion_hash", "camera_extrinsic_hash"
+                        ):
+                            require_string(camera[hash_field], label + "." + hash_field)
+                            if re.fullmatch(
+                                    r"fnv1a64:[0-9a-f]{16}",
+                                    camera[hash_field]) is None:
+                                raise CampaignError(label + " hash is invalid")
+                        if camera["hash_algorithm"] != "fnv1a64_binary64_be.v1":
+                            raise CampaignError(label + " hash algorithm mismatch")
+                        return camera
+
+                    camera = validate_group_camera(
+                        group_value["camera"], "T0 provenance camera",
+                        group_key["camera_id"])
+                    stereo_camera = validate_group_camera(
+                        group_value["target_stereo_camera"],
+                        "T0 provenance target stereo camera", None)
+                    rotation_statuses = []
+                    for rotation_field in (
+                        "source_current_R_GtoI", "source_fej_R_GtoI",
+                        "target_current_R_GtoI", "target_fej_R_GtoI",
+                        "fixed_R_ItoC",
+                    ):
+                        rotation_statuses.append(require_rotation(
+                            group_value[rotation_field],
+                            "T0 provenance." + rotation_field,
+                        ))
+                    supported = require_object(
+                        group_value["supported_configuration"],
+                        "T0 provenance supported configuration",
+                        ("value", "reasons"),
+                    )
+                    require_bool(
+                        supported["value"],
+                        "T0 provenance supported configuration value",
+                    )
+                    supported_reasons = require_array(
+                        supported["reasons"],
+                        "T0 provenance supported configuration reasons",
+                    )
+                    if supported_reasons != sorted(set(supported_reasons)):
+                        raise CampaignError(
+                            "T0 provenance supported reasons are not canonical"
+                        )
+                    if supported["value"] and (
+                            camera["status"] != "AVAILABLE" or
+                            stereo_camera["status"] != "AVAILABLE" or
+                            any(value["status"] != "AVAILABLE"
+                                for value in rotation_statuses)):
+                        raise CampaignError(
+                            "supported T0 group lacks calibration or rotations")
+                    key_fields = (
+                        "camera_id", "source_timestamp_key",
+                        "target_timestamp_key", "feature_id",
+                        "detached_index", "source_observation_ordinal",
+                        "target_observation_ordinal",
+                    )
+                    canonical_member_keys: List[Tuple[Any, ...]] = []
+                    for key_index, member_key in enumerate(member_keys):
+                        key_value = require_object(
+                            member_key,
+                            "T0 provenance member key {}".format(key_index),
+                            key_fields,
+                        )
+                        for integer_field in (
+                                "camera_id", "feature_id", "detached_index",
+                                "source_observation_ordinal",
+                                "target_observation_ordinal"):
+                            require_nonnegative_integer(
+                                key_value[integer_field],
+                                "T0 provenance member key." + integer_field)
+                        if (key_value["camera_id"] != group_key["camera_id"] or
+                                key_value["source_timestamp_key"] !=
+                                group_key["source_timestamp_key"] or
+                                key_value["target_timestamp_key"] !=
+                                group_key["target_timestamp_key"]):
+                            raise CampaignError(
+                                "T0 provenance member key differs from group")
+                        canonical_member_keys.append(
+                            tuple(key_value[field] for field in key_fields)
+                        )
+                    if canonical_member_keys != sorted(set(canonical_member_keys)):
+                        raise CampaignError("T0 provenance members are not canonical")
+                    for member_index, member in enumerate(members):
+                        member_value = require_object(
+                            member,
+                            "T0 provenance member {}".format(member_index),
+                            ("member_key", "feature_id", "detached_index",
+                             "source_observation_key", "target_observation_key",
+                             "target_stereo_observation_key", "source_raw_pixel",
+                             "target_raw_pixel", "source_normalized_coordinates",
+                             "target_normalized_coordinates", "source_unit_bearing",
+                             "target_unit_bearing", "target_stereo_raw_pixel",
+                             "source_image_cell", "target_image_cell",
+                             "target_stereo_image_cell",
+                             "native_source_status", "finite_validation"),
+                        )
+                        if member_value["member_key"] != member_keys[member_index]:
+                            raise CampaignError(
+                                "T0 provenance member-key references differ"
+                            )
+                        require_nonnegative_integer(
+                            member_value["feature_id"],
+                            "T0 provenance member feature ID",
+                        )
+                        require_nonnegative_integer(
+                            member_value["detached_index"],
+                            "T0 provenance member detached index",
+                        )
+                        if (member_value["feature_id"] !=
+                                member_keys[member_index]["feature_id"] or
+                                member_value["detached_index"] !=
+                                member_keys[member_index]["detached_index"]):
+                            raise CampaignError(
+                                "T0 provenance member identity differs from key"
+                            )
+                        source_key = require_observation_key(
+                            member_value["source_observation_key"],
+                            "T0 provenance source observation key",
+                        )
+                        target_key = require_observation_key(
+                            member_value["target_observation_key"],
+                            "T0 provenance target observation key",
+                        )
+                        stereo_key = require_observation_key(
+                            member_value["target_stereo_observation_key"],
+                            "T0 provenance target stereo observation key",
+                        )
+                        member_key = member_keys[member_index]
+                        for observation_key, timestamp_name, ordinal_name in (
+                                (source_key, "source", "source_observation_ordinal"),
+                                (target_key, "target", "target_observation_ordinal")):
+                            expected_timestamp = (
+                                group_value["source_clone_timestamp_value"]
+                                if timestamp_name == "source" else
+                                group_value["target_clone_timestamp_value"])
+                            if (observation_key["camera_id"] != group_key["camera_id"] or
+                                    observation_key["timestamp_value"] != expected_timestamp or
+                                    observation_key["feature_id"] != member_key["feature_id"] or
+                                    observation_key["detached_index"] != member_key["detached_index"] or
+                                    observation_key["observation_ordinal"] !=
+                                    member_key[ordinal_name]):
+                                raise CampaignError(
+                                    "T0 provenance observation/member key mismatch")
+                        if (stereo_key["camera_id"] == group_key["camera_id"] or
+                                stereo_key["timestamp_value"] !=
+                                group_value["target_clone_timestamp_value"] or
+                                stereo_key["feature_id"] != member_key["feature_id"] or
+                                stereo_key["detached_index"] !=
+                                member_key["detached_index"]):
+                            raise CampaignError(
+                                "T0 provenance target stereo key mismatch")
+                        if (stereo_camera["status"] == "AVAILABLE" and
+                                stereo_key["camera_id"] !=
+                                stereo_camera["camera_id"]):
+                            raise CampaignError(
+                                "T0 provenance stereo camera identity mismatch")
+                        typed_vectors: Dict[str, Mapping[str, Any]] = {}
+                        for vector_field, vector_length in (
+                            ("source_raw_pixel", 2),
+                            ("target_raw_pixel", 2),
+                            ("source_normalized_coordinates", 2),
+                            ("target_normalized_coordinates", 2),
+                            ("source_unit_bearing", 3),
+                            ("target_unit_bearing", 3),
+                            ("target_stereo_raw_pixel", 2),
+                            ("source_image_cell", 2),
+                            ("target_image_cell", 2),
+                            ("target_stereo_image_cell", 2),
+                        ):
+                            typed_vector = require_typed_vector(
+                                member_value[vector_field], vector_length,
+                                "T0 provenance member." + vector_field,
+                            )
+                            typed_vectors[vector_field] = typed_vector
+                            if (vector_field.endswith("unit_bearing") and
+                                    typed_vector["status"] == "AVAILABLE" and
+                                    typed_vector.get("frame") != "camera"):
+                                raise CampaignError(
+                                    "T0 provenance bearing frame is invalid"
+                                )
+                            if (vector_field.endswith("image_cell") and
+                                    typed_vector["status"] == "AVAILABLE" and
+                                    typed_vector.get("representation") !=
+                                    "continuous_pixel_center_fraction.v1"):
+                                raise CampaignError(
+                                    "T0 provenance image-cell representation is invalid"
+                                )
+                        for normalized_field, bearing_field in (
+                                ("source_normalized_coordinates", "source_unit_bearing"),
+                                ("target_normalized_coordinates", "target_unit_bearing")):
+                            normalized = typed_vectors[normalized_field]
+                            bearing = typed_vectors[bearing_field]
+                            if normalized["status"] == "AVAILABLE":
+                                if bearing["status"] != "AVAILABLE":
+                                    raise CampaignError(
+                                        "T0 normalized coordinate lacks bearing")
+                                ray = [normalized["value"][0],
+                                       normalized["value"][1], 1.0]
+                                norm = math.sqrt(sum(item * item for item in ray))
+                                expected_bearing = [item / norm for item in ray]
+                                if any(abs(bearing["value"][axis] -
+                                           expected_bearing[axis]) > 1.0e-12
+                                       for axis in range(3)):
+                                    raise CampaignError(
+                                        "T0 bearing differs from native normalized ray")
+                                if bearing["value"][2] <= 0.0:
+                                    raise CampaignError("T0 bearing z is not positive")
+                        if camera["status"] == "AVAILABLE":
+                            for pixel_field, cell_field in (
+                                    ("source_raw_pixel", "source_image_cell"),
+                                    ("target_raw_pixel", "target_image_cell")):
+                                pixel = typed_vectors[pixel_field]
+                                cell = typed_vectors[cell_field]
+                                if pixel["status"] == "AVAILABLE":
+                                    if cell["status"] != "AVAILABLE":
+                                        raise CampaignError("T0 pixel lacks image cell")
+                                    expected_cell = [
+                                        (pixel["value"][0] + 0.5) /
+                                        camera["image_width"],
+                                        (pixel["value"][1] + 0.5) /
+                                        camera["image_height"],
+                                    ]
+                                    if any(abs(cell["value"][axis] -
+                                               expected_cell[axis]) > 1.0e-12
+                                           for axis in range(2)):
+                                        raise CampaignError(
+                                            "T0 image cell differs from raw pixel")
+                        if stereo_camera["status"] == "AVAILABLE":
+                            pixel = typed_vectors["target_stereo_raw_pixel"]
+                            cell = typed_vectors["target_stereo_image_cell"]
+                            if pixel["status"] == "AVAILABLE":
+                                expected_cell = [
+                                    (pixel["value"][0] + 0.5) /
+                                    stereo_camera["image_width"],
+                                    (pixel["value"][1] + 0.5) /
+                                    stereo_camera["image_height"],
+                                ]
+                                if cell["status"] != "AVAILABLE" or any(
+                                        abs(cell["value"][axis] -
+                                            expected_cell[axis]) > 1.0e-12
+                                        for axis in range(2)):
+                                    raise CampaignError(
+                                        "T0 stereo image cell differs from raw pixel")
+                        source_status = require_status(
+                            member_value["native_source_status"],
+                            "T0 provenance native source status",
+                        )
+                        if (source_status["status"] != "AVAILABLE" or
+                                source_status["reason"] !=
+                                "TYPED_T1_SOURCE_OUTCOME"):
+                            raise CampaignError(
+                                "T0 provenance member is outside typed source population"
+                            )
+                        require_string(
+                            source_status.get("full_outcome"),
+                            "T0 provenance native source outcome",
+                        )
+                        require_status(
+                            member_value["finite_validation"],
+                            "T0 provenance finite validation",
+                        )
+                    group_provenance_count += 1
+                    group_member_count += len(members)
     if callback_count == 0:
         raise CampaignError("T0 JSONL contains no camera callbacks")
+    if (header_event_extension is not None and
+            header_event_extension["capture_flags"]["causal_imu_intervals"] and
+            interval_count != callback_count):
+        raise CampaignError("T0 callback/interval counts do not reconcile")
     return {
         "schema": T0_SCHEMA,
-        "record_count": len(records),
+        "record_count": record_count,
         "callback_count": callback_count,
         "updater_callback_count": updater_callback_count,
+        "event_extension": {
+            "schema": (T0_EVENT_EXTENSION_SCHEMA
+                       if header_event_extension is not None else None),
+            "interval_count": interval_count,
+            "interval_available_count": interval_available_count,
+            "interval_unavailable_count": interval_count - interval_available_count,
+            "interval_unavailable_reasons": dict(
+                sorted(interval_unavailable_reasons.items())),
+            "group_provenance_count": group_provenance_count,
+            "group_member_count": group_member_count,
+        },
         "identity": file_identity(path),
         "runtime_sequence_identity_absent": True,
         "finite_json": True,
@@ -1698,7 +2718,10 @@ def _validate_paths(args: argparse.Namespace) -> Dict[str, Path]:
     config = _regular_file(args.config, "configuration")
     launch = _regular_file(args.launch, "launch file")
     binary = _regular_file(args.binary, "estimator binary", executable=True)
-    reference = _regular_file(args.reference_tum, "reference trajectory")
+    # Resolve and firewall the reference path without opening or stat'ing it.
+    # The first byte/content access is deliberately post-roslaunch.
+    reference = args.reference_tum.resolve(strict=False)
+    _reject_forbidden_path(reference, "reference trajectory")
     output = args.output_dir.resolve(strict=False)
     _reject_forbidden_path(output, "output directory")
 
@@ -2016,6 +3039,367 @@ def _validate_output_consistency(
         "timing_state_timestamp_tolerance_seconds": 1e-5,
         "timing_state_maximum_absolute_difference_seconds": maximum_difference,
         "timing_state_timestamps_within_tolerance": True,
+    }
+
+
+def _validate_association_outputs(
+    output: Path,
+    callback_count: int,
+    telemetry: Path,
+    state: Path,
+    deviation: Path,
+    trajectory: Path,
+    reference: Path,
+) -> Dict[str, Any]:
+    """Validate deterministic post-close joins and bind every input/output."""
+
+    state_csv = _regular_file(
+        output / "CALLBACK_STATE_ASSOCIATION.csv",
+        "callback/state association",
+    )
+    reference_csv = _regular_file(
+        output / "CALLBACK_REFERENCE_ASSOCIATION.csv",
+        "callback/reference association",
+    )
+    coverage_path = _regular_file(
+        output / "ASSOCIATION_COVERAGE.json", "association coverage"
+    )
+    coverage = _strict_json(
+        coverage_path.read_text(encoding="utf-8"), "association coverage"
+    )
+    if coverage.get("schema_version") != "turnsafe.association_coverage.v1":
+        raise CampaignError("association coverage schema mismatch")
+    if coverage.get("association_version") != "turnsafe.offline_association.v1":
+        raise CampaignError("association version mismatch")
+    if coverage.get("callback_count") != callback_count:
+        raise CampaignError("association callback count does not reconcile")
+    expected_input_hashes = {
+        "telemetry_sha256": sha256_file(telemetry),
+        "state_sha256": sha256_file(state),
+        "deviation_sha256": sha256_file(deviation),
+        "trajectory_sha256": sha256_file(trajectory),
+        "reference_sha256": sha256_file(reference),
+    }
+    if coverage.get("inputs") != expected_input_hashes:
+        raise CampaignError("association input identities do not reconcile")
+    if coverage.get("prohibited_outputs_absent") != {
+        "event_ids": True,
+        "outcome_labels": True,
+        "degradation_labels": True,
+        "error_metrics": True,
+    }:
+        raise CampaignError("association scientific-output firewall failed")
+    streams = coverage.get("streams")
+    if not isinstance(streams, dict) or set(streams) != {
+        "state", "deviation", "trajectory", "reference"
+    }:
+        raise CampaignError("association stream coverage is incomplete")
+    for stream_name, stream in streams.items():
+        if not isinstance(stream, dict) or not isinstance(stream.get("counts"), dict):
+            raise CampaignError("association stream counts are invalid")
+        counts = stream["counts"]
+        if set(counts) != {"MATCHED", "MISSING", "AMBIGUOUS"}:
+            raise CampaignError("association status taxonomy is invalid")
+        if any(isinstance(value, bool) or not isinstance(value, int) or value < 0
+               for value in counts.values()):
+            raise CampaignError("association status count is invalid")
+        if sum(counts.values()) != callback_count:
+            raise CampaignError(
+                "association {} coverage does not reconcile".format(stream_name)
+            )
+
+    prohibited_columns = {
+        "event_id", "severity", "outcome_label", "degraded_label",
+        "failure_label", "final_error", "trajectory_error",
+    }
+
+    def validate_csv(path: Path, required_columns: Sequence[str]) -> int:
+        with path.open("r", encoding="utf-8", newline="") as stream:
+            reader = csv.DictReader(stream)
+            fieldnames = reader.fieldnames
+            if fieldnames is None or any(column not in fieldnames
+                                         for column in required_columns):
+                raise CampaignError("association CSV header is incomplete")
+            if any(column.lower() in prohibited_columns for column in fieldnames):
+                raise CampaignError("association CSV contains scientific output")
+            row_count = 0
+            for row in reader:
+                try:
+                    callback_id = int(row["callback_id"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise CampaignError("association callback ID is invalid") from exc
+                if callback_id != row_count:
+                    raise CampaignError("association callback order is not canonical")
+                if row.get("association_version") != "turnsafe.offline_association.v1":
+                    raise CampaignError("association CSV version mismatch")
+                row_count += 1
+        if row_count != callback_count:
+            raise CampaignError("association CSV callback count does not reconcile")
+        return row_count
+
+    state_rows = validate_csv(
+        state_csv,
+        (
+            "association_version", "policy_id", "callback_id",
+            "state_status", "deviation_status", "trajectory_status",
+        ),
+    )
+    reference_rows = validate_csv(
+        reference_csv,
+        (
+            "association_version", "policy_id", "callback_id",
+            "reference_status", "reference_source_sha256",
+            "reference_time_base",
+        ),
+    )
+    return {
+        "schema_version": "turnsafe.campaign_association_binding.v1",
+        "callback_count": callback_count,
+        "state_association_row_count": state_rows,
+        "reference_association_row_count": reference_rows,
+        "coverage": coverage,
+        "outputs": {
+            "callback_state_association": file_identity(state_csv),
+            "callback_reference_association": file_identity(reference_csv),
+            "association_coverage": file_identity(coverage_path),
+        },
+    }
+
+
+def _validate_baseline_digest_output(
+    path: Path,
+    source_sha: str,
+    state: Path,
+    deviation: Path,
+    trajectory: Path,
+    timing: Path,
+) -> Dict[str, Any]:
+    identity = file_identity(_regular_file(path, "stable estimator digest"))
+    value = _strict_json(path.read_text(encoding="utf-8"),
+                         "stable estimator digest")
+    if value.get("schema") != "turnsafe.baseline_digest.v1":
+        raise CampaignError("stable estimator digest schema mismatch")
+    if value.get("source_sha") != source_sha:
+        raise CampaignError("stable estimator digest source mismatch")
+    combined = value.get("combined_stable_sha256")
+    if not isinstance(combined, str) or not re.fullmatch(r"[0-9a-f]{64}", combined):
+        raise CampaignError("stable estimator digest identity is invalid")
+    expected_inputs = {
+        "state_estimate.txt": sha256_file(state),
+        "state_deviation.txt": sha256_file(deviation),
+        "trajectory_tum.txt": sha256_file(trajectory),
+        "timing_openvins.csv": sha256_file(timing),
+    }
+    if value.get("input_file_sha256") != expected_inputs:
+        raise CampaignError("stable estimator digest inputs do not reconcile")
+    fields = value.get("stable_fields")
+    if not isinstance(fields, dict) or set(fields) != {
+        "callback_timestamps", "deviation", "state", "trajectory"
+    }:
+        raise CampaignError("stable estimator digest fields are incomplete")
+    validation = value.get("validation")
+    if not isinstance(validation, dict) or not all(
+        validation.get(key) is True
+        for key in (
+            "all_numeric_fields_finite", "row_counts_equal",
+            "state_deviation_trajectory_timestamps_exact",
+            "timestamps_strictly_increasing",
+        )
+    ):
+        raise CampaignError("stable estimator digest validation is incomplete")
+    return {"identity": identity, "value": value}
+
+
+def _stream_decompressed_identity(
+    executable: Path,
+    archive: Path,
+    algorithm: str,
+    stderr_log: Path,
+    environment: Mapping[str, str],
+    timeout_seconds: float,
+) -> Dict[str, Any]:
+    if algorithm == "zstd":
+        argv = [str(executable), "-q", "-d", "-c", str(archive)]
+    elif algorithm == "gzip":
+        argv = [str(executable), "-d", "-c", str(archive)]
+    else:
+        raise CampaignError("unsupported telemetry compression algorithm")
+    started = time.monotonic()
+    digest = hashlib.sha256()
+    byte_count = 0
+    timed_out = False
+    signals_sent: List[str] = []
+    surviving_group = False
+    with stderr_log.open("xb") as errors:
+        process = subprocess.Popen(
+            argv,
+            cwd=str(REPO_ROOT),
+            env=dict(environment),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=errors,
+            start_new_session=True,
+        )
+        if process.stdout is None:
+            raise CampaignError("decompressor stdout pipe is unavailable")
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        try:
+            eof = False
+            while not eof:
+                remaining = timeout_seconds - (time.monotonic() - started)
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                events = selector.select(min(1.0, remaining))
+                if not events:
+                    if process.poll() is not None:
+                        block = os.read(process.stdout.fileno(), 4 * 1024 * 1024)
+                        if not block:
+                            eof = True
+                        else:
+                            digest.update(block)
+                            byte_count += len(block)
+                    continue
+                block = os.read(process.stdout.fileno(), 4 * 1024 * 1024)
+                if not block:
+                    eof = True
+                else:
+                    digest.update(block)
+                    byte_count += len(block)
+        finally:
+            selector.close()
+            process.stdout.close()
+        if timed_out:
+            signals_sent, surviving_group = _clean_process_group(process)
+        try:
+            exit_code = process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            extra, surviving_group = _clean_process_group(process)
+            signals_sent.extend(extra)
+            exit_code = process.poll()
+        errors.flush()
+        os.fsync(errors.fileno())
+    if timed_out or exit_code != 0 or surviving_group:
+        raise CampaignError("telemetry decompression round trip failed")
+    return {
+        "argv": argv,
+        "duration_seconds": time.monotonic() - started,
+        "timeout_seconds": timeout_seconds,
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "signals_sent": signals_sent,
+        "process_group_survived_cleanup": surviving_group,
+        "sha256": digest.hexdigest(),
+        "size_bytes": byte_count,
+        "stderr": file_identity(stderr_log),
+    }
+
+
+def _compress_verified_jsonl(
+    path: Path,
+    executable: Path,
+    environment: Mapping[str, str],
+    timeout_seconds: float,
+) -> Dict[str, Any]:
+    """Losslessly archive telemetry and remove raw only after exact replay."""
+
+    raw_identity = file_identity(path)
+    algorithm = "zstd" if executable.name.startswith("zstd") else "gzip"
+    archive = path.with_suffix(path.suffix + (".zst" if algorithm == "zstd" else ".gz"))
+    if archive.exists():
+        raise CampaignError("refusing to overwrite telemetry archive")
+    version_record = run_command(
+        [str(executable), "--version"],
+        path.parent / "event_telemetry_compressor_version.log",
+        environment,
+        min(timeout_seconds, 60.0),
+    )
+    if not _command_succeeded(version_record):
+        raise CampaignError("telemetry compressor version query failed")
+    if algorithm == "zstd":
+        compression_argv = [
+            str(executable), "-T1", "-9", "-q", "--no-progress", "-f",
+            str(path), "-o", str(archive),
+        ]
+        compression_record = run_command(
+            compression_argv,
+            path.parent / "event_telemetry_compression.log",
+            environment,
+            timeout_seconds,
+        )
+    else:
+        compression_argv = [str(executable), "-9", "-n", "-c", str(path)]
+        started = time.monotonic()
+        with archive.open("xb") as output_stream, (
+            path.parent / "event_telemetry_compression.log"
+        ).open("x", encoding="utf-8") as log_stream:
+            process = subprocess.Popen(
+                compression_argv,
+                cwd=str(REPO_ROOT), env=dict(environment),
+                stdin=subprocess.DEVNULL, stdout=output_stream,
+                stderr=log_stream, start_new_session=True,
+            )
+            timed_out = False
+            try:
+                exit_code = process.wait(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                signals_sent, surviving_group = _clean_process_group(process)
+                exit_code = process.poll()
+            else:
+                signals_sent, surviving_group = _clean_process_group(process)
+            output_stream.flush()
+            os.fsync(output_stream.fileno())
+            log_stream.flush()
+            os.fsync(log_stream.fileno())
+        compression_record = {
+            "argv": compression_argv,
+            "shell": shlex.join(compression_argv),
+            "cwd": str(REPO_ROOT),
+            "environment": dict(environment),
+            "duration_seconds": time.monotonic() - started,
+            "timeout_seconds": timeout_seconds,
+            "exit_code": exit_code,
+            "timed_out": timed_out,
+            "signals_sent": signals_sent,
+            "process_group_survived_cleanup": surviving_group,
+            "log": str(path.parent / "event_telemetry_compression.log"),
+        }
+    if not _command_succeeded(compression_record):
+        raise CampaignError("telemetry compression failed; raw retained")
+    test_argv = ([str(executable), "-q", "-t", str(archive)]
+                 if algorithm == "zstd" else
+                 [str(executable), "-t", str(archive)])
+    test_record = run_command(
+        test_argv,
+        path.parent / "event_telemetry_archive_test.log",
+        environment,
+        timeout_seconds,
+    )
+    if not _command_succeeded(test_record):
+        raise CampaignError("telemetry archive test failed; raw retained")
+    roundtrip = _stream_decompressed_identity(
+        executable, archive, algorithm,
+        path.parent / "event_telemetry_roundtrip.log",
+        environment, timeout_seconds,
+    )
+    if (roundtrip["sha256"] != raw_identity["sha256"] or
+            roundtrip["size_bytes"] != raw_identity["size_bytes"]):
+        raise CampaignError("telemetry archive round trip differs; raw retained")
+    archive_identity = file_identity(archive)
+    path.unlink()
+    return {
+        "schema_version": "turnsafe.lossless_telemetry_archive.v1",
+        "algorithm": algorithm,
+        "compressor": file_identity(executable),
+        "compressor_version": version_record,
+        "compression": compression_record,
+        "archive_test": test_record,
+        "roundtrip": roundtrip,
+        "raw": raw_identity,
+        "archive": archive_identity,
+        "raw_removed_after_verified_roundtrip": True,
     }
 
 
@@ -2338,6 +3722,26 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
         _assert_port_available(args.ros_port)
 
     t0_capture = bool(getattr(args, "turnsafe_t0_capture", False))
+    capture_causal_imu_intervals = bool(
+        getattr(args, "turnsafe_t0_capture_causal_imu_intervals", False)
+    )
+    capture_outcome_association_keys = bool(
+        getattr(args, "turnsafe_t0_capture_outcome_association_keys", False)
+    )
+    capture_group_bearing_provenance = bool(
+        getattr(args, "turnsafe_t0_capture_group_bearing_provenance", False)
+    )
+    event_extension_capture = any(
+        (
+            capture_causal_imu_intervals,
+            capture_outcome_association_keys,
+            capture_group_bearing_provenance,
+        )
+    )
+    if event_extension_capture and not t0_capture:
+        raise CampaignError(
+            "TurnSafe event-extension capture requires --turnsafe-t0-capture"
+        )
     t0_provenance = t0_capture or bool(
         getattr(args, "turnsafe_t0_provenance", False)
     )
@@ -2445,6 +3849,16 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
             )
             if t0_provenance:
                 tool_paths["ldd"] = _command_path("ldd")
+            if event_extension_capture:
+                compressor = shutil.which("zstd")
+                if compressor is not None:
+                    tool_paths["event_telemetry_compressor"] = _regular_file(
+                        Path(compressor), "zstd", executable=True
+                    )
+                else:
+                    tool_paths["event_telemetry_compressor"] = _command_path(
+                        "gzip"
+                    )
         environment = _minimal_environment(output, args.ros_port)
         manifest["runtime"] = {
             "ros_port": args.ros_port,
@@ -2470,9 +3884,9 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
             "kalibr_imucam_chain": paths["config"].parent / "kalibr_imucam_chain.yaml",
             "launch": paths["launch"],
             "estimator_binary": paths["binary"],
-            "reference_tum": paths["reference_tum"],
             "adapter": ADAPTER_PATH,
             "trajectory_converter": CONVERTER_PATH,
+            "baseline_digest_tool": BASELINE_DIGEST_PATH,
             "frozen_baseline_results": FROZEN_BASELINE_RESULTS,
             "python": PYTHON,
         }
@@ -2492,6 +3906,9 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
                 t0_build_binding["artifact_paths"].items()
             ):
                 fixed_inputs["turnsafe_artifact_" + name] = path
+        if event_extension_capture:
+            fixed_inputs["turnsafe_event_association_tool"] = EVENT_ASSOCIATION_PATH
+            fixed_inputs["turnsafe_event_corpus_tool"] = EVENT_CORPUS_PATH
         for name, path in list(fixed_inputs.items()):
             fixed_inputs[name] = _regular_file(path, name, name in ("estimator_binary", "python"))
         fixed_inputs.update(tool_paths)
@@ -2503,7 +3920,6 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
             "config": "config_sha256",
             "kalibr_imu_chain": "kalibr_imu_chain_sha256",
             "kalibr_imucam_chain": "kalibr_imucam_chain_sha256",
-            "reference_tum": "reference_sha256",
         }
         for input_name, frozen_name in frozen_pre_adapter.items():
             _require_frozen_identity(
@@ -2686,6 +4102,7 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
         ]
         t0_output = output / "t0_events.jsonl"
         t0_expected_header: Dict[str, Any] = {}
+        t0_run_identity = ""
         if t0_provenance:
             if t0_build_binding is None:
                 raise CampaignError("T0 build binding is unavailable")
@@ -2714,6 +4131,46 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
                 "calibration_sha256": _sha256_canonical_json(calibration_bundle),
                 "diagnostic_schema_sha256": manifest["inputs_before"]["turnsafe_t0_schema"]["sha256"],
             }
+            if event_extension_capture:
+                t0_expected_header["extensions"] = {
+                    "event_extension": {
+                        "schema": T0_EVENT_EXTENSION_SCHEMA,
+                        "record_version": 1,
+                        "capture_flags": {
+                            "causal_imu_intervals": capture_causal_imu_intervals,
+                            "outcome_association_keys": capture_outcome_association_keys,
+                            "group_bearing_provenance": capture_group_bearing_provenance,
+                        },
+                        "integration_method": "piecewise_linear_trapezoid.v1",
+                        "rotation_convention": (
+                            "native_gyroscope_frame_passive_left_exp_minus_"
+                            "omega_diagnostic.v1"),
+                        "gyro_bias_convention": "raw_wm_minus_current_callback_bias_g.v1",
+                        "clock_mapping": "t_imu_equals_t_camera_plus_dt_CAMtoIMU.v1",
+                        "association_version": "turnsafe.offline_association.v1",
+                        "canonical_ordering_version": "turnsafe.event_extension.order.v1",
+                        "image_cell_representation": "continuous_pixel_center_fraction.v1",
+                        "group_hash_algorithm": "fnv1a64_binary64_be.v1",
+                    }
+                }
+                t0_run_identity = "sha256:" + _sha256_canonical_json(
+                    {
+                        "source_snapshot_sha256": t0_expected_header[
+                            "source_snapshot_sha256"
+                        ],
+                        "build_provenance_id": t0_expected_header[
+                            "build_provenance_id"
+                        ],
+                        "binary_sha256": t0_expected_header["binary_sha256"],
+                        "config_sha256": t0_expected_header["config_sha256"],
+                        "calibration_sha256": t0_expected_header[
+                            "calibration_sha256"
+                        ],
+                        "adapted_input_sha256": manifest["adapted_bag"]["sha256"],
+                        "event_extension_schema": T0_EVENT_EXTENSION_SCHEMA,
+                    }
+                )
+            manifest["turnsafe_t0_provenance_binding"] = t0_expected_header
             if t0_capture:
                 launch_arguments.extend(
                     [
@@ -2742,6 +4199,20 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
                         + t0_expected_header["diagnostic_schema_sha256"],
                     ]
                 )
+                if event_extension_capture:
+                    launch_arguments.extend(
+                        [
+                            "turnsafe_t0_capture_causal_imu_intervals:="
+                            + str(capture_causal_imu_intervals).lower(),
+                            "turnsafe_t0_capture_outcome_association_keys:="
+                            + str(capture_outcome_association_keys).lower(),
+                            "turnsafe_t0_capture_group_bearing_provenance:="
+                            + str(capture_group_bearing_provenance).lower(),
+                            "turnsafe_t0_event_extension_schema:="
+                            + T0_EVENT_EXTENSION_SCHEMA,
+                            "turnsafe_t0_run_identity:=" + t0_run_identity,
+                        ]
+                    )
         joined_runtime = "\n".join(launch_arguments).lower()
         if str(paths["reference_tum"]) in joined_runtime or any(
             token in joined_runtime for token in FORBIDDEN_RUNTIME_TEXT
@@ -2824,6 +4295,7 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
             for artifact_name, soname in (
                 ("ov_msckf_library", "libov_msckf_lib.so"),
                 ("ov_core_library", "libov_core_lib.so"),
+                ("ov_init_library", "libov_init_lib.so"),
             ):
                 expected = t0_build_binding["artifact_paths"][artifact_name]
                 if resolved_libraries.get(soname) != expected:
@@ -2900,7 +4372,7 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
 
         if t0_capture:
             manifest["turnsafe_t0"] = _validate_t0_jsonl(
-                t0_output, t0_expected_header
+                t0_output, t0_expected_header, t0_run_identity
             )
             manifest["turnsafe_t0"].update(
                 {
@@ -2912,8 +4384,17 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
             manifest["checks"]["turnsafe_t0_schema_valid"] = True
             manifest["checks"]["turnsafe_t0_runtime_identity_firewall"] = True
 
-        # Until roslaunch terminates, only the reference's byte identity is
-        # bound. Its numeric ground-truth contents are first parsed here.
+        # This is the first reference byte/content access, after roslaunch and
+        # its complete process-group cleanup have finished.
+        paths["reference_tum"] = _regular_file(
+            paths["reference_tum"], "reference trajectory")
+        manifest["inputs_before"]["reference_tum"] = file_identity(
+            paths["reference_tum"])
+        _require_frozen_identity(
+            manifest["inputs_before"]["reference_tum"],
+            frozen_sequence_inputs["reference_sha256"],
+            "reference_tum",
+        )
         manifest["reference_validation"] = _validate_numeric_table(
             paths["reference_tum"], None, 8
         )
@@ -2942,6 +4423,76 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
         )
         manifest["checks"]["output_timestamp_and_row_consistency"] = True
         manifest["completion"]["output_validation_passed"] = True
+
+        if t0_provenance:
+            if t0_build_binding is None:
+                raise CampaignError("T0 build binding is unavailable for parity digest")
+            stable_digest_path = output / "stable_digest.json"
+            stable_digest_argv = [
+                str(PYTHON), str(BASELINE_DIGEST_PATH),
+                "--run-dir", str(output),
+                "--output", str(stable_digest_path),
+                "--source-sha", t0_build_binding["source_snapshot"]["head_sha"],
+            ]
+            stable_digest_record = run_command(
+                stable_digest_argv,
+                output / "stable_digest.log",
+                environment,
+                min(args.timeout_seconds, 300.0),
+            )
+            manifest["commands"]["stable_estimator_digest"] = stable_digest_record
+            if not _command_succeeded(stable_digest_record):
+                raise CampaignError("stable estimator digest generation failed")
+            manifest["stable_estimator_digest"] = _validate_baseline_digest_output(
+                stable_digest_path,
+                t0_build_binding["source_snapshot"]["head_sha"],
+                state, deviation, trajectory, timing,
+            )
+            manifest["checks"]["stable_estimator_digest_valid"] = True
+
+        if event_extension_capture:
+            manifest["event_extension"] = {
+                "schema": T0_EVENT_EXTENSION_SCHEMA,
+                "capture_flags": {
+                    "causal_imu_intervals": capture_causal_imu_intervals,
+                    "outcome_association_keys": capture_outcome_association_keys,
+                    "group_bearing_provenance": capture_group_bearing_provenance,
+                },
+                "opaque_run_identity": t0_run_identity,
+                "association_version": "turnsafe.offline_association.v1",
+            }
+        if capture_outcome_association_keys:
+            association_argv = [
+                str(PYTHON), str(EVENT_ASSOCIATION_PATH),
+                "--telemetry", str(t0_output),
+                "--state", str(state),
+                "--deviation", str(deviation),
+                "--trajectory", str(trajectory),
+                "--reference", str(paths["reference_tum"]),
+                "--output-dir", str(output),
+            ]
+            association_record = run_command(
+                association_argv,
+                output / "event_ready_association.log",
+                environment,
+                min(args.timeout_seconds, 600.0),
+            )
+            manifest["commands"]["event_ready_association"] = association_record
+            if not _command_succeeded(association_record):
+                raise CampaignError("post-close event-ready association failed")
+            manifest["event_extension"]["associations"] = (
+                _validate_association_outputs(
+                    output,
+                    manifest["turnsafe_t0"]["callback_count"],
+                    t0_output,
+                    state,
+                    deviation,
+                    trajectory,
+                    paths["reference_tum"],
+                )
+            )
+            manifest["checks"]["post_close_association_valid"] = True
+            manifest["checks"]["association_contains_no_scientific_labels"] = True
 
         metric_specs = {
             "ape_translation": (
@@ -3006,6 +4557,18 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
                 "no_dropped_message_lines": diagnostic_counts["dropped_message_lines"] == 0,
             }
         )
+        if event_extension_capture:
+            telemetry_archive = _compress_verified_jsonl(
+                t0_output,
+                tool_paths["event_telemetry_compressor"],
+                environment,
+                min(args.timeout_seconds, 1800.0),
+            )
+            if telemetry_archive["raw"] != manifest["turnsafe_t0"]["identity"]:
+                raise CampaignError("validated and archived telemetry identities differ")
+            manifest["event_extension"]["telemetry_archive"] = telemetry_archive
+            manifest["checks"]["event_telemetry_archive_roundtrip_valid"] = True
+            manifest["checks"]["event_telemetry_raw_removed_after_roundtrip"] = True
         if not all(manifest["checks"].values()):
             raise CampaignError("runtime diagnostics or ground-truth boundary check failed")
 
@@ -3013,6 +4576,8 @@ def run_campaign(args: argparse.Namespace) -> Dict[str, Any]:
         manifest["inputs_after"] = {
             name: file_identity(path) for name, path in sorted(fixed_inputs.items())
         }
+        manifest["inputs_after"]["reference_tum"] = file_identity(
+            paths["reference_tum"])
         manifest["inputs_after"]["adapted_bag"] = file_identity(paths["adapted_bag"])
         changed = [
             name
@@ -3063,6 +4628,15 @@ def _parser() -> argparse.ArgumentParser:
         help="audit/adapt and record rosbag metadata without starting the estimator",
     )
     parser.add_argument("--turnsafe-t0-capture", action="store_true")
+    parser.add_argument(
+        "--turnsafe-t0-capture-causal-imu-intervals", action="store_true"
+    )
+    parser.add_argument(
+        "--turnsafe-t0-capture-outcome-association-keys", action="store_true"
+    )
+    parser.add_argument(
+        "--turnsafe-t0-capture-group-bearing-provenance", action="store_true"
+    )
     parser.add_argument(
         "--turnsafe-t0-provenance",
         action="store_true",
