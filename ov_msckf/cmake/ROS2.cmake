@@ -166,5 +166,9 @@ install(TARGETS test_sim_repeat DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch/)
 install(DIRECTORY ../config/ DESTINATION share/${PROJECT_NAME}/config/)
 
+# Value-only T1 pilot core and non-installed offline scanner. The core remains
+# outside ov_msckf_lib and every live estimator target.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/TurnSafeP1.cmake)
+
 # finally define this as the package
 ament_package()

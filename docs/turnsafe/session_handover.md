@@ -444,3 +444,145 @@ human commit manifest message
 reproduce the recorded dirty snapshot byte-for-byte before requesting
 `APPROVE_SESSION_2B_EVENT_CONTRACT_AND_BRANCH_DECISION`. Any non-PASS packet
 retains `SESSION_1_REVIEW_REQUIRED` and authorizes no Session-2B work.
+
+---
+
+# TurnSafe T1 Pilot Session P1 handover
+
+Status: **`P1_REVIEW_REQUIRED` at the fail-closed P1 hard stop**
+
+## Identity and entry gates
+
+| Field | Value |
+|---|---|
+| Authorization | `APPROVE_T1_PILOT_P1_CERTIFICATE_FACTOR_SHADOW_SCAN` |
+| Branch | `schurvio-lite/turnsafe-t1-pilot` |
+| Start/end HEAD | `4d2f2d275437ead9496b848730d5a9eb0e402864` |
+| Start/end HEAD tree | `7c390aeb126f1ef69aad75733f40559639889ed3` |
+| Required P0B decision | `P0B_CONTINUE_T1_PILOT_STRONG` |
+| Required P0C decision | `P0C_INPUT_ROBUSTNESS_CONFIRMED` |
+| Session-2C decision | unchanged `NO_EXTENSION` |
+| Final P1 decision | `P1_REVIEW_REQUIRED` |
+| Exact next token | `NONE_ISSUED_ADVISOR_REVIEW_REQUIRED` |
+
+Entry passed on the requested branch, HEAD, and tree with a clean tracked tree
+and index. The P0B and P0C decisions and checksum inventories were validated
+from their owning artifact directories. Session-2C remained `NO_EXTENSION`;
+holdout isolation and the readable public KAIST event-ready corpus were
+verified.
+
+Before any real certificate result was opened, the three P1 contracts,
+decision preregistration, metric contract, and source map were frozen and
+reviewed read-only. The preregistration ledger
+`artifacts/turnsafe/t1_pilot_p1/P1_PREREGISTRATION_SHA256SUMS` has SHA-256
+`351072c13aa2ab65a584a0befd5c1a4b7166ff9fc5a24749aa95aed4eeddc54e`
+and continued to validate after the hard stop. No frozen constant, score,
+tie-break, threshold, group size, window, or decision rule changed afterward.
+
+## Implementation and validation
+
+The dirty source snapshot adds only the isolated certificate, bearing factor,
+pair selector, shadow evaluator/worker, four focused test translation units,
+P1-only CMake isolation, the shadow-scan driver, and the three contracts. No
+P1 source is linked into the production library and no live proposal or commit
+call site was added. The frozen source snapshot is
+`.turnsafe-work/t1_pilot_p1/verification/final_source_snapshot.json`, file
+SHA-256
+`cf06b8c128e69eb4d9cc571fef80a12cc9ce8982ff221c15882267f896017821`,
+with aggregate source identity
+`0d3279530eb1df68ff02d169b02d4f76185da3dc2f14e9e2599106cd0a30c7ef`.
+
+Two source-identical Release builds completed all five packages using at most
+two compile jobs and the authorized read-only Ceres prefix. The first build
+under the authoritative space-containing path exposed a pre-existing catkin
+CTest command-quoting defect: all 33 wrappers failed before launching their
+binaries. Direct execution of every registered binary then passed 339 cases
+with no failures. A fresh no-space build at `/tmp/turnsafe_p1_release_ws`
+passed the original registered CTest wrappers 33/33. The TurnSafe Python suite
+passed 121/121, the combined focused P1 Release suite passed 48/48, and the
+focused ASan/UBSan certificate, factor, selector, shadow, worker,
+serializer-edge, and overflow runs passed without sanitizer diagnostics.
+
+The final certificate coverage artifact records exact frozen grid results of
+0.99865 for each component and 0.9973 jointly, plus 16,000/16,000 stereo-range
+and 24,000/24,000 certified-translation Monte Carlo coverage. These are
+synthetic kernel checks, not real-data survival evidence. The final worker
+SHA-256 is
+`497b1ef980ef1e6eb7ec33b90dd0ec1a370ec829576c426de7cbb6b268a5e62d`.
+Exact build/test commands, results, and log paths are retained in
+`artifacts/turnsafe/t1_pilot_p1/TEST_RESULTS.md` and
+`.turnsafe-work/t1_pilot_p1/logs/`.
+
+The first MH_01 attempt stopped before replay because the shell had not
+sourced the no-space overlay and resolved a different estimator. After
+correcting only that shell environment, capture-off and capture-on both
+completed. State, deviation, and trajectory outputs were byte-identical, and
+both retained the frozen stable digest
+`8525ee08a3e7b00261bcd5089cefd6b51c279747ecb26bed9505edc5e890010a`.
+Capture-on preserved 2,882 callbacks, 2,883 records, 33,978 groups, and 171,358
+members with a verified archive round trip. The path-quoting and overlay
+preflight events are ENGINEERING harness failures; neither changed source or
+scientific policy.
+
+## Official scan correctness failure
+
+After revalidating the preregistration and source freeze, the first fixed real
+scan, `07_infinite_fast_on1_post_mh`, stopped atomically at callback 190:
+
+```text
+turnsafe_p1_shadow_worker ERROR: callback[190].provenance.groups[0].members[0].base_candidate.camera_calibration.source is unavailable
+```
+
+The production prior contains two valid finite RADTAN calibrations with fixed
+identifiers `-1/-1`; its calibration matrices and the event-group hashes
+agree. Production intentionally represents each legacy base-candidate camera
+identity as `NOT_EXPOSED` with reason
+`CAMERA_CALIBRATION_NOT_EXPOSED_BY_NATIVE_PATH` when those identifiers are
+negative. The frozen worker correctly accepts negative identifiers in the
+prior and audits the real matrix hashes, but its redundant base-candidate
+identity check incorrectly requires `AVAILABLE`. A synthetic fixture used the
+production-inconsistent combination `AVAILABLE/-1`, so the defect escaped the
+pre-scan tests.
+
+This is a CORRECTNESS failure in the frozen provenance join, not corpus
+corruption and not evidence that calibration is absent. The worker published
+no callback CSV or metadata and did not reach certificate evaluation. Its
+stderr SHA-256 is
+`be137814b839dd52b170feab0fe5e761e2c87f5fbcf7d3f7ea68da152892d39f`.
+The remaining five primary scans and two repeats were not started. No code,
+threshold, selector, group size, window, or fixture changed after the first
+real result, and no retry was attempted.
+
+Consequently, certificate survival, winner identity, shadow NIS, predicted
+orientation information, E07, E10, square, and sequence results are all
+`NOT_EVALUABLE` and represented as null. The recorded zero scientific rows is
+only a publication count; it is not a zero-survival denominator.
+`P1_NO_GO_CERTIFICATE_EMPTY` and
+`P1_NO_GO_INFORMATION_NEGLIGIBLE` therefore do not apply. The preregistered
+correctness/completeness precedence binds `P1_REVIEW_REQUIRED`. No admission
+freeze or external callback join was created.
+
+## Repository and safety state
+
+No file was staged and no commit was created. HEAD and its tree are unchanged;
+the index is clean and the worktree remains intentionally dirty with the P1
+source, contracts, tests, this handover, and ignored artifact/scratch evidence.
+The closed 18-entry artifact inventory validates from its owning directory;
+`artifacts/turnsafe/t1_pilot_p1/SHA256SUMS` has SHA-256
+`de2e2f20154a354a32ff421c116f62f07d12372d9dddccdd573cc4ac81907f09`.
+
+Only loopback ROS was used. No external network access, package installation,
+holdout or private-data access, runtime ground truth, destructive Git action,
+or content access below `scripts/cp2/` occurred. No T1 row entered a live
+estimator proposal, no accepted production observation was changed, and P2
+was not started.
+
+## Next gate
+
+P1 stops here. No corrective edit, retry, integration, P2 work, or live
+estimator proposal activity is authorized. Advisor review and a new explicit
+authorization are required. The exact continuation token is:
+
+```text
+NONE_ISSUED_ADVISOR_REVIEW_REQUIRED
+```

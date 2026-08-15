@@ -365,3 +365,4 @@ if (CATKIN_ENABLE_TESTING)
 endif ()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CP2Tests.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/TurnSafeP1.cmake)
