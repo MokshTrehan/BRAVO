@@ -542,7 +542,8 @@ fonts, references, claims, video, and upload integrity.
 - [x] Create local working branch.
 - [x] Create local annotated `icra27-a0-base` tag.
 - [x] Record local-only authority and protect the dirty T1 worktree by policy.
-- [ ] Generate and retain a clean source snapshot.
+- [x] Generate and retain a clean source snapshot (checkpoint commit
+  `ab51413985d8213f40d7124364faf69631da135d`; write-locked artifact copy).
 - [ ] Verify remote ref/protection only after separate approval; no push now.
 
 ### A1 -- local-first readiness inventory
@@ -594,7 +595,7 @@ fonts, references, claims, video, and upload integrity.
 
 | Item | execution_status | Evidence / blocker | Next action |
 |---|---|---|---|
-| Exact source identity | DONE | A0 commit/tree above | Generate source snapshot |
+| Exact source identity | DONE | A0 commit/tree plus clean `ab51413` Phase A source snapshot | Preserve the write-locked snapshot |
 | Clean worktree/branch | DONE | `/home/moksh/schurvio-lite-icra27-a0` | Keep unrelated worktrees untouched |
 | Local tag | DONE | `icra27-a0-base` -> A0 commit | Remote action not authorized |
 | Dataset inventory | DONE | EuRoC 11/11, KAIST source/adapted 22/22, and selected TUM-VI 3/3 freshly hash-verified | Repair portable tracked bindings |
@@ -618,6 +619,7 @@ fonts, references, claims, video, and upload integrity.
 | 2026-08-15 | Complete clean build and baseline tests | Five-package build passes; 580 C++ + 123 TurnSafe Python + 494 isolated CP2 Python tests pass |
 | 2026-08-15 | Repair ignored KAIST ledger dependency | Exact-byte historical ledger imported into tracked registry; clean-worktree prepare-only preflight passes; TurnSafe suite now 123 tests |
 | 2026-08-15 | Repair historical CP0 package | Restored the exact checksum-listed build-provenance member and bound verification to the artifact-snapshotted verifier; sealed artifact passes |
+| 2026-08-15 | Retain clean Phase A source snapshot | Clean checkpoint `ab51413`, aggregate source SHA-256 `098b95dc...`, stored write-locked outside Git |
 
 Update this file whenever a work item changes state, a gate is evaluated, a
 download occurs, scope changes, or evidence is invalidated. A status change is

@@ -17,9 +17,15 @@ for `EXECUTION_PLAN.md` Phase A and is not itself a science result.
 | Frozen base tree | `7c390aeb126f1ef69aad75733f40559639889ed3` | PASS |
 | Frozen local tag | `icra27-a0-base` | PASS |
 | Estimator binary built in this worktree | `build/cp0-ws/devel/lib/ov_msckf/ros1_serial_msckf`; SHA-256 `8de5970c9654c1bb5c2fcdc5646fd5dd8675198d4ba41c6bdae8e5edba2b80ed`; ELF build ID `5e2538a1e79e913df3c3e288d083df4f683099e3` | PASS |
+| Clean Phase A source snapshot | Commit `ab51413985d8213f40d7124364faf69631da135d`, tree `29c3689adc2f70f51c152f8948fa1e8e1b89207f`; `source_dirty=false`; aggregate source SHA-256 `098b95dc77adc756f6363ce312f88ff8aaba62953c44e7281d5021768e1333ca` | PASS |
 
 The dirty T1 worktree at `/home/moksh/newSlam turnsafe-primary` is not a
 campaign input and must remain untouched.
+
+The write-locked source snapshot is stored at
+`/home/moksh/schurvio-icra27-artifacts/readiness/source/ab51413/source_snapshot.json`;
+the snapshot file SHA-256 is
+`bb021b3c208993a86144a43b3e38e40c03af9d7d59efa1cf0d188a89a7bb3f42`.
 
 ## Dataset inventory
 
