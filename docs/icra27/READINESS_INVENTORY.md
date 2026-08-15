@@ -142,12 +142,13 @@ test failure.
 
 Status: `BLOCKED`
 
-The tracked dependency registry names a Jetson Nano, while the plan requires a
-Jetson Orin Nano. There is no local SSH alias, endpoint declaration, loaded
-agent key, board OS/toolchain record, usable-core policy, power interface,
-`tegrastats`, or `nvpmodel`. `project/d0_status.py --strict` fails only on these
-target-board requirements. No connection attempt was made because no endpoint
-was discoverable without user information.
+The target is now confirmed by the user as an NVIDIA Jetson Orin Nano
+Developer Kit, and the dependency registry has been corrected. Its module
+memory/SKU, JetPack/L4T image, storage/cooling setup, SSH endpoint, usable-core
+policy, power interface, `tegrastats`, and `nvpmodel` evidence remain unknown.
+`project/d0_status.py --strict` therefore still fails on the unresolved
+target-board requirements. No connection attempt has been made because no
+endpoint is yet available.
 
 Desktop Phase A may continue. H3/embedded work cannot pass G0 until an Orin
 endpoint and fixed profile/power proof are supplied. If unavailable within 48

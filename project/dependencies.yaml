@@ -1,6 +1,6 @@
 schema_version: 1
 project: SchurVIO-Lite
-as_of: "2026-08-01T16:06:56-04:00"
+as_of: "2026-08-15"
 timezone: America/Toronto
 
 gate:
@@ -26,16 +26,16 @@ dependencies:
 
   target_board_and_power:
     status: partial
-    architecture_selected_at: "2026-08-01T16:06:56-04:00"
+    architecture_selected_at: "2026-08-15"
     architecture_selected_via: explicit_user_message
-    board_model: NVIDIA Jetson Nano
+    board_model: NVIDIA Jetson Orin Nano Developer Kit
     board_variant: null
     board_os: null
     toolchain: null
     access_method: null
     available_cpu_cores: null
     power_reading_interface: null
-    blocker: The Jetson Nano family is selected, but its exact variant, software image/toolchain, access method, usable CPU-core policy, and synchronized board-power interface are not yet recorded or demonstrated.
+    blocker: The Jetson Orin Nano Developer Kit is confirmed, but its module memory/SKU, software image/toolchain, access method, usable CPU-core policy, cooling/storage configuration, and synchronized board-power interface are not yet recorded or demonstrated.
     local_probe:
       checked_at: "2026-07-22T14:02:37-04:00"
       desktop_host:
@@ -57,7 +57,7 @@ dependencies:
       - The visible UPS reports charge/runtime but not usable watts or energy rate.
       - GPU-only power telemetry cannot support a CPU-only target claim.
     required_to_unblock:
-      - Confirm the exact Jetson Nano variant and OS/toolchain.
+      - Record the Jetson Orin Nano module memory/SKU and OS/toolchain.
       - Record the access method and usable CPU cores.
       - Demonstrate synchronized board-level power or energy telemetry.
 

@@ -620,6 +620,7 @@ fonts, references, claims, video, and upload integrity.
 | 2026-08-15 | Repair ignored KAIST ledger dependency | Exact-byte historical ledger imported into tracked registry; clean-worktree prepare-only preflight passes; TurnSafe suite now 123 tests |
 | 2026-08-15 | Repair historical CP0 package | Restored the exact checksum-listed build-provenance member and bound verification to the artifact-snapshotted verifier; sealed artifact passes |
 | 2026-08-15 | Retain clean Phase A source snapshot | Clean checkpoint `ab51413`, aggregate source SHA-256 `098b95dc...`, stored write-locked outside Git |
+| 2026-08-15 | Correct embedded target identity | User confirmed NVIDIA Jetson Orin Nano Developer Kit; module/software/access/power details remain pending |
 
 Update this file whenever a work item changes state, a gate is evaluated, a
 download occurs, scope changes, or evidence is invalidated. A status change is
