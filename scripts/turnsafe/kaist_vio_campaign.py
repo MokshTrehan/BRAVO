@@ -46,7 +46,7 @@ FIXED_CONFIG = (
     REPO_ROOT / "config" / "kaist_vio_turnsafe_baseline" / "estimator_config.yaml"
 )
 FROZEN_BASELINE_RESULTS = (
-    REPO_ROOT / "artifacts" / "turnsafe" / "data" /
+    REPO_ROOT / "project" / "evidence" / "kaist" / "session_0_5" /
     "KAIST_BASELINE_RESULTS.csv"
 )
 FROZEN_BASELINE_RESULTS_SHA256 = (

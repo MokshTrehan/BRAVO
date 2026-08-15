@@ -21,7 +21,8 @@ baselines:
       sha256sums_sha256: c5e70f3f0aa204a96e2ab030838355b97639c3f10ab7e8d11b3a2b6d14ec964d
       independent_verification: passed
       verification_command: >-
-        scripts/cp0/verify_run.py
+        /usr/bin/python3 -B
+        results/immutable/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/scripts/cp0/verify_run.py
         results/immutable/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93
         --sha256sums-sha256
         c5e70f3f0aa204a96e2ab030838355b97639c3f10ab7e8d11b3a2b6d14ec964d
@@ -104,3 +105,30 @@ baselines:
       git_tag_status: annotated_tag
       git_tag: schurvio-lite-cp0-mh01
       note: The containing commit and annotated tag freeze this registry, the CP0 inputs, and the checksum anchor without changing the sealed run or its contract.
+
+  - baseline_id: kaist_session_0_5_input_identity_ledger
+    checkpoint: Session-0.5
+    role: historical_input_identity_ledger
+    status: imported_exact_bytes
+    recorded_at: "2026-08-12T13:50:00-04:00"
+    imported_at: "2026-08-15"
+
+    artifact:
+      path: project/evidence/kaist/session_0_5/KAIST_BASELINE_RESULTS.csv
+      size_bytes: 126368
+      sha256: 99f94546bfe1d807af04c47df82ff5bd0ed63d8c1eb500e5e10bed3fa95bf8b5
+      rows: 11
+      exact_byte_import: true
+      performance_evidence_status: historical_not_fresh
+
+    source:
+      repository_commit: 6e289fc2d1e8c86f0930605fc6b234df3cea1e84
+      repository_tree: 40d59b7c4a6341dcc7ae1565f386cbbeb607db39
+      source_identity_sha256: 1ea6f6c50364ff8eb6248473f996df51a32aa760f88c8f8c79fe2d38bed3995f
+      source_identity_size_bytes: 1939
+      original_logical_path: artifacts/turnsafe/data/KAIST_BASELINE_RESULTS.csv
+
+    use:
+      permitted: frozen input-byte lookup and historical comparison context
+      forbidden: claim of a fresh A0 reproduction or current campaign performance
+      notice: project/evidence/kaist/session_0_5/README.md

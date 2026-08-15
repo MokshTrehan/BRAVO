@@ -92,6 +92,19 @@ The verifier checks complete checksum coverage, absence of symlinks/scratch
 ROS state, the source/config snapshots, exact evo commands and result archives,
 full-run completion, synchronous state/std parity, and every validation gate.
 
+For the registered historical CP0 artifact, run the verifier snapshotted
+inside that artifact rather than the current checkout's verifier. This binds
+the historical result to its original verification semantics and avoids
+mistaking later source/config changes for corruption. `-B` prevents Python
+bytecode from changing the sealed checksum population:
+
+```bash
+/usr/bin/python3 -B \
+  results/immutable/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93/reproducibility/scripts/cp0/verify_run.py \
+  results/immutable/baseline/cp0_mh01_20260722T163734461107Z-g69488123ed93 \
+  --sha256sums-sha256 c5e70f3f0aa204a96e2ab030838355b97639c3f10ab7e8d11b3a2b6d14ec964d
+```
+
 After sealing, copy the printed `SHA256SUMS SHA-256` value into the CP0
 checkpoint evidence committed to Git. That external digest anchors the
 otherwise self-contained artifact tree. It can be supplied during later audit:
