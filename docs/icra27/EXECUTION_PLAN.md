@@ -4,9 +4,9 @@
 
 | Field | Value |
 |---|---|
-| Plan version | `0.1.0` |
+| Plan version | `0.2.0` |
 | Plan status | `ACTIVE -- Phase A in progress` |
-| Approved scope | Local Phase A readiness work; 2026-08-15 |
+| Approved scope | Local Phase A readiness plus the diagnostic G0.5 stock-OpenVINS screen; 2026-08-15 |
 | Target venue | IEEE ICRA 2027 main track, conditional on G3 |
 | Submission deadline | 2026-09-15 23:59 Pacific; internal upload target 2026-09-14 |
 | Timezone for this plan | `America/Toronto` unless explicitly marked Pacific |
@@ -53,11 +53,12 @@ The strategic pivot, matched controls, immutable evidence, bounded claims,
 and early kill gates are retained. The earlier `MINOR REVISION -> PROCEED`
 ruling is replaced by `MAJOR REVISION -> CONDITIONAL`.
 
-Only Phase A is currently authorized. The full campaign is not authorized
-until G0 passes and the bounded causal falsification in Phase B finds a useful
-S1-versus-N0g signal. Prior evidence adverse to a Schur-specific efficiency or
-robustness claim must remain visible in the evidence registry and paper
-decision.
+Phase A and the bounded G0.5 diagnostic screen are currently authorized. G0.5
+may stop or prioritize work, but it is not publication evidence and does not
+waive G0. The full campaign is not authorized until G0 passes and the bounded
+causal falsification in Phase B finds a useful S1-versus-N0g signal. Prior
+evidence adverse to a Schur-specific efficiency or robustness claim must
+remain visible in the evidence registry and paper decision.
 
 ## Status vocabulary
 
@@ -120,7 +121,7 @@ result, not positive evidence of estimator superiority.
 | N0g | N0 plus S1's typed rank/condition guard; it retains the same already-common transaction | Guard effect from N0->N0g; formulation effect from N0g->S1 |
 | S1 | Guarded, transaction-wrapped, one-pass Schur update | Primary candidate |
 | S2 | Frozen two-pass Schur ablation | Existing supporting ablation; no new broad campaign unless a gate requires it |
-| N0p | Upstream OpenVINS algorithm defaults with only unavoidable correct dataset calibration, topics, and adapter bindings | Context, not a matched causal control |
+| U0 | Pinned upstream OpenVINS source/executable and upstream KAIST algorithm defaults, with only unavoidable bag/topic/output bindings | Practical stock-system context, not a matched causal control |
 | VF | VINS-Fusion variant(s) prospectively named from the dataset authors' configuration | Mandatory two-day engagement; success or documented failure ends the timebox |
 | EXT | At least one completing independent public implementation on a shared supported dataset | External context |
 
@@ -231,10 +232,11 @@ Exact selections and expected counts will be generated into
 
 | ID | Purpose | Systems | Data/platform | Repeats | Gate |
 |---|---|---|---|---:|---|
+| E0S | Early practical stock-system screen; diagnostic only | U0, S1 | All 11 KAIST sequences, desktop | 1 scored attempt plus 1 geometry capture replay | G0.5 |
 | E0 | One-cell harness and instrumentation neutrality | N0, N0g, S1 | One frozen KAIST sequence, desktop | 1 plus capture replay | G0 |
 | E0L | Cheap causal/load falsification on identical captured backend envelopes | N0, N0g, S1 | Four prospectively frozen realistic conditions, desktop | 5 interleaved process repeats over one fixed eligible-envelope population per condition | G1 |
 | E1 | Primary matched desktop evidence | N0, N0g, S1 | All 11 KAIST sequences | 3 | G2 |
-| E2 | External context | N0p; both VF dataset-paper variants; completing EXT candidate | Frozen four-sequence EuRoC sanity subset, then KAIST with dataset-author bindings where supported; VF capped at 2 working days and fallback EXT at 1 day | 3 if admissible | G2/G3 |
+| E2 | External context | U0; both VF dataset-paper variants; completing EXT candidate | Frozen four-sequence EuRoC sanity subset, then KAIST with dataset-author bindings where supported; VF capped at 2 working days and fallback EXT at 1 day | 3 if admissible | G2/G3 |
 | E3 | Breadth and explicit common-mode failure reporting | N0, N0g, S1 | All 11 EuRoC sequences; MH_04 never silently omitted | 3 where authorized by G1 | G2/G3 |
 | E4 | Secondary-dataset context only | N0g, S1 | TUM-VI room4, corridor4, outdoors4 valid-GT intervals | 3 | G3 |
 | E5 | Embedded confirmation | N0g, S1 | Frozen KAIST and EuRoC subsets, Orin | 3; 5 headline | G3 |
@@ -246,6 +248,14 @@ E6 must sweep actual updater load. Each budget cell couples tracker supply to
 the realized population. Within a cell, N0g and S1 differ only by formulation.
 A `num_pts`-only sweep is forbidden because the current KAIST updater caps its
 input at 50 features.
+
+E0S is governed by `docs/icra27/KAIST_UPSTREAM_SCREEN.yaml` and
+`docs/icra27/RUN_MATRIX_G0_5.csv`. It intentionally preserves each pinned
+system's native serial delivery behavior: U0 uses upstream's first-forward
+record-time `<20 ms` stereo rule, while S1 uses the frozen exact-header seam.
+Both consume the same unchanged adapted-bag bytes. Callback identity is
+therefore not claimed. Each result must include the complete pairing census
+and any positive result is whole-system/configuration evidence only.
 
 E2's two mandatory VF variants are defined by behavior, not the review pack's
 contradictory labels: (a) stereo visual-only with IMU disabled and (b)
@@ -360,6 +370,7 @@ no-throw/rollback behavior is separately proved.
 | Phase | Target dates | execution_status | Deliverable |
 |---|---|---|---|
 | A -- readiness | Aug 15-18 | RUNNING | Clean identity, local-first inventory, environment/Orin probe, canonical protocol, matched harness MVP, deterministic metrics/map fixture, paper skeleton |
+| A-S -- stock screen | Aug 15-16 | RUNNING | Frozen E0S contract, one-sequence dry run, 22 accounted U0/S1 attempts, linked geometry captures, mechanical G0.5 report |
 | B -- causal falsification | Aug 19-20 | NOT_STARTED | E0L N0/N0g/S1 backend-envelope load sweep and G1 report |
 | C -- desktop attribution | Aug 21-24 | NOT_STARTED | E1 plus bounded E2/E3, paired statistics, G2 report |
 | D -- embedded/fault evidence | Aug 23-27 | NOT_STARTED | E5/E6, mandatory VF timebox, completing EXT result, E7, natural-incident ledger |
@@ -383,6 +394,96 @@ two-day documented VF engagement. VF stops after two working days unless a
 new decision explicitly authorizes continuation.
 
 ## Gates and exhaustive decision rules
+
+### G0.5 -- pinned-upstream KAIST-11 diagnostic screen
+
+`gate_status: PENDING`
+
+This gate answers whether the frozen S1 *system/configuration* merits the
+matched confirmatory study against pinned upstream OpenVINS. It does not test
+Schur causality, cannot pass G0, and cannot unlock a paper claim by itself.
+
+The prospectively frozen population is all 11 KAIST sequences, U0 and S1,
+one scored attempt per cell, in the committed order and method alternation in
+`RUN_MATRIX_G0_5.csv`. Every scored attempt receives a separate capture
+replay. An estimator failure is never replaced. An infrastructure-invalid
+retry is appended, gives a machine-readable reason, and repeats both systems
+for that sequence.
+
+U0 is the clean upstream commit
+`69488123ed9362dd44b6f28e7f4680abbff1442b`, its upstream KAIST configuration,
+and its native serial runner. Only bag/start/duration, the three topic names,
+node namespace, passive output/timing enablement, and output paths may be
+bound at runtime. S1 is the current frozen Schur executable/configuration.
+The same hash-pinned adapted bag is passed to both; no payload, header stamp,
+record time, or message order is changed. Ground truth is unavailable to the
+estimators and is opened only after each estimator process closes.
+
+U0 is never patched, rebuilt, retuned, recalibrated, or moved to a different
+frontend/pairing mode to make a sequence work. `NO_INIT`, tracking loss,
+numeric failure, crash, and partial output are valid original-algorithm
+results. The harness retains their input census, process/console evidence,
+and every partial output; absence of emitted geometry is recorded explicitly
+rather than repaired or hidden.
+
+U0's native record-time stereo pairing and S1's exact-header seam are retained.
+This deliberate whole-system comparison requires, adjacent to each result, a
+pairing census covering input camera counts, exact-header pairs/unmatched
+messages, U0 paired/skipped behavior and record-skew distribution, S1
+queued/processed/pending pairs, pair-set intersection/differences, each
+system's static selected-input bounds, and the estimator state's actual first/
+last output timestamps. A valid native U0 skip remains a stock-system
+outcome; a missing census or source/config/bag drift invalidates the screen.
+
+Ordered endpoints are: (1) valid completion dominance, (2) provisional
+accuracy noninferiority on common complete sequences, then (3) material
+accuracy improvement. After both estimators close, the shared offline
+evaluator intersects the exact ground-truth row identities associated within
+10 ms to both estimates. Both systems are scored on that identical reference
+population and RPE pair set, using independent SE(3) alignment without scale,
+translation ATE RMSE, 1 m translation RPE, and 1 m rotation RPE. For metric
+`m`, define
+`d[s,m] = (m[S1] - m[U0]) / m[U0]`. Noninferiority is assessable only with at
+least eight common complete sequences and passes only when every metric's
+median `d` is at most 0.10 and no individual `d` exceeds 0.20. Missing or
+failed trajectories remain in the completion denominator and are never
+assigned invented errors.
+
+For this practical screen, `COMPLETE` requires initialization within the
+first 10% of that method's selected-input span, a final state within 0.10 s of
+its last selected camera time, and no post-initialization state gap above
+0.20 s. The initialization rule is duration-normalized and prevents an
+estimator from discarding a difficult prefix and then being rewarded on only
+the easier common suffix. State-span fraction remains a reported diagnostic,
+not a substitute for the direct initialization rule.
+
+The mechanical outcomes are:
+
+- `ADVANCE_COMPLETION`: S1 completes 11/11, never fails where U0 completes,
+  U0 has at least one valid estimator-incomplete cell, and noninferiority
+  passes. Repeat every discordant cell at least three times before any claim.
+- `ADVANCE_ACCURACY`: both complete 11/11, noninferiority passes, at least two
+  of three paired median errors improve by at least 10%, and none worsens in
+  median. This triggers a confirmatory repeated design.
+- `PARITY`: both complete 11/11 and noninferiority passes, but the material
+  accuracy rule does not pass. Continue only to the already-planned cheap
+  matched causal falsification; do not claim superiority.
+- `COMPLETION_SIGNAL_ONLY`: fewer than eight common complete sequences, with
+  no U0-complete/S1-incomplete cell. Report completion only and audit U0 input
+  delivery before deciding whether to repeat.
+- `INCONCLUSIVE_SHARED_FAILURE`: every remaining valid pattern, including
+  eight or more common complete sequences with passing noninferiority but one
+  or both systems below 11/11. Report the shared/incomplete failure pattern;
+  it does not authorize a superiority claim.
+- `STOP_AND_AUDIT`: any U0-complete/S1-incomplete cell, noninferiority failure,
+  prohibited source/config/input drift, missing attempt/map accounting, or an
+  unreconciled catastrophic qualitative artifact.
+
+One attempt supplies no within-cell variance, confidence interval, scheduler/
+thermal robustness, or publication-level superiority test. Wall time, CPU,
+RSS, updater timing, and energy are diagnostic only and never decide G0.5.
+Permitted wording is bounded to "S1 outperformed the pinned stock OpenVINS
+configuration under these inputs." Schur attribution still requires N0g/S1.
 
 ### G0 -- readiness hard stop
 
@@ -591,6 +692,19 @@ fonts, references, claims, video, and upload integrity.
   fixed-view qualitative atlas row.
 - [ ] Create the eight-page paper skeleton and AI-use log.
 
+### A5 -- authorized G0.5 diagnostic screen
+
+- [ ] Freeze and validate `KAIST_UPSTREAM_SCREEN.yaml` and
+  `RUN_MATRIX_G0_5.csv` before launching U0.
+- [ ] Verify the pinned upstream checkout/binary/config and the S1 binary/config
+  without rebuilding or downloading when the exact local assets are valid.
+- [ ] Run one full-sequence U0/S1 dry run and their capture replays; accept only
+  if manifests, evaluator outputs, pairing census, and geometry accounting
+  validate.
+- [ ] Execute all 22 scored cells without replacement and all 22 linked capture
+  replays; append paired retries only for classified infrastructure failures.
+- [ ] Generate the deterministic result table, map inventory, and G0.5 outcome.
+
 ## Phase A acceptance record
 
 | Item | execution_status | Evidence / blocker | Next action |
@@ -604,6 +718,7 @@ fonts, references, claims, video, and upload integrity.
 | Orin readiness | BLOCKED | No endpoint/profile/power declaration is locally discoverable | Request endpoint and control/telemetry details |
 | Protocol/control files | NOT_STARTED | This plan defines required content | Implement after inventory/build facts |
 | Harness/metrics/maps MVP | NOT_STARTED | Existing fixed-S1 runner is insufficient | Begin only after clean build diagnosis |
+| G0.5 stock screen | RUNNING | User authorized the practical upstream-first check; contract/harness in progress | Freeze contract, then run the one-sequence dry run |
 | G0 | PENDING | All A1-A4 requirements are conjunctive | Do not start science runs |
 
 ## Decision and progress log
@@ -618,6 +733,7 @@ fonts, references, claims, video, and upload integrity.
 | 2026-08-15 | Complete local-first inventory | All selected dataset bytes already present and verified; only missing mandatory VINS-Fusion was downloaded at pinned commits |
 | 2026-08-15 | Complete clean build and baseline tests | Five-package build passes; 580 C++ + 123 TurnSafe Python + 494 isolated CP2 Python tests pass |
 | 2026-08-15 | Repair ignored KAIST ledger dependency | Exact-byte historical ledger imported into tracked registry; clean-worktree prepare-only preflight passes; TurnSafe suite now 123 tests |
+| 2026-08-15 | Authorize upstream-first KAIST screen | Add diagnostic G0.5 before N0g/full campaign; retain stock U0 delivery, complete map/attempt accounting, and forbid Schur attribution |
 | 2026-08-15 | Repair historical CP0 package | Restored the exact checksum-listed build-provenance member and bound verification to the artifact-snapshotted verifier; sealed artifact passes |
 | 2026-08-15 | Retain clean Phase A source snapshot | Clean checkpoint `ab51413`, aggregate source SHA-256 `098b95dc...`, stored write-locked outside Git |
 | 2026-08-15 | Correct embedded target identity | User confirmed NVIDIA Jetson Orin Nano Developer Kit; module/software/access/power details remain pending |

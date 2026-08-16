@@ -1,0 +1,428 @@
+schema: schurvio.icra27.kaist_upstream_screen.v1
+protocol_id: g0.5-kaist11-u0-s1-20260815
+frozen_at: "2026-08-15T21:50:00-04:00"
+status: FROZEN_BEFORE_FIRST_U0_LAUNCH
+purpose: >-
+  Diagnostic whole-system screen answering whether S1 merits a confirmatory
+  study against the pinned stock OpenVINS KAIST configuration.
+evidence_class: PREVIEW
+publication_claim_eligible: false
+
+harness:
+  git_ref: refs/tags/icra27-g05-screen-v1
+  repository_must_be_clean: true
+  file_sha256:
+    runner: a9f043c4b58da9e783bed47396665cb770d2f0664051b6bab2d5f5693744c42e
+    matrix: 74054bc5e957fd1e8f130ee68199bff05cbf3aabde26af2f7c7b55dfd8084df9
+    u0_launch: b9ea5787fd0ce998028bc63c04b09da796f344800a4b0e9b3f90e4d906412640
+    s1_launch: 13196d4d080932e08643685ced85ce0783f21689bb9a9a5264e4d10d13196713
+    converter: 1d09172e88f152dea3490496030df12d8f80abf9ee528d7b412222940e45b5e4
+    pairing_census: d44fccf4be492fb88563ffc68e50abebee074577cecafa792333b791ee1da41a
+    geometry_bundle: 7d090d8e22c7c77e1be3cbc38964c3a7c6c8b782b88ed2efa96ded1e82816eb8
+    runtime_identity: c65162cc04b3921f58eac6ad20b5c0f236acfe9cb654e6a87bb14246c7b24769
+    pair_evaluator: 24c30b19c65f95c644065eda35534e803d4ffc72825f9e6aa0ffb9a2bbffaa7c
+
+interpretation:
+  permitted: >-
+    S1 outperformed the pinned stock OpenVINS configuration under these
+    inputs.
+  forbidden:
+    - Schur elimination caused an observed difference.
+    - S1 is universally more robust than OpenVINS.
+    - One-pass timing, energy, or real-time superiority.
+  causal_comparator_deferred_to: N0g
+
+systems:
+  U0:
+    role: pinned_stock_system
+    source_repository: https://github.com/rpng/open_vins.git
+    source_commit: 69488123ed9362dd44b6f28e7f4680abbff1442b
+    source_tree: 12ab1c94ccae78ad50fa7376f47f0e55e2672257
+    source_must_be_clean: true
+    executable_sha256: c0e2203d0c01822fd089b32fb25d2b81dc850abc03c273d169b812801788d57b
+    executable_build_id: 49428bb7cf13fe81ff529b23f197d944a5dacd20
+    estimator_config_sha256: a7212a7b0e7e2df3ddefe402f12b5cbd155b368b43253f96a306d6638ba648d5
+    imu_config_sha256: c4c8ae37b17199363b5647dcff973e6cdb8b974d4f4a81edae0335bdc1debf56
+    camera_imu_config_sha256: d80f5690eabce47d25ee08cccde25bcf1821acbf34c0f26a9e66af2cb81046af
+    native_delivery: first_forward_record_time_strictly_less_than_20_ms
+    algorithm_mutation_policy: >-
+      Forbidden. Do not patch, rebuild, retune, recalibrate, change frontend
+      or pairing behavior, or substitute a configuration when U0 fails.
+    failure_policy: >-
+      NO_INIT, tracking loss, numeric failure, crash, and partial output are
+      valid stock-system results and are retained without estimator repair.
+    runtime_binding_allowlist:
+      - path_bag
+      - bag_start
+      - bag_durr
+      - cam0_rostopic
+      - cam1_rostopic
+      - imu0_rostopic
+      - node_name
+      - save_total_state
+      - filepath_est
+      - filepath_std
+      - record_timing_information
+      - record_timing_filepath
+  S1:
+    role: frozen_candidate_system
+    estimator_source_commit: 4d2f2d275437ead9496b848730d5a9eb0e402864
+    estimator_source_tree: 7c390aeb126f1ef69aad75733f40559639889ed3
+    executable_sha256: 8de5970c9654c1bb5c2fcdc5646fd5dd8675198d4ba41c6bdae8e5edba2b80ed
+    executable_build_id: 5e2538a1e79e913df3c3e288d083df4f683099e3
+    build_provenance_sha256: 87b88fbe67273153f3a5c079a8d8f2e9a9b98fbce789b6f35e242af1e6949e0c
+    estimator_config_sha256: 6f8e585998fd056364dca21d614ef41f5aa9e155ebe67660eea8139c1cc96838
+    imu_config_sha256: 7294c128d7268c2cc9c5a29d400a956aa28391211f9e385c3c256d004894b794
+    camera_imu_config_sha256: 940c3d6b3b6996d9e9b586e08a9927ee4ce2fa507c1dc1daa841629df2e920a9
+    native_delivery: exact_header_stamp_with_frozen_frequency_thinning
+
+runtime_identity:
+  policy_id: g05-kaist-u0-s1-runtime-20260815-v1
+  validate_before_every_attempt: true
+  executable_build_id_required: true
+  all_dynamic_dependencies_must_resolve: true
+  U0_ceres:
+    canonical_path: /home/moksh/newSlam variant/build/vendor/ceres-install/lib/libceres.so.1.14.0
+    sha256: bec3b211a1fda35a44986a4000b666e4d218d84190b545805461b1652e086aad
+    build_id: b8b3ea689da20dd04fe174e6df812556c0440ee6
+  S1_ceres:
+    canonical_path: /home/moksh/schurvio-lite-icra27-a0/build/vendor/ceres-install/lib/libceres.so.1.14.0
+    sha256: 24cfda7121265b24ede3a3a853920a2413f531c772ad0f3cc990a7f621212a33
+    build_id: 6b0bb3df363dd2c5651906ae7772143fc8de8579
+  S1_build_provenance_sha256: 87b88fbe67273153f3a5c079a8d8f2e9a9b98fbce789b6f35e242af1e6949e0c
+
+common_input:
+  dataset: KAIST-VIO
+  population: all_11_sequences
+  adapted_bag_registry: /home/moksh/datasets/KAIST_VIO/manifests/BAG_INVENTORY.csv
+  adapted_bag_policy: exact_existing_bytes_no_rewrite
+  ground_truth_available_to_estimator: false
+  ground_truth_opened: only_after_estimator_process_closes
+  camera0_topic: /turnsafe/kaist/infra1/image_raw
+  camera1_topic: /turnsafe/kaist/infra2/image_raw
+  imu_topic: /mavros/imu/data
+  callback_identity_required: false
+  callback_asymmetry_reason: >-
+    Stock U0 pairs by bag record time while S1's native seam pairs exact header
+    stamps; changing either would stop this from being the requested practical
+    stock-system screen.
+
+schedule:
+  matrix: docs/icra27/RUN_MATRIX_G0_5.csv
+  primary_cell_count: 22
+  scored_attempts_per_cell: 1
+  capture_replays_per_cell: 1
+  dry_run_sequence: rotation/rotation_fast.bag
+  dry_run_is_scored: false
+  dry_run_scored_id_rule: g05-dry-{sequence_stem}-{system_lower}-scored
+  dry_run_capture_id_rule: g05-dry-{sequence_stem}-{system_lower}-capture
+  primary_capture_id_rule: "{primary_run_id}-capture"
+  sequence_order_rule: >-
+    Ascending SHA-256 of UTF-8 bytes
+    "icra27-g0.5-stock-screen-v1\\0" concatenated with sequence ID.
+  method_order_rule: alternate U0-first and S1-first by sequence-order index
+  infrastructure_retry_rule: >-
+    Never replace an attempt. Append a classified retry and rerun both systems
+    for the affected sequence with byte-identical estimator/config identities.
+  cpu_affinity: "8-15"
+  math_library_threads: 1
+  outer_timeout_seconds: 900
+  inter_attempt_cooldown_seconds: 5
+  timing_is_endpoint: false
+
+attempt_status:
+  allowed:
+    - COMPLETE
+    - COMPLETE_WITH_TEARDOWN_DEFECT
+    - PARTIAL
+    - NO_INIT
+    - TRACKING_LOSS
+    - NUMERIC_FAILURE
+    - CRASH
+    - TIMEOUT
+    - INVALID_INFRA
+  teardown_exception_rule: >-
+    A pinned upstream class_loader unload abort after final visualization and
+    complete valid output is retained as COMPLETE_WITH_TEARDOWN_DEFECT, counts
+    as complete for accuracy, and cannot alone create a completion advantage.
+  complete_requires:
+    - nonempty finite strictly increasing state and trajectory outputs
+    - final estimate no more than 0.10 s before the last selected camera time
+    - initialization occurs within the first 10 percent of selected-input span
+    - no reset, nonfinite state, covariance failure, or intervention
+    - trajectory is eligible for the post-pair common-population evaluator
+  tail_gap_max_seconds: 0.10
+  negative_tail_tolerance_seconds: 0.01
+  post_initialization_max_state_gap_seconds: 0.20
+  initialization_delay_max_fraction_of_selected_input: 0.10
+
+pairing_census:
+  mandatory: true
+  fields:
+    - source_camera0_count
+    - source_camera1_count
+    - exact_header_pair_count
+    - camera0_unmatched_count
+    - camera1_unmatched_count
+    - u0_native_pair_count
+    - u0_native_skipped_count
+    - u0_native_non_dispatch_camera_visit_count
+    - u0_reused_candidate_count
+    - u0_record_skew_min_ns
+    - u0_record_skew_median_ns
+    - u0_record_skew_p95_ns
+    - u0_record_skew_max_ns
+    - s1_exact_pair_count
+    - s1_queued_pair_count
+    - s1_processed_pair_count
+    - s1_frequency_thinned_pair_count
+    - s1_pending_pair_count
+    - pair_set_intersection_count
+    - u0_only_pair_count
+    - s1_only_pair_count
+    - u0_first_selected_header_stamp_ns
+    - u0_last_selected_header_stamp_ns
+    - s1_first_selected_header_stamp_ns
+    - s1_last_selected_header_stamp_ns
+    - estimator_output_first_timestamp_ns
+    - estimator_output_last_timestamp_ns
+  field_semantics:
+    u0_native_skipped_count: >-
+      Camera outer-loop visits that reach upstream's no-pair skip branch; this
+      is not the larger count of visits that dispatch no callback because
+      already-used candidates are skipped separately.
+    u0_native_non_dispatch_camera_visit_count: >-
+      All camera outer-loop visits that dispatch no callback, including both
+      already-used candidates and no-pair skips.
+    u0_reused_candidate_count: >-
+      Opposite-camera candidates selected by more than one upstream anchor;
+      this preserves the pinned source's used-index semantics.
+    selected_header_stamps: >-
+      The U0 fields bound the first and last native record-time-selected stereo
+      callbacks; the S1 fields bound the first and last exact-header pairs
+      before S1's frozen frequency thinning. They are static input-census
+      fields, not estimator-output timestamps.
+    estimator_output_timestamps: >-
+      First and last sensor timestamps actually written to the estimator state
+      output. They are populated from the attempt, not inferred from the bag.
+
+evaluation:
+  implementation: evo
+  evo_version: 1.31.1
+  evaluator_runtime_pins:
+    schema: schurvio.icra27.kaist_pair_evaluator.runtime_pins.v1
+    python:
+      version: "3.8.10 (default, Mar 18 2025, 20:04:55) \n[GCC 9.4.0]"
+      version_info: 3.8.10
+      implementation: cpython
+      cache_tag: cpython-38
+      executable:
+        path: /usr/bin/python3.8
+        size_bytes: 5490456
+        sha256: 298a9e830ed52f36c299427565485d717d1ce0179c0597cc16560513eb780b06
+    evo:
+      version: 1.31.1
+      required_version: 1.31.1
+      executables:
+        evo_ape:
+          path: /home/moksh/.local/bin/evo_ape
+          size_bytes: 213
+          sha256: 6bee25dc5bfdab0ead8988ab4014a72511339e94697ec61699f66f68f5f24d15
+        evo_rpe:
+          path: /home/moksh/.local/bin/evo_rpe
+          size_bytes: 213
+          sha256: 9e07d0bd4566aa680d5e39e58589176a286f4f8a22ba9107a5834ddb278e2bd1
+      semantic_modules:
+        package:
+          path: /home/moksh/.local/lib/python3.8/site-packages/evo/__init__.py
+          size_bytes: 583
+          sha256: ea1a753dbb2d53e58f5b3c7c1691fbcac02295cd22be8fe0831092fe7e009010
+        filters:
+          path: /home/moksh/.local/lib/python3.8/site-packages/evo/core/filters.py
+          size_bytes: 8213
+          sha256: 1dde62d6caada3d4c957add128992873f3a5f9533ae3329f224ca9c2ab383c45
+        geometry:
+          path: /home/moksh/.local/lib/python3.8/site-packages/evo/core/geometry.py
+          size_bytes: 3396
+          sha256: 85851e80c82de536e69e2d4ebe8744d34653d280af7e80ee6f8e5c74ea4f600e
+        lie_algebra:
+          path: /home/moksh/.local/lib/python3.8/site-packages/evo/core/lie_algebra.py
+          size_bytes: 7018
+          sha256: a5336f8b3ab8687e634c19ac74618787cb50536b1dab93d7485bbb61f14566ef
+        metrics:
+          path: /home/moksh/.local/lib/python3.8/site-packages/evo/core/metrics.py
+          size_bytes: 18910
+          sha256: 5f1011bea2662febf67c706b801f4ca3d583c0ffd0228d7860338105ce06ddb7
+        result:
+          path: /home/moksh/.local/lib/python3.8/site-packages/evo/core/result.py
+          size_bytes: 4754
+          sha256: a5a8c8a61002ad560164f243be6968256e455c377f2bc1b5ddf0db33c997c833
+        sync:
+          path: /home/moksh/.local/lib/python3.8/site-packages/evo/core/sync.py
+          size_bytes: 4637
+          sha256: fc7936dae2ffc92846c9ff6e2cfa19c2270dcf2089527beb9e854ab160ba45f8
+        trajectory:
+          path: /home/moksh/.local/lib/python3.8/site-packages/evo/core/trajectory.py
+          size_bytes: 25161
+          sha256: 20a17714d8404cf5a1954876b273c6e40206268b849c0ded5215456059b5b808
+        transformations:
+          path: /home/moksh/.local/lib/python3.8/site-packages/evo/core/transformations.py
+          size_bytes: 66201
+          sha256: cafc0715e7a948f7aff36d30ed619567b40f2d179250c9fdfe5e1e74b8aaa382
+        units:
+          path: /home/moksh/.local/lib/python3.8/site-packages/evo/core/units.py
+          size_bytes: 1357
+          sha256: e266f314a904ea38dce7ac605b6de273a30456a9460f86aba2d58cb031605547
+        file_interface:
+          path: /home/moksh/.local/lib/python3.8/site-packages/evo/tools/file_interface.py
+          size_bytes: 22382
+          sha256: c3b40e17f1f5893344dfef64341375520b7017ce402700578b1160a88e3fd74c
+    numpy:
+      version: 1.24.4
+      semantic_modules:
+        package:
+          path: /home/moksh/.local/lib/python3.8/site-packages/numpy/__init__.py
+          size_bytes: 16174
+          sha256: edd18feff93348beb02f392959e80b9fda1875a842d7f9760847f32386fdfd48
+        core_numeric:
+          path: /home/moksh/.local/lib/python3.8/site-packages/numpy/core/numeric.py
+          size_bytes: 77704
+          sha256: 4a4542d7758f8aa769e4fa7ff6228e1063788700332298de3da84608004df122
+        linalg_package:
+          path: /home/moksh/.local/lib/python3.8/site-packages/numpy/linalg/__init__.py
+          size_bytes: 1813
+          sha256: 9a97651175ad4efa45ec89fbefa38d2f0a7a448ca8e14fc62cf4f52f5788267c
+        linalg_implementation:
+          path: /home/moksh/.local/lib/python3.8/site-packages/numpy/linalg/linalg.py
+          size_bytes: 89351
+          sha256: 304a00b1bbd5f933e3920264c93f7a21a46e4091a05fc714248492b54e78d1c9
+        multiarray_umath:
+          path: /home/moksh/.local/lib/python3.8/site-packages/numpy/core/_multiarray_umath.cpython-38-x86_64-linux-gnu.so
+          size_bytes: 6311424
+          sha256: 190fed599b26cf689e22f198faf97d632f1d19b8aa75fdf5ca7fb96d37d97e37
+        umath_linalg:
+          path: /home/moksh/.local/lib/python3.8/site-packages/numpy/linalg/_umath_linalg.cpython-38-x86_64-linux-gnu.so
+          size_bytes: 230272
+          sha256: 77d989daf30e91b14b657f0a125377d1c5bf49d7d950522baefdce9a7a93f927
+  execution_stage: post_pair_after_both_estimators_close
+  trajectory_format: tum
+  alignment: se3_without_scale
+  timestamp_association_max_seconds: 0.01
+  ground_truth_population: >-
+    Exact intersection of ground-truth row identities associated within 10 ms
+    to both U0 and S1 estimates; both metrics use this same reference-row
+    population and its identical RPE pair set.
+  per_run_full_overlap_metrics_are_primary: false
+  minimum_common_pose_count: 10
+  minimum_common_rpe_pair_count: 5
+  rpe_relative_delta_tolerance: 0.10
+  primary_metrics:
+    - id: ate_translation_rmse_m
+      evo_tool: evo_ape
+      pose_relation: trans_part
+    - id: rpe_translation_rmse_1m_m
+      evo_tool: evo_rpe
+      pose_relation: trans_part
+      delta: 1.0
+      delta_unit: m
+      all_pairs: true
+      pairs_from_reference: true
+    - id: rpe_rotation_rmse_1m_deg
+      evo_tool: evo_rpe
+      pose_relation: angle_deg
+      delta: 1.0
+      delta_unit: m
+      all_pairs: true
+      pairs_from_reference: true
+  common_complete_minimum_for_noninferiority: 8
+  relative_difference: (S1-U0)/U0
+  median_noninferiority_margin: 0.10
+  worst_sequence_noninferiority_margin: 0.20
+  material_median_improvement: -0.10
+  material_metrics_required: 2
+  median_regressions_allowed_for_material_win: 0
+
+geometry:
+  capture_is_separate_replay: true
+  capture_timing_scored: false
+  raw_topics:
+    - poseimu
+    - points_slam
+    - points_msckf
+    - points_aruco
+    - loop_feats
+  forbidden_raw_topics:
+    - pathimu
+    - trackhist
+    - loop_depth
+    - loop_depth_colored
+  scored_capture_trajectory_identity: byte_exact
+  render_alignment: >-
+    Fit one evo-1.31.1 SE(3)-without-scale transform from the capture estimate
+    to associated GT (10 ms), then apply that identical transform to the
+    rendered estimate and every rendered feature point. Raw PLY coordinates
+    remain unaligned and authoritative.
+  final_slam_policy: >-
+    Save the literal final points_slam message. A zero-point final state is a
+    valid zero-vertex PLY plus an explicit feature-collapse flag; never replace
+    it with the last nonempty cloud.
+  required_outputs:
+    - geometry/feature_stream.bag
+    - geometry/slam_landmarks_final.ply
+    - geometry/msckf_update_points.ply
+    - geometry/alignment_associations.csv
+    - geometry/snapshots/25.ply
+    - geometry/snapshots/50.ply
+    - geometry/snapshots/75.ply
+    - geometry/snapshots/max_angular_rate.ply
+    - figures/top.svg
+    - figures/side.svg
+    - figures/oblique.svg
+  terminology:
+    points_slam: current_active_sparse_slam_state_not_persistent_map
+    points_msckf: transient_last_update_points_aggregated_over_time
+  missing_output_policy: explicit_failure_tile_never_fabricate
+
+artifact_policy:
+  root: /home/moksh/schurvio-icra27-artifacts/g05
+  overwrite_existing_run: forbidden
+  attempts_are_append_only: true
+  retain_raw_trajectory_and_covariance: true
+  retain_raw_geometry_stream_for_every_capture: true
+  retain_partial_or_active_geometry_stream_on_failure: true
+  deterministic_derived_geometry_checksums: required
+
+gate:
+  outcomes:
+    - ADVANCE_COMPLETION
+    - ADVANCE_ACCURACY
+    - PARITY
+    - COMPLETION_SIGNAL_ONLY
+    - INCONCLUSIVE_SHARED_FAILURE
+    - STOP_AND_AUDIT
+  advance_completion_requires:
+    s1_complete_count: 11
+    u0_complete_s1_incomplete_count: 0
+    u0_incomplete_minimum: 1
+    noninferiority: pass
+  advance_accuracy_requires:
+    s1_complete_count: 11
+    u0_complete_count: 11
+    noninferiority: pass
+    materially_improved_metric_medians_minimum: 2
+    regressed_metric_medians: 0
+  stop_conditions:
+    - any U0-complete and S1-incomplete sequence
+    - provisional noninferiority failure
+    - source, binary, config, calibration, or bag identity drift
+    - missing scheduled attempt, pairing census, or geometry accounting
+    - unreconciled catastrophic qualitative artifact
+  ordered_fallbacks:
+    completion_signal_only: >-
+      Fewer than eight common COMPLETE sequences, no U0-complete/S1-incomplete
+      cell, and no provenance/input validity failure. Report completion only;
+      provisional accuracy is unassessable.
+    inconclusive_shared_failure: >-
+      Every valid result pattern not assigned above, including eight or more
+      common COMPLETE sequences with passing noninferiority but one or both
+      systems below 11/11. This does not authorize a superiority claim.
