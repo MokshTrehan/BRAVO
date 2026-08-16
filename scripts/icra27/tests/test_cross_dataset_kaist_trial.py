@@ -418,22 +418,23 @@ class PairingAndOutcomeTests(unittest.TestCase):
         facts["input_decode_valid"] = False
         self.assertEqual(MODULE.classify_outcome(facts), "TRACKING_LOSS")
 
-    def test_observed_s1_pairing_mismatch_is_infrastructure_even_without_output(self) -> None:
-        console = (
-            "[SERIAL-KAIST]: exact_header_pairs=100 camera0_without_match=2 "
-            "camera1_without_match=3 record_delta_ge_20ms=7 "
-            "maximum_record_delta_ns=42000000\n"
-            "[SERIAL-KAIST]: queued_pairs=80 processed_pairs=80 "
-            "frequency_thinned_pairs=20 cam0_decode_failures=0 "
-            "cam1_decode_failures=0 pending_pairs=0\n"
-        )
-        summaries = MODULE.rotation.parse_runtime_summaries(console)
+    @staticmethod
+    def _runtime_census_fixture():
+        full = {
+            "schema": MODULE.pairing.SCHEMA,
+            "census": {
+                "s1_exact_pair_count": 100,
+                "camera0_unmatched_count": 2,
+                "camera1_unmatched_count": 3,
+            },
+            "selection_bounds": {"s1_exact_header": {"pair_count": 100}},
+        }
         normalized = {
             "schema": MODULE.KAIST_CENSUS_SCHEMA,
             "system": "S1",
             "input_interval": {
-                "selected_pair_count": 79,
-                "visualizer_frequency_dropped_pair_count": 21,
+                "selected_pair_count": 80,
+                "visualizer_frequency_dropped_pair_count": 20,
                 "raw_serial_dispatch_pair_count": 100,
                 "first_selected_input_timestamp_ns": 1,
                 "last_selected_input_timestamp_ns": 2,
@@ -442,10 +443,51 @@ class PairingAndOutcomeTests(unittest.TestCase):
                 "accepted_visualizer_callback_sequence_sha256": "0" * 64,
             },
         }
-        self.assertTrue(MODULE._s1_pairing_runtime_evidence_observed(console))
+        return full, normalized
+
+    @staticmethod
+    def _early_summary(exact_header_pairs: int = 100) -> str:
+        return (
+            "[SERIAL-KAIST]: exact_header_pairs={} camera0_without_match=2 "
+            "camera1_without_match=3 record_delta_ge_20ms=7 "
+            "maximum_record_delta_ns=42000000\n"
+        ).format(exact_header_pairs)
+
+    @staticmethod
+    def _terminal_summary() -> str:
+        return (
+            "[SERIAL-KAIST]: queued_pairs=80 processed_pairs=80 "
+            "frequency_thinned_pairs=20 cam0_decode_failures=0 "
+            "cam1_decode_failures=0 pending_pairs=0\n"
+        )
+
+    @staticmethod
+    def _child(status: str) -> dict:
+        return {
+            "required_terminations": [
+                {"node": "kaist_vio_turnsafe_baseline-1", "status": status}
+            ]
+        }
+
+    @staticmethod
+    def _launch() -> dict:
+        return {"timed_out": False, "interrupted": False}
+
+    def test_observed_terminal_s1_pairing_mismatch_is_infrastructure_even_without_output(self) -> None:
+        console = (
+            "[SERIAL-KAIST]: exact_header_pairs=100 camera0_without_match=2 "
+            "camera1_without_match=3 record_delta_ge_20ms=7 "
+            "maximum_record_delta_ns=42000000\n"
+            "[SERIAL-KAIST]: queued_pairs=80 processed_pairs=80 "
+            "frequency_thinned_pairs=20 cam0_decode_failures=0 "
+            "cam1_decode_failures=0 pending_pairs=0\n"
+        )
+        full, normalized = self._runtime_census_fixture()
+        normalized["input_interval"]["selected_pair_count"] = 79
+        normalized["input_interval"]["visualizer_frequency_dropped_pair_count"] = 21
         with self.assertRaisesRegex(MODULE.TrialError, "runtime/projected"):
-            MODULE.validate_s1_visualizer_gate_runtime_binding(
-                summaries, normalized
+            MODULE.assess_s1_pairing_runtime(
+                console, full, normalized
             )
         self.assertEqual(
             MODULE.classify_outcome(
@@ -460,11 +502,294 @@ class PairingAndOutcomeTests(unittest.TestCase):
             ),
             "INFRASTRUCTURE_FAILED",
         )
+    def test_early_malformed_duplicate_or_static_mismatch_without_terminal_is_infra(self) -> None:
+        full, normalized = self._runtime_census_fixture()
+        cases = {
+            "malformed": "[SERIAL-KAIST]: exact_header_pairs=malformed\n",
+            "duplicate": self._early_summary() + self._early_summary(),
+            "static_mismatch": self._early_summary(101),
+        }
+        for name, console in cases.items():
+            with self.subTest(case=name), self.assertRaises(MODULE.TrialError):
+                MODULE.assess_s1_pairing_runtime(console, full, normalized)
+
+    def test_valid_early_only_requires_exact_failed_child(self) -> None:
+        full, normalized = self._runtime_census_fixture()
+        runtime = MODULE.assess_s1_pairing_runtime(
+            self._early_summary(), full, normalized
+        )
+        failed = MODULE.finalize_s1_pairing_runtime_contract(
+            True,
+            runtime,
+            self._child("FAILED"),
+            self._launch(),
+            True,
+            "missing",
+            False,
+        )
+        self.assertTrue(failed["runtime_contract_valid"])
+        common_facts = {
+            "mode": "scored",
+            "teardown_ok": True,
+            "runtime_contract_valid": True,
+            "numeric_integrity_valid": True,
+            "input_decode_valid": True,
+            "state_kind": "missing",
+        }
+        self.assertEqual(
+            MODULE.classify_outcome({**common_facts, "launch_abnormal": True}),
+            "ESTIMATOR_CRASH",
+        )
+        for status in ("CLEAN", "UNRESOLVED"):
+            with self.subTest(child_status=status):
+                nonfailure = MODULE.finalize_s1_pairing_runtime_contract(
+                    True,
+                    runtime,
+                    self._child(status),
+                    self._launch(),
+                    True,
+                    "missing",
+                    False,
+                )
+                self.assertFalse(nonfailure["runtime_contract_valid"])
+                self.assertEqual(
+                    MODULE.classify_outcome(
+                        {
+                            **common_facts,
+                            "runtime_contract_valid": nonfailure[
+                                "runtime_contract_valid"
+                            ],
+                            "launch_abnormal": status != "CLEAN",
+                        }
+                    ),
+                    "INFRASTRUCTURE_FAILED",
+                )
+
+    def test_no_summary_preselector_failure_requires_zero_postselector_evidence(self) -> None:
+        full, normalized = self._runtime_census_fixture()
+        runtime = MODULE.assess_s1_pairing_runtime("", full, normalized)
+        constructor_console = (
+            "[LONG-GAP-RECOVERY]: event=contract_validated enabled=1 "
+            "threshold_s=0.500 attempts=10 consensus=3\n"
+        )
         self.assertFalse(
-            MODULE._s1_pairing_runtime_evidence_observed(
-                "estimator died before runtime summaries\n"
+            MODULE._s1_post_selector_evidence_observed(
+                constructor_console, "missing", True, True
             )
         )
+        preselector = MODULE.finalize_s1_pairing_runtime_contract(
+            True,
+            runtime,
+            self._child("FAILED"),
+            self._launch(),
+            True,
+            "missing",
+            False,
+        )
+        self.assertTrue(preselector["runtime_contract_valid"])
+        for status in ("CLEAN", "UNRESOLVED"):
+            with self.subTest(child_status=status):
+                unproven_preselector = MODULE.finalize_s1_pairing_runtime_contract(
+                    True,
+                    runtime,
+                    self._child(status),
+                    self._launch(),
+                    True,
+                    "missing",
+                    False,
+                )
+                self.assertFalse(unproven_preselector["runtime_contract_valid"])
+                self.assertEqual(
+                    unproven_preselector["reason"],
+                    "ABSENT_SUMMARIES_WITHOUT_PROVEN_PRE_SELECTOR_FAILURE",
+                )
+        contaminated = MODULE.finalize_s1_pairing_runtime_contract(
+            True,
+            runtime,
+            self._child("FAILED"),
+            self._launch(),
+            True,
+            "valid",
+            True,
+        )
+        self.assertFalse(contaminated["runtime_contract_valid"])
+        self.assertTrue(
+            MODULE._s1_post_selector_evidence_observed(
+                constructor_console
+                + "[LONG-GAP-RECOVERY]: event=trigger epoch=0 timestamp=1 "
+                "last_state_timestamp=0 gap_s=1 activation=1\n",
+                "missing",
+                True,
+                True,
+            )
+        )
+        for contaminated_contract in (
+            constructor_console + constructor_console,
+            constructor_console.replace("attempts=10", "attempts=9"),
+            constructor_console
+            + "[SERIAL-KAIST]: exact-header pair selection failed: synthetic\n",
+        ):
+            self.assertTrue(
+                MODULE._s1_post_selector_evidence_observed(
+                    contaminated_contract, "missing", True, True
+                )
+            )
+
+    def test_malformed_or_duplicate_terminal_summary_is_infrastructure(self) -> None:
+        full, normalized = self._runtime_census_fixture()
+        early = self._early_summary()
+        terminal = self._terminal_summary()
+        cases = {
+            "malformed": early + "[SERIAL-KAIST]: queued_pairs=malformed\n",
+            "duplicate": early + terminal + terminal,
+            "reversed": terminal + early,
+        }
+        for name, console in cases.items():
+            with self.subTest(case=name):
+                with self.assertRaises(MODULE.KAIST_VALIDATION_ERRORS):
+                    MODULE.assess_s1_pairing_runtime(console, full, normalized)
+                self.assertEqual(
+                    MODULE.classify_outcome(
+                        {
+                            "mode": "scored",
+                            "teardown_ok": True,
+                            "runtime_contract_valid": False,
+                            "numeric_integrity_valid": True,
+                            "input_decode_valid": True,
+                            "state_kind": "missing",
+                            "launch_abnormal": True,
+                        }
+                    ),
+                    "INFRASTRUCTURE_FAILED",
+                )
+
+    def test_clean_no_initialization_requires_both_bound_summaries(self) -> None:
+        full, normalized = self._runtime_census_fixture()
+        runtime = MODULE.assess_s1_pairing_runtime(
+            self._early_summary() + self._terminal_summary(), full, normalized
+        )
+        decision = MODULE.finalize_s1_pairing_runtime_contract(
+            True,
+            runtime,
+            self._child("CLEAN"),
+            self._launch(),
+            True,
+            "missing",
+            False,
+        )
+        self.assertTrue(decision["runtime_contract_valid"])
+        self.assertEqual(
+            MODULE.classify_outcome(
+                {
+                    "mode": "scored",
+                    "teardown_ok": True,
+                    "runtime_contract_valid": True,
+                    "numeric_integrity_valid": True,
+                    "input_decode_valid": True,
+                    "state_kind": "missing",
+                    "launch_abnormal": False,
+                }
+            ),
+            "NO_INITIALIZATION",
+        )
+
+    def test_late_failed_child_after_tail_output_remains_partial(self) -> None:
+        full, normalized = self._runtime_census_fixture()
+        runtime = MODULE.assess_s1_pairing_runtime(
+            self._early_summary(), full, normalized
+        )
+        decision = MODULE.finalize_s1_pairing_runtime_contract(
+            True,
+            runtime,
+            self._child("FAILED"),
+            self._launch(),
+            True,
+            "valid",
+            True,
+        )
+        self.assertTrue(decision["runtime_contract_valid"])
+        self.assertEqual(
+            MODULE.classify_outcome(
+                {
+                    "mode": "scored",
+                    "teardown_ok": True,
+                    "runtime_contract_valid": True,
+                    "numeric_integrity_valid": True,
+                    "input_decode_valid": True,
+                    "state_kind": "valid",
+                    "outputs_valid": True,
+                    "continuity_pass": True,
+                    "tail_pass": True,
+                    "launch_abnormal": True,
+                    "exact_u0_teardown": False,
+                }
+            ),
+            "PARTIAL",
+        )
+
+    def test_no_summary_timeout_or_interruption_uses_explicit_policy(self) -> None:
+        full, normalized = self._runtime_census_fixture()
+        runtime = MODULE.assess_s1_pairing_runtime("", full, normalized)
+        for flag in ("timed_out", "interrupted"):
+            with self.subTest(flag=flag):
+                launch = {"timed_out": False, "interrupted": False}
+                launch[flag] = True
+                decision = MODULE.finalize_s1_pairing_runtime_contract(
+                    True,
+                    runtime,
+                    self._child("UNRESOLVED"),
+                    launch,
+                    False,
+                    "missing",
+                    False,
+                )
+                self.assertTrue(decision["runtime_contract_valid"])
+                self.assertEqual(decision["reason"], "TIMEOUT_OR_INTERRUPTION_POLICY")
+                self.assertEqual(decision[flag], True)
+                self.assertEqual(decision["expected_child_termination_status"], "UNPROVEN")
+                self.assertTrue(decision["estimator_attempted"])
+
+    def test_valid_early_timeout_or_interruption_uses_explicit_policy(self) -> None:
+        full, normalized = self._runtime_census_fixture()
+        runtime = MODULE.assess_s1_pairing_runtime(
+            self._early_summary(), full, normalized
+        )
+        for flag in ("timed_out", "interrupted"):
+            with self.subTest(flag=flag):
+                launch = {"timed_out": False, "interrupted": False}
+                launch[flag] = True
+                decision = MODULE.finalize_s1_pairing_runtime_contract(
+                    True,
+                    runtime,
+                    self._child("UNRESOLVED"),
+                    launch,
+                    False,
+                    "missing",
+                    True,
+                )
+                self.assertTrue(decision["runtime_contract_valid"])
+                self.assertEqual(decision["reason"], "TIMEOUT_OR_INTERRUPTION_POLICY")
+                self.assertTrue(decision["early_selector_evidence_observed"])
+                self.assertFalse(decision["terminal_enqueue_evidence_observed"])
+                self.assertEqual(decision[flag], True)
+
+    def test_invalid_pairing_evidence_remains_invalid_during_timeout(self) -> None:
+        full, normalized = self._runtime_census_fixture()
+        runtime = MODULE.assess_s1_pairing_runtime("", full, normalized)
+        decision = MODULE.finalize_s1_pairing_runtime_contract(
+            False,
+            runtime,
+            self._child("FAILED"),
+            {"timed_out": True, "interrupted": False},
+            True,
+            "missing",
+            False,
+        )
+        self.assertFalse(decision["runtime_contract_valid"])
+        self.assertEqual(decision["reason"], "PAIRING_RUNTIME_EVIDENCE_INVALID")
+        self.assertTrue(decision["timed_out"])
+        self.assertFalse(decision["interrupted"])
+        self.assertTrue(decision["estimator_attempted"])
 
     def test_preflight_failure_is_published_as_infrastructure_not_no_init(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

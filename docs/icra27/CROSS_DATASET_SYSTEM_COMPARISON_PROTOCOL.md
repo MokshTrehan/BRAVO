@@ -500,8 +500,28 @@ counts, and digests remain diagnostic evidence. For S1, runtime serializer
 count, `frequency_thinned_pairs` must equal the projected drop count, and
 `queued_pairs + frequency_thinned_pairs` must equal the raw exact-header
 count. The read-only preflight projection exactly matches those frozen S1
-runtime counters on all eleven bags; every fresh R4 S1 cell must re-establish
-the binding, and a mismatch fails closed.
+runtime counters on all eleven bags. Every observed early exact-header summary
+must occur exactly once, parse exactly, and bind the static selector census.
+Every observed terminal queue summary must occur exactly once as part of a
+complete early-plus-terminal pair and must bind both the static selector and
+projected visualizer-gate populations. A malformed, duplicate, or mismatching
+observed summary is infrastructure-invalid.
+
+The exact-header summary is emitted before the processing loop, whereas the
+queue summary is emitted only after that loop drains. A valid bound early
+summary without a terminal summary is retained as a native algorithm outcome
+only when the parsed expected S1 required-child termination is exactly
+`FAILED`; a clean or unresolved child outcome is infrastructure-invalid. A
+failure before either summary is retainable only with that same exact failed
+required-child proof, closed estimator process group, no state or decode
+evidence, and no post-selector recovery or other post-selector evidence; the
+one exact constructor-time `contract_validated` recovery line is explicitly
+pre-selector and does not cross that boundary. Timeout and interruption keep
+their separate classifications. Clean `NO_INITIALIZATION` requires both valid bound
+summaries and an exactly clean expected child. A late exact child failure after
+valid early evidence may remain a crash or partial algorithm outcome even if
+tail output exists; no cell can claim eligible completion without the terminal
+binding and clean child outcome.
 
 Before either lane may launch its first estimator, the campaign independently
 recomputes all 22 U0/S1 KAIST projections from the eleven live bags and their

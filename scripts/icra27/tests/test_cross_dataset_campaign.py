@@ -98,6 +98,263 @@ def _row(
     )
 
 
+def _s1_pairing_runtime_fixture(
+    lifecycle: str,
+    full_census: Mapping[str, Any],
+    input_interval: Mapping[str, Any],
+    gate: Mapping[str, Any],
+) -> Dict[str, Any]:
+    static = full_census["census"]
+    early_counts = {
+        "exact_header_pairs": static["s1_exact_pair_count"],
+        "camera0_without_match": static["camera0_unmatched_count"],
+        "camera1_without_match": static["camera1_unmatched_count"],
+        "record_delta_ge_20ms": 0,
+        "maximum_record_delta_ns": 0,
+    }
+    early_line = (
+        "[SERIAL-KAIST]: exact_header_pairs={exact_header_pairs} "
+        "camera0_without_match={camera0_without_match} "
+        "camera1_without_match={camera1_without_match} "
+        "record_delta_ge_20ms={record_delta_ge_20ms} "
+        "maximum_record_delta_ns={maximum_record_delta_ns}"
+    ).format(**early_counts)
+    static_expected = {
+        name: early_counts[name]
+        for name in (
+            "exact_header_pairs",
+            "camera0_without_match",
+            "camera1_without_match",
+        )
+    }
+    early_binding = {
+        "status": "PASS",
+        "runtime_matches_static_census": True,
+        "static_expected": static_expected,
+        "runtime_observed": early_counts,
+    }
+    termination = {
+        "runtime_contract_valid": True,
+        "estimator_attempted": True,
+        "estimator_process_group_closed": True,
+        "timed_out": lifecycle == "timeout_preselector",
+        "interrupted": False,
+    }
+    if lifecycle in ("terminal_clean", "terminal_failed"):
+        enqueue_counts = {
+            "queued_pairs": input_interval["selected_pair_count"],
+            "processed_pairs": input_interval["selected_pair_count"],
+            "frequency_thinned_pairs": input_interval[
+                "visualizer_frequency_dropped_pair_count"
+            ],
+            "cam0_decode_failures": 0,
+            "cam1_decode_failures": 0,
+            "pending_pairs": 0,
+        }
+        enqueue_line = (
+            "[SERIAL-KAIST]: queued_pairs={queued_pairs} "
+            "processed_pairs={processed_pairs} "
+            "frequency_thinned_pairs={frequency_thinned_pairs} "
+            "cam0_decode_failures={cam0_decode_failures} "
+            "cam1_decode_failures={cam1_decode_failures} "
+            "pending_pairs={pending_pairs}"
+        ).format(**enqueue_counts)
+        projected = {
+            "queued_pairs": input_interval["selected_pair_count"],
+            "processed_pairs": input_interval["selected_pair_count"],
+            "frequency_thinned_pairs": input_interval[
+                "visualizer_frequency_dropped_pair_count"
+            ],
+            "raw_exact_header_pairs": input_interval[
+                "raw_serial_dispatch_pair_count"
+            ],
+        }
+        child = "CLEAN" if lifecycle == "terminal_clean" else "FAILED"
+        termination.update(
+            {
+                "reason": "TERMINAL_BOUND_CHILD_{}".format(child),
+                "expected_child_termination_status": child,
+                "terminal_enqueue_evidence_observed": True,
+                "early_selector_evidence_observed": True,
+                "post_selector_evidence_observed": True,
+            }
+        )
+        return {
+            "status": "AVAILABLE",
+            "summaries": {
+                "exact_header": {"line": early_line, "counts": early_counts},
+                "camera_enqueue": {
+                    "line": enqueue_line,
+                    "counts": enqueue_counts,
+                },
+                "checks": {
+                    "pair_accounting_complete": True,
+                    "processed_pairs_match_queued": True,
+                    "queue_drained": True,
+                    "decode_failures_zero": True,
+                },
+            },
+            "early_selector_binding": early_binding,
+            "raw_selector_binding": {
+                "status": "AVAILABLE",
+                "reason": "NONE",
+                "runtime_matches_static_census": True,
+                "static_expected": static_expected,
+                "selected_input": full_census["selection_bounds"][
+                    "s1_exact_header"
+                ],
+                "selected_first_header_stamp_ns": static[
+                    "s1_first_selected_header_stamp_ns"
+                ],
+                "selected_last_header_stamp_ns": static[
+                    "s1_last_selected_header_stamp_ns"
+                ],
+                "runtime_delivery": {
+                    "s1_queued_pair_count": enqueue_counts["queued_pairs"],
+                    "s1_processed_pair_count": enqueue_counts["processed_pairs"],
+                    "s1_frequency_thinned_pair_count": enqueue_counts[
+                        "frequency_thinned_pairs"
+                    ],
+                    "s1_pending_pair_count": 0,
+                },
+            },
+            "visualizer_gate_binding": {
+                "status": "PASS",
+                "runtime_matches_projected_visualizer_gate": True,
+                "accepted_input": {
+                    "first_header_stamp_ns": input_interval[
+                        "first_selected_input_timestamp_ns"
+                    ],
+                    "last_header_stamp_ns": input_interval[
+                        "last_selected_input_timestamp_ns"
+                    ],
+                    "callback_count": input_interval["selected_pair_count"],
+                    "ordered_callback_sequence_sha256": gate[
+                        "accepted_visualizer_callback_sequence_sha256"
+                    ],
+                },
+                "projected": projected,
+                "runtime": dict(projected),
+            },
+            "early_selector_evidence_observed": True,
+            "terminal_enqueue_evidence_observed": True,
+            "termination_binding": termination,
+        }
+
+    if lifecycle == "early_failed":
+        early = {"status": "AVAILABLE", "line": early_line, "counts": early_counts}
+        termination.update(
+            {
+                "reason": "VALID_EARLY_ONLY_REQUIRED_CHILD_FAILED",
+                "expected_child_termination_status": "FAILED",
+                "terminal_enqueue_evidence_observed": False,
+                "early_selector_evidence_observed": True,
+                "post_selector_evidence_observed": True,
+            }
+        )
+        early_observed = True
+        binding: Optional[Mapping[str, Any]] = early_binding
+    elif lifecycle in ("preselector_failed", "timeout_preselector"):
+        early = {"status": "ABSENT", "line": None, "counts": None}
+        termination.update(
+            {
+                "reason": (
+                    "TIMEOUT_OR_INTERRUPTION_POLICY"
+                    if lifecycle == "timeout_preselector"
+                    else "PRE_SELECTOR_REQUIRED_CHILD_FAILED"
+                ),
+                "expected_child_termination_status": (
+                    "UNPROVEN" if lifecycle == "timeout_preselector" else "FAILED"
+                ),
+                "terminal_enqueue_evidence_observed": False,
+                "early_selector_evidence_observed": False,
+                "post_selector_evidence_observed": False,
+            }
+        )
+        early_observed = False
+        binding = None
+    else:
+        raise AssertionError("unknown synthetic S1 lifecycle: {}".format(lifecycle))
+    return {
+        "status": "TERMINAL_UNAVAILABLE",
+        "reason": "terminal_enqueue_summary_absent",
+        "static_census_retained": True,
+        "early_selector": early,
+        "early_selector_binding": binding,
+        "early_selector_evidence_observed": early_observed,
+        "terminal_enqueue_evidence_observed": False,
+        "termination_binding": termination,
+    }
+
+
+def _outcome_facts_fixture(
+    lane: str,
+    system: str,
+    status: str,
+    runtime_valid: bool,
+    linkage_valid: bool,
+) -> Dict[str, Any]:
+    facts: Dict[str, Any] = {
+        "mode": lane,
+        "interrupted": False,
+        "timed_out": False,
+        "teardown_ok": bool(runtime_valid),
+        "runtime_contract_valid": bool(runtime_valid),
+        "numeric_integrity_valid": True,
+        "input_decode_valid": True,
+        "state_kind": "valid",
+        "outputs_valid": True,
+        "continuity_pass": True,
+        "tail_pass": True,
+        "launch_abnormal": False,
+        "exact_u0_teardown": False,
+        "capture_closed": bool(runtime_valid),
+        "linkage_valid": bool(lane == "scored" or linkage_valid),
+    }
+    if status == "INTERRUPTED":
+        facts["interrupted"] = True
+    elif status == "TIMED_OUT":
+        facts["timed_out"] = True
+    elif status == "TEARDOWN_FAILED":
+        facts["teardown_ok"] = False
+    elif status == "INFRASTRUCTURE_FAILED":
+        facts["runtime_contract_valid"] = False
+    elif status == "NUMERIC_FAILURE":
+        facts["numeric_integrity_valid"] = False
+    elif status == "NO_INITIALIZATION":
+        facts.update(
+            {
+                "state_kind": "missing",
+                "outputs_valid": False,
+                "continuity_pass": False,
+                "tail_pass": False,
+            }
+        )
+    elif status == "ESTIMATOR_CRASH":
+        facts.update(
+            {
+                "state_kind": "missing",
+                "outputs_valid": False,
+                "continuity_pass": False,
+                "tail_pass": False,
+                "launch_abnormal": True,
+            }
+        )
+    elif status == "INVALID_OUTPUT":
+        facts["state_kind"] = "invalid"
+    elif status == "PARTIAL":
+        facts["tail_pass"] = False
+    elif status == "TRACKING_LOSS":
+        facts["input_decode_valid"] = False
+    elif status == "CAPTURE_INCOMPLETE":
+        facts["capture_closed"] = False
+    elif status == "INVALID_LINKAGE":
+        facts["linkage_valid"] = False
+    elif status == "COMPLETED_WITH_TEARDOWN_DEFECT":
+        facts["exact_u0_teardown"] = system == "U0"
+    return facts
+
+
 def _publish_sequence_result(
     root: Path,
     lane: str,
@@ -108,6 +365,7 @@ def _publish_sequence_result(
     runner_path: Optional[Path] = None,
     include_raw_geometry: bool = True,
     closed_utc: str = "2026-08-16T12:00:00Z",
+    s1_lifecycle: str = "terminal_clean",
 ) -> Path:
     location = campaign.run_location(root, lane, row, system)
     location.run_directory.mkdir(parents=True)
@@ -162,6 +420,8 @@ def _publish_sequence_result(
             "census": {
                 "u0_native_pair_count": 3,
                 "s1_exact_pair_count": 3,
+                "camera0_unmatched_count": 0,
+                "camera1_unmatched_count": 0,
                 "u0_first_selected_header_stamp_ns": 1_000_000_000,
                 "u0_last_selected_header_stamp_ns": 1_040_000_000,
                 "s1_first_selected_header_stamp_ns": 1_000_000_000,
@@ -257,26 +517,10 @@ def _publish_sequence_result(
             "native_pair_census": campaign.file_identity(normalized_path),
             "kaist_pairing_census": campaign.file_identity(full_path),
         }
-        if system == "S1" and eligible:
-            kaist_evidence["pairing_runtime"] = {
-                "status": "AVAILABLE",
-                "visualizer_gate_binding": {
-                    "status": "PASS",
-                    "runtime_matches_projected_visualizer_gate": True,
-                    "accepted_input": {
-                        "first_header_stamp_ns": input_interval[
-                            "first_selected_input_timestamp_ns"
-                        ],
-                        "last_header_stamp_ns": input_interval[
-                            "last_selected_input_timestamp_ns"
-                        ],
-                        "callback_count": input_interval["selected_pair_count"],
-                        "ordered_callback_sequence_sha256": gate[
-                            "accepted_visualizer_callback_sequence_sha256"
-                        ],
-                    },
-                },
-            }
+        if system == "S1":
+            kaist_evidence["pairing_runtime"] = _s1_pairing_runtime_fixture(
+                s1_lifecycle, full_census, input_interval, gate
+            )
     scored_linkage = None
     if lane == "capture":
         scored_path = campaign.run_location(root, "scored", row, system).result_path.resolve(
@@ -342,10 +586,9 @@ def _publish_sequence_result(
             "status_known": True,
             "runtime_inputs_unchanged": bool(runtime_valid),
         },
-        "outcome_facts": {
-            "runtime_contract_valid": bool(runtime_valid),
-            "teardown_ok": bool(runtime_valid),
-        },
+        "outcome_facts": _outcome_facts_fixture(
+            lane, system, status, runtime_valid, linkage_valid
+        ),
         "inputs": {"runner": runner_identity},
         "artifacts": artifacts,
         "publication": {
@@ -863,7 +1106,13 @@ class CampaignTest(unittest.TestCase):
                 self.assertFalse(artifact_root.exists())
                 self.assertEqual(fake.calls, [])
 
-    def _kaist_fixture(self, system: str = "S1") -> Tuple[campaign.MatrixRow, Path]:
+    def _kaist_fixture(
+        self,
+        system: str = "S1",
+        status: str = "COMPLETED",
+        s1_lifecycle: str = "terminal_clean",
+        artifact_root: Optional[Path] = None,
+    ) -> Tuple[campaign.MatrixRow, Path]:
         row = _row(
             19,
             dataset="kaist_vio",
@@ -871,11 +1120,13 @@ class CampaignTest(unittest.TestCase):
             capability="full_trajectory",
         )
         result_path = _publish_sequence_result(
-            self.artifacts,
+            artifact_root or self.artifacts,
             "scored",
             row,
             system,
+            status=status,
             runner_path=self.paths.kaist_runner,
+            s1_lifecycle=s1_lifecycle,
         )
         return row, result_path
 
@@ -889,6 +1140,373 @@ class CampaignTest(unittest.TestCase):
             expected_runner=self.paths.kaist_runner,
         )
         self.assertEqual(validated.classification, "retained_algorithm_outcome")
+
+    def test_failed_s1_terminal_early_and_preselector_lifecycles_are_retained(
+        self,
+    ) -> None:
+        for lifecycle in (
+            "terminal_failed",
+            "early_failed",
+            "preselector_failed",
+        ):
+            with self.subTest(lifecycle=lifecycle):
+                row, result_path = self._kaist_fixture(
+                    status="ESTIMATOR_CRASH",
+                    s1_lifecycle=lifecycle,
+                    artifact_root=self.base / ("valid-" + lifecycle),
+                )
+                validated = campaign.validate_sequence_result(
+                    result_path,
+                    row,
+                    "S1",
+                    "scored",
+                    expected_runner=self.paths.kaist_runner,
+                )
+                self.assertEqual(
+                    validated.classification, "retained_algorithm_outcome"
+                )
+
+    def test_failed_s1_early_only_checksum_republication_rejects_lifecycle_drift(
+        self,
+    ) -> None:
+        def clean_child(result: Dict[str, Any], _census: Dict[str, Any]) -> None:
+            result["pairing_runtime"]["termination_binding"][
+                "expected_child_termination_status"
+            ] = "CLEAN"
+
+        def wrong_reason(result: Dict[str, Any], _census: Dict[str, Any]) -> None:
+            result["pairing_runtime"]["termination_binding"][
+                "reason"
+            ] = "PRE_SELECTOR_REQUIRED_CHILD_FAILED"
+
+        def absent_early_record(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            result["pairing_runtime"]["early_selector"]["status"] = "ABSENT"
+
+        def add_terminal_binding(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            result["pairing_runtime"]["raw_selector_binding"] = {
+                "status": "AVAILABLE"
+            }
+
+        def omit_observed_counter(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            del result["pairing_runtime"]["early_selector_binding"][
+                "runtime_observed"
+            ]["maximum_record_delta_ns"]
+
+        def malformed_early_line(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            result["pairing_runtime"]["early_selector"][
+                "line"
+            ] = "[SERIAL-KAIST]: exact_header_pairs=malformed"
+
+        def missing_termination(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            del result["pairing_runtime"]["termination_binding"]
+
+        def invalid_termination_contract(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            result["pairing_runtime"]["termination_binding"][
+                "runtime_contract_valid"
+            ] = False
+
+        def contradictory_terminal_flags(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            result["pairing_runtime"]["terminal_enqueue_evidence_observed"] = True
+            result["pairing_runtime"]["termination_binding"][
+                "terminal_enqueue_evidence_observed"
+            ] = True
+
+        def failed_child_without_abnormal_launch(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            result["status"] = "PARTIAL"
+            result["outcome_facts"].update(
+                {
+                    "state_kind": "valid",
+                    "outputs_valid": True,
+                    "continuity_pass": True,
+                    "tail_pass": False,
+                    "launch_abnormal": False,
+                }
+            )
+
+        cases = (
+            ("clean-child", clean_child, "early-only lifecycle binding"),
+            ("wrong-reason", wrong_reason, "early-only lifecycle binding"),
+            ("absent-early", absent_early_record, "early-only selector record"),
+            ("raw-binding", add_terminal_binding, "wrong runtime shape"),
+            ("missing-counter", omit_observed_counter, "early selector lifecycle"),
+            ("malformed-line", malformed_early_line, "early-only selector record"),
+            ("missing-termination", missing_termination, "lacks runtime lifecycle"),
+            (
+                "invalid-termination",
+                invalid_termination_contract,
+                "lifecycle truth differs",
+            ),
+            (
+                "terminal-flags",
+                contradictory_terminal_flags,
+                "terminal runtime lifecycle",
+            ),
+            (
+                "failed-child-without-abnormal-launch",
+                failed_child_without_abnormal_launch,
+                "failed child termination",
+            ),
+        )
+        for name, mutate, expected_error in cases:
+            with self.subTest(case=name):
+                row, result_path = self._kaist_fixture(
+                    status="ESTIMATOR_CRASH",
+                    s1_lifecycle="early_failed",
+                    artifact_root=self.base / ("early-mutation-" + name),
+                )
+                _republish_kaist_fixture_mutation(result_path, mutate)
+                with self.assertRaisesRegex(campaign.CampaignError, expected_error):
+                    campaign.validate_sequence_result(
+                        result_path,
+                        row,
+                        "S1",
+                        "scored",
+                        expected_runner=self.paths.kaist_runner,
+                    )
+
+    def test_failed_s1_preselector_checksum_republication_rejects_lifecycle_drift(
+        self,
+    ) -> None:
+        def post_selector_evidence(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            result["pairing_runtime"]["termination_binding"][
+                "post_selector_evidence_observed"
+            ] = True
+
+        def available_early_record(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            result["pairing_runtime"]["early_selector"]["status"] = "AVAILABLE"
+
+        def add_early_binding(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            result["pairing_runtime"]["early_selector_binding"] = {
+                "status": "PASS"
+            }
+
+        def unproven_child(result: Dict[str, Any], _census: Dict[str, Any]) -> None:
+            result["pairing_runtime"]["termination_binding"][
+                "expected_child_termination_status"
+            ] = "UNPROVEN"
+
+        def relabel_partial(result: Dict[str, Any], _census: Dict[str, Any]) -> None:
+            result["status"] = "PARTIAL"
+
+        def coordinated_partial_facts(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            result["status"] = "PARTIAL"
+            result["outcome_facts"].update(
+                {
+                    "state_kind": "valid",
+                    "outputs_valid": True,
+                    "continuity_pass": True,
+                    "tail_pass": False,
+                }
+            )
+
+        cases = (
+            ("post-selector", post_selector_evidence, "pre-selector lifecycle binding"),
+            ("early-record", available_early_record, "pre-selector lifecycle record"),
+            ("early-binding", add_early_binding, "absent early selector"),
+            ("unproven-child", unproven_child, "pre-selector lifecycle binding"),
+            ("partial-status", relabel_partial, "status contradicts outcome facts"),
+            (
+                "partial-facts",
+                coordinated_partial_facts,
+                "pre-selector lifecycle binding",
+            ),
+        )
+        for name, mutate, expected_error in cases:
+            with self.subTest(case=name):
+                row, result_path = self._kaist_fixture(
+                    status="ESTIMATOR_CRASH",
+                    s1_lifecycle="preselector_failed",
+                    artifact_root=self.base / ("preselector-mutation-" + name),
+                )
+                _republish_kaist_fixture_mutation(result_path, mutate)
+                with self.assertRaisesRegex(campaign.CampaignError, expected_error):
+                    campaign.validate_sequence_result(
+                        result_path,
+                        row,
+                        "S1",
+                        "scored",
+                        expected_runner=self.paths.kaist_runner,
+                    )
+
+    def test_s1_timeout_checksum_republication_binds_status_facts_and_termination(
+        self,
+    ) -> None:
+        def wrong_status(result: Dict[str, Any], _census: Dict[str, Any]) -> None:
+            result["status"] = "ESTIMATOR_CRASH"
+
+        def termination_flag_drift(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            result["pairing_runtime"]["termination_binding"]["timed_out"] = False
+
+        def wrong_reason(result: Dict[str, Any], _census: Dict[str, Any]) -> None:
+            result["pairing_runtime"]["termination_binding"][
+                "reason"
+            ] = "PRE_SELECTOR_REQUIRED_CHILD_FAILED"
+
+        def overlapping_flags(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            result["outcome_facts"]["interrupted"] = True
+            result["pairing_runtime"]["termination_binding"]["interrupted"] = True
+
+        def missing_timeout_fact(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            result["outcome_facts"]["timed_out"] = False
+            result["pairing_runtime"]["termination_binding"]["timed_out"] = False
+
+        cases = (
+            ("wrong-status", wrong_status, "status contradicts outcome facts"),
+            ("termination-flag", termination_flag_drift, "lifecycle truth differs"),
+            ("wrong-reason", wrong_reason, "timeout/interruption lifecycle"),
+            ("overlap", overlapping_flags, "flags overlap"),
+            (
+                "missing-fact",
+                missing_timeout_fact,
+                "status contradicts outcome facts",
+            ),
+        )
+        for name, mutate, expected_error in cases:
+            with self.subTest(case=name):
+                row, result_path = self._kaist_fixture(
+                    status="TIMED_OUT",
+                    s1_lifecycle="timeout_preselector",
+                    artifact_root=self.base / ("timeout-mutation-" + name),
+                )
+                campaign.validate_sequence_result(
+                    result_path,
+                    row,
+                    "S1",
+                    "scored",
+                    expected_runner=self.paths.kaist_runner,
+                )
+                _republish_kaist_fixture_mutation(result_path, mutate)
+                with self.assertRaisesRegex(campaign.CampaignError, expected_error):
+                    campaign.validate_sequence_result(
+                        result_path,
+                        row,
+                        "S1",
+                        "scored",
+                        expected_runner=self.paths.kaist_runner,
+                    )
+
+    def test_s1_terminal_checksum_republication_rejects_semantic_binding_drift(
+        self,
+    ) -> None:
+        def early_payload(result: Dict[str, Any], _census: Dict[str, Any]) -> None:
+            result["pairing_runtime"]["early_selector_binding"][
+                "runtime_observed"
+            ]["record_delta_ge_20ms"] = -1
+
+        def raw_payload(result: Dict[str, Any], _census: Dict[str, Any]) -> None:
+            result["pairing_runtime"]["raw_selector_binding"]["runtime_delivery"][
+                "s1_queued_pair_count"
+            ] += 1
+
+        def gate_payload(result: Dict[str, Any], _census: Dict[str, Any]) -> None:
+            result["pairing_runtime"]["visualizer_gate_binding"]["projected"][
+                "queued_pairs"
+            ] += 1
+
+        def eligible_failed_child(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            termination = result["pairing_runtime"]["termination_binding"]
+            termination["expected_child_termination_status"] = "FAILED"
+            termination["reason"] = "TERMINAL_BOUND_CHILD_FAILED"
+
+        def missing_summaries(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            del result["pairing_runtime"]["summaries"]
+
+        def malformed_terminal_line(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            result["pairing_runtime"]["summaries"]["camera_enqueue"][
+                "line"
+            ] = "[SERIAL-KAIST]: queued_pairs=malformed"
+
+        def mutated_terminal_counts(
+            result: Dict[str, Any], _census: Dict[str, Any]
+        ) -> None:
+            result["pairing_runtime"]["summaries"]["camera_enqueue"]["counts"][
+                "pending_pairs"
+            ] = 1
+
+        cases = (
+            ("early", early_payload, "early selector lifecycle"),
+            ("raw", raw_payload, "terminal raw-selector"),
+            ("gate", gate_payload, "accepted KAIST population"),
+            ("missing-summaries", missing_summaries, "runtime summaries"),
+            ("malformed-terminal", malformed_terminal_line, "runtime summaries"),
+            ("mutated-terminal", mutated_terminal_counts, "runtime summaries"),
+            (
+                "eligible-child",
+                eligible_failed_child,
+                "failed child termination",
+            ),
+        )
+        for name, mutate, expected_error in cases:
+            with self.subTest(case=name):
+                row, result_path = self._kaist_fixture(
+                    artifact_root=self.base / ("terminal-mutation-" + name)
+                )
+                _republish_kaist_fixture_mutation(result_path, mutate)
+                with self.assertRaisesRegex(campaign.CampaignError, expected_error):
+                    campaign.validate_sequence_result(
+                        result_path,
+                        row,
+                        "S1",
+                        "scored",
+                        expected_runner=self.paths.kaist_runner,
+                    )
+
+    def test_campaign_validate_only_transitively_rejects_failed_s1_lifecycle_drift(
+        self,
+    ) -> None:
+        row, result_path = self._kaist_fixture(
+            status="ESTIMATOR_CRASH", s1_lifecycle="early_failed"
+        )
+
+        def mutate(result: Dict[str, Any], _census: Dict[str, Any]) -> None:
+            result["pairing_runtime"]["termination_binding"][
+                "expected_child_termination_status"
+            ] = "CLEAN"
+
+        _republish_kaist_fixture_mutation(result_path, mutate)
+        fake = FakeExecutor(self.artifacts, [row])
+        options = self._options(dataset="kaist_vio", start=19, end=19)
+        with self.assertRaisesRegex(
+            campaign.CampaignError, "early-only lifecycle binding"
+        ):
+            self._campaign([row], fake, options).validate_only(enforce_static=False)
+        self.assertEqual(fake.calls, [])
 
     def test_kaist_fixture_rejects_mutated_census_count_after_republication(self) -> None:
         row, result_path = self._kaist_fixture()

@@ -894,6 +894,66 @@ def _validate_capture_linkage(
         raise CampaignError("capture outcome lacks exact scored linkage")
 
 
+def _classify_s1_kaist_outcome_facts(
+    result: Mapping[str, Any], facts: Mapping[str, Any]
+) -> str:
+    """Independently reproduce the adapter's frozen S1 outcome classifier."""
+
+    boolean_fields = (
+        "interrupted",
+        "timed_out",
+        "teardown_ok",
+        "runtime_contract_valid",
+        "numeric_integrity_valid",
+        "input_decode_valid",
+        "outputs_valid",
+        "continuity_pass",
+        "tail_pass",
+        "launch_abnormal",
+        "exact_u0_teardown",
+        "capture_closed",
+        "linkage_valid",
+    )
+    if any(type(facts.get(name)) is not bool for name in boolean_fields):
+        raise CampaignError("S1 retained KAIST outcome facts are not exact booleans")
+    mode = facts.get("mode")
+    state_kind = facts.get("state_kind")
+    if (
+        mode not in LANES
+        or mode != result.get("mode")
+        or state_kind not in ("missing", "empty", "invalid", "valid")
+        or facts.get("exact_u0_teardown") is not False
+    ):
+        raise CampaignError("S1 retained KAIST outcome facts are malformed")
+
+    if facts["interrupted"]:
+        return "INTERRUPTED"
+    if facts["timed_out"]:
+        return "TIMED_OUT"
+    if not facts["teardown_ok"]:
+        return "TEARDOWN_FAILED"
+    if not facts["runtime_contract_valid"]:
+        return "INFRASTRUCTURE_FAILED"
+    if not facts["numeric_integrity_valid"]:
+        return "NUMERIC_FAILURE"
+    if state_kind in ("missing", "empty"):
+        return "ESTIMATOR_CRASH" if facts["launch_abnormal"] else "NO_INITIALIZATION"
+    if state_kind == "invalid":
+        return "INVALID_OUTPUT"
+    if not facts["outputs_valid"]:
+        return "PARTIAL" if facts["launch_abnormal"] else "INVALID_OUTPUT"
+    if not facts["input_decode_valid"] or not facts["continuity_pass"]:
+        return "TRACKING_LOSS"
+    if not facts["tail_pass"] or facts["launch_abnormal"]:
+        return "PARTIAL"
+    if mode == "capture":
+        if not facts["capture_closed"]:
+            return "CAPTURE_INCOMPLETE"
+        if not facts["linkage_valid"]:
+            return "INVALID_LINKAGE"
+    return "COMPLETED"
+
+
 def _validate_kaist_census_evidence(
     result: Mapping[str, Any],
     run_directory: Path,
@@ -1119,33 +1179,323 @@ def _validate_kaist_census_evidence(
     ):
         raise CampaignError("KAIST normalized census does not bind the full raw census")
 
-    if system == "S1" and result.get("status") in ELIGIBLE_STATUSES:
+    if system == "S1":
         runtime = result.get("pairing_runtime")
-        binding = (
-            runtime.get("visualizer_gate_binding")
+        termination = (
+            runtime.get("termination_binding")
             if isinstance(runtime, Mapping)
             else None
         )
-        accepted_input = (
-            binding.get("accepted_input") if isinstance(binding, Mapping) else None
+        close = result.get("estimator_close_receipt")
+        facts = result.get("outcome_facts")
+        if not all(
+            isinstance(value, Mapping)
+            for value in (runtime, termination, close, facts)
+        ):
+            raise CampaignError(
+                "S1 retained KAIST outcome lacks runtime lifecycle binding"
+            )
+        derived_status = _classify_s1_kaist_outcome_facts(result, facts)
+
+        runtime_early = runtime.get("early_selector_evidence_observed")
+        runtime_terminal = runtime.get("terminal_enqueue_evidence_observed")
+        termination_early = termination.get("early_selector_evidence_observed")
+        termination_terminal = termination.get(
+            "terminal_enqueue_evidence_observed"
         )
+        post_selector = termination.get("post_selector_evidence_observed")
+        fact_timed_out = facts.get("timed_out")
+        fact_interrupted = facts.get("interrupted")
+        termination_timed_out = termination.get("timed_out")
+        termination_interrupted = termination.get("interrupted")
+        if any(
+            type(value) is not bool
+            for value in (
+                runtime_early,
+                runtime_terminal,
+                termination_early,
+                termination_terminal,
+                post_selector,
+                fact_timed_out,
+                fact_interrupted,
+                termination_timed_out,
+                termination_interrupted,
+            )
+        ):
+            raise CampaignError("S1 retained KAIST lifecycle flags are not booleans")
+        if (
+            termination.get("runtime_contract_valid") is not True
+            or facts.get("runtime_contract_valid") is not True
+            or termination_early != runtime_early
+            or termination_terminal != runtime_terminal
+            or termination_timed_out != fact_timed_out
+            or termination_interrupted != fact_interrupted
+            or termination.get("estimator_attempted") is not True
+            or termination.get("estimator_process_group_closed") is not True
+            or termination.get("estimator_attempted")
+            is not close.get("estimator_attempted")
+            or termination.get("estimator_process_group_closed")
+            is not close.get("estimator_process_group_closed")
+        ):
+            raise CampaignError("S1 retained KAIST runtime lifecycle truth differs")
+        if fact_timed_out and fact_interrupted:
+            raise CampaignError("S1 timeout/interruption lifecycle flags overlap")
+        if result.get("status") != derived_status:
+            raise CampaignError(
+                "S1 retained KAIST status contradicts outcome facts: {} != {}".format(
+                    result.get("status"), derived_status
+                )
+            )
+
+        status = result.get("status")
+        if fact_interrupted:
+            expected_status = "INTERRUPTED"
+        elif fact_timed_out:
+            expected_status = "TIMED_OUT"
+        else:
+            expected_status = None
+        if (
+            expected_status is not None
+            and status != expected_status
+        ) or (
+            expected_status is None and status in ("TIMED_OUT", "INTERRUPTED")
+        ):
+            raise CampaignError("S1 timeout/interruption facts contradict status")
+
+        expected_early = {
+            "exact_header_pairs": full_census.get("s1_exact_pair_count"),
+            "camera0_without_match": full_census.get("camera0_unmatched_count"),
+            "camera1_without_match": full_census.get("camera1_unmatched_count"),
+        }
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in expected_early.values()
+        ):
+            raise CampaignError("S1 static early selector census is malformed")
+
+        early_binding = runtime.get("early_selector_binding")
+        early_runtime_observed = (
+            early_binding.get("runtime_observed")
+            if isinstance(early_binding, Mapping)
+            else None
+        )
+        early_runtime_fields = (
+            "exact_header_pairs",
+            "camera0_without_match",
+            "camera1_without_match",
+            "record_delta_ge_20ms",
+            "maximum_record_delta_ns",
+        )
+        expected_early_line = None
+        if runtime_early:
+            if (
+                not isinstance(early_binding, Mapping)
+                or early_binding.get("status") != "PASS"
+                or early_binding.get("runtime_matches_static_census") is not True
+                or early_binding.get("static_expected") != expected_early
+                or not isinstance(early_runtime_observed, Mapping)
+                or set(early_runtime_observed) != set(early_runtime_fields)
+                or any(
+                    isinstance(early_runtime_observed.get(name), bool)
+                    or not isinstance(early_runtime_observed.get(name), int)
+                    or early_runtime_observed.get(name) < 0
+                    for name in early_runtime_fields
+                )
+                or any(
+                    early_runtime_observed.get(name) != expected
+                    for name, expected in expected_early.items()
+                )
+            ):
+                raise CampaignError("S1 early selector lifecycle binding is invalid")
+            expected_early_line = (
+                "[SERIAL-KAIST]: exact_header_pairs={exact_header_pairs} "
+                "camera0_without_match={camera0_without_match} "
+                "camera1_without_match={camera1_without_match} "
+                "record_delta_ge_20ms={record_delta_ge_20ms} "
+                "maximum_record_delta_ns={maximum_record_delta_ns}"
+            ).format(**early_runtime_observed)
+        elif early_binding is not None:
+            raise CampaignError("S1 absent early selector has a runtime binding")
+
+        child_status = termination.get("expected_child_termination_status")
+        reason = termination.get("reason")
+        if child_status == "FAILED" and facts.get("launch_abnormal") is not True:
+            raise CampaignError(
+                "S1 failed child termination lacks an abnormal launch outcome"
+            )
+        timed_or_interrupted = bool(fact_timed_out or fact_interrupted)
+        raw_binding = runtime.get("raw_selector_binding")
+        gate_binding = runtime.get("visualizer_gate_binding")
+        expected_raw_delivery = {
+            "s1_queued_pair_count": accepted_count,
+            "s1_processed_pair_count": accepted_count,
+            "s1_frequency_thinned_pair_count": dropped_count,
+            "s1_pending_pair_count": 0,
+        }
+        expected_gate_counts = {
+            "queued_pairs": accepted_count,
+            "processed_pairs": accepted_count,
+            "frequency_thinned_pairs": dropped_count,
+            "raw_exact_header_pairs": raw_count,
+        }
+        expected_enqueue_counts = {
+            "queued_pairs": accepted_count,
+            "processed_pairs": accepted_count,
+            "frequency_thinned_pairs": dropped_count,
+            "cam0_decode_failures": 0,
+            "cam1_decode_failures": 0,
+            "pending_pairs": 0,
+        }
+        expected_enqueue_line = (
+            "[SERIAL-KAIST]: queued_pairs={queued_pairs} "
+            "processed_pairs={processed_pairs} "
+            "frequency_thinned_pairs={frequency_thinned_pairs} "
+            "cam0_decode_failures={cam0_decode_failures} "
+            "cam1_decode_failures={cam1_decode_failures} "
+            "pending_pairs={pending_pairs}"
+        ).format(**expected_enqueue_counts)
         expected_accepted_input = {
-            "first_header_stamp_ns": interval.get("first_selected_input_timestamp_ns"),
-            "last_header_stamp_ns": interval.get("last_selected_input_timestamp_ns"),
+            "first_header_stamp_ns": interval.get(
+                "first_selected_input_timestamp_ns"
+            ),
+            "last_header_stamp_ns": interval.get(
+                "last_selected_input_timestamp_ns"
+            ),
             "callback_count": accepted_count,
             "ordered_callback_sequence_sha256": gate.get(
                 "accepted_visualizer_callback_sequence_sha256"
             ),
         }
-        if (
-            not isinstance(runtime, Mapping)
-            or runtime.get("status") != "AVAILABLE"
-            or not isinstance(binding, Mapping)
-            or binding.get("status") != "PASS"
-            or binding.get("runtime_matches_projected_visualizer_gate") is not True
-            or accepted_input != expected_accepted_input
+        if runtime_terminal:
+            if (
+                runtime.get("status") != "AVAILABLE"
+                or not runtime_early
+                or runtime.get("early_selector") is not None
+                or post_selector is not True
+            ):
+                raise CampaignError("S1 terminal runtime lifecycle binding is invalid")
+            summaries = runtime.get("summaries")
+            exact_summary = (
+                summaries.get("exact_header")
+                if isinstance(summaries, Mapping)
+                else None
+            )
+            enqueue_summary = (
+                summaries.get("camera_enqueue")
+                if isinstance(summaries, Mapping)
+                else None
+            )
+            expected_summary_checks = {
+                "pair_accounting_complete": True,
+                "processed_pairs_match_queued": True,
+                "queue_drained": True,
+                "decode_failures_zero": True,
+            }
+            if (
+                not isinstance(summaries, Mapping)
+                or set(summaries)
+                != {"exact_header", "camera_enqueue", "checks"}
+                or not isinstance(exact_summary, Mapping)
+                or exact_summary.get("counts") != early_runtime_observed
+                or exact_summary.get("line") != expected_early_line
+                or not isinstance(enqueue_summary, Mapping)
+                or enqueue_summary.get("counts") != expected_enqueue_counts
+                or enqueue_summary.get("line") != expected_enqueue_line
+                or summaries.get("checks") != expected_summary_checks
+            ):
+                raise CampaignError("S1 terminal runtime summaries are invalid")
+            if (
+                not isinstance(raw_binding, Mapping)
+                or raw_binding.get("status") != "AVAILABLE"
+                or raw_binding.get("reason") != "NONE"
+                or raw_binding.get("runtime_matches_static_census") is not True
+                or raw_binding.get("static_expected") != expected_early
+                or raw_binding.get("selected_input") != selector_bounds
+                or raw_binding.get("selected_first_header_stamp_ns")
+                != full_census.get("s1_first_selected_header_stamp_ns")
+                or raw_binding.get("selected_last_header_stamp_ns")
+                != full_census.get("s1_last_selected_header_stamp_ns")
+                or raw_binding.get("runtime_delivery") != expected_raw_delivery
+            ):
+                raise CampaignError("S1 terminal raw-selector binding is invalid")
+            if (
+                not isinstance(gate_binding, Mapping)
+                or gate_binding.get("status") != "PASS"
+                or gate_binding.get(
+                    "runtime_matches_projected_visualizer_gate"
+                )
+                is not True
+                or gate_binding.get("accepted_input") != expected_accepted_input
+                or gate_binding.get("projected") != expected_gate_counts
+                or gate_binding.get("runtime") != expected_gate_counts
+            ):
+                raise CampaignError(
+                    "S1 runtime does not bind the accepted KAIST population"
+                )
+            if not timed_or_interrupted and child_status not in ("CLEAN", "FAILED"):
+                raise CampaignError(
+                    "S1 terminal runtime lifecycle binding is invalid"
+                )
+        else:
+            if (
+                runtime.get("status") != "TERMINAL_UNAVAILABLE"
+                or runtime.get("reason") != "terminal_enqueue_summary_absent"
+                or runtime.get("static_census_retained") is not True
+                or runtime.get("summaries") is not None
+                or raw_binding is not None
+                or gate_binding is not None
+            ):
+                raise CampaignError("S1 absent terminal has the wrong runtime shape")
+            early = runtime.get("early_selector")
+            if not isinstance(early, Mapping):
+                raise CampaignError("S1 absent terminal lacks early selector evidence")
+            if runtime_early:
+                if (
+                    early.get("status") != "AVAILABLE"
+                    or early.get("line") != expected_early_line
+                    or early.get("counts") != early_runtime_observed
+                    or post_selector is not True
+                ):
+                    raise CampaignError("S1 early-only selector record is invalid")
+            elif (
+                early.get("status") != "ABSENT"
+                or early.get("line") is not None
+                or early.get("counts") is not None
+            ):
+                raise CampaignError("S1 pre-selector lifecycle record is invalid")
+
+        if timed_or_interrupted:
+            if (
+                reason != "TIMEOUT_OR_INTERRUPTION_POLICY"
+                or child_status not in ("CLEAN", "FAILED", "UNPROVEN")
+            ):
+                raise CampaignError(
+                    "S1 timeout/interruption lifecycle binding is invalid"
+                )
+        elif runtime_terminal:
+            if reason != "TERMINAL_BOUND_CHILD_{}".format(child_status):
+                raise CampaignError("S1 terminal child lifecycle reason is invalid")
+        elif runtime_early:
+            if (
+                reason != "VALID_EARLY_ONLY_REQUIRED_CHILD_FAILED"
+                or child_status != "FAILED"
+            ):
+                raise CampaignError("S1 early-only lifecycle binding is invalid")
+        elif (
+            reason != "PRE_SELECTOR_REQUIRED_CHILD_FAILED"
+            or child_status != "FAILED"
+            or post_selector is not False
+            or facts.get("state_kind") not in ("missing", "empty")
+            or facts.get("numeric_integrity_valid") is not True
+            or facts.get("input_decode_valid") is not True
         ):
-            raise CampaignError("S1 runtime does not bind the accepted KAIST population")
+            raise CampaignError("S1 pre-selector lifecycle binding is invalid")
+
+        if status in ELIGIBLE_STATUSES or status == "NO_INITIALIZATION":
+            if not runtime_terminal or child_status != "CLEAN":
+                raise CampaignError(
+                    "S1 eligible/NO_INITIALIZATION outcome lacks a clean terminal binding"
+                )
 
 
 def validate_sequence_result(

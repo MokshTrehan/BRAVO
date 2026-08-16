@@ -613,11 +613,248 @@ def validate_s1_visualizer_gate_runtime_binding(
     }
 
 
-def _s1_pairing_runtime_evidence_observed(console_text: str) -> bool:
-    return bool(
-        rotation.SERIAL_SUMMARY_PREFIX in console_text
-        or rotation.ENQUEUE_SUMMARY_PREFIX in console_text
+def _parse_s1_early_selector_summary(console_text: str) -> Dict[str, Any]:
+    """Parse the pre-loop exact-header summary independently of terminal output."""
+
+    clean_lines = [rotation.ANSI_RE.sub("", line) for line in console_text.splitlines()]
+    lines = [
+        line for line in clean_lines if rotation.SERIAL_SUMMARY_PREFIX in line
+    ]
+    if not lines:
+        return {"status": "ABSENT", "line": None, "counts": None}
+    if len(lines) != 1:
+        raise TrialError(
+            "expected at most one early exact-header summary; found {}".format(
+                len(lines)
+            )
+        )
+    match = rotation.SERIAL_SUMMARY_RE.fullmatch(lines[0])
+    if match is None:
+        raise TrialError("malformed early SERIAL-KAIST exact-header summary")
+    return {
+        "status": "AVAILABLE",
+        "line": lines[0],
+        "counts": {key: int(value) for key, value in match.groupdict().items()},
+    }
+
+
+def _bind_s1_early_selector_summary(
+    early: Mapping[str, Any], full_census: Mapping[str, Any]
+) -> Dict[str, Any]:
+    if early.get("status") != "AVAILABLE" or not isinstance(
+        early.get("counts"), Mapping
+    ):
+        raise TrialError("early exact-header summary is unavailable")
+    if full_census.get("schema") != pairing.SCHEMA or not isinstance(
+        full_census.get("census"), Mapping
+    ):
+        raise TrialError("early exact-header binding received an invalid census")
+    observed = early["counts"]
+    static = full_census["census"]
+    expected = {
+        "exact_header_pairs": static.get("s1_exact_pair_count"),
+        "camera0_without_match": static.get("camera0_unmatched_count"),
+        "camera1_without_match": static.get("camera1_unmatched_count"),
+    }
+    mismatches = {
+        key: {"runtime": observed.get(key), "static": value}
+        for key, value in expected.items()
+        if observed.get(key) != value
+    }
+    if mismatches:
+        raise TrialError(
+            "runtime/static early exact-header mismatch: {}".format(mismatches)
+        )
+    return {
+        "status": "PASS",
+        "runtime_matches_static_census": True,
+        "static_expected": expected,
+        "runtime_observed": dict(observed),
+    }
+
+
+def assess_s1_pairing_runtime(
+    console_text: str,
+    full_census: Mapping[str, Any],
+    normalized_census: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Validate early selector evidence and, when present, terminal gate evidence."""
+
+    early = _parse_s1_early_selector_summary(console_text)
+    terminal_observed = rotation.ENQUEUE_SUMMARY_PREFIX in console_text
+    early_binding = (
+        _bind_s1_early_selector_summary(early, full_census)
+        if early["status"] == "AVAILABLE"
+        else None
     )
+    if terminal_observed:
+        # The terminal summary is meaningful only as one complete, valid pair
+        # with the early selector summary.  The shared parser also rejects
+        # malformed/duplicate/decode/pending/accounting defects.
+        summaries = rotation.parse_runtime_summaries(console_text)
+        clean_lines = [
+            rotation.ANSI_RE.sub("", line) for line in console_text.splitlines()
+        ]
+        early_index = next(
+            index
+            for index, line in enumerate(clean_lines)
+            if rotation.SERIAL_SUMMARY_PREFIX in line
+        )
+        terminal_index = next(
+            index
+            for index, line in enumerate(clean_lines)
+            if rotation.ENQUEUE_SUMMARY_PREFIX in line
+        )
+        if terminal_index <= early_index:
+            raise TrialError("terminal camera-enqueue summary precedes early selector summary")
+        raw_binding = rotation.bind_pairing_census(summaries, full_census)
+        gate_binding = validate_s1_visualizer_gate_runtime_binding(
+            summaries, normalized_census
+        )
+        if (
+            raw_binding.get("status") != "AVAILABLE"
+            or gate_binding.get("status") != "PASS"
+        ):
+            raise TrialError("terminal S1 pairing runtime binding is unavailable")
+        return {
+            "status": "AVAILABLE",
+            "summaries": summaries,
+            "early_selector_binding": early_binding,
+            "raw_selector_binding": raw_binding,
+            "visualizer_gate_binding": gate_binding,
+            "early_selector_evidence_observed": True,
+            "terminal_enqueue_evidence_observed": True,
+        }
+    return {
+        "status": "TERMINAL_UNAVAILABLE",
+        "reason": "terminal_enqueue_summary_absent",
+        "static_census_retained": True,
+        "early_selector": early,
+        "early_selector_binding": early_binding,
+        "early_selector_evidence_observed": early["status"] == "AVAILABLE",
+        "terminal_enqueue_evidence_observed": False,
+    }
+
+
+def _s1_expected_child_termination_status(child: Mapping[str, Any]) -> str:
+    terminations = child.get("required_terminations")
+    if not isinstance(terminations, list):
+        return "UNPROVEN"
+    matches = [
+        record
+        for record in terminations
+        if isinstance(record, Mapping)
+        and str(record.get("node", "")).split("-", 1)[0]
+        == "kaist_vio_turnsafe_baseline"
+    ]
+    if len(matches) != 1 or matches[0].get("status") not in ("CLEAN", "FAILED"):
+        return "UNPROVEN"
+    return str(matches[0]["status"])
+
+
+def _s1_post_selector_evidence_observed(
+    console_text: str,
+    state_kind: Optional[str],
+    numeric_integrity_valid: bool,
+    input_decode_valid: Optional[bool],
+) -> bool:
+    """Exclude the constructor-time recovery contract from post-selector evidence."""
+
+    clean_lines = [rotation.ANSI_RE.sub("", line) for line in console_text.splitlines()]
+    recovery_lines = [
+        line for line in clean_lines if rotation.RECOVERY_PREFIX in line
+    ]
+    if recovery_lines and (
+        len(recovery_lines) != 1
+        or rotation.RECOVERY_CONTRACT_RE.fullmatch(recovery_lines[0]) is None
+    ):
+        return True
+    return bool(
+        any("[SERIAL-KAIST]:" in line for line in clean_lines)
+        or state_kind not in (None, "missing", "empty")
+        or numeric_integrity_valid is False
+        or input_decode_valid is False
+    )
+
+
+def finalize_s1_pairing_runtime_contract(
+    current_valid: bool,
+    pairing_runtime: Mapping[str, Any],
+    child: Mapping[str, Any],
+    launch_record: Optional[Mapping[str, Any]],
+    estimator_group_closed: bool,
+    state_kind: Optional[str],
+    post_selector_evidence_observed: bool,
+) -> Dict[str, Any]:
+    """Apply the exact terminal-summary/native-termination truth table."""
+
+    if not current_valid:
+        attempted = launch_record is not None
+        timed_out = bool(launch_record and launch_record.get("timed_out"))
+        interrupted = bool(launch_record and launch_record.get("interrupted"))
+        return {
+            "runtime_contract_valid": False,
+            "reason": "PAIRING_RUNTIME_EVIDENCE_INVALID",
+            "estimator_attempted": attempted,
+            "estimator_process_group_closed": estimator_group_closed,
+            "expected_child_termination_status": _s1_expected_child_termination_status(
+                child
+            ),
+            "timed_out": timed_out,
+            "interrupted": interrupted,
+            "post_selector_evidence_observed": post_selector_evidence_observed,
+        }
+    attempted = launch_record is not None
+    timed_out = bool(launch_record and launch_record.get("timed_out"))
+    interrupted = bool(launch_record and launch_record.get("interrupted"))
+    terminal = pairing_runtime.get("terminal_enqueue_evidence_observed") is True
+    early = pairing_runtime.get("early_selector_evidence_observed") is True
+    child_status = _s1_expected_child_termination_status(child)
+    if timed_out or interrupted:
+        valid = bool(attempted and (early or pairing_runtime.get("status") == "TERMINAL_UNAVAILABLE"))
+        reason = "TIMEOUT_OR_INTERRUPTION_POLICY" if valid else "UNBOUND_TIMEOUT_OR_INTERRUPTION"
+    elif terminal:
+        valid = bool(early and child_status in ("CLEAN", "FAILED"))
+        reason = (
+            "TERMINAL_BOUND_CHILD_{}".format(child_status)
+            if valid
+            else "TERMINAL_BOUND_CHILD_OUTCOME_UNPROVEN"
+        )
+    elif early:
+        valid = bool(attempted and estimator_group_closed and child_status == "FAILED")
+        reason = (
+            "VALID_EARLY_ONLY_REQUIRED_CHILD_FAILED"
+            if valid
+            else "EARLY_ONLY_WITHOUT_EXACT_REQUIRED_CHILD_FAILURE"
+        )
+    else:
+        zero_post_selector_evidence = bool(
+            state_kind in (None, "missing", "empty")
+            and not post_selector_evidence_observed
+        )
+        valid = bool(
+            attempted
+            and estimator_group_closed
+            and child_status == "FAILED"
+            and zero_post_selector_evidence
+        )
+        reason = (
+            "PRE_SELECTOR_REQUIRED_CHILD_FAILED"
+            if valid
+            else "ABSENT_SUMMARIES_WITHOUT_PROVEN_PRE_SELECTOR_FAILURE"
+        )
+    return {
+        "runtime_contract_valid": valid,
+        "reason": reason,
+        "estimator_attempted": attempted,
+        "estimator_process_group_closed": estimator_group_closed,
+        "expected_child_termination_status": child_status,
+        "timed_out": timed_out,
+        "interrupted": interrupted,
+        "terminal_enqueue_evidence_observed": terminal,
+        "early_selector_evidence_observed": early,
+        "post_selector_evidence_observed": post_selector_evidence_observed,
+    }
 
 
 def _clean_recovery_lines(text: str) -> Tuple[List[str], List[str]]:
@@ -1390,6 +1627,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
     capture_closed = args.mode == "scored"
     linkage_valid = args.mode == "scored"
     exact_u0_teardown = False
+    console_text = ""
     input_paths: Dict[str, Path] = {}
     input_identities_before: Dict[str, Dict[str, Any]] = {}
     stage = "preflight"
@@ -1621,32 +1859,24 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         runtime_pairing_valid = args.system == "U0"
         if args.system == "S1":
             try:
-                summaries = rotation.parse_runtime_summaries(console_text)
-                binding = rotation.bind_pairing_census(summaries, full_census)
-                gate_binding = validate_s1_visualizer_gate_runtime_binding(
-                    summaries, normalized_census
+                pairing_runtime = assess_s1_pairing_runtime(
+                    console_text, full_census, normalized_census
                 )
-                result["pairing_runtime"] = {
-                    "summaries": summaries,
-                    "raw_selector_binding": binding,
-                    "visualizer_gate_binding": gate_binding,
-                    "status": "AVAILABLE",
-                }
-                runtime_pairing_valid = bool(
-                    binding.get("status") == "AVAILABLE"
-                    and gate_binding.get("status") == "PASS"
-                )
+                result["pairing_runtime"] = pairing_runtime
+                runtime_pairing_valid = pairing_runtime.get("status") == "AVAILABLE"
             except KAIST_VALIDATION_ERRORS as exc:
                 result["pairing_runtime"] = {
                     "status": "UNAVAILABLE",
                     "reason": str(exc),
                     "static_census_retained": True,
-                    "runtime_evidence_observed": (
-                        _s1_pairing_runtime_evidence_observed(console_text)
+                    "early_selector_evidence_observed": (
+                        rotation.SERIAL_SUMMARY_PREFIX in console_text
+                    ),
+                    "terminal_enqueue_evidence_observed": (
+                        rotation.ENQUEUE_SUMMARY_PREFIX in console_text
                     ),
                 }
-                if _s1_pairing_runtime_evidence_observed(console_text):
-                    runtime_contract_valid = False
+                runtime_contract_valid = False
                 common._record_error(result, "pairing_runtime", exc)
         else:
             result["pairing_runtime"] = {
@@ -1803,12 +2033,6 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             except KAIST_VALIDATION_ERRORS as exc:
                 common._record_error(result, "completion", exc)
 
-        # An absent end-of-run S1 summary is an algorithm consequence when the
-        # estimator already failed.  It becomes an evidence defect only for a
-        # trajectory that would otherwise claim eligible completion.
-        if args.system == "S1" and outputs_valid and coverage_pass and not runtime_pairing_valid:
-            runtime_contract_valid = False
-
         stage = "capture_validation"
         result["artifacts"] = refresh_artifacts(run_dir, args.system)
         if args.mode == "scored":
@@ -1922,6 +2146,38 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                 or bool(child.get("estimator_required_child_died"))
             )
         )
+        if args.system == "S1" and launch_record is not None:
+            pairing_runtime = result.get("pairing_runtime")
+            if not isinstance(pairing_runtime, Mapping):
+                pairing_runtime = {}
+            pairing_decision = finalize_s1_pairing_runtime_contract(
+                runtime_contract_valid,
+                pairing_runtime,
+                child if isinstance(child, Mapping) else {},
+                launch_record,
+                estimator_group_closed,
+                state_kind,
+                _s1_post_selector_evidence_observed(
+                    console_text,
+                    state_kind,
+                    numeric_integrity_valid,
+                    input_decode_valid,
+                ),
+            )
+            if isinstance(result.get("pairing_runtime"), dict):
+                result["pairing_runtime"]["termination_binding"] = pairing_decision
+            if (
+                runtime_contract_valid
+                and pairing_decision["runtime_contract_valid"] is False
+            ):
+                common._record_error(
+                    result,
+                    "pairing_runtime_termination",
+                    TrialError(str(pairing_decision["reason"])),
+                )
+            runtime_contract_valid = bool(
+                pairing_decision["runtime_contract_valid"]
+            )
         facts = {
             "mode": args.mode,
             "interrupted": bool(launch_record and launch_record.get("interrupted")),
