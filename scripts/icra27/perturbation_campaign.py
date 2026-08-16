@@ -449,8 +449,8 @@ class Driver:
         self.paths = campaign.RuntimePaths()
         self.rows = campaign.load_matrix(self.paths.matrix)
         self.events = campaign.EventLog(root)
-        self.ledger = root / "control" / "cells.jsonl"
-        self.log_dir = root / "control" / "logs"
+        self.ledger = root / "driver" / "cells.jsonl"
+        self.log_dir = root / "driver" / "logs"
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.last_end = 0.0
         self.port_index = 0
