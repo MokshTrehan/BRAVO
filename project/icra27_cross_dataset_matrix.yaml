@@ -1,0 +1,459 @@
+schema: schurvio.icra27.cross_dataset_matrix.v1
+project: SchurVIO-Lite
+frozen_at_utc: "2026-08-16T13:21:05Z"
+status: INPUT_IDENTITIES_VERIFIED
+sequence_count: 25
+
+identity_verification:
+  verified_at_utc: "2026-08-16T13:21:05Z"
+  unique_canonical_files: 48
+  method: full-file SHA-256 and exact byte-count comparison
+  result: 48_of_48_match
+
+systems:
+  - id: U0
+    description: Pinned, unmodified upstream OpenVINS
+  - id: S1
+    description: SchurVIO-Lite with the frozen rotation-outage robustness change
+
+execution_policy:
+  sequence_order: frozen_as_listed
+  pair_order: adjacent_by_sequence
+  system_first_rule: U0 on odd sequence orders; S1 on even sequence orders
+  system_first_alternates_globally: true
+  bag_start_semantics: seconds from native ROS bag record-time start
+  ground_truth_open_boundary: post_estimator_process_group_close_only
+  failures_are_retained: true
+  input_hash_algorithm: sha256
+
+ground_truth_capabilities:
+  full_trajectory:
+    evaluation: accuracy_and_completion
+    description: A tracked TUM trajectory is available for the scored interval.
+  embedded_partial_intervals:
+    evaluation: completion_and_valid_gt_intervals_only
+    description: >-
+      TransformStamped reference samples are embedded in the input bag and have
+      a material outage. They must be extracted after estimator close; no
+      full-sequence ATE is permitted.
+
+sequences:
+  - order: 1
+    dataset: euroc_mav
+    sequence: MH_01_easy
+    system_order: [U0, S1]
+    bag_start_seconds: 40.0
+    bag:
+      path: /home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag
+      bytes: 2673818914
+      sha256: 57f440ccd68ec8dc8f9461269f5909656b86198bac3adfd677b1fcc7a1428fa9
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/euroc_mav/MH_01_easy.txt
+      bytes: 3043947
+      sha256: ab1579de35a047d241e2d0d1a4f4306b4fa51d99c6f11bcdebf336ab2b784df9
+      format: tum
+
+  - order: 2
+    dataset: euroc_mav
+    sequence: MH_02_easy
+    system_order: [S1, U0]
+    bag_start_seconds: 35.0
+    bag:
+      path: /home/moksh/Downloads/machine_hall/MH_02_easy/MH_02_easy.bag
+      bytes: 2207602649
+      sha256: b5b2178bf0602d56dcb6372f3463aa70be1ff95e8c8d3a4a059747c270d45575
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/euroc_mav/MH_02_easy.txt
+      bytes: 2511371
+      sha256: 3ba9123b1914631c1f192c6a00741c8f92d4177950f0fa6894603f013393aabc
+      format: tum
+
+  - order: 3
+    dataset: euroc_mav
+    sequence: MH_03_medium
+    system_order: [U0, S1]
+    bag_start_seconds: 5.0
+    bag:
+      path: /home/moksh/Downloads/machine_hall/MH_03_medium/MH_03_medium.bag
+      bytes: 1960673046
+      sha256: c51b0064681dfb287b6653f5fd54e6c56af5d9151c866e17574fdbc527db2311
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/euroc_mav/MH_03_medium.txt
+      bytes: 2202391
+      sha256: 8c7c9873f5cb102eda2b68d665134f144eed9d5778f0dbdc82bbf8e8fdbd558e
+      format: tum
+
+  - order: 4
+    dataset: euroc_mav
+    sequence: MH_04_difficult
+    system_order: [S1, U0]
+    bag_start_seconds: 10.0
+    bag:
+      path: /home/moksh/Downloads/machine_hall/MH_04_difficult/MH_04_difficult.bag
+      bytes: 1475957410
+      sha256: 4d28ea2883327774fd28477c8e73200237350c0e3b407d20eb6358b2f72124b9
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/euroc_mav/MH_04_difficult.txt
+      bytes: 1653320
+      sha256: 552cb6fa2ce3de0a15a5a9caeea3ae1afe7e084e8604251b661a4fcc32a87b13
+      format: tum
+    notes:
+      - The verified official bag has 2033 cam0 and 2032 cam1 images.
+
+  - order: 5
+    dataset: euroc_mav
+    sequence: MH_05_difficult
+    system_order: [U0, S1]
+    bag_start_seconds: 5.0
+    bag:
+      path: /home/moksh/Downloads/machine_hall/MH_05_difficult/MH_05_difficult.bag
+      bytes: 1650601827
+      sha256: 0a56ceb1a4618176fde985a93aab71b546bee805a6ca054cc64e76a804c17c03
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/euroc_mav/MH_05_difficult.txt
+      bytes: 1858716
+      sha256: b207efc0ad53cdba7adca75b2a9ee79f8b7ab8b5a0221b77ebe73f0bba211cb2
+      format: tum
+
+  - order: 6
+    dataset: euroc_mav
+    sequence: V1_01_easy
+    system_order: [S1, U0]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/Downloads/vicon_room1/V1_01_easy/V1_01_easy.bag
+      bytes: 2130599434
+      sha256: 6dc6192fac63dd0a05ba745548b41fe8cae14724168a98865a81d37e681bbc81
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/euroc_mav/V1_01_easy.txt
+      bytes: 239010
+      sha256: 6d2f961334ff3069105be0aacf118d3c7e82bf3ab0e238acd5f40f1d897573d1
+      format: tum
+      note: Use the corrected OpenVINS reference, not V1_01_easy_original.txt.
+
+  - order: 7
+    dataset: euroc_mav
+    sequence: V1_02_medium
+    system_order: [U0, S1]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/Downloads/vicon_room1/V1_02_medium/V1_02_medium.bag
+      bytes: 1251654819
+      sha256: 16bf6781505aa16fe8ab9047696c881621824d19cf50adf053ccaa0eb885f9ff
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/euroc_mav/V1_02_medium.txt
+      bytes: 1377047
+      sha256: 264eaeaab03e145ba47195678faeb38eda0b5e6b26fa0b188a3eb9a08e681911
+      format: tum
+    notes:
+      - The verified official bag has 1710 cam0 and 1711 cam1 images.
+
+  - order: 8
+    dataset: euroc_mav
+    sequence: V1_03_difficult
+    system_order: [S1, U0]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/Downloads/vicon_room1/V1_03_difficult/V1_03_difficult.bag
+      bytes: 1572354176
+      sha256: d36fc630d34d2f6863c2e62c5d79ce1cbab4228c9ef55c5034772922ea376f56
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/euroc_mav/V1_03_difficult.txt
+      bytes: 1721626
+      sha256: e08f8cb4cbc3b771f392a95dd4380a9d30634c3c8fc1f23a0fe9dbd3f5f60762
+      format: tum
+
+  - order: 9
+    dataset: euroc_mav
+    sequence: V2_01_easy
+    system_order: [U0, S1]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/Downloads/vicon_room2/V2_01_easy/V2_01_easy.bag
+      bytes: 1658222247
+      sha256: d4a4c07aa599008479d5a7a0c10435588d28e0194ef1de67e7385fe4294c73c7
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/euroc_mav/V2_01_easy.txt
+      bytes: 1870695
+      sha256: 5b1c66ce6fce43b26a0971b5c5d92e62d790c46e5552e1a4ddd1134233b37e32
+      format: tum
+
+  - order: 10
+    dataset: euroc_mav
+    sequence: V2_02_medium
+    system_order: [S1, U0]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/Downloads/vicon_room2/V2_02_medium/V2_02_medium.bag
+      bytes: 1707681870
+      sha256: fa020a53ef21d4e7002a0892feea41295fcd49ece383d7e3107c61c1018e3318
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/euroc_mav/V2_02_medium.txt
+      bytes: 1924152
+      sha256: 9e18da3f96828a80b1a020dd5731c6013d61ce3cb6d11c361f0f00230e1ed1e7
+      format: tum
+
+  - order: 11
+    dataset: euroc_mav
+    sequence: V2_03_difficult
+    system_order: [U0, S1]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/Downloads/vicon_room2/V2_03_difficult/V2_03_difficult.bag
+      bytes: 1549418209
+      sha256: 3c765fe04aa4f7f4caa4ffd29e38fd045e8121b8a97eb40a2e9bb296c0311f7b
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/euroc_mav/V2_03_difficult.txt
+      bytes: 1904751
+      sha256: c371bc389ec6a8beb3dee9e75cb3a03b3d0779db84e20654d1752c79905ab731
+      format: tum
+    notes:
+      - The verified official bag has 1922 cam0 and 2336 cam1 images.
+
+  - order: 12
+    dataset: tum_vi
+    sequence: dataset-room4_512_16
+    system_order: [S1, U0]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/Downloads/tum_vi/calibrated/512_16/dataset-room4_512_16.bag
+      bytes: 2346890121
+      sha256: 8027451a7390efd51098a10949b91dae7c183d9daf1a09ab058e8169c55ecf9e
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/tum_vi/dataset-room4_512_16.txt
+      bytes: 1075853
+      sha256: 2e8819fd0371c10125f33879bb2209146c126a2bff101e3c8ef20852e8597b67
+      format: tum
+      source_topic: /vrpn_client/raw_transform
+      extractor: /home/moksh/schurvio-lite-rotation-robustness/scripts/icra27/tum_vi_reference_extract.py
+      compatibility_requirement: extracted bytes must equal the tracked reference
+
+  - order: 13
+    dataset: tum_vi
+    sequence: dataset-corridor4_512_16
+    system_order: [U0, S1]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/Downloads/tum_vi/calibrated/512_16/dataset-corridor4_512_16.bag
+      bytes: 2029099748
+      sha256: a244ed421af33c73aca53b54a7b150d0f538f350e8d8333d072e5e4845d0a955
+    ground_truth:
+      capability: embedded_partial_intervals
+      canonical_path: /home/moksh/Downloads/tum_vi/calibrated/512_16/dataset-corridor4_512_16.bag
+      bytes: 2029099748
+      sha256: a244ed421af33c73aca53b54a7b150d0f538f350e8d8333d072e5e4845d0a955
+      container: rosbag
+      source_topic: /vrpn_client/raw_transform
+      source_type: geometry_msgs/TransformStamped
+      extractor: /home/moksh/schurvio-lite-rotation-robustness/scripts/icra27/tum_vi_reference_extract.py
+      extracted_format: tum
+      interval_gap_threshold_ns: 1000000000
+
+  - order: 14
+    dataset: tum_vi
+    sequence: dataset-outdoors4_512_16
+    system_order: [S1, U0]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/Downloads/tum_vi/calibrated/512_16/dataset-outdoors4_512_16.bag
+      bytes: 14736044692
+      sha256: 85b6359d6779771d749cca2489069b52e26ae3bfcfc41ba6d65a306d78a4c97f
+    ground_truth:
+      capability: embedded_partial_intervals
+      canonical_path: /home/moksh/Downloads/tum_vi/calibrated/512_16/dataset-outdoors4_512_16.bag
+      bytes: 14736044692
+      sha256: 85b6359d6779771d749cca2489069b52e26ae3bfcfc41ba6d65a306d78a4c97f
+      container: rosbag
+      source_topic: /vrpn_client/raw_transform
+      source_type: geometry_msgs/TransformStamped
+      extractor: /home/moksh/schurvio-lite-rotation-robustness/scripts/icra27/tum_vi_reference_extract.py
+      extracted_format: tum
+      interval_gap_threshold_ns: 1000000000
+
+  - order: 15
+    dataset: kaist_vio
+    sequence: infinite/infinite_fast.bag
+    system_order: [U0, S1]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/datasets/KAIST_VIO/raw/turnsafe_adapted/infinite/infinite_fast.bag
+      bytes: 3905788523
+      sha256: 7e5bd68b1edd150a98ed773aaa881db7f517f8c7605ac37271fa3c5bb88d5e24
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/kaist_vio/infinite_fast.txt
+      bytes: 823783
+      sha256: 8ad6cbe21918e3ca3e84a3a0f5518fc79ea5ba19cbdd797ce77bac3c706f1d0a
+      format: tum
+
+  - order: 16
+    dataset: kaist_vio
+    sequence: square/square_fast.bag
+    system_order: [S1, U0]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/datasets/KAIST_VIO/raw/turnsafe_adapted/square/square_fast.bag
+      bytes: 2683497785
+      sha256: 302ef89bfc41408fc24ab07bb08f9af4bc2e9ecbeb9334e73abef08b5d2e4b35
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/kaist_vio/square_fast.txt
+      bytes: 464070
+      sha256: a379cd70dae1122721b898474557bd777cc8e138b8f181dbcc4b2791b29f7efc
+      format: tum
+
+  - order: 17
+    dataset: kaist_vio
+    sequence: square/square.bag
+    system_order: [U0, S1]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/datasets/KAIST_VIO/raw/turnsafe_adapted/square/square.bag
+      bytes: 2971455983
+      sha256: 3b5ad8626372f8b1e90f1ff74593a189e3ab4035e68b85b4930ee508c50a3b3c
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/kaist_vio/square.txt
+      bytes: 728150
+      sha256: ba6de59b6d7f4e9afd2fd085e4fdf3741d23b294d0437da8ed37836722167e76
+      format: tum
+
+  - order: 18
+    dataset: kaist_vio
+    sequence: circle/circle_head.bag
+    system_order: [S1, U0]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/datasets/KAIST_VIO/raw/turnsafe_adapted/circle/circle_head.bag
+      bytes: 2751424001
+      sha256: 80b0b000e0b5ccbf21f4a08245258b494d1f3020ee14dfb7f051aa06fe020a96
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/kaist_vio/circle_head.txt
+      bytes: 578318
+      sha256: f8333341bf332f81ecee3835191828a34eea1bea6835eada7c64c533f0c3d1e1
+      format: tum
+
+  - order: 19
+    dataset: kaist_vio
+    sequence: rotation/rotation.bag
+    system_order: [U0, S1]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/datasets/KAIST_VIO/raw/turnsafe_adapted/rotation/rotation.bag
+      bytes: 2891498226
+      sha256: 440e1fa42faa178aad2ac981c6332288dc01b738877198a232ac84881e02bd7e
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/kaist_vio/rotation.txt
+      bytes: 640107
+      sha256: 0621116ae5ffbd86fb21de80538906e4dd3a3fd4c684f1cc8177e2f9576c1f26
+      format: tum
+
+  - order: 20
+    dataset: kaist_vio
+    sequence: infinite/infinite.bag
+    system_order: [S1, U0]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/datasets/KAIST_VIO/raw/turnsafe_adapted/infinite/infinite.bag
+      bytes: 2761858501
+      sha256: 8e0d7aea6e7aeacfc73897a5e95aceadc73bc39088e4b0108068186f79ae00a1
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/kaist_vio/infinite.txt
+      bytes: 701731
+      sha256: 33f76a9230e352f7c75c33c55aab3bfbbfea2c96bffb285d6a5e384911b515a9
+      format: tum
+
+  - order: 21
+    dataset: kaist_vio
+    sequence: square/square_head.bag
+    system_order: [U0, S1]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/datasets/KAIST_VIO/raw/turnsafe_adapted/square/square_head.bag
+      bytes: 5163651223
+      sha256: 480e9b9595de4d811e4d65a00963ee7161ed1dea153fa31da94152450ae4b315
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/kaist_vio/square_head.txt
+      bytes: 941526
+      sha256: 7e0d6f3ee3051bb35ad9ffbc0b266a82232312d27994455be1119057ceece224
+      format: tum
+
+  - order: 22
+    dataset: kaist_vio
+    sequence: circle/circle.bag
+    system_order: [S1, U0]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/datasets/KAIST_VIO/raw/turnsafe_adapted/circle/circle.bag
+      bytes: 2935969045
+      sha256: d3d317e6deb4470b938bd7e6c123f576cd087d7c949214bae1ef79df22829a7f
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/kaist_vio/circle.txt
+      bytes: 689556
+      sha256: 6d67aef090aef87a5d90b82bb4f59a13f2df894d6eddb65f6a82b384a87bff4f
+      format: tum
+
+  - order: 23
+    dataset: kaist_vio
+    sequence: rotation/rotation_fast.bag
+    system_order: [U0, S1]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/datasets/KAIST_VIO/raw/turnsafe_adapted/rotation/rotation_fast.bag
+      bytes: 2318167932
+      sha256: 94796ff4c4cc85360d527a509267716363554c95e445838653704ba9fd74fbcc
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/kaist_vio/rotation_fast.txt
+      bytes: 560200
+      sha256: 5c022e1bc47e6176dc47c7c0254237f078cbc2a9cc47b7e02752bf8f3446c634
+      format: tum
+
+  - order: 24
+    dataset: kaist_vio
+    sequence: circle/circle_fast.bag
+    system_order: [S1, U0]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/datasets/KAIST_VIO/raw/turnsafe_adapted/circle/circle_fast.bag
+      bytes: 2787800726
+      sha256: d6d16436b5eb3360fbbb4e41edf7fcaf8274617afe41f76091973a84ca97b8ef
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/kaist_vio/circle_fast.txt
+      bytes: 647382
+      sha256: 041717e09b21018e1179db4147f8498036536ba84fe4c629fafa1e28ef5ddb72
+      format: tum
+
+  - order: 25
+    dataset: kaist_vio
+    sequence: infinite/infinite_head.bag
+    system_order: [U0, S1]
+    bag_start_seconds: 0.0
+    bag:
+      path: /home/moksh/datasets/KAIST_VIO/raw/turnsafe_adapted/infinite/infinite_head.bag
+      bytes: 2933483354
+      sha256: fed10ab5ba22bd20178b000041f4ca62426097a8711d99dbfe474bf362b6c073
+    ground_truth:
+      capability: full_trajectory
+      canonical_path: /home/moksh/schurvio-lite-rotation-robustness/ov_data/kaist_vio/infinite_head.txt
+      bytes: 651542
+      sha256: f8e000fa95706dc403fbb6258891c442c76b1d6464dd7be35d2205b749f9928d
+      format: tum

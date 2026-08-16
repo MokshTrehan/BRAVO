@@ -1693,6 +1693,7 @@ def _render_svg(
     msckf_points: Sequence[tuple[float, float, float]],
     gap_threshold_s: float,
     alignment_id: str,
+    display_dataset_label: str,
 ) -> tuple[str, dict[str, Any]]:
     projection = VIEW_PROJECTIONS[view_name]
     bounds = _view_bounds(gt, projection)
@@ -1728,7 +1729,7 @@ def _render_svg(
         projected_geometry[label] = [point for point in projected if _inside(point, bounds)]
         geometry_clipped[label] = len(projected) - len(projected_geometry[label])
 
-    title = f"KAIST geometry — {view_name} view"
+    title = f"{display_dataset_label} geometry — {view_name} view"
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{int(width)}" height="{int(height)}" viewBox="0 0 {int(width)} {int(height)}" data-alignment-id="{alignment_id}">',
@@ -1877,6 +1878,7 @@ def build_bundle(
     namespace: str | None = None,
     expected_frame: str = "global",
     trajectory_format: str = "auto",
+    display_dataset_label: str = "KAIST",
 ) -> dict[str, Any]:
     """Validate inputs and publish a complete deterministic bundle."""
 
@@ -1884,6 +1886,8 @@ def build_bundle(
     capture_trajectory_path = capture_trajectory_path.resolve()
     ground_truth_path = ground_truth_path.resolve()
     run_dir = run_dir.resolve()
+    if not display_dataset_label or display_dataset_label.strip() != display_dataset_label:
+        raise GeometryError("display dataset label must be a nonempty canonical string")
     if not expected_frame or expected_frame.strip() != expected_frame:
         raise GeometryError("expected frame must be a nonempty canonical string")
     for path in (feature_bag, capture_trajectory_path, ground_truth_path):
@@ -2222,6 +2226,7 @@ def build_bundle(
                 aligned_aggregate_msckf,
                 gap_threshold_s,
                 render_alignment_id,
+                display_dataset_label,
             )
             staged_path = staging / relative
             _write_text(staged_path, svg)
@@ -2304,6 +2309,7 @@ def _parser() -> argparse.ArgumentParser:
         choices=("auto", "tum", "openvins-state"),
         default="auto",
     )
+    parser.add_argument("--display-dataset-label", default="KAIST")
     return parser
 
 
@@ -2318,6 +2324,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             namespace=args.namespace,
             expected_frame=args.expected_frame,
             trajectory_format=args.trajectory_format,
+            display_dataset_label=args.display_dataset_label,
         )
     except (GeometryError, OSError) as exc:
         print(f"geometry bundle failed: {exc}", file=sys.stderr)
