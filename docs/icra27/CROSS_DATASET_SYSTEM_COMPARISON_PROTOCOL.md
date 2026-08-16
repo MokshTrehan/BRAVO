@@ -509,8 +509,8 @@ canonical configs. The order-sensitive compact preflight record (counts,
 accepted endpoints, accepted gaps, and raw/accepted callback digests) must have
 SHA-256
 `915d816de64a408d10c0e362dad1368454a7ba465c6dba1302d565de06efef4b`.
-This all-matrix gate is repeated by each individual run rather than replacing
-its per-cell census.
+This all-matrix gate supplements, rather than replaces, the per-cell census
+that each individual run recomputes.
 
 Every KAIST run binds and rehashes before and after estimator execution both
 `cross_dataset_trial.py`, which implements the stock visualizer-gate
