@@ -102,6 +102,13 @@ ENQUEUE_SUMMARY_RE = re.compile(
     r"cam1_decode_failures=(?P<cam1_decode_failures>[0-9]+) "
     r"pending_pairs=(?P<pending_pairs>[0-9]+)"
 )
+REQUIRED_PROCESS_DIED_RE = re.compile(
+    r"=+REQUIRED process \[(?P<node>[^\]]+)\] has died!"
+)
+PROCESS_DIED_RE = re.compile(
+    r"process has died \[pid (?P<pid>[0-9]+), exit code (?P<exit_code>-?[0-9]+), "
+    r"cmd (?P<command>.+)\]\."
+)
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}")
 FORBIDDEN_RUNTIME_TOKENS = (
@@ -458,6 +465,42 @@ def command_succeeded(record: Mapping[str, Any]) -> bool:
     )
 
 
+def classify_trial_status(
+    launch_record: Optional[Mapping[str, Any]],
+    estimator_child_died: bool,
+    state_valid: bool,
+    output_valid: bool,
+    seam_valid: bool,
+    provenance_valid: bool,
+    evaluation_valid: bool,
+    capture_valid: bool,
+) -> str:
+    """Classify scientific outcome independently of roslaunch wrapper quirks."""
+
+    launch_success = (
+        launch_record is not None
+        and command_succeeded(launch_record)
+        and not estimator_child_died
+    )
+    if launch_record is not None and launch_record.get("timed_out"):
+        return "TIMED_OUT"
+    if not state_valid:
+        return "NO_INITIALIZATION" if launch_success else "ESTIMATOR_FAILED"
+    if not output_valid:
+        return "INVALID_OUTPUT"
+    if not launch_success:
+        return "PARTIAL"
+    if not seam_valid:
+        return "INVALID_RUNTIME_EVIDENCE"
+    if not provenance_valid:
+        return "INVALID_PROVENANCE"
+    if not evaluation_valid:
+        return "EVALUATION_FAILED"
+    if not capture_valid:
+        return "CAPTURE_FAILED"
+    return "COMPLETED"
+
+
 def start_managed_process(
     argv: Sequence[str], log_path: Path, environment: Mapping[str, str]
 ) -> ManagedProcess:
@@ -739,6 +782,39 @@ def parse_runtime_summaries(text: str) -> Dict[str, Any]:
     }
 
 
+def parse_roslaunch_child_deaths(text: str) -> Dict[str, Any]:
+    """Extract required-child deaths that roslaunch may mask with exit zero."""
+
+    clean_lines = [ANSI_RE.sub("", line) for line in text.splitlines()]
+    required_nodes: List[str] = []
+    deaths: List[Dict[str, Any]] = []
+    for line in clean_lines:
+        required_match = REQUIRED_PROCESS_DIED_RE.search(line)
+        if required_match is not None:
+            required_nodes.append(required_match.group("node"))
+        death_match = PROCESS_DIED_RE.search(line)
+        if death_match is not None:
+            deaths.append(
+                {
+                    "pid": int(death_match.group("pid")),
+                    "exit_code": int(death_match.group("exit_code")),
+                    "command": death_match.group("command"),
+                    "line": line,
+                }
+            )
+    estimator_required_death = any(
+        node.split("-", 1)[0] == "kaist_vio_turnsafe_baseline"
+        for node in required_nodes
+    )
+    return {
+        "required_process_death_detected": bool(required_nodes),
+        "required_nodes": required_nodes,
+        "process_deaths": deaths,
+        "estimator_required_child_died": estimator_required_death,
+        "wrapper_exit_code_is_not_estimator_success": estimator_required_death,
+    }
+
+
 def bind_pairing_census(
     summaries: Mapping[str, Any], census: Mapping[str, Any]
 ) -> Dict[str, Any]:
@@ -747,6 +823,20 @@ def bind_pairing_census(
     values = census.get("census")
     if not isinstance(values, dict):
         raise TrialError("pairing census lacks flat census values")
+    static_selection = {
+        "selected_input": census.get("selection_bounds", {}).get("s1_exact_header"),
+        "selected_first_header_stamp_ns": values.get(
+            "s1_first_selected_header_stamp_ns"
+        ),
+        "selected_last_header_stamp_ns": values.get("s1_last_selected_header_stamp_ns"),
+    }
+    if "exact_header" not in summaries or "camera_enqueue" not in summaries:
+        return {
+            "status": "UNAVAILABLE",
+            "reason": "runtime_summary_unavailable",
+            "static_census_retained": True,
+            **static_selection,
+        }
     observed = summaries["exact_header"]["counts"]
     expected = {
         "exact_header_pairs": values.get("s1_exact_pair_count"),
@@ -762,13 +852,11 @@ def bind_pairing_census(
         raise TrialError("runtime/static exact-header mismatch: {}".format(mismatches))
     enqueue = summaries["camera_enqueue"]["counts"]
     return {
+        "status": "AVAILABLE",
+        "reason": "NONE",
         "runtime_matches_static_census": True,
         "static_expected": expected,
-        "selected_input": census.get("selection_bounds", {}).get("s1_exact_header"),
-        "selected_first_header_stamp_ns": values.get(
-            "s1_first_selected_header_stamp_ns"
-        ),
-        "selected_last_header_stamp_ns": values.get("s1_last_selected_header_stamp_ns"),
+        **static_selection,
         "runtime_delivery": {
             "s1_queued_pair_count": enqueue["queued_pairs"],
             "s1_processed_pair_count": enqueue["processed_pairs"],
@@ -1504,6 +1592,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
     seam_valid = False
     capture_valid = args.mode == "scored"
     launch_record: Optional[Dict[str, Any]] = None
+    estimator_child_died = False
     source_before_snapshot: Optional[Dict[str, Any]] = None
     try:
         assert_port_available(args.ros_port)
@@ -1708,6 +1797,18 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
 
         console_path = run_dir / "diagnostics" / "console.log"
         manifest["console_diagnostics"] = _console_diagnostics(console_path)
+        child_outcome = parse_roslaunch_child_deaths(
+            console_path.read_text(encoding="utf-8", errors="replace")
+        )
+        manifest["roslaunch_child_outcome"] = child_outcome
+        estimator_child_died = bool(child_outcome["estimator_required_child_died"])
+        manifest["completion"]["estimator_required_child_died"] = estimator_child_died
+        manifest["completion"]["estimator_wrapper_exit_code"] = launch_record.get(
+            "exit_code"
+        )
+        manifest["completion"]["estimator_completed"] = (
+            command_succeeded(launch_record) and not estimator_child_died
+        )
         try:
             summaries = parse_runtime_summaries(
                 console_path.read_text(encoding="utf-8", errors="replace")
@@ -1738,11 +1839,12 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         ):
             try:
                 census = json.loads(census_path.read_text(encoding="utf-8"))
+                census_binding = bind_pairing_census(summaries, census)
                 manifest["pairing_census"] = {
                     "artifact": file_identity(census_path),
-                    "binding": bind_pairing_census(summaries, census),
+                    "binding": census_binding,
                 }
-                seam_valid = seam_valid and True
+                seam_valid = seam_valid and census_binding.get("status") == "AVAILABLE"
             except (TrialError, json.JSONDecodeError) as exc:
                 seam_valid = False
                 manifest["stage_errors"].append(
@@ -1954,27 +2056,19 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             == source_after_snapshot.get("aggregate_source_snapshot_sha256")
         )
 
-        launch_success = launch_record is not None and command_succeeded(launch_record)
-        if launch_record is not None and launch_record.get("timed_out"):
-            final_status = "TIMED_OUT"
-        elif not state_valid:
-            final_status = "NO_INITIALIZATION" if launch_success else "ESTIMATOR_FAILED"
-        elif not output_valid:
-            final_status = "INVALID_OUTPUT"
-        elif not launch_success:
-            final_status = "PARTIAL"
-        elif not seam_valid:
-            final_status = "INVALID_RUNTIME_EVIDENCE"
-        elif not manifest["checks"]["runtime_inputs_unchanged"] or not manifest[
-            "checks"
-        ]["source_snapshot_unchanged_during_trial"]:
-            final_status = "INVALID_PROVENANCE"
-        elif not evaluation_valid:
-            final_status = "EVALUATION_FAILED"
-        elif not capture_valid:
-            final_status = "CAPTURE_FAILED"
-        else:
-            final_status = "COMPLETED"
+        final_status = classify_trial_status(
+            launch_record=launch_record,
+            estimator_child_died=estimator_child_died,
+            state_valid=state_valid,
+            output_valid=output_valid,
+            seam_valid=seam_valid,
+            provenance_valid=(
+                manifest["checks"]["runtime_inputs_unchanged"]
+                and manifest["checks"]["source_snapshot_unchanged_during_trial"]
+            ),
+            evaluation_valid=evaluation_valid,
+            capture_valid=capture_valid,
+        )
     except KeyboardInterrupt as exc:
         final_status = "INTERRUPTED"
         manifest["stage_errors"].append(

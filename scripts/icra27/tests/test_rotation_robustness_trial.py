@@ -82,7 +82,53 @@ class RuntimeSeamTests(unittest.TestCase):
             "selection_bounds": {"s1_exact_header": {"count": 100}},
         }
         binding = TRIAL.bind_pairing_census(value, census)
+        self.assertEqual(binding["status"], "AVAILABLE")
         self.assertTrue(binding["runtime_matches_static_census"])
+
+    def test_crash_without_runtime_summary_retains_static_census(self) -> None:
+        crash_console = (
+            "terminate called after throwing an instance of 'cv::Exception'\n"
+            "\x1b[31m============================================================"
+            "REQUIRED process [kaist_vio_turnsafe_baseline-2] has died!\n"
+            "process has died [pid 1234, exit code -6, cmd /build/ros1_serial_msckf "
+            "__name:=kaist_vio_turnsafe_baseline].\n"
+            "\x1b[0m"
+        )
+        outcome = TRIAL.parse_roslaunch_child_deaths(crash_console)
+        self.assertTrue(outcome["estimator_required_child_died"])
+        self.assertEqual(outcome["process_deaths"][0]["exit_code"], -6)
+        wrapper_record = {
+            "exit_code": 0,
+            "timed_out": False,
+            "interrupted": False,
+            "process_group_survived_cleanup": False,
+            "error": None,
+        }
+        self.assertEqual(
+            TRIAL.classify_trial_status(
+                launch_record=wrapper_record,
+                estimator_child_died=True,
+                state_valid=False,
+                output_valid=False,
+                seam_valid=False,
+                provenance_valid=True,
+                evaluation_valid=False,
+                capture_valid=True,
+            ),
+            "ESTIMATOR_FAILED",
+        )
+        census = {
+            "schema": "schurvio.icra27.kaist_pairing_census.v1",
+            "census": {
+                "s1_first_selected_header_stamp_ns": 10,
+                "s1_last_selected_header_stamp_ns": 20,
+            },
+            "selection_bounds": {"s1_exact_header": {"count": 100}},
+        }
+        binding = TRIAL.bind_pairing_census({}, census)
+        self.assertEqual(binding["status"], "UNAVAILABLE")
+        self.assertEqual(binding["reason"], "runtime_summary_unavailable")
+        self.assertTrue(binding["static_census_retained"])
 
     def test_duplicate_or_incomplete_runtime_summary_fails_closed(self) -> None:
         with self.assertRaises(TRIAL.TrialError):
