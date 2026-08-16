@@ -855,8 +855,7 @@ bool VioManager::process_long_gap_recovery_frame(
       metrics.min_depth, metrics.image_span_x_fraction,
       metrics.image_span_y_fraction,
       metrics.second_to_first_3d_singular_ratio,
-      metrics.orientation_disagreement_deg,
-      static_cast<int>(!recovery.accepted));
+      metrics.orientation_disagreement_deg, 1);
 
   if (!recovery.accepted) {
     long_gap_recovery_consensus.clear();
