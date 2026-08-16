@@ -56,6 +56,7 @@ DEFAULT_BINARY = DEFAULT_BUILD_ROOT / "devel" / "lib" / "ov_msckf" / "ros1_seria
 DEFAULT_ARTIFACT_ROOT = Path(
     "/home/moksh/schurvio-icra27-artifacts/rotation-robustness"
 )
+EVO_SITE_PACKAGES = Path("/home/moksh/.local/lib/python3.8/site-packages")
 
 SCHEMA = "schurvio.icra27.rotation_robustness_trial.v1"
 GAP_SCHEMA = "schurvio.icra27.rotation_gap_metrics.v1"
@@ -81,8 +82,23 @@ ROTATION_GAP: Mapping[str, Any] = {
     "selected_stereo_gap_seconds": 13.441997175,
     "last_pre_gap_estimator_timestamp_s": 1599131266.36014,
     "first_post_gap_estimator_timestamp_s": 1599131279.80214,
-    "anchor_search_limit_seconds": 0.10,
+    "pre_anchor_search_limit_seconds": 0.10,
+    "post_anchor_search_limit_seconds": 0.10,
     "association_max_difference_seconds": 0.01,
+}
+TERMINAL_COMPLETION: Mapping[str, float] = {
+    "tail_gap_max_seconds": 0.10,
+    "negative_tail_tolerance_seconds": 0.01,
+}
+ROTATION_TARGET_THRESHOLDS: Mapping[str, float] = {
+    "cross_gap_translation_m": 0.50,
+    "cross_gap_rotation_deg": 1.534,
+    "full_ate_rmse_m": 0.25,
+    "pre_gap_ate_rmse_m": 0.065795,
+    "post_gap_ate_rmse_m": 0.25,
+    "translation_rpe_1m_rmse_m": 0.25,
+    "rotation_rpe_1m_rmse_deg": 3.0601,
+    "first_resumed_position_nees": 11.345,
 }
 
 SERIAL_SUMMARY_PREFIX = "[SERIAL-KAIST]: exact_header_pairs="
@@ -108,6 +124,55 @@ REQUIRED_PROCESS_DIED_RE = re.compile(
 PROCESS_DIED_RE = re.compile(
     r"process has died \[pid (?P<pid>[0-9]+), exit code (?P<exit_code>-?[0-9]+), "
     r"cmd (?P<command>.+)\]\."
+)
+RECOVERY_PREFIX = "[LONG-GAP-RECOVERY]:"
+RECOVERY_CONTRACT_RE = re.compile(
+    r"\[LONG-GAP-RECOVERY\]: event=contract_validated enabled=1 "
+    r"threshold_s=0\.500 attempts=10 consensus=3"
+)
+RECOVERY_TRIGGER_RE = re.compile(
+    r"\[LONG-GAP-RECOVERY\]: event=trigger epoch=(?P<epoch>[0-9]+) "
+    r"timestamp=(?P<timestamp>[-+0-9.eE]+) "
+    r"last_state_timestamp=(?P<last_state_timestamp>[-+0-9.eE]+) "
+    r"gap_s=(?P<gap_s>[-+0-9.eE]+) activation=(?P<activation>[0-9]+)"
+)
+RECOVERY_ATTEMPT_RE = re.compile(
+    r"\[LONG-GAP-RECOVERY\]: event=attempt epoch=(?P<epoch>[0-9]+) "
+    r"attempt=(?P<attempt>[0-9]+) (?P<diagnostics>.+) "
+    r"state_unchanged=(?P<state_unchanged>[01])"
+)
+RECOVERY_COMMIT_RE = re.compile(
+    r"\[LONG-GAP-RECOVERY\]: event=relocalization_commit "
+    r"epoch=(?P<epoch>[0-9]+) timestamp=(?P<timestamp>[-+0-9.eE]+) "
+    r"p_x=(?P<p_x>[-+0-9.eE]+) p_y=(?P<p_y>[-+0-9.eE]+) "
+    r"p_z=(?P<p_z>[-+0-9.eE]+) velocity_reset=(?P<velocity_reset>[01])"
+)
+RECOVERY_COVARIANCE_RE = re.compile(
+    r"\[LONG-GAP-RECOVERY\]: event=first_resumed_covariance "
+    r"epoch=(?P<epoch>[0-9]+) camera_timestamp=(?P<camera_timestamp>[-+0-9.eE]+) "
+    r"state_output_timestamp=(?P<state_output_timestamp>[-+0-9.eE]+) "
+    r"frame=estimator_global available=(?P<available>[01])(?P<tail>.*)"
+)
+RECOVERY_COVARIANCE_TAIL_RE = re.compile(
+    r" p_cov_00=(?P<p_cov_00>[-+0-9.eE]+) "
+    r"p_cov_01=(?P<p_cov_01>[-+0-9.eE]+) "
+    r"p_cov_02=(?P<p_cov_02>[-+0-9.eE]+) "
+    r"p_cov_10=(?P<p_cov_10>[-+0-9.eE]+) "
+    r"p_cov_11=(?P<p_cov_11>[-+0-9.eE]+) "
+    r"p_cov_12=(?P<p_cov_12>[-+0-9.eE]+) "
+    r"p_cov_20=(?P<p_cov_20>[-+0-9.eE]+) "
+    r"p_cov_21=(?P<p_cov_21>[-+0-9.eE]+) "
+    r"p_cov_22=(?P<p_cov_22>[-+0-9.eE]+)"
+)
+RECOVERY_WARMUP_RE = re.compile(
+    r"\[LONG-GAP-RECOVERY\]: event=warmup_complete "
+    r"epoch=(?P<epoch>[0-9]+) timestamp=(?P<timestamp>[-+0-9.eE]+) "
+    r"clones=(?P<clones>[0-9]+)"
+)
+RECOVERY_SUMMARY_RE = re.compile(
+    r"\[LONG-GAP-RECOVERY\]: event=summary "
+    r"activations=(?P<activations>[0-9]+) commits=(?P<commits>[0-9]+) "
+    r"failures=(?P<failures>[0-9]+) final_epoch=(?P<final_epoch>[0-9]+)"
 )
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}")
@@ -333,6 +398,51 @@ def minimal_environment(run_dir: Path, ros_port: int) -> Dict[str, str]:
         }
     )
     return dict(sorted(environment.items()))
+
+
+def pinned_post_close_python_environment(
+    runtime_environment: Mapping[str, str], site_packages: Path
+) -> Tuple[Dict[str, str], Dict[str, Any]]:
+    """Add one byte-identified user site only to post-close evaluation."""
+
+    site = _directory(site_packages, "evo site-packages")
+    evo_init = _regular_file(site / "evo" / "__init__.py", "evo package")
+    metadata_candidates = sorted(site.glob("evo-*.dist-info/METADATA"))
+    if len(metadata_candidates) != 1:
+        raise TrialError("expected exactly one installed evo distribution metadata file")
+    metadata = _regular_file(metadata_candidates[0], "evo distribution metadata")
+    environment = dict(runtime_environment)
+    existing = [
+        value
+        for value in environment.get("PYTHONPATH", "").split(os.pathsep)
+        if value and Path(value).resolve(strict=False) != site
+    ]
+    environment["PYTHONPATH"] = os.pathsep.join([str(site), *existing])
+    return dict(sorted(environment.items())), {
+        "activation_boundary": "post_estimator_process_group_close_only",
+        "consumers": ["evo_ape", "evo_rpe", "geometry_atlas"],
+        "runtime_home_remains_isolated": environment.get("HOME"),
+        "site_packages": str(site),
+        "evo_package_init": file_identity(evo_init),
+        "evo_distribution_metadata": file_identity(metadata),
+        "pythonpath": environment["PYTHONPATH"],
+    }
+
+
+def select_command_environment(
+    consumer: str,
+    runtime_environment: Mapping[str, str],
+    post_close_environment: Optional[Mapping[str, str]] = None,
+) -> Dict[str, str]:
+    if consumer == "estimator_runtime":
+        return dict(runtime_environment)
+    if consumer in ("evo_metric", "geometry_atlas"):
+        if post_close_environment is None:
+            raise TrialError(
+                "{} requires the pinned post-close environment".format(consumer)
+            )
+        return dict(post_close_environment)
+    raise TrialError("unknown command environment consumer: {}".format(consumer))
 
 
 def assert_port_available(port: int) -> None:
@@ -783,35 +893,344 @@ def parse_runtime_summaries(text: str) -> Dict[str, Any]:
 
 
 def parse_roslaunch_child_deaths(text: str) -> Dict[str, Any]:
-    """Extract required-child deaths that roslaunch may mask with exit zero."""
+    """Distinguish clean required-node completion from masked child failure."""
 
     clean_lines = [ANSI_RE.sub("", line) for line in text.splitlines()]
     required_nodes: List[str] = []
+    required_terminations: List[Dict[str, Any]] = []
     deaths: List[Dict[str, Any]] = []
+    pending_required_node: Optional[str] = None
     for line in clean_lines:
         required_match = REQUIRED_PROCESS_DIED_RE.search(line)
         if required_match is not None:
-            required_nodes.append(required_match.group("node"))
+            pending_required_node = required_match.group("node")
+            required_nodes.append(pending_required_node)
+            continue
         death_match = PROCESS_DIED_RE.search(line)
         if death_match is not None:
-            deaths.append(
-                {
-                    "pid": int(death_match.group("pid")),
-                    "exit_code": int(death_match.group("exit_code")),
-                    "command": death_match.group("command"),
-                    "line": line,
-                }
+            death = {
+                "pid": int(death_match.group("pid")),
+                "exit_code": int(death_match.group("exit_code")),
+                "command": death_match.group("command"),
+                "line": line,
+            }
+            deaths.append(death)
+            if pending_required_node is not None:
+                required_terminations.append(
+                    {
+                        "node": pending_required_node,
+                        "status": "FAILED",
+                        **death,
+                    }
+                )
+                pending_required_node = None
+            continue
+        if pending_required_node is not None and line.strip() == "process has finished cleanly":
+            required_terminations.append(
+                {"node": pending_required_node, "status": "CLEAN", "line": line}
             )
+            pending_required_node = None
+    if pending_required_node is not None:
+        required_terminations.append(
+            {
+                "node": pending_required_node,
+                "status": "UNRESOLVED",
+                "line": "required termination detail missing",
+            }
+        )
+    estimator_terminations = [
+        event
+        for event in required_terminations
+        if event["node"].split("-", 1)[0] == "kaist_vio_turnsafe_baseline"
+    ]
     estimator_required_death = any(
-        node.split("-", 1)[0] == "kaist_vio_turnsafe_baseline"
-        for node in required_nodes
+        event["status"] != "CLEAN" for event in estimator_terminations
+    )
+    estimator_clean = bool(estimator_terminations) and all(
+        event["status"] == "CLEAN" for event in estimator_terminations
     )
     return {
-        "required_process_death_detected": bool(required_nodes),
+        "required_process_termination_detected": bool(required_nodes),
+        "required_process_death_detected": any(
+            event["status"] == "FAILED" for event in required_terminations
+        ),
         "required_nodes": required_nodes,
+        "required_terminations": required_terminations,
         "process_deaths": deaths,
         "estimator_required_child_died": estimator_required_death,
+        "estimator_required_child_completed_cleanly": estimator_clean,
         "wrapper_exit_code_is_not_estimator_success": estimator_required_death,
+    }
+
+
+def candidate_recovery_enabled(config_text: str) -> bool:
+    try:
+        value = yaml.safe_load(config_text)
+    except yaml.YAMLError as exc:
+        raise TrialError("candidate config YAML is invalid") from exc
+    if not isinstance(value, dict):
+        raise TrialError("candidate config is not a YAML mapping")
+    enabled = value.get("long_gap_recovery_enabled", False)
+    if not isinstance(enabled, bool):
+        raise TrialError("long_gap_recovery_enabled must be Boolean")
+    return enabled
+
+
+def parse_recovery_runtime(
+    text: str, enabled: bool, sequence: str
+) -> Dict[str, Any]:
+    """Bind target recovery or zero-activation regression evidence."""
+
+    if sequence not in SEQUENCES:
+        raise TrialError("unknown KAIST sequence for recovery evidence: {}".format(sequence))
+    clean_lines = [ANSI_RE.sub("", line) for line in text.splitlines()]
+    recovery_lines = [line for line in clean_lines if RECOVERY_PREFIX in line]
+    event_names: List[str] = []
+    for line in recovery_lines:
+        match = re.search(r"\bevent=([a-z0-9_]+)(?:\s|$)", line)
+        if match is None:
+            raise TrialError("recovery line lacks a machine-readable event name")
+        event_names.append(match.group(1))
+    event_counts = {
+        name: event_names.count(name) for name in sorted(set(event_names))
+    }
+    if not enabled:
+        if recovery_lines:
+            raise TrialError("recovery events appeared while candidate config disables recovery")
+        return {
+            "status": "NOT_ENABLED",
+            "reason": "candidate_config_disabled",
+            "sequence_contract": "DEFAULT_OFF",
+            "event_line_count": 0,
+            "event_counts": {},
+        }
+
+    def exact_one(event: str, pattern: re.Pattern) -> re.Match:
+        candidates = [
+            line
+            for line, name in zip(recovery_lines, event_names)
+            if name == event
+        ]
+        if len(candidates) != 1:
+            raise TrialError(
+                "enabled recovery requires exactly one {} line; found {}".format(
+                    event, len(candidates)
+                )
+            )
+        match = pattern.fullmatch(candidates[0])
+        if match is None:
+            raise TrialError("malformed recovery {} line".format(event))
+        return match
+
+    exact_one("contract_validated", RECOVERY_CONTRACT_RE)
+    summary_match = exact_one("summary", RECOVERY_SUMMARY_RE)
+    summary = {
+        key: int(value) for key, value in summary_match.groupdict().items()
+    }
+
+    if sequence != "rotation/rotation.bag":
+        expected_zero = {
+            "activations": 0,
+            "commits": 0,
+            "failures": 0,
+            "final_epoch": 0,
+        }
+        unexpected_events = sorted(
+            name
+            for name in set(event_names)
+            if name not in ("contract_validated", "summary")
+        )
+        if unexpected_events or len(recovery_lines) != 2:
+            raise TrialError(
+                "zero-activation regression emitted recovery activity: {}".format(
+                    unexpected_events or event_counts
+                )
+            )
+        if summary != expected_zero:
+            raise TrialError(
+                "regression recovery summary differs from exact-zero contract: {}".format(
+                    summary
+                )
+            )
+        return {
+            "status": "AVAILABLE",
+            "reason": "NONE",
+            "sequence_contract": "ZERO_ACTIVATION_REGRESSION",
+            "contract": {
+                "expected": expected_zero,
+                "exactly_one_contract_line": True,
+                "exactly_one_summary_line": True,
+                "no_recovery_activity_events": True,
+            },
+            "summary": summary,
+            "event_line_count": len(recovery_lines),
+            "event_counts": event_counts,
+        }
+
+    trigger_match = exact_one("trigger", RECOVERY_TRIGGER_RE)
+    attempt_lines = [
+        line
+        for line, name in zip(recovery_lines, event_names)
+        if name == "attempt"
+    ]
+    if not 3 <= len(attempt_lines) <= 10:
+        raise TrialError(
+            "target recovery requires three to ten attempt lines; found {}".format(
+                len(attempt_lines)
+            )
+        )
+    attempts: List[Dict[str, Any]] = []
+    for line in attempt_lines:
+        match = RECOVERY_ATTEMPT_RE.fullmatch(line)
+        if match is None:
+            raise TrialError("malformed recovery attempt line")
+        attempts.append(
+            {
+                "epoch": int(match.group("epoch")),
+                "attempt": int(match.group("attempt")),
+                "state_unchanged": int(match.group("state_unchanged")) == 1,
+            }
+        )
+    if [attempt["attempt"] for attempt in attempts] != list(
+        range(1, len(attempts) + 1)
+    ):
+        raise TrialError("recovery attempt indices are not consecutive from one")
+    if any(attempt["epoch"] != 0 for attempt in attempts):
+        raise TrialError("recovery attempt occurred outside epoch zero")
+    if not all(attempt["state_unchanged"] for attempt in attempts):
+        raise TrialError("recovery attempt mutated the live state")
+    commit_match = exact_one("relocalization_commit", RECOVERY_COMMIT_RE)
+    covariance_match = exact_one(
+        "first_resumed_covariance", RECOVERY_COVARIANCE_RE
+    )
+    warmup_match = exact_one("warmup_complete", RECOVERY_WARMUP_RE)
+    trigger = {
+        "epoch": int(trigger_match.group("epoch")),
+        "timestamp": float(trigger_match.group("timestamp")),
+        "last_state_timestamp": float(trigger_match.group("last_state_timestamp")),
+        "gap_s": float(trigger_match.group("gap_s")),
+        "activation": int(trigger_match.group("activation")),
+    }
+    commit = {
+        "epoch": int(commit_match.group("epoch")),
+        "timestamp": float(commit_match.group("timestamp")),
+        "position_xyz_m": [
+            float(commit_match.group("p_x")),
+            float(commit_match.group("p_y")),
+            float(commit_match.group("p_z")),
+        ],
+        "velocity_reset": int(commit_match.group("velocity_reset")) == 1,
+    }
+    warmup = {
+        "epoch": int(warmup_match.group("epoch")),
+        "timestamp": float(warmup_match.group("timestamp")),
+        "clones": int(warmup_match.group("clones")),
+    }
+    covariance_common = {
+        "event": "first_resumed_covariance",
+        "semantic_binding": "relocalization_commit_emitted_state",
+        "epoch": int(covariance_match.group("epoch")),
+        "camera_timestamp": float(covariance_match.group("camera_timestamp")),
+        "state_output_timestamp": float(
+            covariance_match.group("state_output_timestamp")
+        ),
+        "frame": "estimator_global",
+    }
+    if covariance_match.group("available") == "1":
+        tail_match = RECOVERY_COVARIANCE_TAIL_RE.fullmatch(
+            covariance_match.group("tail")
+        )
+        if tail_match is None:
+            raise TrialError("available commit covariance is malformed")
+        covariance_values = [
+            float(tail_match.group("p_cov_{}{}".format(row, column)))
+            for row in range(3)
+            for column in range(3)
+        ]
+        covariance = {
+            "status": "AVAILABLE",
+            "reason": "NONE",
+            **covariance_common,
+            "position_covariance_row_major_m2": covariance_values,
+        }
+    else:
+        if covariance_match.group("tail"):
+            raise TrialError("unavailable commit covariance contains values")
+        covariance = {
+            "status": "UNAVAILABLE",
+            "reason": "estimator_marginal_covariance_unavailable",
+            **covariance_common,
+        }
+    expected = {
+        "activations": 1,
+        "commits": 1,
+        "failures": 0,
+        "final_epoch": 1,
+    }
+    if summary != expected:
+        raise TrialError(
+            "target recovery summary differs from exact-one success contract: {}".format(
+                summary
+            )
+        )
+    if trigger["epoch"] != 0 or trigger["activation"] != 1:
+        raise TrialError("recovery trigger is not the unique epoch-zero activation")
+    if commit["epoch"] != 1 or not commit["velocity_reset"]:
+        raise TrialError("recovery commit does not establish epoch one with velocity reset")
+    if covariance["epoch"] != 1:
+        raise TrialError("commit covariance is not bound to epoch one")
+    if warmup["epoch"] != 1 or warmup["clones"] != 5:
+        raise TrialError("warmup completion is not epoch one at five clones")
+    if abs(covariance["camera_timestamp"] - commit["timestamp"]) > 1.0e-6:
+        raise TrialError("commit covariance camera timestamp differs from commit event")
+    if abs(
+        covariance["state_output_timestamp"] - covariance["camera_timestamp"]
+    ) > 0.10:
+        raise TrialError("commit covariance state timestamp differs by more than 0.10 s")
+    if not all(
+        math.isfinite(value)
+        for value in (
+            trigger["timestamp"],
+            trigger["last_state_timestamp"],
+            trigger["gap_s"],
+            commit["timestamp"],
+            *commit["position_xyz_m"],
+            covariance["camera_timestamp"],
+            covariance["state_output_timestamp"],
+            *covariance.get("position_covariance_row_major_m2", []),
+            warmup["timestamp"],
+        )
+    ):
+        raise TrialError("recovery runtime contains a nonfinite value")
+    if trigger["gap_s"] <= 0 or abs(
+        trigger["timestamp"] - trigger["last_state_timestamp"] - trigger["gap_s"]
+    ) > 1.0e-5:
+        raise TrialError("recovery trigger gap accounting is invalid")
+    if not trigger["timestamp"] <= commit["timestamp"] <= warmup["timestamp"]:
+        raise TrialError("recovery trigger/commit/warmup time order is invalid")
+    return {
+        "status": "AVAILABLE",
+        "reason": "NONE",
+        "sequence_contract": "EXACT_ONE_TARGET_RECOVERY",
+        "contract": {
+            "expected": expected,
+            "exactly_one_contract_line": True,
+            "exactly_one_trigger_line": True,
+            "three_to_ten_attempt_lines": True,
+            "all_attempts_state_unchanged": True,
+            "exactly_one_commit_line": True,
+            "exactly_one_commit_covariance_line": True,
+            "exactly_one_warmup_complete_line": True,
+            "exactly_one_summary_line": True,
+        },
+        "trigger": trigger,
+        "attempts": attempts,
+        "commit": commit,
+        "commit_covariance": covariance,
+        "warmup_complete": warmup,
+        "summary": summary,
+        "event_line_count": len(recovery_lines),
+        "event_counts": event_counts,
     }
 
 
@@ -1034,8 +1453,28 @@ def _table_timestamps(path: Path, separator: Optional[str] = None) -> List[float
     return result
 
 
+def _unique_timestamp_index(
+    timestamps: Sequence[float], target: float, tolerance: float, label: str
+) -> int:
+    lower = bisect.bisect_left(timestamps, target - tolerance)
+    upper = bisect.bisect_right(timestamps, target + tolerance)
+    if upper - lower != 1:
+        raise TrialError(
+            "{} binds {} rows within {:.1e} s".format(
+                label, upper - lower, tolerance
+            )
+        )
+    return lower
+
+
 def validate_output_consistency(
-    state: Path, deviation: Path, timing: Path, trajectory: Path
+    state: Path,
+    deviation: Path,
+    timing: Path,
+    trajectory: Path,
+    *,
+    sequence: str,
+    recovery_runtime: Mapping[str, Any],
 ) -> Dict[str, Any]:
     state_times = _table_timestamps(state)
     deviation_times = _table_timestamps(deviation)
@@ -1043,17 +1482,148 @@ def validate_output_consistency(
     trajectory_times = _table_timestamps(trajectory)
     if state_times != deviation_times or state_times != trajectory_times:
         raise TrialError("state/deviation/trajectory timestamp sequences differ")
-    if len(timing_times) != len(state_times):
-        raise TrialError("timing and state row counts differ")
-    maximum = max(abs(a - b) for a, b in zip(timing_times, state_times))
-    if maximum > 1.0e-5:
-        raise TrialError("timing/state timestamps differ by more than 1e-5 s")
-    return {
+    if sequence not in SEQUENCES:
+        raise TrialError("unknown sequence for output consistency")
+    recovery_status = recovery_runtime.get("status")
+    sequence_contract = recovery_runtime.get("sequence_contract")
+    target_recovery = (
+        sequence == "rotation/rotation.bag"
+        and recovery_status == "AVAILABLE"
+        and sequence_contract == "EXACT_ONE_TARGET_RECOVERY"
+    )
+    legacy_timing = (
+        recovery_status == "NOT_ENABLED"
+        or (
+            recovery_status == "AVAILABLE"
+            and sequence_contract == "ZERO_ACTIVATION_REGRESSION"
+        )
+    )
+    if not target_recovery and not legacy_timing:
+        raise TrialError("output timing contract lacks valid recovery evidence")
+
+    tolerance = 1.0e-5
+    base: Dict[str, Any] = {
         "row_count": len(state_times),
         "state_deviation_trajectory_timestamps_exact": True,
-        "timing_state_maximum_absolute_difference_seconds": maximum,
-        "timing_state_tolerance_seconds": 1.0e-5,
+        "timing_state_tolerance_seconds": tolerance,
+    }
+    if legacy_timing:
+        if len(timing_times) != len(state_times):
+            raise TrialError("legacy timing and state row counts differ")
+        maximum = max(abs(a - b) for a, b in zip(timing_times, state_times))
+        if maximum > tolerance:
+            raise TrialError("timing/state timestamps differ by more than 1e-5 s")
+        return {
+            **base,
+            "timing_contract": "FROZEN_EXACT_ROW_PARITY",
+            "timing_row_count": len(timing_times),
+            "timing_state_maximum_absolute_difference_seconds": maximum,
+            "timing_state_row_counts_equal": True,
+            "consistent": True,
+        }
+
+    if len(state_times) - len(timing_times) != 5:
+        raise TrialError(
+            "target recovery requires exactly five state rows without timing"
+        )
+    timing_state_indexes: List[int] = []
+    timing_differences: List[float] = []
+    for index, timestamp in enumerate(timing_times):
+        state_index = _unique_timestamp_index(
+            state_times, timestamp, tolerance, "timing row {}".format(index)
+        )
+        timing_state_indexes.append(state_index)
+        timing_differences.append(abs(state_times[state_index] - timestamp))
+    if timing_state_indexes != sorted(set(timing_state_indexes)):
+        raise TrialError("timing rows are not an ordered one-to-one state subset")
+    mapped = set(timing_state_indexes)
+    missing_indexes = [index for index in range(len(state_times)) if index not in mapped]
+    covariance = recovery_runtime.get("commit_covariance")
+    warmup = recovery_runtime.get("warmup_complete")
+    if not isinstance(covariance, Mapping) or not isinstance(warmup, Mapping):
+        raise TrialError("target recovery timing evidence is incomplete")
+    commit_output_timestamp = float(covariance["state_output_timestamp"])
+    commit_index = _unique_timestamp_index(
+        state_times,
+        commit_output_timestamp,
+        tolerance,
+        "commit covariance state_output_timestamp",
+    )
+    expected_missing_indexes = list(range(commit_index, commit_index + 5))
+    if missing_indexes != expected_missing_indexes:
+        raise TrialError(
+            "five untimed target-recovery states are not commit plus four warmup rows"
+        )
+    warmup_state_index = commit_index + 5
+    if warmup_state_index >= len(state_times):
+        raise TrialError("warmup completion has no following full timed state row")
+    camera_to_output_offset = (
+        commit_output_timestamp - float(covariance["camera_timestamp"])
+    )
+    expected_warmup_output_timestamp = (
+        float(warmup["timestamp"]) + camera_to_output_offset
+    )
+    bound_warmup_index = _unique_timestamp_index(
+        state_times,
+        expected_warmup_output_timestamp,
+        tolerance,
+        "warmup_complete output timestamp",
+    )
+    if bound_warmup_index != warmup_state_index or warmup_state_index not in mapped:
+        raise TrialError(
+            "warmup_complete does not bind the next state row carrying timing"
+        )
+    return {
+        **base,
+        "timing_contract": "TARGET_COMMIT_PLUS_FOUR_PROPAGATE_ONLY_ROWS",
+        "timing_row_count": len(timing_times),
+        "timing_is_ordered_one_to_one_state_subset": True,
+        "timing_state_maximum_absolute_difference_seconds": max(
+            timing_differences, default=0.0
+        ),
+        "untimed_state_row_count": len(missing_indexes),
+        "untimed_state_indexes": missing_indexes,
+        "untimed_state_timestamps_s": [state_times[index] for index in missing_indexes],
+        "commit_state_index": commit_index,
+        "commit_state_timestamp_s": state_times[commit_index],
+        "commit_state_bound_to_covariance_event": True,
+        "warmup_complete_state_index": warmup_state_index,
+        "warmup_complete_state_timestamp_s": state_times[warmup_state_index],
+        "warmup_complete_expected_output_timestamp_s": (
+            expected_warmup_output_timestamp
+        ),
+        "warmup_complete_state_carries_timing": True,
+        "camera_to_state_output_offset_seconds": camera_to_output_offset,
         "consistent": True,
+    }
+
+
+def assess_terminal_completion(
+    selected_last_header_stamp_ns: Any, state_summary: Mapping[str, Any]
+) -> Dict[str, Any]:
+    if not isinstance(selected_last_header_stamp_ns, int):
+        raise TrialError("selected-input terminal header timestamp is unavailable")
+    try:
+        last_state = float(state_summary["last_timestamp"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise TrialError("last state timestamp is unavailable") from exc
+    selected_end = selected_last_header_stamp_ns / 1.0e9
+    tail_gap = selected_end - last_state
+    maximum = float(TERMINAL_COMPLETION["tail_gap_max_seconds"])
+    negative_tolerance = float(
+        TERMINAL_COMPLETION["negative_tail_tolerance_seconds"]
+    )
+    if not math.isfinite(tail_gap):
+        raise TrialError("trajectory terminal gap is nonfinite")
+    passed = -negative_tolerance <= tail_gap <= maximum
+    return {
+        "selected_last_header_stamp_ns": selected_last_header_stamp_ns,
+        "selected_last_header_timestamp_s": selected_end,
+        "last_state_timestamp_s": last_state,
+        "tail_gap_seconds": tail_gap,
+        "tail_gap_max_seconds": maximum,
+        "negative_tail_tolerance_seconds": negative_tolerance,
+        "tail_gap_pass": passed,
     }
 
 
@@ -1217,8 +1787,8 @@ def _nearest_pose(poses: Sequence[Pose], timestamp: float, tolerance: float) -> 
 
 
 def _interpolate_pose(
-    poses: Sequence[Pose], timestamp: float, maximum_bracket_seconds: float = 0.10
-) -> Pose:
+    poses: Sequence[Pose], timestamp: float, maximum_bracket_seconds: float = 0.20
+) -> Tuple[Pose, Dict[str, Any]]:
     """Interpolate a reference pose at a frozen anchor timestamp.
 
     KAIST ground-truth sampling around the outage endpoints is irregular and
@@ -1230,14 +1800,24 @@ def _interpolate_pose(
     times = [pose.timestamp for pose in poses]
     right = bisect.bisect_left(times, timestamp)
     if right < len(poses) and poses[right].timestamp == timestamp:
-        return poses[right]
+        return poses[right], {
+            "method": "exact",
+            "before_timestamp_s": timestamp,
+            "after_timestamp_s": timestamp,
+            "bracket_span_seconds": 0.0,
+            "fraction": 0.0,
+        }
     if right == 0 or right == len(poses):
         raise TrialError("reference anchor is not bracketed")
     before = poses[right - 1]
     after = poses[right]
     span = after.timestamp - before.timestamp
     if span <= 0 or span > maximum_bracket_seconds:
-        raise TrialError("reference anchor bracket exceeds frozen 0.10 s limit")
+        raise TrialError(
+            "reference anchor bracket exceeds frozen {:.3f} s limit".format(
+                maximum_bracket_seconds
+            )
+        )
     fraction = (timestamp - before.timestamp) / span
     position = before.position + fraction * (after.position - before.position)
     first = before.quaternion_xyzw
@@ -1258,7 +1838,13 @@ def _interpolate_pose(
             + math.sin(fraction * angle) / sine * second
         )
         quaternion /= np.linalg.norm(quaternion)
-    return Pose(timestamp, position, quaternion)
+    return Pose(timestamp, position, quaternion), {
+        "method": "linear_translation_shortest_arc_quaternion_slerp",
+        "before_timestamp_s": before.timestamp,
+        "after_timestamp_s": after.timestamp,
+        "bracket_span_seconds": span,
+        "fraction": fraction,
+    }
 
 
 def _estimate_boundary_anchor(
@@ -1287,8 +1873,146 @@ def _rotation_angle_degrees(rotation: np.ndarray) -> float:
     return math.degrees(math.acos(cosine))
 
 
+def evaluate_first_resumed_position_nees(
+    estimate: Sequence[Pose],
+    reference: Sequence[Pose],
+    pre_alignment_metric: Mapping[str, Any],
+    covariance_evidence: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    threshold = 11.345
+    timestamp_tolerance = 1.0e-5
+    if covariance_evidence is None:
+        return {
+            "status": "UNASSESSABLE",
+            "reason": "first_resumed_covariance_not_supplied",
+            "threshold": threshold,
+        }
+    if covariance_evidence.get("status") != "AVAILABLE":
+        return {
+            "status": "UNASSESSABLE",
+            "reason": str(
+                covariance_evidence.get("reason", "first_resumed_covariance_unavailable")
+            ),
+            "threshold": threshold,
+            "covariance_evidence": dict(covariance_evidence),
+        }
+    if pre_alignment_metric.get("status") != "AVAILABLE":
+        return {
+            "status": "UNASSESSABLE",
+            "reason": "frozen_pre_gap_se3_alignment_unavailable",
+            "threshold": threshold,
+        }
+    try:
+        state_timestamp = float(covariance_evidence["state_output_timestamp"])
+        matches = [
+            pose
+            for pose in estimate
+            if abs(pose.timestamp - state_timestamp) <= timestamp_tolerance
+        ]
+        if len(matches) != 1:
+            raise TrialError(
+                "first-resumed covariance timestamp binds {} trajectory rows".format(
+                    len(matches)
+                )
+            )
+        estimate_pose = matches[0]
+        reference_pose, reference_evidence = _interpolate_pose(
+            reference, estimate_pose.timestamp, maximum_bracket_seconds=0.20
+        )
+        alignment = pre_alignment_metric["alignment"]
+        rotation = np.asarray(alignment["rotation_row_major"], dtype=float).reshape(3, 3)
+        translation = np.asarray(alignment["translation_xyz_m"], dtype=float)
+        covariance_estimator = np.asarray(
+            covariance_evidence["position_covariance_row_major_m2"], dtype=float
+        ).reshape(3, 3)
+        if not np.all(np.isfinite(covariance_estimator)):
+            raise TrialError("first-resumed covariance is nonfinite")
+        symmetry_error = float(
+            np.max(np.abs(covariance_estimator - covariance_estimator.T))
+        )
+        symmetry_tolerance = 1.0e-12 * max(
+            1.0, float(np.max(np.abs(covariance_estimator)))
+        )
+        if symmetry_error > symmetry_tolerance:
+            raise TrialError("first-resumed covariance is not symmetric")
+        covariance_estimator = 0.5 * (
+            covariance_estimator + covariance_estimator.T
+        )
+        eigenvalues = np.linalg.eigvalsh(covariance_estimator)
+        if not np.all(np.isfinite(eigenvalues)) or float(np.min(eigenvalues)) <= 0.0:
+            raise TrialError("first-resumed covariance is not SPD")
+        covariance_reference = rotation @ covariance_estimator @ rotation.T
+        estimate_aligned = rotation @ estimate_pose.position + translation
+        error_reference = estimate_aligned - reference_pose.position
+        nees = float(
+            error_reference.T
+            @ np.linalg.solve(covariance_reference, error_reference)
+        )
+        if not math.isfinite(nees) or nees < 0.0:
+            raise TrialError("first-resumed position NEES is invalid")
+        return {
+            "status": "AVAILABLE",
+            "reason": "NONE",
+            "covariance_event": {
+                "event": covariance_evidence.get("event"),
+                "semantic_binding": covariance_evidence.get("semantic_binding"),
+                "epoch": covariance_evidence.get("epoch"),
+                "camera_timestamp_s": covariance_evidence.get("camera_timestamp"),
+                "state_output_timestamp_s": state_timestamp,
+                "frame": covariance_evidence.get("frame"),
+            },
+            "state_output_timestamp_s": state_timestamp,
+            "trajectory_timestamp_s": estimate_pose.timestamp,
+            "trajectory_timestamp_absolute_difference_seconds": abs(
+                estimate_pose.timestamp - state_timestamp
+            ),
+            "trajectory_timestamp_tolerance_seconds": timestamp_tolerance,
+            "ground_truth": {
+                "timestamp_s": reference_pose.timestamp,
+                "position_xyz_m": [float(value) for value in reference_pose.position],
+                "association": reference_evidence,
+            },
+            "pre_gap_alignment": alignment,
+            "estimate_position_estimator_frame_xyz_m": [
+                float(value) for value in estimate_pose.position
+            ],
+            "estimate_position_reference_frame_xyz_m": [
+                float(value) for value in estimate_aligned
+            ],
+            "position_error_reference_frame_xyz_m": [
+                float(value) for value in error_reference
+            ],
+            "position_error_norm_m": float(np.linalg.norm(error_reference)),
+            "covariance_estimator_frame_row_major_m2": [
+                float(value) for value in covariance_estimator.reshape(-1)
+            ],
+            "covariance_reference_frame_row_major_m2": [
+                float(value) for value in covariance_reference.reshape(-1)
+            ],
+            "covariance_symmetry_max_absolute_error": symmetry_error,
+            "covariance_symmetry_tolerance": symmetry_tolerance,
+            "covariance_estimator_frame_eigenvalues_m2": [
+                float(value) for value in eigenvalues
+            ],
+            "covariance_finite_symmetric_spd": True,
+            "nees": nees,
+            "threshold": threshold,
+            "pass": nees <= threshold,
+            "degrees_of_freedom": 3,
+        }
+    except (KeyError, TypeError, ValueError, TrialError, np.linalg.LinAlgError) as exc:
+        return {
+            "status": "INVALID",
+            "reason": str(exc),
+            "threshold": threshold,
+            "pass": False,
+        }
+
+
 def evaluate_rotation_gap(
-    trajectory_path: Path, reference_path: Path
+    trajectory_path: Path,
+    reference_path: Path,
+    first_resumed_covariance: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     estimate = read_tum(trajectory_path)
     reference = read_tum(reference_path)
@@ -1321,15 +2045,20 @@ def evaluate_rotation_gap(
 
     cross_gap: Dict[str, Any]
     try:
-        limit = float(ROTATION_GAP["anchor_search_limit_seconds"])
-        if not pre_pairs or not post_pairs:
-            raise TrialError("no associated estimate/reference pair at a gap boundary")
-        reference_pre, estimate_pre, _ = pre_pairs[-1]
-        reference_post, estimate_post, _ = post_pairs[0]
-        if abs(estimate_pre.timestamp - pre_boundary) > limit:
-            raise TrialError("associated pre-gap anchor exceeds frozen 0.10 s limit")
-        if abs(estimate_post.timestamp - post_boundary) > limit:
-            raise TrialError("associated post-gap anchor exceeds frozen 0.10 s limit")
+        pre_limit = float(ROTATION_GAP["pre_anchor_search_limit_seconds"])
+        post_limit = float(ROTATION_GAP["post_anchor_search_limit_seconds"])
+        estimate_pre = _estimate_boundary_anchor(
+            estimate, pre_boundary, "pre", pre_limit
+        )
+        estimate_post = _estimate_boundary_anchor(
+            estimate, post_boundary, "post", post_limit
+        )
+        reference_pre, reference_pre_evidence = _interpolate_pose(
+            reference, estimate_pre.timestamp
+        )
+        reference_post, reference_post_evidence = _interpolate_pose(
+            reference, estimate_post.timestamp
+        )
         estimate_pre_rotation = _quat_to_rotation(estimate_pre.quaternion_xyzw)
         estimate_post_rotation = _quat_to_rotation(estimate_post.quaternion_xyzw)
         reference_pre_rotation = _quat_to_rotation(reference_pre.quaternion_xyzw)
@@ -1350,11 +2079,17 @@ def evaluate_rotation_gap(
             "reference_pre_timestamp_s": reference_pre.timestamp,
             "reference_post_timestamp_s": reference_post.timestamp,
             "estimate_gap_seconds": estimate_post.timestamp - estimate_pre.timestamp,
-            "reference_anchor_policy": (
-                "last/first one-to-one 0.01 s trajectory association on the "
-                "respective side of the frozen outage boundaries; each estimate "
-                "anchor must be within 0.10 s of its boundary"
+            "post_publish_delay_from_frozen_boundary_seconds": (
+                estimate_post.timestamp - post_boundary
             ),
+            "post_publish_delay_limit_seconds": post_limit,
+            "post_anchor_is_first_published_state_after_boundary": True,
+            "reference_anchor_policy": (
+                "bounded linear translation plus shortest-arc quaternion SLERP "
+                "at the last pre-gap and first published post-gap state timestamps"
+            ),
+            "reference_pre_interpolation": reference_pre_evidence,
+            "reference_post_interpolation": reference_post_evidence,
             "estimate_displacement_m": float(
                 np.linalg.norm(estimate_post.position - estimate_pre.position)
             ),
@@ -1380,6 +2115,49 @@ def evaluate_rotation_gap(
     maximum_association_delta = max(
         (pair[2] for pair in associations), default=None
     )
+    first_resumed_nees = evaluate_first_resumed_position_nees(
+        estimate, reference, pre_metric, first_resumed_covariance
+    )
+    if first_resumed_covariance is not None:
+        if (
+            first_resumed_nees.get("status") == "AVAILABLE"
+            and cross_gap.get("status") == "AVAILABLE"
+        ):
+            boundary_difference = abs(
+                float(first_resumed_nees["trajectory_timestamp_s"])
+                - float(cross_gap["estimate_post_timestamp_s"])
+            )
+            first_resumed_nees[
+                "cross_gap_post_anchor_absolute_difference_seconds"
+            ] = boundary_difference
+            first_resumed_nees[
+                "cross_gap_post_anchor_timestamp_tolerance_seconds"
+            ] = 1.0e-5
+            first_resumed_nees[
+                "commit_state_is_first_published_post_gap_anchor"
+            ] = boundary_difference <= 1.0e-5
+            if boundary_difference > 1.0e-5:
+                first_resumed_nees.update(
+                    {
+                        "status": "INVALID",
+                        "reason": (
+                            "commit covariance state is not the first published "
+                            "post-gap anchor"
+                        ),
+                        "pass": False,
+                    }
+                )
+        elif (
+            first_resumed_nees.get("status") == "AVAILABLE"
+            and cross_gap.get("status") != "AVAILABLE"
+        ):
+            first_resumed_nees.update(
+                {
+                    "status": "INVALID",
+                    "reason": "cross-gap post anchor is unavailable for commit binding",
+                    "pass": False,
+                }
+            )
     return {
         "schema": GAP_SCHEMA,
         "sequence": "rotation/rotation.bag",
@@ -1400,10 +2178,161 @@ def evaluate_rotation_gap(
             "post_gap_under_pre_gap_alignment": post_under_pre,
         },
         "cross_gap_relative_transform": cross_gap,
+        "first_resumed_position_nees": first_resumed_nees,
         "inputs": {
             "trajectory": file_identity(trajectory_path),
             "reference": file_identity(reference_path),
         },
+    }
+
+
+def assess_rotation_gap_evidence(
+    gap: Mapping[str, Any], recovery_enabled: bool
+) -> Dict[str, Any]:
+    """Fail closed on missing gap metrics and enabled-target NEES evidence."""
+
+    required_segments = (
+        "full_independent_se3_alignment",
+        "pre_gap_independent_se3_alignment",
+        "post_gap_independent_se3_alignment",
+        "post_gap_under_pre_gap_alignment",
+    )
+    segments = gap.get("segments")
+    cross = gap.get("cross_gap_relative_transform")
+    if not isinstance(segments, Mapping) or not isinstance(cross, Mapping):
+        raise TrialError("rotation gap evaluation has malformed structure")
+    segment_statuses = {
+        name: (
+            segments.get(name, {}).get("status")
+            if isinstance(segments.get(name), Mapping)
+            else "MISSING"
+        )
+        for name in required_segments
+    }
+    structure_valid = (
+        cross.get("status") == "AVAILABLE"
+        and all(status == "AVAILABLE" for status in segment_statuses.values())
+    )
+    result: Dict[str, Any] = {
+        "rotation_gap_metrics_available": structure_valid,
+        "cross_gap_status": cross.get("status", "MISSING"),
+        "segment_statuses": segment_statuses,
+        "enabled_target_nees_required": recovery_enabled,
+    }
+    if recovery_enabled:
+        nees = gap.get("first_resumed_position_nees")
+        if not isinstance(nees, Mapping):
+            raise TrialError("enabled target lacks first-resumed NEES evidence")
+        nees_available = nees.get("status") == "AVAILABLE"
+        nees_pass = bool(nees.get("pass", False))
+        anchor_bound = bool(
+            nees.get("commit_state_is_first_published_post_gap_anchor", False)
+        )
+        result.update(
+            {
+                "first_resumed_position_nees_available": nees_available,
+                "first_resumed_position_nees_within_11_345": nees_pass,
+                "commit_state_is_first_published_post_gap_anchor": anchor_bound,
+                "pass": structure_valid
+                and nees_available
+                and nees_pass
+                and anchor_bound,
+            }
+        )
+    else:
+        result["pass"] = structure_valid
+    return result
+
+
+def assess_rotation_target_numeric_acceptance(
+    gap: Mapping[str, Any], metrics: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Apply every prospectively frozen target metric as a finite upper bound."""
+
+    def nested(root: Mapping[str, Any], path: Sequence[str]) -> Any:
+        value: Any = root
+        for key in path:
+            if not isinstance(value, Mapping) or key not in value:
+                return None
+            value = value[key]
+        return value
+
+    endpoints = {
+        "cross_gap_translation_m": (
+            nested(
+                gap,
+                ("cross_gap_relative_transform", "relative_translation_error_m"),
+            ),
+            "rotation_gap.cross_gap_relative_transform.relative_translation_error_m",
+        ),
+        "cross_gap_rotation_deg": (
+            nested(
+                gap,
+                ("cross_gap_relative_transform", "relative_rotation_error_deg"),
+            ),
+            "rotation_gap.cross_gap_relative_transform.relative_rotation_error_deg",
+        ),
+        "full_ate_rmse_m": (
+            nested(
+                gap,
+                ("segments", "full_independent_se3_alignment", "rmse_m"),
+            ),
+            "rotation_gap.segments.full_independent_se3_alignment.rmse_m",
+        ),
+        "pre_gap_ate_rmse_m": (
+            nested(
+                gap,
+                ("segments", "pre_gap_independent_se3_alignment", "rmse_m"),
+            ),
+            "rotation_gap.segments.pre_gap_independent_se3_alignment.rmse_m",
+        ),
+        "post_gap_ate_rmse_m": (
+            nested(
+                gap,
+                ("segments", "post_gap_independent_se3_alignment", "rmse_m"),
+            ),
+            "rotation_gap.segments.post_gap_independent_se3_alignment.rmse_m",
+        ),
+        "translation_rpe_1m_rmse_m": (
+            nested(metrics, ("rpe_translation_1m", "stats", "rmse")),
+            "metrics.rpe_translation_1m.stats.rmse",
+        ),
+        "rotation_rpe_1m_rmse_deg": (
+            nested(metrics, ("rpe_rotation_1m_deg", "stats", "rmse")),
+            "metrics.rpe_rotation_1m_deg.stats.rmse",
+        ),
+        "first_resumed_position_nees": (
+            nested(gap, ("first_resumed_position_nees", "nees")),
+            "rotation_gap.first_resumed_position_nees.nees",
+        ),
+    }
+    gates: Dict[str, Any] = {}
+    for name, (raw_value, source) in endpoints.items():
+        threshold = float(ROTATION_TARGET_THRESHOLDS[name])
+        try:
+            if isinstance(raw_value, bool):
+                raise TypeError("Boolean is not a metric")
+            numeric = float(raw_value)
+        except (TypeError, ValueError):
+            numeric = None
+        finite = numeric is not None and math.isfinite(numeric)
+        passed = bool(finite and 0.0 <= numeric <= threshold)
+        gates[name] = {
+            "source": source,
+            "observed": numeric if finite else None,
+            "observed_repr": None if finite else repr(raw_value),
+            "finite": finite,
+            "comparison": "finite_nonnegative_and_less_than_or_equal",
+            "threshold": threshold,
+            "pass": passed,
+        }
+    passed = all(gate["pass"] for gate in gates.values())
+    return {
+        "status": "PASS" if passed else "FAIL",
+        "pass": passed,
+        "all_values_finite": all(gate["finite"] for gate in gates.values()),
+        "all_thresholds_inclusive": True,
+        "gates": gates,
     }
 
 
@@ -1590,6 +2519,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
     output_valid = False
     evaluation_valid = False
     seam_valid = False
+    recovery_valid = False
     capture_valid = args.mode == "scored"
     launch_record: Optional[Dict[str, Any]] = None
     estimator_child_died = False
@@ -1648,6 +2578,9 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             "pairing_census": file_identity(PAIRING_CENSUS),
             "geometry_bundle": file_identity(GEOMETRY_BUNDLE),
         }
+        candidate_config_text = config.read_text(encoding="utf-8", errors="strict")
+        recovery_enabled = candidate_recovery_enabled(candidate_config_text)
+        manifest["candidate"]["long_gap_recovery_enabled"] = recovery_enabled
         manifest["build_provenance"] = validate_build_binding(
             build_root, binary, source_before_snapshot, args.build_manifest
         )
@@ -1700,7 +2633,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         manifest["ground_truth_firewall"] = validate_runtime_firewall(
             estimator_argv,
             resolved_text,
-            config.read_text(encoding="utf-8", errors="strict"),
+            candidate_config_text,
             bag_info_text,
             reference,
         )
@@ -1776,7 +2709,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         launch_record = run_command(
             wrapped_argv,
             run_dir / "diagnostics" / "console.log",
-            environment,
+            select_command_environment("estimator_runtime", environment),
             args.timeout_seconds,
         )
         launch_record["estimator_argv"] = estimator_argv
@@ -1809,6 +2742,22 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         manifest["completion"]["estimator_completed"] = (
             command_succeeded(launch_record) and not estimator_child_died
         )
+        try:
+            manifest["recovery_runtime"] = parse_recovery_runtime(
+                console_path.read_text(encoding="utf-8", errors="replace"),
+                recovery_enabled,
+                args.sequence,
+            )
+            recovery_valid = True
+        except TrialError as exc:
+            manifest["recovery_runtime"] = {
+                "status": "INVALID",
+                "reason": str(exc),
+                "enabled_by_candidate_config": recovery_enabled,
+            }
+            manifest["stage_errors"].append(
+                {"stage": "recovery_runtime", "type": type(exc).__name__, "message": str(exc)}
+            )
         try:
             summaries = parse_runtime_summaries(
                 console_path.read_text(encoding="utf-8", errors="replace")
@@ -1853,6 +2802,10 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         else:
             seam_valid = False
         manifest["checks"]["exact_header_runtime_and_static_census_match"] = seam_valid
+        manifest["checks"]["recovery_runtime_contract_valid_or_not_enabled"] = (
+            recovery_valid
+        )
+        seam_valid = seam_valid and recovery_valid
 
         # Ground truth is first resolved/opened here, after every runtime group closes.
         reference = _regular_file(reference, "reference trajectory")
@@ -1861,6 +2814,10 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         manifest["completion"]["reference_first_open_utc"] = utc_now()
         manifest["reference"] = file_identity(reference)
         manifest["checks"]["reference_opened_only_post_close"] = True
+        evaluation_environment, evaluation_binding = (
+            pinned_post_close_python_environment(environment, EVO_SITE_PACKAGES)
+        )
+        manifest["post_close_evaluation_environment"] = evaluation_binding
 
         try:
             manifest["outputs"]["state"] = validate_numeric_table(paths["state"], 8)
@@ -1907,8 +2864,29 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                         paths["deviation"],
                         paths["timing"],
                         paths["trajectory"],
+                        sequence=args.sequence,
+                        recovery_runtime=manifest.get("recovery_runtime", {}),
                     )
-                    output_valid = True
+                    terminal = assess_terminal_completion(
+                        manifest.get("pairing_census", {})
+                        .get("binding", {})
+                        .get("selected_last_header_stamp_ns"),
+                        manifest["outputs"]["state"],
+                    )
+                    manifest["completion"].update(terminal)
+                    if terminal["tail_gap_pass"]:
+                        output_valid = True
+                    else:
+                        manifest["stage_errors"].append(
+                            {
+                                "stage": "terminal_completion",
+                                "type": "FrozenGateFailure",
+                                "message": (
+                                    "trajectory terminal gap exceeds frozen 0.10 s bound: "
+                                    "{}".format(terminal["tail_gap_seconds"])
+                                ),
+                            }
+                        )
             except TrialError as exc:
                 manifest["stage_errors"].append(
                     {"stage": "output_consistency", "type": type(exc).__name__, "message": str(exc)}
@@ -1950,7 +2928,9 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                     name,
                     argv,
                     run_dir / "metrics" / (name + ".log"),
-                    environment,
+                    select_command_environment(
+                        "evo_metric", environment, evaluation_environment
+                    ),
                     min(args.timeout_seconds, 300.0),
                 )
                 metric_successes[name] = succeeded
@@ -1964,14 +2944,48 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                         )
             if args.sequence == "rotation/rotation.bag":
                 try:
-                    gap = evaluate_rotation_gap(paths["trajectory"], reference)
+                    covariance_evidence = None
+                    if recovery_enabled and manifest.get("recovery_runtime", {}).get(
+                        "status"
+                    ) == "AVAILABLE":
+                        covariance_evidence = manifest["recovery_runtime"].get(
+                            "commit_covariance"
+                        )
+                    gap = evaluate_rotation_gap(
+                        paths["trajectory"], reference, covariance_evidence
+                    )
                     gap_path = run_dir / "metrics" / "rotation_gap_metrics.json"
                     atomic_write_new_json(gap_path, gap)
                     manifest["metrics"]["rotation_gap"] = {
                         "artifact": file_identity(gap_path),
                         "value": gap,
                     }
-                    metric_successes["rotation_gap"] = True
+                    gap_gate = assess_rotation_gap_evidence(
+                        gap, recovery_enabled
+                    )
+                    manifest["checks"].update(gap_gate)
+                    target_acceptance = assess_rotation_target_numeric_acceptance(
+                        gap, manifest["metrics"]
+                    )
+                    manifest["target_acceptance"] = target_acceptance
+                    manifest["checks"][
+                        "all_rotation_target_numeric_thresholds_pass"
+                    ] = bool(target_acceptance["pass"])
+                    metric_successes["rotation_gap"] = bool(
+                        gap_gate["pass"] and target_acceptance["pass"]
+                    )
+                    if not metric_successes["rotation_gap"]:
+                        manifest["stage_errors"].append(
+                            {
+                                "stage": "rotation_gap",
+                                "type": "ScientificGateFailure",
+                                "message": (
+                                    "frozen gap metrics or enabled-target commit "
+                                    "covariance/NEES evidence, or a numeric target "
+                                    "threshold did not pass"
+                                ),
+                            }
+                        )
                 except (TrialError, ValueError, np.linalg.LinAlgError) as exc:
                     metric_successes["rotation_gap"] = False
                     manifest["stage_errors"].append(
@@ -2008,7 +3022,9 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                             "/kaist_vio_turnsafe_baseline",
                         ],
                         run_dir / "diagnostics" / "geometry_atlas.log",
-                        environment,
+                        select_command_environment(
+                            "geometry_atlas", environment, evaluation_environment
+                        ),
                         min(args.timeout_seconds, 1800.0),
                     )
                     if atlas_ok and (atlas_dir / "geometry_manifest.json").is_file():
