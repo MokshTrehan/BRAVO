@@ -2349,6 +2349,29 @@ def assess_rotation_target_numeric_acceptance(
     }
 
 
+def assess_rotation_target_acceptance(
+    gap: Mapping[str, Any],
+    metrics: Mapping[str, Any],
+    recovery_enabled: bool,
+) -> Dict[str, Any]:
+    if not recovery_enabled:
+        return {
+            "status": "NOT_APPLICABLE",
+            "reason": "candidate_recovery_disabled_control_or_diagnostic",
+            "required": False,
+            "admission_pass": True,
+            "pass": None,
+            "gates": {},
+        }
+    result = assess_rotation_target_numeric_acceptance(gap, metrics)
+    return {
+        **result,
+        "reason": "NONE",
+        "required": True,
+        "admission_pass": bool(result["pass"]),
+    }
+
+
 def metric_archive(path: Path) -> Dict[str, Any]:
     path = _regular_file(path, "evo metric archive")
     try:
@@ -2977,15 +3000,19 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                         gap, recovery_enabled
                     )
                     manifest["checks"].update(gap_gate)
-                    target_acceptance = assess_rotation_target_numeric_acceptance(
-                        gap, manifest["metrics"]
+                    target_acceptance = assess_rotation_target_acceptance(
+                        gap, manifest["metrics"], recovery_enabled
                     )
                     manifest["target_acceptance"] = target_acceptance
                     manifest["checks"][
-                        "all_rotation_target_numeric_thresholds_pass"
-                    ] = bool(target_acceptance["pass"])
+                        "rotation_target_numeric_thresholds_required"
+                    ] = bool(target_acceptance["required"])
+                    if target_acceptance["required"]:
+                        manifest["checks"][
+                            "all_rotation_target_numeric_thresholds_pass"
+                        ] = bool(target_acceptance["pass"])
                     metric_successes["rotation_gap"] = bool(
-                        gap_gate["pass"] and target_acceptance["pass"]
+                        gap_gate["pass"] and target_acceptance["admission_pass"]
                     )
                     if not metric_successes["rotation_gap"]:
                         manifest["stage_errors"].append(

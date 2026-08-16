@@ -535,6 +535,22 @@ class OutputValidationTests(unittest.TestCase):
 
 
 class RotationGapEvaluatorTests(unittest.TestCase):
+    def test_disabled_rotation_control_skips_only_target_numeric_admission(self) -> None:
+        disabled = TRIAL.assess_rotation_target_acceptance({}, {}, False)
+        self.assertEqual(disabled["status"], "NOT_APPLICABLE")
+        self.assertFalse(disabled["required"])
+        self.assertTrue(disabled["admission_pass"])
+        self.assertIsNone(disabled["pass"])
+
+        enabled = TRIAL.assess_rotation_target_acceptance({}, {}, True)
+        self.assertEqual(enabled["status"], "FAIL")
+        self.assertTrue(enabled["required"])
+        self.assertFalse(enabled["admission_pass"])
+        self.assertFalse(enabled["pass"])
+        self.assertEqual(
+            set(enabled["gates"]), set(TRIAL.ROTATION_TARGET_THRESHOLDS)
+        )
+
     def test_every_target_numeric_endpoint_is_finite_inclusive_and_independent(self) -> None:
         thresholds = dict(TRIAL.ROTATION_TARGET_THRESHOLDS)
         gap = {
