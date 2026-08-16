@@ -1,10 +1,13 @@
 # S1 KAIST `rotation` outage-recovery plan
 
-Status: **ACTIVE DEVELOPMENT**  
-Frozen S1 base: `49a653ab3c6e69f436aadb749d1f8238624288e6`  
-Development branch: `schurvio-lite/rotation-outage-robustness`  
-Development sequence: KAIST `rotation`  
-Regression suite: the other ten KAIST sequences  
+- Status: **VALIDATED_ON_KAIST11**
+- Frozen S1 base: `49a653ab3c6e69f436aadb749d1f8238624288e6`
+- Development branch: `schurvio-lite/rotation-outage-robustness`
+- Development sequence: KAIST `rotation`
+- Regression suite: the other ten KAIST sequences
+- Validated science commit: `2751bcdc0fae25c993b3224dc5fa40aaab6571d7`
+- Evidence root: `/home/moksh/schurvio-icra27-artifacts/rotation-robustness/r2-20260816T050224Z`
+- Result report: [`ROTATION_OUTAGE_ROBUSTNESS_REPORT.md`](ROTATION_OUTAGE_ROBUSTNESS_REPORT.md)
 
 ## Scope and evidence boundary
 
@@ -104,9 +107,11 @@ The order is fixed and stops at the first full pass:
    byte-identical.
 2. `C1`: the single diagnostic global descriptor change
    `use_klt: true -> false`, with every other parameter fixed. It is diagnostic
-   because native descriptor tracking is not the offline gap bridge.
+   because native descriptor tracking is not the offline gap bridge. **Rejected:**
+   the original descriptor path terminated in OpenCV `batchDistance`; it was
+   retained and not repaired.
 3. `C2`: default-off, gap-gated PnP reanchor while normal operation remains
-   frozen KLT.
+   frozen KLT. **Selected:** target 3/3 and regression 10/10 passed.
 4. `C3`: explicitly segmented restart only if `C2` rejects safely or fails.
 
 No threshold sweep or combinatorial tuning is allowed. Kill a candidate on
@@ -169,3 +174,7 @@ substituted.
 - `VALIDATED_ON_KAIST11`: target 3/3 and all ten regressions pass. This is a
   KAIST result, not a general robustness claim.
 - `STOPPED_NEGATIVE`: bounded candidates are exhausted without a pass.
+
+Final decision: **`VALIDATED_ON_KAIST11`**. The decision applies to the frozen
+KAIST design above; it is not an independent general-robustness or
+Schur-causation claim.
