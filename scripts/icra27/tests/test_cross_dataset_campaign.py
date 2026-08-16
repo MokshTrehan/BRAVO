@@ -1,5 +1,5 @@
 #!/usr/bin/python3.8
-"""Focused non-ROS tests for the resume-safe CDSC-1R2 campaign driver."""
+"""Focused non-ROS tests for the resume-safe CDSC-1R3 campaign driver."""
 
 from __future__ import annotations
 
@@ -430,7 +430,7 @@ class CampaignTest(unittest.TestCase):
         u0.mkdir()
         protocol = self.base / "protocol.md"
         matrix = self.base / "matrix.yaml"
-        protocol.write_text("- Protocol ID: `CDSC-1R2`\nPROSPECTIVE_NOT_RUN\n", encoding="utf-8")
+        protocol.write_text("- Protocol ID: `CDSC-1R3`\nPROSPECTIVE_NOT_RUN\n", encoding="utf-8")
         matrix.write_text("fixture: true\n", encoding="utf-8")
         self.paths = campaign.RuntimePaths(
             repo_root=repo,

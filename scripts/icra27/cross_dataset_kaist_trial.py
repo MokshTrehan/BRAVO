@@ -1,5 +1,5 @@
 #!/usr/bin/python3.8
-"""Append-only fresh-KAIST adapter for the CDSC-1R2 U0/S1 comparison.
+"""Append-only fresh-KAIST adapter for the CDSC-1R3 U0/S1 comparison.
 
 This module deliberately does not alter either estimator.  U0 runs the pinned
 upstream executable, native KAIST configuration, and native record-time stereo
@@ -289,9 +289,9 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
 
 def validate_canonical_campaign(protocol: Path, matrix: Path) -> Dict[str, Any]:
     if protocol != CANONICAL_PROTOCOL.resolve(strict=True):
-        raise TrialError("protocol is not the canonical CDSC-1R2 path")
+        raise TrialError("protocol is not the canonical CDSC-1R3 path")
     if matrix != CANONICAL_MATRIX.resolve(strict=True):
-        raise TrialError("matrix is not the canonical CDSC-1R2 path")
+        raise TrialError("matrix is not the canonical CDSC-1R3 path")
     return {"protocol": common.file_identity(protocol), "matrix": common.file_identity(matrix)}
 
 
@@ -305,7 +305,7 @@ def launch_arguments(
     run_dir: Path,
 ) -> List[str]:
     if bag_duration != -1.0:
-        raise TrialError("CDSC-1R2 KAIST must run from the frozen start to bag end")
+        raise TrialError("CDSC-1R3 KAIST must run from the frozen start to bag end")
     paths = {
         "state": run_dir / "trajectory" / "state_estimate.txt",
         "std": run_dir / "trajectory" / "state_deviation.txt",
@@ -453,7 +453,7 @@ def kaist_pair_census(
     """Return normalized CDSC evidence, the full KAIST census, and bag identity."""
 
     if bag_start != 0.0 or bag_duration != -1.0:
-        raise TrialError("CDSC-1R2 KAIST census requires the complete adapted bag")
+        raise TrialError("CDSC-1R3 KAIST census requires the complete adapted bag")
     messages, bag_identity_raw, topic_identity = pairing.read_bag(
         bag, CAMERA0_TOPIC, CAMERA1_TOPIC, IMU_TOPIC
     )
@@ -826,7 +826,7 @@ def assess_kaist_output_coverage(
 def _start_geometry_recorder(
     run_dir: Path, environment: Mapping[str, str], system: str
 ) -> common.ManagedProcess:
-    recorder_name = "icra27_cdsc1r2_kaist_geometry_recorder"
+    recorder_name = "icra27_cdsc1r3_kaist_geometry_recorder"
     recorder = common.start_managed_process(
         "geometry_recorder",
         [
@@ -918,6 +918,8 @@ def classify_outcome(facts: Mapping[str, Any]) -> str:
         return "INVALID_OUTPUT"
     if not facts.get("outputs_valid", False):
         return "PARTIAL" if abnormal else "INVALID_OUTPUT"
+    if not facts.get("input_decode_valid", True):
+        return "TRACKING_LOSS"
     if not facts.get("continuity_pass", False):
         return "TRACKING_LOSS"
     if not facts.get("tail_pass", False):
@@ -1170,7 +1172,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
     started = time.monotonic()
     result: Dict[str, Any] = {
         "schema": SCHEMA,
-        "adapter": "fresh_kaist_cdsc1r2",
+        "adapter": "fresh_kaist_cdsc1r3",
         "protocol_id": args.protocol_id,
         "run_id": args.run_id,
         "attempt_index": args.attempt_index,
@@ -1221,6 +1223,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             "ground_truth_never_opened_by_runner": True,
             "original_u0_never_modified_or_rescued": args.system == "U0",
             "runtime_inputs_unchanged": None,
+            "input_decode_failure_count_zero": None,
             "late_initialization_is_descriptive_only": True,
         },
         "completion": None,
@@ -1265,6 +1268,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
     continuity_pass = False
     tail_pass = False
     numeric_integrity_valid = True
+    input_decode_valid: Optional[bool] = None
     capture_closed = args.mode == "scored"
     linkage_valid = args.mode == "scored"
     exact_u0_teardown = False
@@ -1531,6 +1535,8 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             for name in ("nonfinite_pattern", "reset_pattern", "covariance_failure_pattern")
         )
         result["checks"]["numeric_integrity_valid"] = numeric_integrity_valid
+        input_decode_valid = not console["image_decode_failure_pattern"]
+        result["checks"]["input_decode_failure_count_zero"] = input_decode_valid
         result["checks"]["s1_runtime_pairing_evidence_valid"] = runtime_pairing_valid
         exact_u0_teardown = bool(
             args.system == "U0"
@@ -1645,6 +1651,13 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                 result["passage"] = common.passage_record(
                     result["input_interval"], state, result["completion"]
                 )
+                if input_decode_valid is False:
+                    result["completion"]["pass"] = False
+                    result["completion"]["input_decode_valid"] = False
+                    result["passage"]["complete"] = False
+                    result["passage"]["reason"] = "INPUT_DECODE_FAILURE"
+                    coverage_pass = False
+                    continuity_pass = False
             except KAIST_VALIDATION_ERRORS as exc:
                 common._record_error(result, "completion", exc)
 
@@ -1775,6 +1788,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             and not bool(launch_record and launch_record.get("process_group_survived_cleanup")),
             "runtime_contract_valid": runtime_contract_valid,
             "numeric_integrity_valid": numeric_integrity_valid,
+            "input_decode_valid": input_decode_valid,
             "state_kind": state_kind,
             "outputs_valid": outputs_valid,
             "continuity_pass": continuity_pass,
@@ -1789,6 +1803,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         result["strict_process_health"] = bool(
             runtime_contract_valid
             and numeric_integrity_valid
+            and input_decode_valid
             and facts["teardown_ok"]
             and not launch_abnormal
             and not facts["timed_out"]
@@ -1952,7 +1967,7 @@ def _load_result(
         raise TrialError("{} sequence result is not an object".format(system))
     expected = {
         "schema": SCHEMA,
-        "protocol_id": "CDSC-1R2",
+        "protocol_id": "CDSC-1R3",
         "dataset": DATASET,
         "sequence": "rotation/rotation.bag",
         "system": system,
@@ -2070,13 +2085,13 @@ def _s1_rotation_artifact_precondition(
 def _matrix_rotation_declared_binding(matrix_path: Path) -> Dict[str, Any]:
     """Bind the rotation row without resolving or opening its ground truth."""
 
-    matrix_path = common._regular_file(matrix_path, "CDSC-1R2 matrix")
+    matrix_path = common._regular_file(matrix_path, "CDSC-1R3 matrix")
     if matrix_path != CANONICAL_MATRIX.resolve(strict=True):
-        raise TrialError("post-pair matrix is not the canonical CDSC-1R2 path")
+        raise TrialError("post-pair matrix is not the canonical CDSC-1R3 path")
     try:
         matrix = yaml.safe_load(matrix_path.read_text(encoding="utf-8", errors="strict"))
     except yaml.YAMLError as exc:
-        raise TrialError("CDSC-1R2 matrix is invalid YAML") from exc
+        raise TrialError("CDSC-1R3 matrix is invalid YAML") from exc
     rows = matrix.get("sequences") if isinstance(matrix, dict) else None
     matches = [
         row
@@ -2213,7 +2228,7 @@ def _post_pair_result_base(
         "schema": POST_PAIR_SCHEMA,
         "status": "C2_VALIDATION_FAILURE",
         "pass": False,
-        "protocol_id": "CDSC-1R2",
+        "protocol_id": "CDSC-1R3",
         "dataset": DATASET,
         "sequence": "rotation/rotation.bag",
         "source_runs": dict(source_runs),

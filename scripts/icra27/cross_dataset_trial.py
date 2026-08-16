@@ -56,7 +56,7 @@ import kaist_runtime_identity as pinned_runtime  # noqa: E402
 
 
 SCHEMA = "schurvio.icra27.cross_dataset.sequence_result.v1"
-NATIVE_CENSUS_SCHEMA = "schurvio.icra27.cross_dataset.native_pair_census.v2"
+NATIVE_CENSUS_SCHEMA = "schurvio.icra27.cross_dataset.native_pair_census.v3"
 SYSTEMS = ("U0", "S1")
 MODES = ("scored", "capture")
 DATASETS = ("euroc_mav", "tum_vi")
@@ -139,6 +139,7 @@ NONFINITE_RE = re.compile(r"\b(?:nan|inf|nonfinite|non-finite)\b", re.IGNORECASE
 COVARIANCE_FAILURE_RE = re.compile(
     r"negative covariance|covariance.*(?:invalid|failure|not positive)", re.IGNORECASE
 )
+DECODE_FAILURE_RE = re.compile(r"cv_bridge\s+exception", re.IGNORECASE)
 RESET_RE = re.compile(r"\b(?:resetting|estimator reset|state reset)\b", re.IGNORECASE)
 RECOVERY_PREFIX = "[LONG-GAP-RECOVERY]:"
 
@@ -820,6 +821,15 @@ def validate_config_contract(system: str, config: Path) -> Dict[str, Any]:
         )
     if mapping.get("use_stereo") is not True or mapping.get("max_cameras") != 2:
         raise TrialError("cross-dataset config must retain native two-camera stereo")
+    raw_track_frequency = mapping.get("track_frequency")
+    if (
+        isinstance(raw_track_frequency, bool)
+        or not isinstance(raw_track_frequency, (int, float))
+    ):
+        raise TrialError("cross-dataset config must define numeric track_frequency")
+    track_frequency_hz = float(raw_track_frequency)
+    if not math.isfinite(track_frequency_hz) or track_frequency_hz <= 0.0:
+        raise TrialError("track_frequency must be finite and positive")
 
     external: Dict[str, Any] = {}
     for config_key, label in (
@@ -863,6 +873,8 @@ def validate_config_contract(system: str, config: Path) -> Dict[str, Any]:
         ),
         "updater_selectors_absent_from_dataset_config": True,
         "native_stereo": True,
+        "track_frequency_hz": track_frequency_hz,
+        "track_frequency_source": "canonical_dataset_config",
         "external_configs": external,
         "masks": masks,
     }
@@ -888,9 +900,9 @@ def validate_canonical_paths_and_hashes(
     if launch != expected_launch:
         raise TrialError("launch is not the canonical {} path".format(system))
     if protocol != CANONICAL_PROTOCOL.resolve(strict=True):
-        raise TrialError("protocol is not the canonical CDSC-1R2 path")
+        raise TrialError("protocol is not the canonical CDSC-1R3 path")
     if matrix != CANONICAL_MATRIX.resolve(strict=True):
-        raise TrialError("matrix is not the canonical CDSC-1R2 path")
+        raise TrialError("matrix is not the canonical CDSC-1R3 path")
     config_identity = file_identity(config)
     launch_identity = file_identity(launch)
     if config_identity["sha256"] != DATASET_CONFIG_SHA256[dataset]:
@@ -1331,8 +1343,165 @@ def project_native_bag_view(
     )
 
 
+def _ordered_stereo_callback_digest(pairs: Sequence[Any]) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"schurvio.icra27.ordered_stereo_callback_sequence.v1\0")
+    for dispatch_index, pair in enumerate(pairs):
+        digest.update(
+            struct.pack(
+                "<QQQQQQQQ",
+                dispatch_index,
+                int(pair.selection_index),
+                int(pair.camera0_filtered_index),
+                int(pair.camera1_filtered_index),
+                int(pair.camera0_record_time_ns),
+                int(pair.camera1_record_time_ns),
+                int(pair.camera0_header_time_ns),
+                int(pair.camera1_header_time_ns),
+            )
+        )
+    return digest.hexdigest()
+
+
+def apply_visualizer_track_frequency_gate(
+    pairs: Sequence[Any], track_frequency_hz: float
+) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
+    """Mirror the stock ROS1Visualizer stereo callback's pre-decode gate.
+
+    The native serial reader can invoke ``callback_stereo`` more than once
+    with the same camera-0 message because its future-candidate lookup does
+    not reject an already-used candidate. The unchanged visualizer applies
+    its track-frequency gate before decoding or feeding the estimator. The
+    estimator-facing input population is therefore the accepted callback
+    sequence, while the raw dispatch population remains valuable evidence.
+    Python ``float`` has the same binary64 arithmetic used by the pinned C++
+    expression, and ``_cpp_ros_time_to_sec`` mirrors ``ros::Time::toSec``.
+    """
+
+    if (
+        isinstance(track_frequency_hz, bool)
+        or not isinstance(track_frequency_hz, (int, float))
+    ):
+        raise TrialError("visualizer track frequency must be numeric")
+    frequency = float(track_frequency_hz)
+    if not math.isfinite(frequency) or frequency <= 0.0:
+        raise TrialError("visualizer track frequency must be finite and positive")
+    time_delta = 1.0 / frequency
+    if not math.isfinite(time_delta) or time_delta <= 0.0:
+        raise TrialError("visualizer track-frequency period is invalid")
+
+    raw_timestamps_ns = [int(pair.camera_timestamp_ns) for pair in pairs]
+    raw_equal_adjacent_count = sum(
+        right == left
+        for left, right in zip(raw_timestamps_ns, raw_timestamps_ns[1:])
+    )
+    raw_reversal_adjacent_count = sum(
+        right < left
+        for left, right in zip(raw_timestamps_ns, raw_timestamps_ns[1:])
+    )
+
+    accepted: List[Any] = []
+    dropped: List[Dict[str, Any]] = []
+    last_accepted_timestamp_s: Optional[float] = None
+    last_accepted_timestamp_ns: Optional[int] = None
+    for dispatch_index, pair in enumerate(pairs):
+        timestamp_ns = int(pair.camera_timestamp_ns)
+        timestamp_s = pairing._cpp_ros_time_to_sec(timestamp_ns)
+        threshold_s = (
+            None
+            if last_accepted_timestamp_s is None
+            else last_accepted_timestamp_s + time_delta
+        )
+        if threshold_s is not None and timestamp_s < threshold_s:
+            if last_accepted_timestamp_ns is None:
+                raise TrialError("visualizer gate lost its accepted timestamp state")
+            dropped.append(
+                {
+                    "raw_dispatch_index": dispatch_index,
+                    "raw_selection_index": int(pair.selection_index),
+                    "camera0_filtered_index": int(pair.camera0_filtered_index),
+                    "camera1_filtered_index": int(pair.camera1_filtered_index),
+                    "camera0_record_time_ns": int(pair.camera0_record_time_ns),
+                    "camera1_record_time_ns": int(pair.camera1_record_time_ns),
+                    "camera0_header_time_ns": int(pair.camera0_header_time_ns),
+                    "camera1_header_time_ns": int(pair.camera1_header_time_ns),
+                    "camera_timestamp_ns": timestamp_ns,
+                    "camera_timestamp_s": timestamp_s,
+                    "previous_accepted_timestamp_ns": last_accepted_timestamp_ns,
+                    "previous_accepted_timestamp_s": last_accepted_timestamp_s,
+                    "minimum_accepted_timestamp_s": threshold_s,
+                    "delta_from_previous_accepted_ns": (
+                        timestamp_ns - last_accepted_timestamp_ns
+                    ),
+                    "reason": (
+                        "timestamp_less_than_previous_accepted_plus_"
+                        "inverse_track_frequency"
+                    ),
+                }
+            )
+            continue
+        accepted.append(pair)
+        last_accepted_timestamp_s = timestamp_s
+        last_accepted_timestamp_ns = timestamp_ns
+
+    if not accepted:
+        raise TrialError("visualizer track-frequency gate accepted no stereo callback")
+    accepted_timestamps_ns = [int(pair.camera_timestamp_ns) for pair in accepted]
+    if any(
+        right <= left
+        for left, right in zip(
+            accepted_timestamps_ns, accepted_timestamps_ns[1:]
+        )
+    ):
+        raise TrialError(
+            "visualizer-accepted camera timestamps are not strictly increasing"
+        )
+    return tuple(accepted), {
+        "policy": "stock_ros1_visualizer_stereo_track_frequency_gate_v1",
+        "timestamp_source": "camera0_ros_header_stamp_toSec_binary64",
+        "expression": (
+            "drop_if_timestamp_less_than_previous_accepted_timestamp_plus_"
+            "inverse_track_frequency"
+        ),
+        "comparison": "strict_less_than",
+        "gate_position": "before_image_decode_and_estimator_feed",
+        "track_frequency_hz": frequency,
+        "track_frequency_source": "canonical_dataset_config",
+        "implementation_binding": (
+            "system_runtime_source_and_binary_identity_in_sequence_result"
+        ),
+        "minimum_period_seconds": time_delta,
+        "raw_serial_dispatch_count": len(pairs),
+        "raw_serial_dispatch_sequence_sha256": _ordered_stereo_callback_digest(
+            pairs
+        ),
+        "raw_adjacent_equal_camera_timestamp_count": raw_equal_adjacent_count,
+        "raw_adjacent_reversed_camera_timestamp_count": (
+            raw_reversal_adjacent_count
+        ),
+        "raw_final_camera_timestamp_ns": (
+            raw_timestamps_ns[-1] if raw_timestamps_ns else None
+        ),
+        "raw_maximum_camera_timestamp_ns": (
+            max(raw_timestamps_ns) if raw_timestamps_ns else None
+        ),
+        "accepted_visualizer_callback_count": len(accepted),
+        "accepted_visualizer_callback_sequence_sha256": (
+            _ordered_stereo_callback_digest(accepted)
+        ),
+        "accepted_final_camera_timestamp_ns": accepted_timestamps_ns[-1],
+        "accepted_maximum_camera_timestamp_ns": max(accepted_timestamps_ns),
+        "frequency_dropped_dispatch_count": len(dropped),
+        "accepted_camera_timestamps_strictly_increasing": True,
+        "dropped_dispatches": dropped,
+    }
+
+
 def native_pair_census(
-    bag: Path, bag_start: float, bag_duration: float
+    bag: Path,
+    bag_start: float,
+    bag_duration: float,
+    track_frequency_hz: float,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     messages, bag_identity, topic_identity = pairing.read_bag(
         bag, CAMERA0_TOPIC, CAMERA1_TOPIC, IMU_TOPIC
@@ -1369,28 +1538,47 @@ def native_pair_census(
             bag_duration,
         )
     )
-    timestamps_ns = [pair.camera_timestamp_ns for pair in native.pairs]
-    if any(right <= left for left, right in zip(timestamps_ns, timestamps_ns[1:])):
-        raise TrialError("native selected camera timestamps are not strictly increasing")
+    accepted_pairs, visualizer_gate = apply_visualizer_track_frequency_gate(
+        native.pairs, track_frequency_hz
+    )
+    timestamps_ns = [pair.camera_timestamp_ns for pair in accepted_pairs]
     reused = {
         index: count for index, count in native.candidate_use_counts.items() if count > 1
     }
     gaps_over_threshold = [
         {
-            "start_timestamp_s": left / 1.0e9,
-            "end_timestamp_s": right / 1.0e9,
-            "duration_s": (right - left) / 1.0e9,
+            "start_timestamp_s": pairing._cpp_ros_time_to_sec(left),
+            "end_timestamp_s": pairing._cpp_ros_time_to_sec(right),
+            "duration_s": (
+                pairing._cpp_ros_time_to_sec(right)
+                - pairing._cpp_ros_time_to_sec(left)
+            ),
         }
         for left, right in zip(timestamps_ns, timestamps_ns[1:])
-        if (right - left) / 1.0e9 > MAXIMUM_STATE_GAP_SECONDS
+        if (
+            pairing._cpp_ros_time_to_sec(right)
+            - pairing._cpp_ros_time_to_sec(left)
+            > MAXIMUM_STATE_GAP_SECONDS
+        )
     ]
     interval = {
-        "source": "native_record_time_stereo_pair_census",
-        "first_selected_input_timestamp_s": timestamps_ns[0] / 1.0e9,
-        "last_selected_input_timestamp_s": timestamps_ns[-1] / 1.0e9,
+        "source": (
+            "native_record_time_stereo_dispatch_plus_"
+            "stock_visualizer_frequency_gate"
+        ),
+        "first_selected_input_timestamp_s": pairing._cpp_ros_time_to_sec(
+            timestamps_ns[0]
+        ),
+        "last_selected_input_timestamp_s": pairing._cpp_ros_time_to_sec(
+            timestamps_ns[-1]
+        ),
         "first_selected_input_timestamp_ns": timestamps_ns[0],
         "last_selected_input_timestamp_ns": timestamps_ns[-1],
-        "selected_pair_count": len(native.pairs),
+        "selected_pair_count": len(accepted_pairs),
+        "raw_serial_dispatch_pair_count": len(native.pairs),
+        "visualizer_frequency_dropped_pair_count": (
+            visualizer_gate["frequency_dropped_dispatch_count"]
+        ),
         "bag_view_bounds_source": full_bounds["source"],
         "bag_full_index_start_record_timestamp_ns": full_bounds[
             "first_record_timestamp_ns"
@@ -1436,6 +1624,7 @@ def native_pair_census(
         },
         "bag": bag_identity,
         "rosbag_index_reader": rosbag_index_reader,
+        "visualizer_track_frequency_gate": visualizer_gate,
         "topic_identity": topic_identity,
         "input_interval": interval,
         "diagnostics": {
@@ -1447,6 +1636,16 @@ def native_pair_census(
             "reused_candidate_message_count": len(reused),
             "candidate_reuse_occurrence_count": sum(count - 1 for count in reused.values()),
             "residual_used_index_count": len(native.residual_used_indices),
+            "raw_dispatch_adjacent_equal_camera_timestamp_count": (
+                visualizer_gate["raw_adjacent_equal_camera_timestamp_count"]
+            ),
+            "raw_dispatch_adjacent_reversed_camera_timestamp_count": (
+                visualizer_gate["raw_adjacent_reversed_camera_timestamp_count"]
+            ),
+            "visualizer_accepted_callback_count": len(accepted_pairs),
+            "visualizer_frequency_dropped_dispatch_count": (
+                visualizer_gate["frequency_dropped_dispatch_count"]
+            ),
         },
     }
     return census, _identity_from_census(bag, bag_identity)
@@ -1648,6 +1847,9 @@ def parse_console(path: Path) -> Dict[str, Any]:
         {"name": name, "pid": int(pid)} for name, pid in CHILD_START_RE.findall(text)
     ]
     recovery_lines = [line for line in text.splitlines() if RECOVERY_PREFIX in line]
+    decode_failure_lines = [
+        line for line in text.splitlines() if DECODE_FAILURE_RE.search(line)
+    ]
     return {
         "child_starts": child_starts,
         "child_exit_codes": child_exits,
@@ -1659,6 +1861,9 @@ def parse_console(path: Path) -> Dict[str, Any]:
         "nonfinite_pattern": bool(NONFINITE_RE.search(text)),
         "reset_pattern": bool(RESET_RE.search(text)),
         "covariance_failure_pattern": bool(COVARIANCE_FAILURE_RE.search(text)),
+        "image_decode_failure_pattern": bool(decode_failure_lines),
+        "image_decode_failure_count": len(decode_failure_lines),
+        "image_decode_failure_lines": decode_failure_lines,
         "recovery_event_line_count": len(recovery_lines),
         "recovery_event_lines": recovery_lines,
     }
@@ -1685,6 +1890,8 @@ def classify_outcome(facts: Mapping[str, Any]) -> str:
         return "INVALID_OUTPUT"
     if not facts.get("outputs_valid", False):
         return "PARTIAL" if abnormal else "INVALID_OUTPUT"
+    if not facts.get("input_decode_valid", True):
+        return "TRACKING_LOSS"
     if not facts.get("continuity_pass", False):
         return "TRACKING_LOSS"
     if not facts.get("tail_pass", False):
@@ -2177,12 +2384,17 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         "duration_seconds": None,
         "run_directory": str(run_dir),
         "input_interval": {
-            "source": "native_record_time_stereo_pair_census",
+            "source": (
+                "native_record_time_stereo_dispatch_plus_"
+                "stock_visualizer_frequency_gate"
+            ),
             "first_selected_input_timestamp_s": None,
             "last_selected_input_timestamp_s": None,
             "first_selected_input_timestamp_ns": None,
             "last_selected_input_timestamp_ns": None,
             "selected_pair_count": None,
+            "raw_serial_dispatch_pair_count": None,
+            "visualizer_frequency_dropped_pair_count": None,
             "bag_view_bounds_source": None,
             "bag_full_index_start_record_timestamp_ns": None,
             "bag_full_index_end_record_timestamp_ns": None,
@@ -2222,6 +2434,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             "ground_truth_never_opened_by_runner": True,
             "recovery_default_off": False,
             "recovery_runtime_event_count_zero": False,
+            "input_decode_failure_count_zero": None,
             "runtime_inputs_unchanged": None,
         },
         "completion": None,
@@ -2257,6 +2470,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
     continuity_pass = False
     tail_pass = False
     numeric_integrity_valid = True
+    input_decode_valid: Optional[bool] = None
     capture_closed = args.mode == "scored"
     linkage_valid = args.mode == "scored"
     exact_u0_teardown = False
@@ -2341,7 +2555,12 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         result["inputs"]["config_dependencies"] = dependencies
 
         stage = "native_pair_census"
-        census, bag_identity = native_pair_census(bag, args.bag_start, args.bag_duration)
+        census, bag_identity = native_pair_census(
+            bag,
+            args.bag_start,
+            args.bag_duration,
+            config_contract["track_frequency_hz"],
+        )
         validate_matrix_bag_identity(campaign, bag_identity)
         result["inputs"]["bag"] = bag_identity
         result["input_interval"] = census["input_interval"]
@@ -2496,6 +2715,8 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             )
         )
         result["checks"]["numeric_integrity_valid"] = numeric_integrity_valid
+        input_decode_valid = not console["image_decode_failure_pattern"]
+        result["checks"]["input_decode_failure_count_zero"] = input_decode_valid
         exact_u0_teardown = bool(
             args.system == "U0"
             and console["post_coverage_teardown_pattern"]
@@ -2572,6 +2793,13 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                 result["passage"] = passage_record(
                     result["input_interval"], state, result["completion"]
                 )
+                if input_decode_valid is False:
+                    result["completion"]["pass"] = False
+                    result["completion"]["input_decode_valid"] = False
+                    result["passage"]["complete"] = False
+                    result["passage"]["reason"] = "INPUT_DECODE_FAILURE"
+                    coverage_pass = False
+                    continuity_pass = False
             except TrialError as exc:
                 _record_error(result, "completion", exc)
 
@@ -2668,6 +2896,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             and not bool(launch_record and launch_record.get("process_group_survived_cleanup")),
             "runtime_contract_valid": runtime_contract_valid,
             "numeric_integrity_valid": numeric_integrity_valid,
+            "input_decode_valid": input_decode_valid,
             "state_kind": state_kind,
             "outputs_valid": outputs_valid,
             "continuity_pass": continuity_pass,
@@ -2691,6 +2920,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         result["strict_process_health"] = bool(
             runtime_contract_valid
             and numeric_integrity_valid
+            and input_decode_valid
             and facts["teardown_ok"]
             and not launch_abnormal
             and not facts["timed_out"]

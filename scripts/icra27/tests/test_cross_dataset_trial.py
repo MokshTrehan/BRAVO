@@ -45,6 +45,7 @@ def _complete_facts(**changes) -> dict:
         "teardown_ok": True,
         "runtime_contract_valid": True,
         "numeric_integrity_valid": True,
+        "input_decode_valid": True,
         "state_kind": "valid",
         "outputs_valid": True,
         "continuity_pass": True,
@@ -120,7 +121,7 @@ class ArtifactPublicationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             args = argparse.Namespace(
-                protocol_id="CDSC-1R2",
+                protocol_id="CDSC-1R3",
                 protocol_file=TRIAL.CANONICAL_PROTOCOL,
                 matrix_file=TRIAL.CANONICAL_MATRIX,
                 run_id="fixture-infra-failure",
@@ -161,6 +162,7 @@ class ArtifactPublicationTests(unittest.TestCase):
                 "trajectory/estimate_raw.tum",
             )
             self.assertFalse(result["estimator_close_receipt"]["estimator_attempted"])
+            self.assertIsNone(result["checks"]["input_decode_failure_count_zero"])
             self.assertTrue((run / "sequence_result.json").is_file())
             self.assertTrue((run / "SHA256SUMS").is_file())
 
@@ -187,6 +189,10 @@ class LaunchAndConfigContractTests(unittest.TestCase):
                 value = TRIAL.validate_config_contract(system, config)
                 self.assertFalse(value["recovery_enabled"])
                 self.assertTrue(value["native_stereo"])
+                self.assertEqual(value["track_frequency_hz"], 21.0)
+                self.assertEqual(
+                    value["track_frequency_source"], "canonical_dataset_config"
+                )
 
     def test_recovery_boolean_is_lexically_strict(self) -> None:
         self.assertFalse(TRIAL._strict_boolean_key("x: 1\n", "long_gap_recovery_enabled", False))
@@ -235,7 +241,7 @@ class CampaignAndParameterTests(unittest.TestCase):
     def test_matrix_binding_selects_exact_start_aware_row(self) -> None:
         bag = Path("/home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag").resolve()
         value = TRIAL.validate_campaign_bindings(
-            "CDSC-1R2",
+            "CDSC-1R3",
             TRIAL.CANONICAL_PROTOCOL.resolve(),
             TRIAL.CANONICAL_MATRIX.resolve(),
             "euroc_mav",
@@ -248,7 +254,7 @@ class CampaignAndParameterTests(unittest.TestCase):
         self.assertEqual(value["expected_bag"]["path"], str(bag))
         with self.assertRaisesRegex(TRIAL.TrialError, "bag start"):
             TRIAL.validate_campaign_bindings(
-                "CDSC-1R2",
+                "CDSC-1R3",
                 TRIAL.CANONICAL_PROTOCOL.resolve(),
                 TRIAL.CANONICAL_MATRIX.resolve(),
                 "euroc_mav",
@@ -367,11 +373,16 @@ class NativeProjectionAndPassageTests(unittest.TestCase):
                 "read_bag",
                 return_value=(messages, bag_identity, {}),
             ), mock.patch.dict(sys.modules, {"rosbag": fake_rosbag}):
-                census, identity = TRIAL.native_pair_census(bag, 5.0, -1.0)
+                census, identity = TRIAL.native_pair_census(
+                    bag, 5.0, -1.0, 21.0
+                )
 
         interval = census["input_interval"]
+        self.assertEqual(census["schema"], TRIAL.NATIVE_CENSUS_SCHEMA)
         self.assertEqual(identity["sha256"], bag_identity["sha256"])
         self.assertEqual(interval["selected_pair_count"], 2)
+        self.assertEqual(interval["raw_serial_dispatch_pair_count"], 2)
+        self.assertEqual(interval["visualizer_frequency_dropped_pair_count"], 0)
         self.assertEqual(interval["first_selected_input_timestamp_ns"], 105_000_000_000)
         self.assertEqual(interval["last_selected_input_timestamp_ns"], 110_000_000_000)
         self.assertEqual(interval["bag_full_index_start_record_timestamp_ns"], 0)
@@ -399,6 +410,232 @@ class NativeProjectionAndPassageTests(unittest.TestCase):
             census["rosbag_index_reader"]["module"]["sha256"],
             TRIAL.ROSBAG_INDEX_MODULE_SHA256,
         )
+
+    def test_native_candidate_reuse_is_retained_then_frequency_dropped(self) -> None:
+        """Mirror V1_01's genuine stock dispatch/callback distinction."""
+
+        messages = [
+            self._camera(TRIAL.pairing.KIND_CAMERA1, 1.000, 100.000),
+            self._camera(TRIAL.pairing.KIND_CAMERA1, 1.010, 100.050),
+            self._camera(TRIAL.pairing.KIND_CAMERA0, 1.011, 100.000),
+            self._camera(TRIAL.pairing.KIND_CAMERA1, 1.060, 100.050),
+            self._camera(TRIAL.pairing.KIND_CAMERA0, 1.061, 100.050),
+        ]
+        native = TRIAL.pairing.select_upstream_native(messages)
+        self.assertGreaterEqual(len(native.pairs), 2)
+        self.assertEqual(
+            native.pairs[0].camera0_filtered_index,
+            native.pairs[1].camera0_filtered_index,
+        )
+        self.assertEqual(
+            native.pairs[0].camera_timestamp_ns,
+            native.pairs[1].camera_timestamp_ns,
+        )
+
+        accepted, gate = TRIAL.apply_visualizer_track_frequency_gate(
+            native.pairs, 21.0
+        )
+        self.assertEqual(gate["raw_serial_dispatch_count"], len(native.pairs))
+        self.assertEqual(gate["frequency_dropped_dispatch_count"], 1)
+        self.assertEqual(gate["track_frequency_hz"], 21.0)
+        self.assertEqual(
+            gate["track_frequency_source"], "canonical_dataset_config"
+        )
+        self.assertEqual(len(accepted), len(native.pairs) - 1)
+        dropped = gate["dropped_dispatches"][0]
+        self.assertEqual(dropped["raw_dispatch_index"], 1)
+        self.assertEqual(dropped["delta_from_previous_accepted_ns"], 0)
+        self.assertEqual(
+            dropped["camera0_filtered_index"],
+            native.pairs[0].camera0_filtered_index,
+        )
+        accepted_ns = [pair.camera_timestamp_ns for pair in accepted]
+        self.assertTrue(
+            all(right > left for left, right in zip(accepted_ns, accepted_ns[1:]))
+        )
+
+    def test_visualizer_gate_preserves_raw_order_and_drops_nonpositive_time(self) -> None:
+        def pair(selection: int, timestamp_s: int):
+            timestamp_ns = timestamp_s * 1_000_000_000
+            return types.SimpleNamespace(
+                selection_index=selection,
+                camera0_filtered_index=selection * 2,
+                camera1_filtered_index=selection * 2 + 1,
+                camera0_record_time_ns=timestamp_ns,
+                camera1_record_time_ns=timestamp_ns,
+                camera0_header_time_ns=timestamp_ns,
+                camera1_header_time_ns=timestamp_ns,
+                camera_timestamp_ns=timestamp_ns,
+            )
+
+        raw = tuple(
+            pair(index, timestamp)
+            for index, timestamp in enumerate((100, 100, 90, 200, 150))
+        )
+        accepted, gate = TRIAL.apply_visualizer_track_frequency_gate(raw, 2.0)
+        self.assertEqual(
+            [value.camera_timestamp_ns for value in accepted],
+            [100_000_000_000, 200_000_000_000],
+        )
+        self.assertEqual(gate["raw_adjacent_equal_camera_timestamp_count"], 1)
+        self.assertEqual(gate["raw_adjacent_reversed_camera_timestamp_count"], 2)
+        self.assertEqual(gate["frequency_dropped_dispatch_count"], 3)
+        self.assertEqual(gate["raw_final_camera_timestamp_ns"], 150_000_000_000)
+        self.assertEqual(gate["raw_maximum_camera_timestamp_ns"], 200_000_000_000)
+        self.assertEqual(
+            gate["accepted_final_camera_timestamp_ns"], 200_000_000_000
+        )
+        self.assertEqual(
+            gate["accepted_maximum_camera_timestamp_ns"], 200_000_000_000
+        )
+
+        reordered = (raw[0], raw[2], raw[1], raw[3], raw[4])
+        _, reordered_gate = TRIAL.apply_visualizer_track_frequency_gate(
+            reordered, 2.0
+        )
+        self.assertNotEqual(
+            gate["raw_serial_dispatch_sequence_sha256"],
+            reordered_gate["raw_serial_dispatch_sequence_sha256"],
+        )
+        self.assertNotEqual(
+            gate["accepted_visualizer_callback_sequence_sha256"],
+            gate["raw_serial_dispatch_sequence_sha256"],
+        )
+
+        positive_subperiod = (
+            pair(0, 100),
+            types.SimpleNamespace(
+                selection_index=1,
+                camera0_filtered_index=2,
+                camera1_filtered_index=3,
+                camera0_record_time_ns=100_047_000_000,
+                camera1_record_time_ns=100_047_000_000,
+                camera0_header_time_ns=100_047_000_000,
+                camera1_header_time_ns=100_047_000_000,
+                camera_timestamp_ns=100_047_000_000,
+            ),
+            types.SimpleNamespace(
+                selection_index=2,
+                camera0_filtered_index=4,
+                camera1_filtered_index=5,
+                camera0_record_time_ns=100_050_000_000,
+                camera1_record_time_ns=100_050_000_000,
+                camera0_header_time_ns=100_050_000_000,
+                camera1_header_time_ns=100_050_000_000,
+                camera_timestamp_ns=100_050_000_000,
+            ),
+        )
+        accepted, gate = TRIAL.apply_visualizer_track_frequency_gate(
+            positive_subperiod, 21.0
+        )
+        self.assertEqual(gate["frequency_dropped_dispatch_count"], 1)
+        self.assertEqual(
+            [value.camera_timestamp_ns for value in accepted],
+            [100_000_000_000, 100_050_000_000],
+        )
+        self.assertEqual(
+            gate["dropped_dispatches"][0]["delta_from_previous_accepted_ns"],
+            47_000_000,
+        )
+        for invalid in (True, 0.0, -1.0, float("nan"), float("inf")):
+            with self.subTest(invalid=invalid), self.assertRaises(TRIAL.TrialError):
+                TRIAL.apply_visualizer_track_frequency_gate(raw, invalid)
+
+    def test_visualizer_gate_accepts_exact_period_and_drops_one_ns_below(self) -> None:
+        def pair(selection: int, timestamp_ns: int):
+            return types.SimpleNamespace(
+                selection_index=selection,
+                camera0_filtered_index=selection * 2,
+                camera1_filtered_index=selection * 2 + 1,
+                camera0_record_time_ns=timestamp_ns,
+                camera1_record_time_ns=timestamp_ns,
+                camera0_header_time_ns=timestamp_ns,
+                camera1_header_time_ns=timestamp_ns,
+                camera_timestamp_ns=timestamp_ns,
+            )
+
+        raw = (
+            pair(0, 100_000_000_000),
+            pair(1, 100_499_999_999),
+            pair(2, 100_500_000_000),
+        )
+        accepted, gate = TRIAL.apply_visualizer_track_frequency_gate(raw, 2.0)
+        self.assertEqual(
+            [value.camera_timestamp_ns for value in accepted],
+            [100_000_000_000, 100_500_000_000],
+        )
+        self.assertEqual(gate["comparison"], "strict_less_than")
+        self.assertEqual(gate["frequency_dropped_dispatch_count"], 1)
+        self.assertEqual(
+            gate["dropped_dispatches"][0]["camera_timestamp_ns"],
+            100_499_999_999,
+        )
+        self.assertEqual(
+            gate["dropped_dispatches"][0]["minimum_accepted_timestamp_s"],
+            100.5,
+        )
+
+    def test_census_interval_and_gaps_use_only_gate_accepted_callbacks(self) -> None:
+        def entry(timestamp_ns: int):
+            seconds, nanoseconds = divmod(timestamp_ns, 1_000_000_000)
+            return types.SimpleNamespace(
+                time=types.SimpleNamespace(secs=seconds, nsecs=nanoseconds)
+            )
+
+        class FakeBag:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def get_start_time(self) -> float:
+                return 0.0
+
+            def get_end_time(self) -> float:
+                return 5.0
+
+            def _get_indexes(self, connections):
+                if connections is not None:
+                    raise AssertionError("all-topic index request must use None")
+                return ([entry(0), entry(5_000_000_000)],)
+
+        messages = [
+            self._camera(TRIAL.pairing.KIND_CAMERA0, 1.000, 100.0),
+            self._camera(TRIAL.pairing.KIND_CAMERA1, 1.005, 100.0),
+            self._camera(TRIAL.pairing.KIND_CAMERA0, 2.000, 100.1),
+            self._camera(TRIAL.pairing.KIND_CAMERA1, 2.005, 100.1),
+            self._camera(TRIAL.pairing.KIND_CAMERA0, 3.000, 101.0),
+            self._camera(TRIAL.pairing.KIND_CAMERA1, 3.005, 101.0),
+            self._camera(TRIAL.pairing.KIND_CAMERA0, 4.000, 100.9),
+            self._camera(TRIAL.pairing.KIND_CAMERA1, 4.005, 100.9),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            bag = Path(temporary) / "accepted-only-interval.bag"
+            bag.write_bytes(b"synthetic rosbag identity\n")
+            bag_identity = TRIAL.file_identity(bag)
+            fake_rosbag = types.SimpleNamespace(
+                Bag=lambda *_args, **_kwargs: FakeBag(),
+                bag=types.SimpleNamespace(__file__=str(TRIAL.ROSBAG_INDEX_MODULE)),
+            )
+            with mock.patch.object(
+                TRIAL.pairing,
+                "read_bag",
+                return_value=(messages, bag_identity, {}),
+            ), mock.patch.dict(sys.modules, {"rosbag": fake_rosbag}):
+                census, _ = TRIAL.native_pair_census(bag, 0.0, -1.0, 2.0)
+
+        interval = census["input_interval"]
+        gate = census["visualizer_track_frequency_gate"]
+        self.assertEqual(interval["raw_serial_dispatch_pair_count"], 4)
+        self.assertEqual(interval["selected_pair_count"], 2)
+        self.assertEqual(interval["visualizer_frequency_dropped_pair_count"], 2)
+        self.assertEqual(interval["first_selected_input_timestamp_ns"], 100_000_000_000)
+        self.assertEqual(interval["last_selected_input_timestamp_ns"], 101_000_000_000)
+        self.assertEqual(gate["raw_final_camera_timestamp_ns"], 100_900_000_000)
+        self.assertEqual(gate["accepted_final_camera_timestamp_ns"], 101_000_000_000)
+        self.assertEqual(len(interval["gaps_over_threshold"]), 1)
+        self.assertEqual(interval["gaps_over_threshold"][0]["duration_s"], 1.0)
 
     def test_late_initialization_is_descriptive_not_failure(self) -> None:
         interval = {
@@ -514,10 +751,18 @@ class ConsoleAndOutcomeTests(unittest.TestCase):
         self.assertTrue(
             self._console("negative covariance detected\n")["covariance_failure_pattern"]
         )
+        decode = self._console("cv_bridge exception: bad image encoding\n")
+        self.assertTrue(decode["image_decode_failure_pattern"])
+        self.assertEqual(decode["image_decode_failure_count"], 1)
+        self.assertEqual(
+            decode["image_decode_failure_lines"],
+            ["cv_bridge exception: bad image encoding"],
+        )
         benign = self._console("verbosity INFO; infinite sequence; covariance valid\n")
         self.assertFalse(benign["nonfinite_pattern"])
         self.assertFalse(benign["reset_pattern"])
         self.assertFalse(benign["covariance_failure_pattern"])
+        self.assertFalse(benign["image_decode_failure_pattern"])
 
     def test_exact_u0_unload_signature_is_separate(self) -> None:
         value = self._console(
@@ -550,6 +795,10 @@ class ConsoleAndOutcomeTests(unittest.TestCase):
         )
         self.assertEqual(
             TRIAL.classify_outcome(_complete_facts(continuity_pass=False)),
+            "TRACKING_LOSS",
+        )
+        self.assertEqual(
+            TRIAL.classify_outcome(_complete_facts(input_decode_valid=False)),
             "TRACKING_LOSS",
         )
         self.assertEqual(

@@ -89,7 +89,7 @@ def _write_finalized_sequence_result(run_dir: Path, bag: Path) -> Path:
     bag_sha256 = hashlib.sha256(bag.read_bytes()).hexdigest()
     result = {
         "schema": "schurvio.icra27.cross_dataset.sequence_result.v1",
-        "protocol_id": "CDSC-1R2",
+        "protocol_id": "CDSC-1R3",
         "run_id": "tumvi-corridor4-u0-r01",
         "status": "NO_INITIALIZATION",
         "run_directory": str(run_dir.resolve()),

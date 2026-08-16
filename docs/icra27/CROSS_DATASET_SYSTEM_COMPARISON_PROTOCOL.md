@@ -1,10 +1,10 @@
 # Cross-dataset U0--S1 system comparison protocol
 
-- Protocol ID: `CDSC-1R2`
+- Protocol ID: `CDSC-1R3`
 - Status: **PROSPECTIVE_NOT_RUN**
-- Frozen on: 2026-08-16, before the first CDSC-1R2 estimator attempt
-- Restart lineage: supersedes the stopped `CDSC-1` and `CDSC-1R1` tooling
-  campaigns described below
+- Frozen on: 2026-08-16, before the first CDSC-1R3 estimator attempt
+- Restart lineage: supersedes the stopped `CDSC-1`, `CDSC-1R1`, and
+  `CDSC-1R2` tooling campaigns described below
 - Systems: pinned stock OpenVINS `U0` and frozen SchurVIO-Lite `S1`
 - Datasets: EuRoC MAV, every runnable local TUM-VI bag, and fresh KAIST-11
 - Primary question: post-initialization passage robustness
@@ -58,7 +58,7 @@ It contains nine closed scored manifests and three closed pair manifests:
 Every file listed in the twelve published `SHA256SUMS` sets passes its recorded
 digest. The R1 run trees nevertheless contain ROS-generated, unchecksummed
 `ros-logs/latest` convenience symlinks, so they do not satisfy the final
-exact-membership closure now enforced in R2 section 10. There are no capture
+exact-membership closure now enforced in R3 section 10. There are no capture
 artifacts. The order-5 S1 directory was interrupted externally after estimator
 output but before `sequence_result.json`, TUM conversion, checksum closure, or
 a campaign receipt; it is unclosed diagnostic material and not estimator
@@ -78,15 +78,64 @@ A read-only preflight over all fourteen EuRoC/TUM-VI bags found that this
 correction changes the native pair population on `MH_01_easy` (2,865 to
 2,883), `MH_02_easy` (2,317 to 2,364), and `V1_01_easy` (2,871 to 2,889).
 The other eleven populations are unchanged; all three local TUM-VI bags are
-unaffected. These input-derived facts are frozen before any `CDSC-1R2`
+unaffected. These input-derived facts were frozen before any `CDSC-1R2`
 estimator attempt.
 
-All closed artifacts from both stopped campaigns remain immutable audit
-evidence, but every `CDSC-1` and `CDSC-1R1` cell and pair is excluded from all
-`CDSC-1R2` denominators and metrics. No output is reused. The complete 25-pair
-matrix restarts in a new artifact root only after this protocol and tooling are
-committed, tagged, clean, and revalidated. U0 and S1 source, binaries, configs,
-inputs, matrix order, and scientific acceptance rules remain unchanged.
+### 0.3 Stopped `CDSC-1R2` callback-population campaign
+
+The `CDSC-1R2` tooling freeze at commit
+`7e1918247133c4615d55d898d23e1cf5c872ee27`, tree
+`da0b80bb5e6d4424456ca3f9b79d8894a1974d81`, used protocol SHA-256
+`17ca3bd9c73ab031a61ca092b2c8359f919545c8fdedb17e4a8eacd130061a9b`.
+Its append-only artifact root is
+`/home/moksh/schurvio-icra27-artifacts/cross-dataset-system-comparison/cdsc1r2-20260816T151827Z`.
+Five EuRoC pairs closed before the system-independent census defect below was
+reached; the order-6 S1 estimator was never launched.
+
+| Artifact | Outcome | SHA-256 |
+|---|---|---|
+| `01-MH_01_easy/U0` | `COMPLETED_WITH_TEARDOWN_DEFECT`, `VALID` | `35e4d71512257eff9f6f26f3319bc020a14af1074351eed947406a95a3bd7a9a` |
+| `01-MH_01_easy/S1` | `COMPLETED`, `VALID` | `03dda99555dc73c74c0d8247c156c3a6d5911f3ab352e13411152c35c122a369` |
+| `02-MH_02_easy/U0` | `COMPLETED_WITH_TEARDOWN_DEFECT`, `VALID` | `05f4f6ae3193c2ac9489d380670d122f1574a746b550691e5b3805726bb8e6c9` |
+| `02-MH_02_easy/S1` | `COMPLETED`, `VALID` | `3d29149728a84e300b7cf0371b5bf866d80824da8ce14e3317692e781223d176` |
+| `03-MH_03_medium/U0` | `COMPLETED_WITH_TEARDOWN_DEFECT`, `VALID` | `fee3109c7d8824cd627dd27d6fbdb550a36efb0da54073808d5721608e47d74a` |
+| `03-MH_03_medium/S1` | `COMPLETED`, `VALID` | `3b99fa9ea55a5efe4a06e5d9ecdd3e97a2db6c2f055fd592b54ec2f1b9fa05ec` |
+| `04-MH_04_difficult/U0` | `COMPLETED_WITH_TEARDOWN_DEFECT`, `VALID` | `393129be606fd5a4a7643b32d097f5bbfefa66adebaae26caa4ca56361b1e440` |
+| `04-MH_04_difficult/S1` | `COMPLETED`, `VALID` | `ed32bdb29d001ecc0deaa6be2579f88b18c50cd99121db3121411dc2dbae0e80` |
+| `05-MH_05_difficult/U0` | `COMPLETED_WITH_TEARDOWN_DEFECT`, `VALID` | `75d252fece8ee0673a936db9d5d29b6441c80380cabc196f215dae0291f205fa` |
+| `05-MH_05_difficult/S1` | `COMPLETED`, `VALID` | `7ecf62e6bac7a625f99f88c4b1435df824ae098453e15e0c9ce88538a52fe480` |
+| Pair `01-MH_01_easy` | `COMPLETE` | `b736e2bde309f0ea1335a1da6fb0168c63b0c96279ce65929940a63c7a99f328` |
+| Pair `02-MH_02_easy` | `COMPLETE` | `4b78a863c960a963622ff48cc7a9f957287a26f0f08d66f05bbd98948e6c31ee` |
+| Pair `03-MH_03_medium` | `COMPLETE` | `203a75aa3bccb122472afdaeb4461137973ff900cc39eaccf27bac76a88a2456` |
+| Pair `04-MH_04_difficult` | `COMPLETE` | `e974fb7cbd9f579d4a6b9ab16bdcefd1b092e9328e4ee8983be98f585ceac9bb` |
+| Pair `05-MH_05_difficult` | `COMPLETE` | `bfc19654a5a9be39ed41f4f00a76d93e1b6c6064dfa5b6779cf06024898bf601` |
+| `06-V1_01_easy/S1` | `INFRASTRUCTURE_FAILED`, `INVALID_INFRA`; estimator not attempted | `07e6d623c366183924cf45dfd405a241940e38e0759be5e605796484d392311b` |
+
+All 261 entries in the sixteen published checksum sets independently verify;
+the artifact root contains zero symlinks and zero captures. Event 17 is the
+final receipt, SHA-256
+`5f95e1733a6ed5821af5ceaa60c3ce1f6048e0d6bdc6bbd341c06f8ddcf6268c`,
+and records the fatal prelaunch census result. No U0 order-6 attempt or other
+unclosed attempt exists.
+
+The stopped census preserved the native serial pairer but incorrectly required
+its raw callback-dispatch timestamps to be strictly increasing. On
+`V1_01_easy`, unchanged upstream candidate reuse dispatches the same cam0
+message for the first two callbacks, producing one equal timestamp and no
+reversal. Both frozen systems then apply the same configured 21 Hz
+`ROS1Visualizer` frequency gate and deterministically drop the second callback
+before image decode or estimator feed. The corrected two-layer rule in
+section 4 retains that upstream reuse as raw evidence and uses only the
+gate-accepted callback sequence for passage semantics. This correction changes
+no estimator, configuration, bag, start offset, or algorithm outcome.
+
+All closed artifacts from the three stopped campaigns remain immutable audit
+evidence, but every `CDSC-1`, `CDSC-1R1`, and `CDSC-1R2` cell and pair is
+excluded from all `CDSC-1R3` denominators and metrics. No output is reused.
+The complete 25-pair matrix restarts in a new artifact root only after this
+protocol and tooling are committed, tagged, clean, and revalidated. U0 and S1
+source, binaries, configs, inputs, matrix order, and scientific acceptance
+rules remain unchanged.
 
 ## 1. Purpose and claim boundary
 
@@ -155,7 +204,7 @@ validated KAIST recovery study:
 
 The reporting commit and tag may identify the completed prior study, but each
 run must bind the science source snapshot and compiled-input provenance above.
-No S1 source, threshold, or estimator behavior may change during CDSC-1R2.
+No S1 source, threshold, or estimator behavior may change during CDSC-1R3.
 
 S1 uses two deliberately different dataset configuration rules:
 
@@ -173,7 +222,7 @@ S1 uses two deliberately different dataset configuration rules:
    zero `[LONG-GAP-RECOVERY]` records. The existing EuRoC profile
    `config/euroc_mav/estimator_config_gate_d_schur_one_pass.yaml`, SHA-256
    `39279fd929ae91dc1ec63c44f17ff66c369dcd4c9f094ffbf7b95acae07f6d33`,
-   already demonstrates exactly this two-key delta. For CDSC-1R2, both datasets
+   already demonstrates exactly this two-key delta. For CDSC-1R3, both datasets
    use their byte-exact native config files and the two selectors are applied
    as typed parameters by the hash-frozen S1 launch file. The resolved
    parameter map and launch contract must prove that these are the only
@@ -183,7 +232,7 @@ S1 uses two deliberately different dataset configuration rules:
 
 2. **KAIST:** use the already-validated
    `config/kaist_vio_rotation_robustness/estimator_config.yaml` and its exact
-   calibration files. This is the only CDSC-1R2 dataset on which long-gap
+   calibration files. This is the only CDSC-1R3 dataset on which long-gap
    recovery is enabled.
 
 The recovery boundary is intentional. The frozen recovery implementation and
@@ -191,7 +240,7 @@ runtime contract are KAIST pinhole/radtan, fixed-calibration evidence. Native
 EuRoC/TUM-VI configurations do not satisfy that contract; TUM-VI is
 equidistant and the native profiles enable online camera calibration. Enabling
 recovery there would be a new algorithm/configuration study and is forbidden
-in CDSC-1R2. In particular, the prior TUM-VI camera-conditioning profile is not
+in CDSC-1R3. In particular, the prior TUM-VI camera-conditioning profile is not
 eligible: it fixed calibration and set `max_slam: 0`, so it is neither native
 S1 nor capable of supplying C2's retained SLAM landmarks.
 
@@ -199,7 +248,7 @@ S1 nor capable of supplying C2's retained SLAM landmarks.
 
 All local candidates must be checked before any download. Exact bag size and
 the recorded checksum are verified first; a missing or irreparably corrupt
-candidate may be acquired only before the CDSC-1R2 input manifest is frozen.
+candidate may be acquired only before the CDSC-1R3 input manifest is frozen.
 No bag is overwritten. The tracked `project/datasets.yaml` TUM-VI entries are
 stale: they refer to old pending paths, while the three runnable bags are
 already present under `calibrated/512_16`.
@@ -332,11 +381,58 @@ bounds before stereo pairing. The private index API is frozen to
 `8c2e1f4b0e1bead5e03694c493a35b10f898bb7b051ca96aef219611b5253422`;
 every census revalidates and records that module identity.
 
-Every cell therefore retains a deterministic pairing census: input topic
-counts, exact-header matches and unmatched images, native selected/skipped
-pairs and record skew, selected-input first/last timestamps, pair-set
-intersection/differences where applicable, and first/last estimator output.
-A native U0 skip is a U0 system outcome, not infrastructure invalidity.
+The generic census preserves two distinct, ordered populations. First, it
+retains the native serial pairer's raw callback dispatches exactly as emitted,
+including future-candidate reuse, raw adjacent equality and reversal counts,
+an order-sensitive digest binding every ordered pair identity and timestamp,
+and raw ordinal-final and maximum timestamps. It never sorts, deduplicates, or
+repairs that stream.
+
+This record is serialized as
+`schurvio.icra27.cross_dataset.native_pair_census.v3`. Second, it projects the
+unchanged `ROS1Visualizer::callback_stereo` gate using
+the exact positive `track_frequency` read from the canonical dataset config,
+binary64 `ros::Time::toSec`, and the stock strict expression:
+
+```text
+drop when timestamp < previous_accepted_timestamp + 1 / track_frequency
+```
+
+The gate executes before image decode and estimator feed. Each dropped raw
+dispatch is retained with its pair identity, raw ordinal, timestamp, previous
+accepted timestamp, threshold, and reason. The accepted sequence receives a
+separate order-sensitive digest and must be strictly increasing. Its final
+timestamp must equal its maximum timestamp. The selected-input first/last
+timestamps, pair count, gaps, and all passage decisions use this gate-accepted
+sequence; raw final/max timestamps are diagnostic only. Decode/runtime failures
+remain separately fail-closed and cannot be hidden by the census.
+
+The prospective exact 21 Hz projection over all fourteen generic bags is:
+
+| Sequence | Raw dispatches | Gate accepted | Frequency drops | Drop character |
+|---|---:|---:|---:|---|
+| `MH_01_easy` | 2,883 | 2,883 | 0 | none |
+| `MH_02_easy` | 2,364 | 2,364 | 0 | none |
+| `MH_03_medium` | 2,592 | 2,592 | 0 | none |
+| `MH_04_difficult` | 1,828 | 1,828 | 0 | none |
+| `MH_05_difficult` | 2,168 | 2,168 | 0 | none |
+| `V1_01_easy` | 2,889 | 2,888 | 1 | duplicate cam0 timestamp from native candidate reuse |
+| `V1_02_medium` | 1,699 | 1,698 | 1 | duplicate cam0 timestamp from native candidate reuse |
+| `V1_03_difficult` | 2,135 | 2,135 | 0 | none |
+| `V2_01_easy` | 2,276 | 2,276 | 0 | none |
+| `V2_02_medium` | 2,341 | 2,341 | 0 | none |
+| `V2_03_difficult` | 1,915 | 1,915 | 0 | none |
+| TUM-VI `room4` | 2,228 | 2,228 | 0 | none |
+| TUM-VI `corridor4` | 1,927 | 1,916 | 11 | positive but shorter than the 47.619 ms gate period |
+| TUM-VI `outdoors4` | 13,999 | 13,998 | 1 | positive but shorter than the 47.619 ms gate period |
+
+All fourteen accepted streams are strictly increasing, and no drop changes a
+first or final accepted endpoint. The two Vicon duplicate cases each contain
+one equality and zero reversals; all source camera streams are themselves
+strict. These are input-derived facts, not tuned thresholds. Every cell
+recomputes and records both populations from the live bag and config. A native
+pairing skip or visualizer frequency drop is a frozen system behavior, not an
+infrastructure or estimator failure.
 
 The expected S1 recovery evidence is fixed:
 
@@ -380,8 +476,8 @@ Evidence validity and estimator outcome are separate fields.
 - `NO_INITIALIZATION`: no valid initialized state was emitted.
 - `PARTIAL`: initialized finite output exists but does not satisfy the terminal
   passage rule.
-- `TRACKING_LOSS`: an unsupported post-initialization output gap or terminal
-  loss is observed.
+- `TRACKING_LOSS`: an unsupported post-initialization output gap, terminal
+  loss, or image-decode failure is observed.
 - `NUMERIC_FAILURE`: nonfinite state, covariance failure, undeclared reset, or
   another numerical integrity failure is observed.
 - `ESTIMATOR_CRASH`: the estimator terminates abnormally before eligible passage
@@ -403,15 +499,16 @@ following hold:
 1. State and deviation outputs are nonempty, finite, strictly timestamp
    increasing, mutually row/timestamp consistent, and free of non-recovery
    resets and covariance-failure evidence.
-2. If `t_input_last` is the last callback in that system's frozen selected
-   stereo stream and `t_state_last` is its final state, then
+2. If `t_input_last` is the final gate-accepted callback in that system's
+   frozen selected stereo stream (and therefore its accepted maximum) and
+   `t_state_last` is its final state, then
    `-0.01 s <= t_input_last - t_state_last <= 0.10 s`.
 3. Every post-initialization state gap is at most 0.20 s, or the gap is fully
-   input-supported: its endpoints correspond to consecutive callbacks in that
-   system's selected stereo stream, no selected callback exists inside it, and
-   selected-input and adjacent timing/output gap durations agree within
-   1 microsecond. A C2 recovery interval must additionally bind to its recovery
-   events and exact five-row timing exception.
+   input-supported: its endpoints correspond to consecutive gate-accepted
+   callbacks in that system's selected stereo stream, no gate-accepted callback
+   exists inside it, and selected-input and adjacent timing/output gap durations
+   agree within 1 microsecond. A C2 recovery interval must additionally bind to
+   its recovery events and exact five-row timing exception.
 4. No ground-truth access, user intervention, hidden restart, trajectory
    stitch, smoothing, or imputation occurred.
 5. Cleanup leaves no descendant process. A nonzero process exit fails strict
@@ -646,4 +743,4 @@ It must name the datasets, state that corridor4/outdoors4 lack accuracy scores,
 and preserve strict process-health defects. “S1 is more accurate,” “Schur
 caused the improvement,” “S1 tracked every dataset from the beginning,” and
 general robustness/superiority claims require separate evidence and are not
-authorized by CDSC-1R2.
+authorized by CDSC-1R3.

@@ -1,5 +1,5 @@
 #!/usr/bin/python3.8
-"""Focused synthetic tests for the CDSC-1R2 fresh-KAIST adapter."""
+"""Focused synthetic tests for the CDSC-1R3 fresh-KAIST adapter."""
 
 from __future__ import annotations
 
@@ -177,7 +177,7 @@ class FixedContractTests(unittest.TestCase):
             [
                 "run",
                 "--protocol-id",
-                "CDSC-1R2",
+                "CDSC-1R3",
                 "--protocol",
                 str(MODULE.CANONICAL_PROTOCOL),
                 "--matrix",
@@ -263,6 +263,7 @@ class PairingAndOutcomeTests(unittest.TestCase):
             "teardown_ok": True,
             "runtime_contract_valid": False,
             "numeric_integrity_valid": True,
+            "input_decode_valid": True,
             "state_kind": "missing",
             "launch_abnormal": True,
         }
@@ -281,12 +282,15 @@ class PairingAndOutcomeTests(unittest.TestCase):
         self.assertEqual(
             MODULE.classify_outcome(facts), "COMPLETED_WITH_TEARDOWN_DEFECT"
         )
+        facts["exact_u0_teardown"] = False
+        facts["input_decode_valid"] = False
+        self.assertEqual(MODULE.classify_outcome(facts), "TRACKING_LOSS")
 
     def test_preflight_failure_is_published_as_infrastructure_not_no_init(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             args = argparse.Namespace(
-                protocol_id="CDSC-1R2",
+                protocol_id="CDSC-1R3",
                 protocol_file=MODULE.CANONICAL_PROTOCOL,
                 matrix_file=MODULE.CANONICAL_MATRIX,
                 run_id="preflight-failure",
@@ -312,6 +316,7 @@ class PairingAndOutcomeTests(unittest.TestCase):
             self.assertEqual(result["status"], "INFRASTRUCTURE_FAILED")
             self.assertNotEqual(result["status"], "NO_INITIALIZATION")
             self.assertEqual(result["evidence_validity"], "INVALID_INFRA")
+            self.assertIsNone(result["checks"]["input_decode_failure_count_zero"])
             self.assertTrue((run_dir / "sequence_result.json").is_file())
             self.assertTrue((run_dir / "SHA256SUMS").is_file())
 
@@ -321,7 +326,7 @@ class PairingAndOutcomeTests(unittest.TestCase):
             bag = root / "wrong-matrix-bag.bag"
             bag.write_bytes(b"not opened because matrix binding fails first")
             args = argparse.Namespace(
-                protocol_id="CDSC-1R2",
+                protocol_id="CDSC-1R3",
                 protocol_file=MODULE.CANONICAL_PROTOCOL,
                 matrix_file=MODULE.CANONICAL_MATRIX,
                 run_id="runner-binding-failure",
@@ -507,7 +512,7 @@ class HistoricalAndPostPairTests(unittest.TestCase):
                     path.write_text("synthetic\n", encoding="ascii")
             manifest = {
                 "schema": MODULE.SCHEMA,
-                "protocol_id": "CDSC-1R2",
+                "protocol_id": "CDSC-1R3",
                 "dataset": "kaist_vio",
                 "sequence": "rotation/rotation.bag",
                 "system": system,

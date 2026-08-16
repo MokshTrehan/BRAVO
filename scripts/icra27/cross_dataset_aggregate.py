@@ -1,5 +1,5 @@
 #!/usr/bin/python3.8
-"""Validate and publish the final CDSC-1R2 comparison report.
+"""Validate and publish the final CDSC-1R3 comparison report.
 
 This is a read-only consumer of a completed campaign artifact tree.  It fails
 closed on missing, duplicate, moved, or checksum-invalid evidence, but it does
@@ -36,7 +36,7 @@ SCHEMA = "schurvio.icra27.cross_dataset.aggregate.v1"
 PAIR_SCHEMA = "schurvio.icra27.cross_dataset.pair_result.v1"
 GEOMETRY_SCHEMA = "schurvio.icra27.cross_dataset_geometry_bundle.v1"
 MECHANISM_SCHEMA = "schurvio.icra27.cross_dataset.kaist_rotation_post_pair.v1"
-PROTOCOL_ID = "CDSC-1R2"
+PROTOCOL_ID = "CDSC-1R3"
 SYSTEMS = ("U0", "S1")
 LANES = ("scored", "capture")
 DATASETS = ("euroc_mav", "tum_vi", "kaist_vio")
@@ -64,7 +64,7 @@ SHA256_RE = campaign.SHA256_RE
 
 
 class AggregateError(RuntimeError):
-    """A final evidence tree cannot support a CDSC-1R2 publication."""
+    """A final evidence tree cannot support a CDSC-1R3 publication."""
 
 
 def utc_now() -> str:
@@ -1240,7 +1240,7 @@ def render_report(aggregate: Mapping[str, Any]) -> str:
     accuracy = aggregate["accuracy"]
     qualitative = aggregate["qualitative"]
     lines = [
-        "# CDSC-1R2 U0--S1 whole-system comparison",
+        "# CDSC-1R3 U0--S1 whole-system comparison",
         "",
         "## Claim boundary",
         "",
@@ -1432,7 +1432,7 @@ def aggregate_campaign(
     matrix_resolved = matrix_path.expanduser().resolve(strict=True)
     protocol_resolved = protocol_path.expanduser().resolve(strict=True)
     if matrix_resolved != campaign.MATRIX_FILE.resolve(strict=True) or protocol_resolved != campaign.PROTOCOL_FILE.resolve(strict=True):
-        raise AggregateError("CDSC-1R2 aggregate requires the canonical matrix and protocol paths")
+        raise AggregateError("CDSC-1R3 aggregate requires the canonical matrix and protocol paths")
     rows = campaign.load_matrix(matrix_resolved, require_canonical=True)
     matrix_identity = file_identity(matrix_resolved)
     protocol_identity = file_identity(protocol_resolved)
