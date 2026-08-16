@@ -991,6 +991,17 @@ int main(int argc, char **argv) {
                static_cast<unsigned long long>(kaist_pending_pairs));
   }
 
+  if (params.long_gap_recovery_enabled) {
+    PRINT_INFO(
+        "[LONG-GAP-RECOVERY]: event=summary activations=%llu commits=%llu "
+        "failures=%llu final_epoch=%llu\n",
+        static_cast<unsigned long long>(
+            sys->long_gap_recovery_activations()),
+        static_cast<unsigned long long>(sys->long_gap_recovery_commits()),
+        static_cast<unsigned long long>(sys->long_gap_recovery_failures()),
+        static_cast<unsigned long long>(sys->estimator_epoch_id()));
+  }
+
   // Passive T0 publication is deliberately non-authoritative: a sink failure
   // is reported but cannot change replay completion or any estimator result.
   if (!sys->finalize_turnsafe_t0()) {

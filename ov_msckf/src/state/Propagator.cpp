@@ -26,6 +26,8 @@
 #include "utils/print.h"
 #include "utils/quat_ops.h"
 
+#include <limits>
+
 using namespace ov_core;
 using namespace ov_type;
 using namespace ov_msckf;
@@ -330,6 +332,71 @@ bool Propagator::fast_state_propagate(std::shared_ptr<State> state, double times
   covariance.block(0, 0, 9, 9) = covariance_tmp.block(0, 0, 9, 9);
   double dt = prop_data.at(prop_data.size() - 1).timestamp - prop_data.at(prop_data.size() - 2).timestamp;
   covariance.block(9, 9, 3, 3) = _noises.sigma_w_2 / dt * Eigen::Matrix3d::Identity();
+  return true;
+}
+
+bool Propagator::predict_orientation_readonly(
+    const std::shared_ptr<State> &state, double timestamp,
+    Eigen::Matrix3d &R_GtoI) {
+  R_GtoI.setConstant(std::numeric_limits<double>::quiet_NaN());
+  if (!state || !std::isfinite(state->_timestamp) ||
+      !std::isfinite(timestamp) || !(timestamp > state->_timestamp)) {
+    return false;
+  }
+
+  const double t_off = state->_calib_dt_CAMtoIMU->value()(0);
+  if (!std::isfinite(t_off)) return false;
+  const double time0 = state->_timestamp + t_off;
+  const double time1 = timestamp + t_off;
+  std::vector<ov_core::ImuData> readings;
+  {
+    std::lock_guard<std::mutex> lock(imu_data_mtx);
+    readings = select_imu_readings(imu_data, time0, time1, false);
+  }
+  if (readings.size() < 2U ||
+      std::abs((readings.back().timestamp - readings.front().timestamp) -
+               (time1 - time0)) > 1.0e-4) {
+    return false;
+  }
+
+  const Eigen::Matrix3d Dw =
+      State::Dm(state->_options.imu_model, state->_calib_imu_dw->value());
+  const Eigen::Matrix3d Da =
+      State::Dm(state->_options.imu_model, state->_calib_imu_da->value());
+  const Eigen::Matrix3d Tg =
+      State::Tg(state->_calib_imu_tg->value());
+  const Eigen::Matrix3d R_ACCtoIMU =
+      state->_calib_imu_ACCtoIMU->Rot();
+  const Eigen::Matrix3d R_GYROtoIMU =
+      state->_calib_imu_GYROtoIMU->Rot();
+  const Eigen::Vector3d bias_g = state->_imu->bias_g();
+  const Eigen::Vector3d bias_a = state->_imu->bias_a();
+
+  Eigen::Matrix3d predicted = state->_imu->Rot();
+  for (std::size_t index = 0U; index + 1U < readings.size(); ++index) {
+    const ov_core::ImuData &before = readings[index];
+    const ov_core::ImuData &after = readings[index + 1U];
+    const double dt = after.timestamp - before.timestamp;
+    if (!std::isfinite(dt) || !(dt > 0.0) || !before.wm.allFinite() ||
+        !after.wm.allFinite() || !before.am.allFinite() ||
+        !after.am.allFinite()) {
+      return false;
+    }
+    const Eigen::Vector3d accel_before =
+        R_ACCtoIMU * Da * (before.am - bias_a);
+    const Eigen::Vector3d accel_after =
+        R_ACCtoIMU * Da * (after.am - bias_a);
+    const Eigen::Vector3d omega_before =
+        R_GYROtoIMU *
+        Dw * (before.wm - bias_g - Tg * accel_before);
+    const Eigen::Vector3d omega_after =
+        R_GYROtoIMU * Dw * (after.wm - bias_g - Tg * accel_after);
+    const Eigen::Vector3d omega = 0.5 * (omega_before + omega_after);
+    if (!omega.allFinite()) return false;
+    predicted = exp_so3(-omega * dt) * predicted;
+  }
+  if (!predicted.allFinite()) return false;
+  R_GtoI = predicted;
   return true;
 }
 

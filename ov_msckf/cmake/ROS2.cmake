@@ -62,6 +62,7 @@ list(APPEND LIBRARY_SOURCES
         src/state/State.cpp
         src/state/StateHelper.cpp
         src/state/Propagator.cpp
+        src/core/LongGapRelocalizer.cpp
         src/core/VioManager.cpp
         src/core/VioManagerHelper.cpp
         src/update/CP2Canonical.cpp
@@ -91,6 +92,7 @@ list(APPEND LIBRARY_SOURCES
 # binary64 contract, despite the project-wide optimization flags inherited
 # above. This includes the Givens/compression and live EKF implementations.
 set_source_files_properties(
+        src/core/LongGapRelocalizer.cpp
         src/state/StateHelper.cpp
         src/update/CP2Canonical.cpp
         src/update/CP2CommitBoundary.cpp

@@ -84,6 +84,18 @@ transition must be machine-readable. The raw pre-gap and post-reset sparse
 geometry streams are separate epochs; a combined atlas is allowed only after
 a verified PnP reanchor.
 
+Protocol amendment (2026-08-16, before the first provenance-valid C2 rerun):
+the accepted reanchor state is emitted immediately, rather than being hidden
+until visual warm-up. Its state timestamp and complete 3x3 position covariance
+are bound to one machine-readable commit record so the original 0.10 s
+cross-gap anchor and first-resumed NEES remain evaluable. The legacy OpenVINS
+timing stream records full visual-update callbacks only; therefore a successful
+recovery has exactly five intentional state rows without legacy timing rows:
+the reanchor commit plus four propagate-only warm-up rows. The harness permits
+only that exact, event-bound omission. Timing must otherwise be an ordered,
+one-to-one timestamp subset of state output; disabled and zero-activation runs
+retain exact timing/state timestamp equality.
+
 ## Candidate order and kill rules
 
 The order is fixed and stops at the first full pass:
@@ -157,4 +169,3 @@ substituted.
 - `VALIDATED_ON_KAIST11`: target 3/3 and all ten regressions pass. This is a
   KAIST result, not a general robustness claim.
 - `STOPPED_NEGATIVE`: bounded candidates are exhausted without a pass.
-

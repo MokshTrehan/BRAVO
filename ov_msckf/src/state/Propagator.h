@@ -135,6 +135,15 @@ public:
                             Eigen::Matrix<double, 12, 12> &covariance);
 
   /**
+   * Predict only the IMU attitude at a later camera timestamp without
+   * mutating the live state or the fast-propagation cache. Long-gap
+   * relocalization uses this as an independent orientation-consistency gate.
+   */
+  bool predict_orientation_readonly(const std::shared_ptr<State> &state,
+                                    double timestamp,
+                                    Eigen::Matrix3d &R_GtoI);
+
+  /**
    * @brief Helper function that given current imu data, will select imu readings between the two times.
    *
    * This will create measurements that we will integrate with, and an extra measurement at the end.

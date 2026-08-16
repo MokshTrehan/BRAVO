@@ -1641,6 +1641,56 @@ TEST(TurnSafeT0,
   }
 }
 
+TEST(TurnSafeT0,
+     EpochFrontendRebindInstallsOnlyTheReplacementTrackerObserver) {
+  FaultReset reset;
+  const std::string path = TemporaryPath();
+  auto sink = ov_msckf::TurnSafeDiagnostics::Create(Options(path));
+  ASSERT_TRUE(sink && sink->active());
+  TrackKLTTestPeer old_tracker;
+  TrackKLTTestPeer replacement_tracker;
+  ov_msckf::UpdaterOptions updater_options;
+  ov_core::FeatureInitializerOptions initializer_options;
+  ov_msckf::UpdaterMSCKF updater(updater_options, initializer_options);
+
+  const ov_msckf::TurnSafeCallbackInstallationResult initial =
+      ov_msckf::install_turnsafe_t0_callbacks(sink, &old_tracker, &updater);
+  ASSERT_TRUE(initial.success);
+  ov_core::TrackKLTFrameDiagnostics record;
+  EXPECT_TRUE(old_tracker.Begin(1.0, record));
+  EXPECT_FALSE(replacement_tracker.Begin(1.0, record));
+
+  EXPECT_TRUE(ov_msckf::reinstall_turnsafe_t0_frontend_callback(
+      sink, &replacement_tracker));
+  EXPECT_TRUE(sink->active());
+  EXPECT_TRUE(replacement_tracker.Begin(2.0, record));
+  EXPECT_TRUE(sink->Finalize());
+  ::unlink(path.c_str());
+  ::unlink((path + ".tmp").c_str());
+}
+
+TEST(TurnSafeT0,
+     EpochFrontendRebindFailureDisablesOnlyPassiveDiagnostics) {
+  FaultReset reset;
+  const std::string path = TemporaryPath();
+  auto sink = ov_msckf::TurnSafeDiagnostics::Create(Options(path));
+  ASSERT_TRUE(sink && sink->active());
+  TrackKLTTestPeer replacement_tracker;
+  ov_msckf::set_turnsafe_diagnostic_fault_for_test(
+      ov_msckf::TurnSafeDiagnosticFaultStage::kTrackerCallbackInstallation,
+      ov_msckf::TurnSafeDiagnosticFaultKind::kBadAlloc);
+  EXPECT_FALSE(ov_msckf::reinstall_turnsafe_t0_frontend_callback(
+      sink, &replacement_tracker));
+  ov_msckf::clear_turnsafe_diagnostic_fault_for_test();
+  EXPECT_FALSE(sink->active());
+  EXPECT_EQ(sink->failure_count(), 1U);
+  ov_core::TrackKLTFrameDiagnostics record;
+  EXPECT_FALSE(replacement_tracker.Begin(1.0, record));
+  EXPECT_FALSE(sink->Finalize());
+  ::unlink(path.c_str());
+  ::unlink((path + ".tmp").c_str());
+}
+
 TEST(TurnSafeT0, SinkFaultInjectionIsContainedAtEveryStage) {
   FaultReset reset;
   const NativeKltOracle native_oracle = CaptureNativeKltOracle();

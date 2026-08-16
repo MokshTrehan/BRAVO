@@ -20,22 +20,252 @@
  */
 
 #include "VioManager.h"
+#include "TurnSafeCallbackInstaller.h"
 
 #include "feat/Feature.h"
 #include "feat/FeatureDatabase.h"
 #include "feat/FeatureInitializer.h"
+#include "track/TrackAruco.h"
+#include "track/TrackDescriptor.h"
+#include "track/TrackKLT.h"
 #include "types/LandmarkRepresentation.h"
 #include "utils/print.h"
+#include "utils/quat_ops.h"
 
 #include "init/InertialInitializer.h"
 
 #include "state/Propagator.h"
 #include "state/State.h"
 #include "state/StateHelper.h"
+#include "update/UpdaterZeroVelocity.h"
+
+#include <cmath>
+#include <stdexcept>
 
 using namespace ov_core;
 using namespace ov_type;
 using namespace ov_msckf;
+
+std::shared_ptr<State> VioManager::make_fresh_state_with_calibration() const {
+  StateOptions options = params.state_options;
+  std::shared_ptr<State> fresh = std::make_shared<State>(options);
+
+  if (state) {
+    fresh->_calib_imu_dw->set_value(state->_calib_imu_dw->value());
+    fresh->_calib_imu_dw->set_fej(state->_calib_imu_dw->value());
+    fresh->_calib_imu_da->set_value(state->_calib_imu_da->value());
+    fresh->_calib_imu_da->set_fej(state->_calib_imu_da->value());
+    fresh->_calib_imu_tg->set_value(state->_calib_imu_tg->value());
+    fresh->_calib_imu_tg->set_fej(state->_calib_imu_tg->value());
+    fresh->_calib_imu_GYROtoIMU->set_value(
+        state->_calib_imu_GYROtoIMU->value());
+    fresh->_calib_imu_GYROtoIMU->set_fej(
+        state->_calib_imu_GYROtoIMU->value());
+    fresh->_calib_imu_ACCtoIMU->set_value(
+        state->_calib_imu_ACCtoIMU->value());
+    fresh->_calib_imu_ACCtoIMU->set_fej(
+        state->_calib_imu_ACCtoIMU->value());
+    fresh->_calib_dt_CAMtoIMU->set_value(
+        state->_calib_dt_CAMtoIMU->value());
+    fresh->_calib_dt_CAMtoIMU->set_fej(
+        state->_calib_dt_CAMtoIMU->value());
+    fresh->_cam_intrinsics_cameras = state->_cam_intrinsics_cameras;
+    for (int camera = 0; camera < options.num_cameras; ++camera) {
+      fresh->_cam_intrinsics.at(camera)->set_value(
+          state->_cam_intrinsics.at(camera)->value());
+      fresh->_cam_intrinsics.at(camera)->set_fej(
+          state->_cam_intrinsics.at(camera)->value());
+      fresh->_calib_IMUtoCAM.at(camera)->set_value(
+          state->_calib_IMUtoCAM.at(camera)->value());
+      fresh->_calib_IMUtoCAM.at(camera)->set_fej(
+          state->_calib_IMUtoCAM.at(camera)->value());
+    }
+  } else {
+    fresh->_calib_imu_dw->set_value(params.vec_dw);
+    fresh->_calib_imu_dw->set_fej(params.vec_dw);
+    fresh->_calib_imu_da->set_value(params.vec_da);
+    fresh->_calib_imu_da->set_fej(params.vec_da);
+    fresh->_calib_imu_tg->set_value(params.vec_tg);
+    fresh->_calib_imu_tg->set_fej(params.vec_tg);
+    fresh->_calib_imu_GYROtoIMU->set_value(params.q_GYROtoIMU);
+    fresh->_calib_imu_GYROtoIMU->set_fej(params.q_GYROtoIMU);
+    fresh->_calib_imu_ACCtoIMU->set_value(params.q_ACCtoIMU);
+    fresh->_calib_imu_ACCtoIMU->set_fej(params.q_ACCtoIMU);
+    Eigen::VectorXd camera_to_imu_time(1);
+    camera_to_imu_time(0) = params.calib_camimu_dt;
+    fresh->_calib_dt_CAMtoIMU->set_value(camera_to_imu_time);
+    fresh->_calib_dt_CAMtoIMU->set_fej(camera_to_imu_time);
+    fresh->_cam_intrinsics_cameras = params.camera_intrinsics;
+    for (int camera = 0; camera < options.num_cameras; ++camera) {
+      fresh->_cam_intrinsics.at(camera)->set_value(
+          params.camera_intrinsics.at(camera)->get_value());
+      fresh->_cam_intrinsics.at(camera)->set_fej(
+          params.camera_intrinsics.at(camera)->get_value());
+      fresh->_calib_IMUtoCAM.at(camera)->set_value(
+          params.camera_extrinsics.at(camera));
+      fresh->_calib_IMUtoCAM.at(camera)->set_fej(
+          params.camera_extrinsics.at(camera));
+    }
+  }
+  return fresh;
+}
+
+void VioManager::reset_feature_epoch(const ov_core::CameraData &message) {
+  const int per_camera_features = std::floor(
+      static_cast<double>(params.num_pts) /
+      static_cast<double>(params.state_options.num_cameras));
+  if (params.use_klt) {
+    trackFEATS = std::make_shared<TrackKLT>(
+        state->_cam_intrinsics_cameras, per_camera_features,
+        state->_options.max_aruco_features, params.use_stereo,
+        params.histogram_method, params.fast_threshold, params.grid_x,
+        params.grid_y, params.min_px_dist);
+  } else {
+    trackFEATS = std::make_shared<TrackDescriptor>(
+        state->_cam_intrinsics_cameras, per_camera_features,
+        state->_options.max_aruco_features, params.use_stereo,
+        params.histogram_method, params.fast_threshold, params.grid_x,
+        params.grid_y, params.min_px_dist, params.knn_ratio);
+  }
+  trackARUCO.reset();
+  if (params.use_aruco) {
+    trackARUCO = std::make_shared<TrackAruco>(
+        state->_cam_intrinsics_cameras,
+        state->_options.max_aruco_features, params.use_stereo,
+        params.histogram_method, params.downsize_aruco);
+  }
+  initializer = std::make_shared<ov_init::InertialInitializer>(
+      params.init_options, trackFEATS->get_feature_database());
+  updaterZUPT.reset();
+  if (params.try_zupt) {
+    updaterZUPT = std::make_shared<UpdaterZeroVelocity>(
+        params.zupt_options, params.imu_noises,
+        trackFEATS->get_feature_database(), propagator, params.gravity_mag,
+        params.zupt_max_velocity, params.zupt_noise_multiplier,
+        params.zupt_max_disparity);
+  }
+  good_features_MSCKF.clear();
+  active_tracks_time = -1.0;
+  active_tracks_posinG.clear();
+  active_tracks_uvd.clear();
+  active_image.release();
+  active_feat_linsys_A.clear();
+  active_feat_linsys_b.clear();
+  active_feat_linsys_count.clear();
+  trackFEATS->feed_new_camera(message);
+  if (trackARUCO) trackARUCO->feed_new_camera(message);
+  if (turnsafe_t0_diagnostics && turnsafe_t0_diagnostics->active()) {
+    // Seed the new tracker without emitting a duplicate frontend record for
+    // the recovery callback. The old tracker remains alive in that callback's
+    // envelope; the new observer begins on the next camera callback. Do not
+    // touch the updater observer, whose installation is frozen after use.
+    const std::shared_ptr<TrackKLT> klt =
+        std::dynamic_pointer_cast<TrackKLT>(trackFEATS);
+    if (!reinstall_turnsafe_t0_frontend_callback(turnsafe_t0_diagnostics,
+                                                  klt.get())) {
+      PRINT_WARNING(
+          YELLOW "[TURNSAFE-T0]: status=epoch_frontend_rebind_rejected "
+                 "estimator_unchanged=1\n" RESET);
+    }
+  }
+}
+
+void VioManager::commit_long_gap_recovery(
+    const ov_core::CameraData &message, const Eigen::Matrix3d &R_GtoI,
+    const Eigen::Vector3d &p_IinG) {
+  if (!R_GtoI.allFinite() || !p_IinG.allFinite() || !state ||
+      !std::isfinite(message.timestamp)) {
+    throw std::runtime_error("invalid long-gap recovery commit input");
+  }
+
+  const Eigen::MatrixXd old_imu_covariance =
+      StateHelper::get_marginal_covariance(state, {state->_imu});
+  if (old_imu_covariance.rows() != 15 ||
+      old_imu_covariance.cols() != 15 ||
+      !old_imu_covariance.allFinite()) {
+    throw std::runtime_error(
+        "long-gap recovery could not preserve bias covariance");
+  }
+  const Eigen::Matrix<double, 16, 1> old_imu = state->_imu->value();
+  std::shared_ptr<State> recovered = make_fresh_state_with_calibration();
+
+  Eigen::Matrix<double, 16, 1> recovered_imu = old_imu;
+  recovered_imu.block<4, 1>(0, 0) = ov_core::rot_2_quat(R_GtoI);
+  recovered_imu.block<3, 1>(4, 0) = p_IinG;
+  recovered_imu.block<3, 1>(7, 0).setZero();
+  recovered->_imu->set_value(recovered_imu);
+  recovered->_imu->set_fej(recovered_imu);
+
+  Eigen::Matrix<double, 15, 15> covariance =
+      Eigen::Matrix<double, 15, 15>::Zero();
+  const double radians_per_degree = std::acos(-1.0) / 180.0;
+  const double orientation_sigma =
+      params.long_gap_recovery_orientation_sigma_deg * radians_per_degree;
+  covariance.block<3, 3>(0, 0) =
+      orientation_sigma * orientation_sigma * Eigen::Matrix3d::Identity();
+  covariance.block<3, 3>(3, 3) =
+      params.long_gap_recovery_position_sigma_m *
+      params.long_gap_recovery_position_sigma_m *
+      Eigen::Matrix3d::Identity();
+  covariance.block<3, 3>(6, 6) =
+      params.long_gap_recovery_velocity_sigma_mps *
+      params.long_gap_recovery_velocity_sigma_mps *
+      Eigen::Matrix3d::Identity();
+  covariance.block<6, 6>(9, 9) = old_imu_covariance.block<6, 6>(9, 9);
+  StateHelper::set_initial_covariance(recovered, covariance,
+                                      {recovered->_imu});
+  const Eigen::Matrix3d committed_position_covariance =
+      covariance.block<3, 3>(3, 3);
+  recovered->_timestamp = message.timestamp;
+
+  state = std::move(recovered);
+  propagator->invalidate_cache();
+  propagator->clean_old_imu_measurements(
+      message.timestamp + state->_calib_dt_CAMtoIMU->value()(0) - 0.10);
+  startup_time = message.timestamp;
+  // Make the accepted relocalization state immediately observable.  Keeping
+  // this at -1 suppresses ROS/state-file output until visual warm-up and
+  // prevents the prospectively frozen first-resumed anchor and covariance
+  // checks from evaluating the actual recovery commit.
+  timelastupdate = message.timestamp;
+  is_initialized_vio = true;
+  did_zupt_update = false;
+  has_moved_since_zupt = false;
+  {
+    std::lock_guard<std::mutex> lock(camera_queue_init_mtx);
+    camera_queue_init.clear();
+  }
+  reset_feature_epoch(message);
+
+  ++epoch_id;
+  ++long_gap_recovery_commit_count;
+  long_gap_recovery_phase = LongGapRecoveryPhase::WARMUP;
+  long_gap_recovery_consensus.clear();
+
+  PRINT_INFO(
+      "[LONG-GAP-RECOVERY]: event=relocalization_commit epoch=%llu "
+      "timestamp=%.15f p_x=%.9f p_y=%.9f p_z=%.9f velocity_reset=1\n",
+      static_cast<unsigned long long>(epoch_id), message.timestamp,
+      p_IinG(0), p_IinG(1), p_IinG(2));
+  PRINT_INFO(
+      "[LONG-GAP-RECOVERY]: event=first_resumed_covariance epoch=%llu "
+      "camera_timestamp=%.15f state_output_timestamp=%.15f "
+      "frame=estimator_global available=1 "
+      "p_cov_00=%.17g p_cov_01=%.17g p_cov_02=%.17g "
+      "p_cov_10=%.17g p_cov_11=%.17g p_cov_12=%.17g "
+      "p_cov_20=%.17g p_cov_21=%.17g p_cov_22=%.17g\n",
+      static_cast<unsigned long long>(epoch_id), message.timestamp,
+      message.timestamp + state->_calib_dt_CAMtoIMU->value()(0),
+      committed_position_covariance(0, 0),
+      committed_position_covariance(0, 1),
+      committed_position_covariance(0, 2),
+      committed_position_covariance(1, 0),
+      committed_position_covariance(1, 1),
+      committed_position_covariance(1, 2),
+      committed_position_covariance(2, 0),
+      committed_position_covariance(2, 1),
+      committed_position_covariance(2, 2));
+}
 
 void VioManager::initialize_with_gt(Eigen::Matrix<double, 17, 1> imustate) {
 

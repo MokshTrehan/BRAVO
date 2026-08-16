@@ -20,6 +20,7 @@
  */
 
 #include "VioManager.h"
+#include "LongGapRelocalizer.h"
 #include "TurnSafeCallbackInstaller.h"
 
 #include "feat/Feature.h"
@@ -46,8 +47,10 @@
 #include "update/UpdaterSLAM.h"
 #include "update/UpdaterZeroVelocity.h"
 
-#include <new>
+#include <cmath>
 #include <exception>
+#include <limits>
+#include <new>
 #include <stdexcept>
 #include <utility>
 
@@ -61,20 +64,22 @@ class TurnSafeCallbackEnvelope {
 public:
   TurnSafeCallbackEnvelope(
       const std::shared_ptr<TurnSafeDiagnostics> &diagnostics,
-      const TrackKLT *tracker, const UpdaterMSCKF *updater,
+      std::shared_ptr<const TrackKLT> tracker,
+      std::shared_ptr<const UpdaterMSCKF> updater,
       double timestamp, const std::vector<int> &camera_frame_ids,
-      State *state, Propagator *propagator,
+      const std::shared_ptr<State> *state_owner, Propagator *propagator,
       const bool *estimator_initialized,
       const double *last_update_timestamp) noexcept
-      : diagnostics_(diagnostics), tracker_(tracker), updater_(updater),
-        state_(state), estimator_initialized_(estimator_initialized),
+      : diagnostics_(diagnostics), tracker_(std::move(tracker)),
+        updater_(std::move(updater)), state_owner_(state_owner),
+        estimator_initialized_(estimator_initialized),
         last_update_timestamp_(last_update_timestamp) {
     PollComponentFailures();
     if (diagnostics_ && diagnostics_->active()) {
       diagnostics_->BeginCallback(
           timestamp, camera_frame_ids,
           estimator_initialized_ != nullptr && *estimator_initialized_,
-          OutputReady(), state_, propagator);
+          OutputReady(), CurrentState(), propagator);
     }
   }
 
@@ -83,11 +88,15 @@ public:
     if (diagnostics_) {
       diagnostics_->EndCallback(
           estimator_initialized_ != nullptr && *estimator_initialized_,
-          OutputReady(), state_, std::uncaught_exception());
+          OutputReady(), CurrentState(), std::uncaught_exception());
     }
   }
 
 private:
+  const State *CurrentState() const noexcept {
+    return state_owner_ == nullptr ? nullptr : state_owner_->get();
+  }
+
   bool OutputReady() const noexcept {
     return estimator_initialized_ != nullptr && *estimator_initialized_ &&
            last_update_timestamp_ != nullptr && *last_update_timestamp_ != -1.0;
@@ -109,9 +118,13 @@ private:
   }
 
   std::shared_ptr<TurnSafeDiagnostics> diagnostics_;
-  const TrackKLT *tracker_ = nullptr;
-  const UpdaterMSCKF *updater_ = nullptr;
-  State *state_ = nullptr;
+  // Recovery replaces the frontend and state inside the callback.  Retain
+  // the frontend/updater whose diagnostic hooks served this callback, while
+  // resolving the state slot again at callback end so metadata describes the
+  // committed state rather than a destroyed predecessor.
+  std::shared_ptr<const TrackKLT> tracker_;
+  std::shared_ptr<const UpdaterMSCKF> updater_;
+  const std::shared_ptr<State> *state_owner_ = nullptr;
   const bool *estimator_initialized_ = nullptr;
   const double *last_update_timestamp_ = nullptr;
 };
@@ -189,6 +202,35 @@ TurnSafeCallbackInstallationResult ov_msckf::install_turnsafe_t0_callbacks(
   return result;
 }
 
+bool ov_msckf::reinstall_turnsafe_t0_frontend_callback(
+    const std::shared_ptr<TurnSafeDiagnostics> &diagnostics,
+    TrackKLT *tracker) noexcept {
+  if (!diagnostics || !diagnostics->active()) return true;
+  bool installed = false;
+  try {
+    if (tracker != nullptr) {
+      const std::weak_ptr<TurnSafeDiagnostics> weak_sink = diagnostics;
+      inject_turnsafe_diagnostic_fault_for_test(
+          TurnSafeDiagnosticFaultStage::kTrackerCallbackInstallation);
+      TrackKLT::DiagnosticsCallback tracker_callback(
+          [weak_sink](TrackKLTFrameDiagnostics record) {
+            const auto sink = weak_sink.lock();
+            if (sink) sink->RecordFrontend(std::move(record));
+          });
+      installed = tracker->set_turnsafe_diagnostics_callback(
+          std::move(tracker_callback));
+    }
+  } catch (const std::bad_alloc &) {
+  } catch (const std::exception &) {
+  } catch (...) {
+  }
+  if (!installed) {
+    diagnostics->ReportComponentFailure(
+        TurnSafeCaptureDisableReason::kFrontendCaptureFailure);
+  }
+  return installed;
+}
+
 VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false), thread_init_success(false) {
 
   // Nice startup message
@@ -202,6 +244,52 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
   params.print_and_load_noise();
   params.print_and_load_state();
   params.print_and_load_trackers();
+
+  // The recovery path is deliberately narrower than ordinary OpenVINS.  It
+  // is a frozen KAIST robustness experiment, default-off, and must not turn
+  // into a configurable gate search or silently run under a different camera
+  // model/frontend contract.
+  if (params.long_gap_recovery_enabled) {
+    const bool frozen_recovery_contract =
+        params.use_klt && params.use_stereo && !params.downsample_cameras &&
+        !params.use_aruco && params.state_options.num_cameras == 2 &&
+        !params.state_options.do_calib_camera_pose &&
+        !params.state_options.do_calib_camera_intrinsics &&
+        !params.state_options.do_calib_camera_timeoffset &&
+        params.state_options.max_slam_features >=
+            params.long_gap_recovery_min_correspondences &&
+        params.camera_intrinsics.size() == 2U &&
+        std::dynamic_pointer_cast<CamRadtan>(
+            params.camera_intrinsics.at(0)) != nullptr &&
+        std::dynamic_pointer_cast<CamRadtan>(
+            params.camera_intrinsics.at(1)) != nullptr &&
+        params.long_gap_recovery_threshold == 0.5 &&
+        params.long_gap_recovery_max_attempts == 10 &&
+        params.long_gap_recovery_min_correspondences ==
+            static_cast<int>(LongGapRelocalizer::minimum_correspondences()) &&
+        params.long_gap_recovery_min_inliers ==
+            static_cast<int>(LongGapRelocalizer::minimum_inliers()) &&
+        params.long_gap_recovery_min_inlier_ratio ==
+            LongGapRelocalizer::minimum_inlier_ratio() &&
+        params.long_gap_recovery_reprojection_px ==
+            LongGapRelocalizer::maximum_reprojection_error_px() &&
+        params.long_gap_recovery_min_image_span_ratio ==
+            LongGapRelocalizer::minimum_image_span_fraction() &&
+        params.long_gap_recovery_max_imu_angle_deg ==
+            LongGapRelocalizer::maximum_orientation_disagreement_deg() &&
+        params.long_gap_recovery_consensus_frames == 3 &&
+        params.long_gap_recovery_stationary_radius_m == 0.10 &&
+        params.long_gap_recovery_orientation_sigma_deg == 2.0 &&
+        params.long_gap_recovery_position_sigma_m == 0.10 &&
+        params.long_gap_recovery_velocity_sigma_mps == 0.05;
+    if (!frozen_recovery_contract) {
+      throw std::runtime_error(
+          "enabled long-gap recovery violates its frozen runtime contract");
+    }
+    PRINT_INFO(
+        "[LONG-GAP-RECOVERY]: event=contract_validated enabled=1 "
+        "threshold_s=0.500 attempts=10 consensus=3\n");
+  }
 
   // This will globally set the thread count we will use
   // -1 will reset to the system default threading (usually the num of cores)
@@ -545,9 +633,10 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
   // Start timing
   rT1 = boost::posix_time::microsec_clock::local_time();
   const TurnSafeCallbackEnvelope turnsafe_callback_envelope(
-      turnsafe_t0_diagnostics, dynamic_cast<const TrackKLT *>(trackFEATS.get()),
-      updaterMSCKF.get(), message_const.timestamp, message_const.sensor_ids,
-      state.get(), propagator.get(), &is_initialized_vio, &timelastupdate);
+      turnsafe_t0_diagnostics,
+      std::dynamic_pointer_cast<const TrackKLT>(trackFEATS), updaterMSCKF,
+      message_const.timestamp, message_const.sensor_ids, &state,
+      propagator.get(), &is_initialized_vio, &timelastupdate);
 
   // Assert we have valid measurement data and ids
   assert(!message_const.sensor_ids.empty());
@@ -568,6 +657,25 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
     message.masks.at(i) = mask_temp;
   }
 
+  // Detect an initialized camera outage before the ordinary frontend/state
+  // pipeline can propagate the stale position and velocity through it.
+  if (params.long_gap_recovery_enabled && is_initialized_vio && state &&
+      long_gap_recovery_phase == LongGapRecoveryPhase::TRACKING &&
+      std::isfinite(state->_timestamp) &&
+      message.timestamp - state->_timestamp >
+          params.long_gap_recovery_threshold) {
+    long_gap_recovery_phase = LongGapRecoveryPhase::REACQUIRING;
+    long_gap_recovery_attempt_count = 0;
+    long_gap_recovery_consensus.clear();
+    ++long_gap_recovery_activation_count;
+    PRINT_INFO(
+        "[LONG-GAP-RECOVERY]: event=trigger epoch=%llu timestamp=%.15f "
+        "last_state_timestamp=%.15f gap_s=%.9f activation=%llu\n",
+        static_cast<unsigned long long>(epoch_id), message.timestamp,
+        state->_timestamp, message.timestamp - state->_timestamp,
+        static_cast<unsigned long long>(long_gap_recovery_activation_count));
+  }
+
   // Perform our feature tracking!
   trackFEATS->feed_new_camera(message);
 
@@ -578,6 +686,17 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
     trackARUCO->feed_new_camera(message);
   }
   rT2 = boost::posix_time::microsec_clock::local_time();
+
+  // Reacquisition frames may update only the temporary frontend.  They never
+  // enter ZUPT, initialization, propagation, or either visual updater while
+  // the old live state is stale.  FAILED remains fail-closed for the rest of
+  // the sequence and preserves all diagnostic prefixes.
+  if (params.long_gap_recovery_enabled &&
+      (long_gap_recovery_phase == LongGapRecoveryPhase::REACQUIRING ||
+       long_gap_recovery_phase == LongGapRecoveryPhase::FAILED)) {
+    process_long_gap_recovery_frame(message);
+    return;
+  }
 
   // Check if we should do zero-velocity, if so update the state with it
   // Note that in the case that we only use in the beginning initialization phase
@@ -609,6 +728,206 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
 
   // Call on our propagate and update function
   do_feature_propagate_update(message);
+
+  if (params.long_gap_recovery_enabled &&
+      long_gap_recovery_phase == LongGapRecoveryPhase::WARMUP && state &&
+      static_cast<int>(state->_clones_IMU.size()) >=
+          std::min(state->_options.max_clone_size, 5) &&
+      timelastupdate == message.timestamp) {
+    long_gap_recovery_phase = LongGapRecoveryPhase::TRACKING;
+    PRINT_INFO(
+        "[LONG-GAP-RECOVERY]: event=warmup_complete epoch=%llu "
+        "timestamp=%.15f clones=%zu\n",
+        static_cast<unsigned long long>(epoch_id), message.timestamp,
+        state->_clones_IMU.size());
+  }
+}
+
+bool VioManager::process_long_gap_recovery_frame(
+    const ov_core::CameraData &message) {
+  if (long_gap_recovery_phase == LongGapRecoveryPhase::FAILED) {
+    PRINT_INFO(
+        "[LONG-GAP-RECOVERY]: event=degraded_frame epoch=%llu "
+        "timestamp=%.15f state_unchanged=1\n",
+        static_cast<unsigned long long>(epoch_id), message.timestamp);
+    return true;
+  }
+  if (long_gap_recovery_phase != LongGapRecoveryPhase::REACQUIRING ||
+      !state || !trackFEATS || !propagator) {
+    return false;
+  }
+
+  ++long_gap_recovery_attempt_count;
+
+  LongGapCameraCalibration calibration;
+  const Eigen::VectorXd intrinsics = state->_cam_intrinsics.at(0)->value();
+  if (intrinsics.rows() >= 8) {
+    calibration.K << intrinsics(0), 0.0, intrinsics(2), 0.0,
+        intrinsics(1), intrinsics(3), 0.0, 0.0, 1.0;
+    calibration.distortion = {intrinsics(4), intrinsics(5), intrinsics(6),
+                              intrinsics(7)};
+  } else {
+    calibration.K.setConstant(
+        std::numeric_limits<double>::quiet_NaN());
+  }
+  calibration.image_width = state->_cam_intrinsics_cameras.at(0)->w();
+  calibration.image_height = state->_cam_intrinsics_cameras.at(0)->h();
+  calibration.R_ItoC = state->_calib_IMUtoCAM.at(0)->Rot();
+  calibration.p_IinC = state->_calib_IMUtoCAM.at(0)->pos();
+
+  const auto last_observations = trackFEATS->get_last_obs();
+  const auto last_ids = trackFEATS->get_last_ids();
+  std::vector<LongGapCorrespondence> correspondences;
+  const auto observations_cam0 = last_observations.find(0U);
+  const auto ids_cam0 = last_ids.find(0U);
+  if (observations_cam0 != last_observations.end() &&
+      ids_cam0 != last_ids.end() &&
+      observations_cam0->second.size() == ids_cam0->second.size()) {
+    correspondences.reserve(ids_cam0->second.size());
+    for (std::size_t index = 0U; index < ids_cam0->second.size(); ++index) {
+      const std::size_t feature_id = ids_cam0->second[index];
+      const auto retained = state->_features_SLAM.find(feature_id);
+      if (retained == state->_features_SLAM.end() || !retained->second ||
+          feature_id <= static_cast<std::size_t>(
+                            4 * state->_options.max_aruco_features)) {
+        continue;
+      }
+
+      Eigen::Vector3d p_FinG = retained->second->get_xyz(false);
+      if (LandmarkRepresentation::is_relative_representation(
+              retained->second->_feat_representation)) {
+        const int anchor_camera = retained->second->_anchor_cam_id;
+        const auto anchor = state->_clones_IMU.find(
+            retained->second->_anchor_clone_timestamp);
+        if (anchor_camera < 0 ||
+            anchor_camera >= state->_options.num_cameras ||
+            anchor == state->_clones_IMU.end() || !anchor->second) {
+          continue;
+        }
+        const Eigen::Matrix3d R_ItoC_anchor =
+            state->_calib_IMUtoCAM.at(anchor_camera)->Rot();
+        const Eigen::Vector3d p_IinC_anchor =
+            state->_calib_IMUtoCAM.at(anchor_camera)->pos();
+        p_FinG = anchor->second->Rot().transpose() *
+                      R_ItoC_anchor.transpose() *
+                      (p_FinG - p_IinC_anchor) +
+                  anchor->second->pos();
+      }
+
+      LongGapCorrespondence correspondence;
+      correspondence.id = static_cast<std::uint64_t>(feature_id);
+      correspondence.p_FinG = p_FinG;
+      correspondence.uv_raw <<
+          static_cast<double>(observations_cam0->second[index].pt.x),
+          static_cast<double>(observations_cam0->second[index].pt.y);
+      correspondences.push_back(correspondence);
+    }
+  }
+  std::sort(correspondences.begin(), correspondences.end(),
+            [](const LongGapCorrespondence &left,
+               const LongGapCorrespondence &right) {
+              return left.id < right.id;
+            });
+
+  Eigen::Matrix3d imu_predicted_R_GtoI = Eigen::Matrix3d::Constant(
+      std::numeric_limits<double>::quiet_NaN());
+  const bool imu_prediction_available =
+      propagator->predict_orientation_readonly(
+          state, message.timestamp, imu_predicted_R_GtoI);
+  const LongGapRelocalizationResult recovery = LongGapRelocalizer::recover(
+      correspondences, calibration, imu_predicted_R_GtoI);
+  const LongGapRelocalizationMetrics &metrics = recovery.metrics;
+  PRINT_INFO(
+      "[LONG-GAP-RECOVERY]: event=attempt epoch=%llu attempt=%d "
+      "timestamp=%.15f imu_prediction=%d accepted=%d reason=%s "
+      "supplied=%zu valid=%zu inliers=%zu inlier_ratio=%.9f "
+      "max_reprojection_px=%.9f min_depth=%.9f span_x=%.9f "
+      "span_y=%.9f support_ratio=%.9f imu_angle_deg=%.9f "
+      "state_unchanged=%d\n",
+      static_cast<unsigned long long>(epoch_id),
+      long_gap_recovery_attempt_count, message.timestamp,
+      static_cast<int>(imu_prediction_available),
+      static_cast<int>(recovery.accepted),
+      long_gap_relocalization_reason_string(recovery.reason),
+      metrics.supplied_correspondence_count,
+      metrics.valid_correspondence_count, metrics.inlier_count,
+      metrics.inlier_ratio, metrics.max_reprojection_error_px,
+      metrics.min_depth, metrics.image_span_x_fraction,
+      metrics.image_span_y_fraction,
+      metrics.second_to_first_3d_singular_ratio,
+      metrics.orientation_disagreement_deg,
+      static_cast<int>(!recovery.accepted));
+
+  if (!recovery.accepted) {
+    long_gap_recovery_consensus.clear();
+  } else {
+    LongGapRecoveryPoseSample sample;
+    sample.timestamp = message.timestamp;
+    sample.R_GtoI = recovery.R_GtoI;
+    sample.p_IinG = recovery.p_IinG;
+    long_gap_recovery_consensus.push_back(sample);
+    PRINT_INFO(
+        "[LONG-GAP-RECOVERY]: event=accepted_pose epoch=%llu attempt=%d "
+        "timestamp=%.15f p_x=%.9f p_y=%.9f p_z=%.9f "
+        "consecutive=%zu\n",
+        static_cast<unsigned long long>(epoch_id),
+        long_gap_recovery_attempt_count, message.timestamp,
+        recovery.p_IinG(0), recovery.p_IinG(1), recovery.p_IinG(2),
+        long_gap_recovery_consensus.size());
+  }
+
+  if (static_cast<int>(long_gap_recovery_consensus.size()) >=
+      params.long_gap_recovery_consensus_frames) {
+    Eigen::Vector3d component_median;
+    for (int dimension = 0; dimension < 3; ++dimension) {
+      std::vector<double> values;
+      values.reserve(long_gap_recovery_consensus.size());
+      for (const auto &sample : long_gap_recovery_consensus) {
+        values.push_back(sample.p_IinG(dimension));
+      }
+      std::sort(values.begin(), values.end());
+      component_median(dimension) = values[values.size() / 2U];
+    }
+    double maximum_radius = 0.0;
+    for (const auto &sample : long_gap_recovery_consensus) {
+      maximum_radius = std::max(
+          maximum_radius, (sample.p_IinG - component_median).norm());
+    }
+    if (std::isfinite(maximum_radius) &&
+        maximum_radius <=
+            params.long_gap_recovery_stationary_radius_m) {
+      const LongGapRecoveryPoseSample verified =
+          long_gap_recovery_consensus.back();
+      PRINT_INFO(
+          "[LONG-GAP-RECOVERY]: event=consensus_pass epoch=%llu "
+          "timestamp=%.15f radius_m=%.9f samples=%zu\n",
+          static_cast<unsigned long long>(epoch_id), verified.timestamp,
+          maximum_radius, long_gap_recovery_consensus.size());
+      commit_long_gap_recovery(message, verified.R_GtoI,
+                               verified.p_IinG);
+      return true;
+    }
+
+    PRINT_INFO(
+        "[LONG-GAP-RECOVERY]: event=consensus_reject epoch=%llu "
+        "timestamp=%.15f radius_m=%.9f threshold_m=%.9f\n",
+        static_cast<unsigned long long>(epoch_id), message.timestamp,
+        maximum_radius, params.long_gap_recovery_stationary_radius_m);
+    long_gap_recovery_consensus.clear();
+  }
+
+  if (long_gap_recovery_attempt_count >=
+      params.long_gap_recovery_max_attempts) {
+    long_gap_recovery_phase = LongGapRecoveryPhase::FAILED;
+    ++long_gap_recovery_failure_count;
+    long_gap_recovery_consensus.clear();
+    PRINT_INFO(
+        "[LONG-GAP-RECOVERY]: event=recovery_failed epoch=%llu "
+        "timestamp=%.15f attempts=%d state_unchanged=1\n",
+        static_cast<unsigned long long>(epoch_id), message.timestamp,
+        long_gap_recovery_attempt_count);
+  }
+  return true;
 }
 
 void VioManager::do_feature_propagate_update(const ov_core::CameraData &message) {

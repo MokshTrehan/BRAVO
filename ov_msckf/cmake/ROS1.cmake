@@ -141,6 +141,7 @@ list(APPEND LIBRARY_SOURCES
         src/state/State.cpp
         src/state/StateHelper.cpp
         src/state/Propagator.cpp
+        src/core/LongGapRelocalizer.cpp
         src/core/VioManager.cpp
         src/core/VioManagerHelper.cpp
         src/update/CP2Canonical.cpp
@@ -173,6 +174,7 @@ list(APPEND LIBRARY_SOURCES
 # actual Givens/compression and EKF implementations called by strict wrappers.
 set_source_files_properties(
         src/ros1_serial_msckf.cpp
+        src/core/LongGapRelocalizer.cpp
         src/state/StateHelper.cpp
         src/ros/CP2ROS1RuntimeParameters.cpp
         src/update/CP2Canonical.cpp

@@ -109,6 +109,32 @@ struct VioManagerOptions {
   /// Default-off, passive Session-1 T0 diagnostic configuration.
   TurnSafeDiagnosticsOptions turnsafe_t0;
 
+  /// Default-off recovery from a long post-initialization camera outage.
+  bool long_gap_recovery_enabled = false;
+
+  /// Camera-time gap which starts fail-closed relocalization (seconds).
+  double long_gap_recovery_threshold = 0.5;
+
+  /// Maximum number of post-gap frames examined before recovery fails closed.
+  int long_gap_recovery_max_attempts = 10;
+
+  /// Minimum retained-map correspondences and accepted PnP inliers.
+  int long_gap_recovery_min_correspondences = 12;
+  int long_gap_recovery_min_inliers = 12;
+
+  /// PnP acceptance thresholds frozen by the rotation recovery protocol.
+  double long_gap_recovery_min_inlier_ratio = 0.70;
+  double long_gap_recovery_reprojection_px = 2.0;
+  double long_gap_recovery_min_image_span_ratio = 0.25;
+  double long_gap_recovery_max_imu_angle_deg = 5.0;
+
+  /// Temporal-consensus gate and fresh-state covariance floors.
+  int long_gap_recovery_consensus_frames = 3;
+  double long_gap_recovery_stationary_radius_m = 0.10;
+  double long_gap_recovery_orientation_sigma_deg = 2.0;
+  double long_gap_recovery_position_sigma_m = 0.10;
+  double long_gap_recovery_velocity_sigma_mps = 0.05;
+
   /// Internal-only CP2 switch; never populated by YAML or ROS parameters.
   bool cp2_preopened_output_mode = false;
 
@@ -167,6 +193,68 @@ struct VioManagerOptions {
       parser->parse_config("turnsafe_t0_digest_contract_version", turnsafe_t0.digest_contract_version, false);
       parser->parse_config("turnsafe_t0_require_target_stereo_range",
                            turnsafe_t0.require_target_stereo_range, false);
+      parser->parse_config("long_gap_recovery_enabled",
+                           long_gap_recovery_enabled, false);
+      parser->parse_config("long_gap_recovery_threshold",
+                           long_gap_recovery_threshold, false);
+      parser->parse_config("long_gap_recovery_max_attempts",
+                           long_gap_recovery_max_attempts, false);
+      parser->parse_config("long_gap_recovery_min_correspondences",
+                           long_gap_recovery_min_correspondences, false);
+      parser->parse_config("long_gap_recovery_min_inliers",
+                           long_gap_recovery_min_inliers, false);
+      parser->parse_config("long_gap_recovery_min_inlier_ratio",
+                           long_gap_recovery_min_inlier_ratio, false);
+      parser->parse_config("long_gap_recovery_reprojection_px",
+                           long_gap_recovery_reprojection_px, false);
+      parser->parse_config("long_gap_recovery_min_image_span_ratio",
+                           long_gap_recovery_min_image_span_ratio, false);
+      parser->parse_config("long_gap_recovery_max_imu_angle_deg",
+                           long_gap_recovery_max_imu_angle_deg, false);
+      parser->parse_config("long_gap_recovery_consensus_frames",
+                           long_gap_recovery_consensus_frames, false);
+      parser->parse_config("long_gap_recovery_stationary_radius_m",
+                           long_gap_recovery_stationary_radius_m, false);
+      parser->parse_config("long_gap_recovery_orientation_sigma_deg",
+                           long_gap_recovery_orientation_sigma_deg, false);
+      parser->parse_config("long_gap_recovery_position_sigma_m",
+                           long_gap_recovery_position_sigma_m, false);
+      parser->parse_config("long_gap_recovery_velocity_sigma_mps",
+                           long_gap_recovery_velocity_sigma_mps, false);
+    }
+    const bool long_gap_options_valid =
+        std::isfinite(long_gap_recovery_threshold) &&
+        long_gap_recovery_threshold > 0.0 &&
+        long_gap_recovery_max_attempts >= 1 &&
+        long_gap_recovery_min_correspondences >= 4 &&
+        long_gap_recovery_min_inliers >= 4 &&
+        long_gap_recovery_min_inliers <=
+            long_gap_recovery_min_correspondences &&
+        std::isfinite(long_gap_recovery_min_inlier_ratio) &&
+        long_gap_recovery_min_inlier_ratio > 0.0 &&
+        long_gap_recovery_min_inlier_ratio <= 1.0 &&
+        std::isfinite(long_gap_recovery_reprojection_px) &&
+        long_gap_recovery_reprojection_px > 0.0 &&
+        std::isfinite(long_gap_recovery_min_image_span_ratio) &&
+        long_gap_recovery_min_image_span_ratio > 0.0 &&
+        long_gap_recovery_min_image_span_ratio <= 1.0 &&
+        std::isfinite(long_gap_recovery_max_imu_angle_deg) &&
+        long_gap_recovery_max_imu_angle_deg > 0.0 &&
+        long_gap_recovery_max_imu_angle_deg <= 180.0 &&
+        long_gap_recovery_consensus_frames >= 1 &&
+        long_gap_recovery_consensus_frames <=
+            long_gap_recovery_max_attempts &&
+        std::isfinite(long_gap_recovery_stationary_radius_m) &&
+        long_gap_recovery_stationary_radius_m > 0.0 &&
+        std::isfinite(long_gap_recovery_orientation_sigma_deg) &&
+        long_gap_recovery_orientation_sigma_deg > 0.0 &&
+        std::isfinite(long_gap_recovery_position_sigma_m) &&
+        long_gap_recovery_position_sigma_m > 0.0 &&
+        std::isfinite(long_gap_recovery_velocity_sigma_mps) &&
+        long_gap_recovery_velocity_sigma_mps > 0.0;
+    if (!long_gap_options_valid) {
+      PRINT_ERROR(RED "invalid long-gap recovery configuration\n" RESET);
+      std::exit(EXIT_FAILURE);
     }
     PRINT_DEBUG("  - dt_slam_delay: %.1f\n", dt_slam_delay);
     PRINT_DEBUG("  - zero_velocity_update: %d\n", try_zupt);
@@ -187,6 +275,23 @@ struct VioManagerOptions {
     PRINT_DEBUG("  - TurnSafe T0 schema: %s\n", turnsafe_t0.schema_version.c_str());
     PRINT_DEBUG("  - TurnSafe T0 target-stereo range required?: %d\n",
                 (int)turnsafe_t0.require_target_stereo_range);
+    PRINT_DEBUG("  - long-gap recovery enabled?: %d\n",
+                (int)long_gap_recovery_enabled);
+    PRINT_DEBUG("  - long-gap threshold: %.3f s\n",
+                long_gap_recovery_threshold);
+    PRINT_DEBUG("  - long-gap attempts / consensus: %d / %d\n",
+                long_gap_recovery_max_attempts,
+                long_gap_recovery_consensus_frames);
+    PRINT_DEBUG("  - long-gap PnP min corr / inliers / ratio: %d / %d / %.3f\n",
+                long_gap_recovery_min_correspondences,
+                long_gap_recovery_min_inliers,
+                long_gap_recovery_min_inlier_ratio);
+    PRINT_DEBUG("  - long-gap PnP reprojection / image span / IMU angle: %.3f px / %.3f / %.3f deg\n",
+                long_gap_recovery_reprojection_px,
+                long_gap_recovery_min_image_span_ratio,
+                long_gap_recovery_max_imu_angle_deg);
+    PRINT_DEBUG("  - long-gap stationary radius: %.3f m\n",
+                long_gap_recovery_stationary_radius_m);
   }
 
   // NOISE / CHI2 ============================

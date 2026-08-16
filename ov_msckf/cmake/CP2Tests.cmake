@@ -165,6 +165,7 @@ if (CATKIN_ENABLE_TESTING)
     endif ()
 
     set(CP2_VALUE_ONLY_TEST_SOURCES
+            test_long_gap_relocalizer;test/cp2/test_long_gap_relocalizer.cpp
             test_cp2_canonical;test/cp2/test_cp2_canonical.cpp
             test_cp2_feature_gate;test/cp2/test_cp2_feature_gate.cpp
             test_cp2_offline_replay;test/cp2/test_cp2_offline_replay.cpp

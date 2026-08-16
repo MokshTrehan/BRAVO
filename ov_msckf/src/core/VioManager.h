@@ -26,10 +26,12 @@
 #include <algorithm>
 #include <atomic>
 #include <boost/filesystem.hpp>
+#include <cstdint>
 #include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "VioManagerOptions.h"
 #include "update/UpdaterMSCKF.h"
@@ -142,6 +144,18 @@ public:
   /** Atomically publish the passive T0 stream; logging failure is isolated. */
   bool finalize_turnsafe_t0() noexcept;
 
+  /// Machine-readable long-gap recovery counters for campaign accounting.
+  std::uint64_t long_gap_recovery_activations() const noexcept {
+    return long_gap_recovery_activation_count;
+  }
+  std::uint64_t long_gap_recovery_commits() const noexcept {
+    return long_gap_recovery_commit_count;
+  }
+  std::uint64_t long_gap_recovery_failures() const noexcept {
+    return long_gap_recovery_failure_count;
+  }
+  std::uint64_t estimator_epoch_id() const noexcept { return epoch_id; }
+
   /// Get a nice visualization image of what tracks we have
   cv::Mat get_historical_viz_image();
 
@@ -196,6 +210,20 @@ protected:
    * @return True if we have successfully initialized
    */
   bool try_to_initialize(const ov_core::CameraData &message);
+
+  /// Evaluate one post-gap frame without propagating the stale live state.
+  bool process_long_gap_recovery_frame(const ov_core::CameraData &message);
+
+  /// Atomically replace the stale window with a fresh, globally reanchored epoch.
+  void commit_long_gap_recovery(const ov_core::CameraData &message,
+                                const Eigen::Matrix3d &R_GtoI,
+                                const Eigen::Vector3d &p_IinG);
+
+  /// Recreate the ordinary frontend at an epoch boundary and seed one frame.
+  void reset_feature_epoch(const ov_core::CameraData &message);
+
+  /// Build a calibration-identical empty state for initialisation or recovery.
+  std::shared_ptr<State> make_fresh_state_with_calibration() const;
 
   /**
    * @brief This function will will re-triangulate all features in the current frame
@@ -268,6 +296,28 @@ protected:
   // If we did a zero velocity update
   bool did_zupt_update = false;
   bool has_moved_since_zupt = false;
+
+  enum class LongGapRecoveryPhase {
+    TRACKING,
+    REACQUIRING,
+    WARMUP,
+    FAILED
+  };
+
+  struct LongGapRecoveryPoseSample {
+    double timestamp = -1.0;
+    Eigen::Matrix3d R_GtoI = Eigen::Matrix3d::Identity();
+    Eigen::Vector3d p_IinG = Eigen::Vector3d::Zero();
+  };
+
+  LongGapRecoveryPhase long_gap_recovery_phase =
+      LongGapRecoveryPhase::TRACKING;
+  int long_gap_recovery_attempt_count = 0;
+  std::vector<LongGapRecoveryPoseSample> long_gap_recovery_consensus;
+  std::uint64_t long_gap_recovery_activation_count = 0U;
+  std::uint64_t long_gap_recovery_commit_count = 0U;
+  std::uint64_t long_gap_recovery_failure_count = 0U;
+  std::uint64_t epoch_id = 0U;
 
   // Good features that where used in the last update (used in visualization)
   std::vector<Eigen::Vector3d> good_features_MSCKF;
