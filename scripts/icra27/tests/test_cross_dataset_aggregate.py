@@ -262,6 +262,16 @@ class ClosureAndAccountingTests(unittest.TestCase):
             with self.assertRaises(aggregate.AggregateError):
                 aggregate.verify_checksum_directory(root, manifest)
 
+    def test_nested_symlink_remains_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = self.write_closed(root)
+            nested = root / "nested"
+            nested.mkdir()
+            (nested / "alias.csv").symlink_to(root / "data.csv")
+            with self.assertRaisesRegex(aggregate.AggregateError, "symlink"):
+                aggregate.verify_checksum_directory(root, manifest)
+
     def test_missing_and_duplicate_canonical_results_rejected(self):
         expected = [Path("/tmp/a"), Path("/tmp/b")]
         aggregate.assert_exact_paths(expected, expected, "fixture")
@@ -286,6 +296,76 @@ class ClosureAndAccountingTests(unittest.TestCase):
             aggregate.validate_accounting(cells[:-1])
         with self.assertRaises(aggregate.AggregateError):
             aggregate.validate_accounting(cells[:-1] + [cells[0]])
+
+
+class QualitativeArtifactMembershipTests(unittest.TestCase):
+    def test_nested_checksum_is_payload_but_root_checksum_is_publication(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payloads = {
+                "evidence/campaign_matrix.yaml": b"schema: fixture\n",
+                "validated_v3/SHA256SUMS": b"delegate checksum fixture\n",
+                "validated_v3/geometry/points.ply": b"ply\n",
+                "validated_v3/geometry_manifest.json": b"{}\n",
+            }
+            artifacts = {}
+            for relative, payload in payloads.items():
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(payload)
+                artifacts[relative] = {
+                    "size_bytes": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                }
+            manifest = root / "qualitative_manifest.json"
+            manifest.write_text(
+                json.dumps({"artifacts": artifacts}, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            checksum_members = [manifest] + [root / name for name in payloads]
+            (root / "SHA256SUMS").write_text(
+                "".join(
+                    "{}  {}\n".format(
+                        hashlib.sha256(item.read_bytes()).hexdigest(),
+                        item.relative_to(root).as_posix(),
+                    )
+                    for item in sorted(
+                        checksum_members,
+                        key=lambda item: item.relative_to(root).as_posix(),
+                    )
+                ),
+                encoding="ascii",
+            )
+
+            closure = aggregate.verify_checksum_directory(root, manifest)
+            actual = aggregate._qualitative_artifact_members(root)
+            self.assertTrue(closure["membership_exact"])
+            self.assertEqual(actual, set(artifacts))
+            self.assertIn("validated_v3/SHA256SUMS", actual)
+            self.assertNotIn("SHA256SUMS", actual)
+
+    def test_completed_r4_fixture_membership_read_only_when_available(self):
+        fixture = Path(
+            "/home/moksh/schurvio-icra27-artifacts/cross-dataset-system-comparison/"
+            "cdsc1r4-20260816T173621Z/geometry"
+        )
+        if not fixture.is_dir():
+            self.skipTest("completed CDSC-1R4 artifact tree is not available")
+        candidate = None
+        value = None
+        for manifest in sorted(fixture.rglob("qualitative_manifest.json")):
+            observed = json.loads(manifest.read_text(encoding="utf-8"))
+            if "validated_v3/SHA256SUMS" in observed.get("artifacts", {}):
+                candidate = manifest
+                value = observed
+                break
+        self.assertIsNotNone(candidate)
+        assert candidate is not None and value is not None
+        actual = aggregate._qualitative_artifact_members(candidate.parent)
+        self.assertEqual(actual, set(value["artifacts"]))
+        self.assertTrue((candidate.parent / "SHA256SUMS").is_file())
+        self.assertIn("validated_v3/SHA256SUMS", actual)
+        self.assertNotIn("SHA256SUMS", actual)
 
 
 class ReportTests(unittest.TestCase):

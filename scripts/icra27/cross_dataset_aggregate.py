@@ -947,6 +947,20 @@ def _validate_pair_result(
     }
 
 
+def _qualitative_artifact_members(directory: Path) -> Set[str]:
+    """Return payload members, excluding only the bundle's root publications."""
+
+    excluded = {
+        directory / "qualitative_manifest.json",
+        directory / "SHA256SUMS",
+    }
+    return {
+        item.relative_to(directory).as_posix()
+        for item in directory.rglob("*")
+        if item.is_file() and item not in excluded
+    }
+
+
 def _validate_geometry(
     path: Path,
     row: campaign.MatrixRow,
@@ -1016,11 +1030,7 @@ def _validate_geometry(
     artifacts = value.get("artifacts")
     if not isinstance(artifacts, dict):
         raise AggregateError("qualitative artifact index is absent")
-    actual_payloads = {
-        item.relative_to(path.parent).as_posix()
-        for item in path.parent.rglob("*")
-        if item.is_file() and item.name not in ("qualitative_manifest.json", "SHA256SUMS")
-    }
+    actual_payloads = _qualitative_artifact_members(path.parent)
     if set(artifacts) != actual_payloads:
         raise AggregateError("qualitative manifest artifact membership mismatch")
     for relative, record in artifacts.items():
