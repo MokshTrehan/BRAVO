@@ -97,6 +97,13 @@ def _write_inputs(
     bad_frame_topic: str | None = None,
     nonfinite_topic: str | None = None,
     trajectory_row_delta: int = 0,
+    bag_start_index: int = 0,
+    omit_loop_indices: frozenset[int] = frozenset(),
+    loop_header_offsets_ns: tuple[int, ...] = (29_958_486, 29_958_487),
+    topic_start_indices: dict[str, int] | None = None,
+    omit_topic_indices: dict[str, frozenset[int]] | None = None,
+    topic_record_offsets_ns: dict[str, int] | None = None,
+    topic_header_offsets_ns: dict[str, int] | None = None,
 ) -> tuple[Path, Path, Path]:
     bag_path = root / "feature_stream.bag"
     trajectory_path = root / "estimate_raw.tum"
@@ -108,9 +115,19 @@ def _write_inputs(
         "points_aruco": "aruco_points",
         "loop_feats": "loop_points",
     }
+    topic_start_indices = topic_start_indices or {}
+    omit_topic_indices = omit_topic_indices or {}
+    topic_record_offsets_ns = topic_record_offsets_ns or {}
+    topic_header_offsets_ns = topic_header_offsets_ns or {}
     with rosbag.Bag(str(bag_path), "w") as bag:
         for index, sensor_timestamp in enumerate(fixture["sensor_timestamps"]):
-            record_timestamp = genpy.Time.from_sec(1000.0 + index)
+            if index < bag_start_index:
+                continue
+            record_timestamp_ns = (1000 + index) * 1_000_000_000
+            record_timestamp = genpy.Time(
+                record_timestamp_ns // 1_000_000_000,
+                record_timestamp_ns % 1_000_000_000,
+            )
             position = fixture["positions"][index]
             quaternion = _quaternion(fixture["yaw_radians"][index])
             pose = PoseWithCovarianceStamped()
@@ -129,7 +146,13 @@ def _write_inputs(
             bag.write(f"{namespace}/poseimu", pose, record_timestamp)
 
             for suffix, fixture_key in suffix_to_fixture.items():
+                if index < topic_start_indices.get(suffix, 0):
+                    continue
+                if index in omit_topic_indices.get(suffix, frozenset()):
+                    continue
                 if omit_last_topic == suffix and index == len(fixture["sensor_timestamps"]) - 1:
+                    continue
+                if suffix == "loop_feats" and index in omit_loop_indices:
                     continue
                 points = copy.deepcopy(fixture[fixture_key][index])
                 if nonfinite_topic == suffix and index == 0:
@@ -138,14 +161,43 @@ def _write_inputs(
                     points[0][0] = float("nan")
                 frame = "wrong" if bad_frame_topic == suffix and index == 0 else fixture["frame_id"]
                 message_stamp = (
-                    sensor_timestamp if suffix == "loop_feats" else 2000.0 + index
+                    sensor_timestamp
+                    if suffix == "loop_feats"
+                    else 1000.0 + index - 0.0001
                 )
                 message = (
                     _legacy_cloud(points, frame, message_stamp)
                     if suffix == "loop_feats"
                     else _pointcloud2(points, frame, message_stamp)
                 )
-                bag.write(f"{namespace}/{suffix}", message, record_timestamp)
+                message.header.seq = index
+                if suffix == "loop_feats":
+                    stamp_ns = (
+                        int(round(sensor_timestamp * 1e9))
+                        + loop_header_offsets_ns[index % len(loop_header_offsets_ns)]
+                    )
+                    message.header.stamp = genpy.Time(
+                        stamp_ns // 1_000_000_000, stamp_ns % 1_000_000_000
+                    )
+                elif suffix in topic_header_offsets_ns:
+                    stamp_ns = (
+                        message.header.stamp.secs * 1_000_000_000
+                        + message.header.stamp.nsecs
+                        + topic_header_offsets_ns[suffix]
+                    )
+                    message.header.stamp = genpy.Time(
+                        stamp_ns // 1_000_000_000, stamp_ns % 1_000_000_000
+                    )
+                topic_record_ns = (
+                    record_timestamp_ns + topic_record_offsets_ns.get(suffix, 0)
+                )
+                topic_record_timestamp = genpy.Time(
+                    topic_record_ns // 1_000_000_000,
+                    topic_record_ns % 1_000_000_000,
+                )
+                bag.write(
+                    f"{namespace}/{suffix}", message, topic_record_timestamp
+                )
 
     trajectory_rows = []
     limit = len(fixture["sensor_timestamps"]) + trajectory_row_delta
@@ -205,15 +257,40 @@ class GeometryBundleIntegrationTests(unittest.TestCase):
 
             self.assertEqual(manifest_a, manifest_b)
             self.assertEqual(manifest_a["status"], "COMPLETE")
+            self.assertEqual(
+                manifest_a["schema"], "schurvio.icra27.kaist_geometry_bundle.v3"
+            )
             self.assertEqual(manifest_a["recording"]["message_counts"]["poseimu"], 5)
             self.assertEqual(
                 manifest_a["recording"]["association"]["points_policy"],
-                "ordinal_to_poseimu_sensor_timestamp",
+                "per_topic_publish_ordinal_after_exact_count_or_proven_"
+                "contiguous_terminal_poseimu_suffix",
             )
+            point_associations = manifest_a["recording"]["association"][
+                "points_topic_associations"
+            ]
             self.assertEqual(
-                manifest_a["recording"]["association"]["loop_feats_policy"],
-                "exact_sensor_header_to_unique_poseimu_timestamp",
+                {
+                    value["mode"]
+                    for value in point_associations.values()
+                },
+                {"V2_EXACT_COUNT_PUBLISH_ORDINAL"},
             )
+            association = manifest_a["recording"]["association"]
+            self.assertEqual(
+                association["loop_feats_mode"], "FULL_COUNT_PUBLISH_ORDINAL"
+            )
+            self.assertTrue(association["loop_feats_count_parity"])
+            self.assertEqual(association["loop_feats_snapshot_associated_count"], 5)
+            self.assertEqual(association["loop_feats_unassociated_raw_message_count"], 0)
+            header_offsets = association["loop_feats_header_offset_diagnostics"]
+            self.assertEqual(header_offsets["minimum_ns"], 29_958_486)
+            self.assertEqual(header_offsets["maximum_ns"], 29_958_487)
+            self.assertEqual(header_offsets["range_ns"], 1)
+            self.assertTrue(
+                header_offsets["within_declared_near_invariant_range_tolerance"]
+            )
+            self.assertTrue(header_offsets["diagnostic_only_not_association_gate"])
             final_selection = manifest_a["selection"]["final_slam_message"]
             self.assertEqual(final_selection["poseimu_ordinal_zero_based"], 4)
             self.assertTrue(final_selection["final_empty"])
@@ -227,6 +304,10 @@ class GeometryBundleIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(
                 manifest_a["outputs"]["geometry/msckf_update_points.ply"]["point_count"],
+                5,
+            )
+            self.assertEqual(
+                manifest_a["outputs"]["geometry/loop_active_tracks_aggregate.ply"]["point_count"],
                 5,
             )
             self.assertEqual(
@@ -268,12 +349,18 @@ class GeometryBundleIntegrationTests(unittest.TestCase):
                 self.assertEqual(_sha256(run_a / relative), _sha256(run_b / relative), relative)
             slam_text = (run_a / "geometry/slam_landmarks_final.ply").read_text(encoding="utf-8")
             msckf_text = (run_a / "geometry/msckf_update_points.ply").read_text(encoding="utf-8")
+            loop_text = (run_a / "geometry/loop_active_tracks_aggregate.ply").read_text(
+                encoding="utf-8"
+            )
             self.assertIn("not a persistent map", slam_text)
             self.assertIn("literal final points_slam", slam_text)
             self.assertIn("final_empty true", slam_text)
             self.assertIn("element vertex 0", slam_text)
             self.assertIn("transient last-update MSCKF", msckf_text)
             self.assertIn("raw estimator global frame", msckf_text)
+            self.assertIn("transient active loop tracks", loop_text)
+            self.assertIn("deliberately unassociated", loop_text)
+            self.assertIn("not a persistent map", loop_text)
             top_svg = (run_a / "figures/top.svg").read_text(encoding="utf-8")
             self.assertIn("GT-derived bounds", top_svg)
             self.assertIn("gaps preserved", top_svg)
@@ -332,21 +419,164 @@ class GeometryBundleIntegrationTests(unittest.TestCase):
                 root, _load_fixture(), omit_last_topic="points_slam"
             )
             run_dir = root / "run"
-            with self.assertRaisesRegex(MODULE.GeometryError, "count mismatch"):
+            with self.assertRaisesRegex(MODULE.GeometryError, "cannot be proved"):
                 MODULE.build_bundle(bag, trajectory, gt, run_dir)
             self.assertFalse((run_dir / "geometry_manifest.json").exists())
 
-    def test_sparse_loop_features_are_retained_as_explicit_empty_slot(self) -> None:
+    def test_per_topic_pose_prefix_uses_direct_and_peer_proofs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             bag, trajectory, gt = _write_inputs(
-                root, _load_fixture(), omit_last_topic="loop_feats"
+                root,
+                _load_fixture(),
+                topic_start_indices={
+                    "points_slam": 1,
+                    "points_aruco": 1,
+                },
+                topic_record_offsets_ns={"points_slam": 600_000_000},
+            )
+            run_a = root / "run_a"
+            run_b = root / "run_b"
+            manifest = MODULE.build_bundle(bag, trajectory, gt, run_a)
+            replay = MODULE.build_bundle(bag, trajectory, gt, run_b)
+            self.assertEqual(manifest, replay)
+            for relative in MODULE.OUTPUT_PATHS:
+                self.assertEqual(
+                    _sha256(run_a / relative),
+                    _sha256(run_b / relative),
+                    relative,
+                )
+            association = manifest["recording"]["association"]
+            topics = association["points_topic_associations"]
+            self.assertFalse(association["points_all_streams_exact_count_parity"])
+            self.assertEqual(
+                topics["points_msckf"]["mode"],
+                "V2_EXACT_COUNT_PUBLISH_ORDINAL",
+            )
+            self.assertEqual(
+                topics["points_aruco"]["mode"],
+                "PROVEN_CONTIGUOUS_POSE_SUFFIX_BAG_RECORD_TIME",
+            )
+            self.assertEqual(
+                topics["points_slam"]["mode"],
+                "PROVEN_CONTIGUOUS_POSE_SUFFIX_HEADER_TO_POSE_RECORD_"
+                "AND_PEER_HEADER_TIME",
+            )
+            self.assertFalse(
+                topics["points_slam"]["direct_bag_record_proof"]["accepted"]
+            )
+            self.assertIn(
+                "points_aruco", topics["points_slam"]["accepted_peer_topics"]
+            )
+            for suffix, expected_prefix in (
+                ("points_slam", 1),
+                ("points_msckf", 0),
+                ("points_aruco", 1),
+            ):
+                self.assertEqual(
+                    topics[suffix]["unobserved_leading_poseimu_count"],
+                    expected_prefix,
+                )
+                self.assertEqual(
+                    topics[suffix]["last_associated_poseimu_ordinal_zero_based"],
+                    4,
+                )
+            self.assertTrue(
+                manifest["selection"]["snapshots"]["points_stream_coverage_gate"][
+                    "every_required_snapshot_at_or_after_complete_points_coverage"
+                ]
+            )
+
+    def test_internal_points_gap_cannot_masquerade_as_recorder_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bag, trajectory, gt = _write_inputs(
+                root,
+                _load_fixture(),
+                omit_topic_indices={"points_slam": frozenset({2})},
+            )
+            run_dir = root / "run"
+            with self.assertRaisesRegex(MODULE.GeometryError, "cannot be proved"):
+                MODULE.build_bundle(bag, trajectory, gt, run_dir)
+            self.assertFalse((run_dir / "geometry_manifest.json").exists())
+
+    def test_peer_header_delta_above_declared_bound_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bag, trajectory, gt = _write_inputs(
+                root,
+                _load_fixture(),
+                topic_start_indices={"points_slam": 1},
+                topic_record_offsets_ns={"points_slam": 600_000_000},
+                topic_header_offsets_ns={"points_slam": 2_000_000},
+            )
+            run_dir = root / "run"
+            with self.assertRaisesRegex(MODULE.GeometryError, "cannot be proved"):
+                MODULE.build_bundle(bag, trajectory, gt, run_dir)
+            self.assertFalse((run_dir / "geometry_manifest.json").exists())
+
+    def test_peer_cycle_without_exact_or_direct_root_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bag, trajectory, gt = _write_inputs(
+                root,
+                _load_fixture(),
+                topic_start_indices={
+                    "points_slam": 1,
+                    "points_msckf": 1,
+                    "points_aruco": 1,
+                },
+                topic_record_offsets_ns={
+                    "points_slam": 600_000_000,
+                    "points_msckf": 600_000_000,
+                    "points_aruco": 600_000_000,
+                },
+            )
+            with self.assertRaisesRegex(MODULE.GeometryError, "cannot be proved"):
+                MODULE.build_bundle(bag, trajectory, gt, root / "run")
+
+    def test_required_snapshot_inside_unobserved_prefix_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bag, trajectory, gt = _write_inputs(
+                root,
+                _load_fixture(),
+                topic_start_indices={
+                    "points_slam": 4,
+                    "points_msckf": 4,
+                    "points_aruco": 4,
+                },
+            )
+            with self.assertRaisesRegex(
+                MODULE.GeometryError, "snapshot precedes complete points"
+            ):
+                MODULE.build_bundle(bag, trajectory, gt, root / "run")
+
+    def test_sparse_loop_features_remain_raw_only_and_all_snapshot_slots_are_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bag, trajectory, gt = _write_inputs(
+                root, _load_fixture(), omit_loop_indices=frozenset({1})
             )
             manifest = MODULE.build_bundle(bag, trajectory, gt, root / "run")
             association = manifest["recording"]["association"]
-            self.assertTrue(association["loop_feats_sparse_emission_allowed"])
-            self.assertEqual(association["loop_feats_emitted_count"], 4)
-            self.assertEqual(association["loop_feats_missing_pose_count"], 1)
+            self.assertEqual(
+                association["loop_feats_mode"], "SPARSE_RAW_ONLY_UNASSOCIATED"
+            )
+            self.assertFalse(association["loop_feats_count_parity"])
+            self.assertEqual(association["loop_feats_raw_message_count"], 4)
+            self.assertEqual(association["loop_feats_snapshot_associated_count"], 0)
+            self.assertEqual(association["loop_feats_snapshot_explicit_empty_count"], 5)
+            self.assertEqual(association["loop_feats_unassociated_raw_message_count"], 4)
+            self.assertIsNone(association["loop_feats_header_offset_diagnostics"])
+            self.assertIsNone(association["loop_feats_bag_record_offset_diagnostics"])
+            self.assertEqual(
+                manifest["outputs"]["geometry/loop_active_tracks_aggregate.ply"]["point_count"],
+                4,
+            )
+            for label in ("25", "50", "75", "max_angular_rate"):
+                snapshot = manifest["outputs"][f"geometry/snapshots/{label}.ply"]
+                self.assertEqual(snapshot["semantic_counts"]["loop_feats"], 0)
 
     def test_frame_mismatch_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -366,14 +596,33 @@ class GeometryBundleIntegrationTests(unittest.TestCase):
             with self.assertRaisesRegex(MODULE.GeometryError, "non-finite"):
                 MODULE.build_bundle(bag, trajectory, gt, root / "run")
 
-    def test_capture_trajectory_count_mismatch_fails_closed(self) -> None:
+    def test_capture_trajectory_missing_recorded_pose_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             bag, trajectory, gt = _write_inputs(
                 root, _load_fixture(), trajectory_row_delta=-1
             )
-            with self.assertRaisesRegex(MODULE.GeometryError, "trajectory count"):
+            with self.assertRaisesRegex(MODULE.GeometryError, "no unique row"):
                 MODULE.build_bundle(bag, trajectory, gt, root / "run")
+
+    def test_feature_recording_may_be_a_validated_trajectory_subset(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bag, trajectory, gt = _write_inputs(
+                root, _load_fixture(), bag_start_index=1
+            )
+            manifest = MODULE.build_bundle(bag, trajectory, gt, root / "run")
+            validation = manifest["capture_trajectory_validation"]
+            self.assertFalse(validation["exact_row_count_parity"])
+            self.assertEqual(validation["poseimu_row_count"], 4)
+            self.assertEqual(validation["capture_trajectory_row_count"], 5)
+            self.assertEqual(
+                validation["first_matched_capture_trajectory_index_zero_based"], 1
+            )
+            self.assertEqual(
+                validation["last_matched_capture_trajectory_index_zero_based"], 4
+            )
+            self.assertEqual(validation["unmatched_capture_rows_before_first_match"], 1)
 
     def test_unreadable_bag_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -388,8 +637,44 @@ class GeometryBundleIntegrationTests(unittest.TestCase):
             with self.assertRaisesRegex(MODULE.GeometryError, "unreadable feature bag"):
                 MODULE.build_bundle(bag, trajectory, gt, root / "run")
 
+    def test_nested_snapshot_symlink_cannot_redirect_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bag, trajectory, gt = _write_inputs(root, _load_fixture())
+            run_dir = root / "run"
+            external = root / "external"
+            (run_dir / "geometry").mkdir(parents=True)
+            external.mkdir()
+            (run_dir / "geometry" / "snapshots").symlink_to(
+                external, target_is_directory=True
+            )
+            with self.assertRaisesRegex(MODULE.GeometryError, "symlinked directory"):
+                MODULE.build_bundle(bag, trajectory, gt, run_dir)
+            self.assertEqual(list(external.iterdir()), [])
+
 
 class PureGeometryTests(unittest.TestCase):
+    def test_peer_proof_rejects_header_after_own_record_time(self) -> None:
+        proof = MODULE._peer_header_suffix_proof(
+            (1_000_000, 4_000_000),
+            (999_999, 3_999_999),
+            (1_000_000, 4_000_000),
+            0,
+            0,
+        )
+        self.assertFalse(proof["accepted"])
+        self.assertFalse(proof["every_point_header_not_after_own_bag_record_time"])
+
+    def test_direct_suffix_proof_rejects_ambiguous_nearest_record_time(self) -> None:
+        proof = MODULE._direct_points_suffix_proof(
+            (150,),
+            (100, 200),
+            1,
+        )
+        self.assertFalse(proof["accepted"])
+        self.assertEqual(proof["nearest_tie_count"], 1)
+        self.assertFalse(proof["unique_nearest_for_every_message"])
+
     def test_openvins_state_format_is_detected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "state.txt"

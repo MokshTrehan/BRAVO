@@ -2,12 +2,19 @@
 """Build a deterministic, fail-closed KAIST qualitative geometry bundle.
 
 The OpenVINS ROS1 visualizer stamps ``points_*`` PointCloud2 messages with
-wall time.  This tool therefore associates those three streams with the
-sensor-time ``poseimu`` stream by ordinal, after requiring exact message-count
-parity.  ``loop_feats`` is allowed to be sparse because the visualizer can
-return before publishing it; its meaningful sensor header is matched to a
-unique pose timestamp.  The tool never treats MSCKF update points as a
-persistent map.
+wall time.  Exact-count streams retain the v2 publish-ordinal association.
+When a recorder starts after a point publisher, v3 permits only an unmatched
+``poseimu`` prefix followed by a proved contiguous point-stream suffix.  The
+suffix is proved either directly by unique nearest bag-record times or by a
+unique wall-header match to a point stream whose pose association is already
+established.  Both proofs have a strict declared bound; neither interpolates
+or treats wall time as sensor time.  Internal or trailing gaps fail closed.
+``loop_feats`` carries a camera-time header that is offset from the state
+header.  It is associated by publish ordinal only when its message count also
+has exact parity with ``poseimu``.  A sparse ``loop_feats`` stream remains
+raw-only: the tool does not invent a timestamp match, and every pose snapshot
+gets an explicit empty loop layer.  The tool never treats MSCKF or loop update
+points as a persistent map.
 
 PLYs remain in the estimator's raw frame.  SVGs use GT-derived bounds after
 applying one frozen evo-compatible, no-scale SE(3) fit to the estimate and to
@@ -22,6 +29,7 @@ time or output-directory path that would make a replay nondeterministic.
 from __future__ import annotations
 
 import argparse
+import bisect
 from dataclasses import dataclass
 import hashlib
 import html
@@ -36,7 +44,10 @@ import tempfile
 from typing import Any, Callable, Iterable, Sequence, Tuple
 
 
-SCHEMA = "schurvio.icra27.kaist_geometry_bundle.v1"
+SCHEMA = "schurvio.icra27.kaist_geometry_bundle.v3"
+LOOP_HEADER_OFFSET_STABILITY_TOLERANCE_NS = 2
+POINTS_SUFFIX_PROOF_MAX_DELTA_NS = 1_000_000
+POINTS_SUFFIX_PROOF_MIN_NEAREST_MARGIN_NS = 1_000_000
 REQUIRED_SUFFIXES = (
     "poseimu",
     "points_slam",
@@ -67,6 +78,7 @@ OUTPUT_PATHS = (
     "geometry/alignment_associations.csv",
     "geometry/slam_landmarks_final.ply",
     "geometry/msckf_update_points.ply",
+    "geometry/loop_active_tracks_aggregate.ply",
     "geometry/snapshots/25.ply",
     "geometry/snapshots/50.ply",
     "geometry/snapshots/75.ply",
@@ -98,8 +110,13 @@ class RecordedStream:
     record_counts: dict[str, int]
     poses: tuple[Pose, ...]
     clouds: dict[str, tuple[tuple[tuple[float, float, float], ...], ...]]
+    raw_loop_clouds: tuple[tuple[tuple[float, float, float], ...], ...]
     header_stamps: dict[str, tuple[float, ...]]
     bag_record_stamps: dict[str, tuple[float, ...]]
+    header_stamps_ns: dict[str, tuple[int, ...]]
+    bag_record_stamps_ns: dict[str, tuple[int, ...]]
+    header_sequences: dict[str, tuple[int, ...]]
+    association: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -122,6 +139,25 @@ class EvoAlignment:
     rotation_orthogonality_error_frobenius: float
 
 
+def _point_cloud_at_pose(
+    recorded: RecordedStream, suffix: str, poseimu_ordinal: int
+) -> tuple[tuple[float, float, float], ...]:
+    """Resolve one proved point suffix without fabricating missing messages."""
+
+    topic = recorded.association["points_topic_associations"][suffix]
+    prefix_count = int(topic["unobserved_leading_poseimu_count"])
+    raw_ordinal = poseimu_ordinal - prefix_count
+    if raw_ordinal < 0:
+        raise GeometryError(
+            f"{suffix}: poseimu ordinal {poseimu_ordinal} is in the unobserved "
+            f"recorder-start prefix of length {prefix_count}"
+        )
+    clouds = recorded.clouds[suffix]
+    if raw_ordinal >= len(clouds):
+        raise GeometryError(f"{suffix}: proved suffix lookup exceeds raw messages")
+    return clouds[raw_ordinal]
+
+
 def _finite(values: Iterable[float], context: str) -> tuple[float, ...]:
     result = tuple(float(value) for value in values)
     if not all(math.isfinite(value) for value in result):
@@ -137,6 +173,21 @@ def _stamp_to_float(stamp: Any, context: str) -> float:
     if not math.isfinite(value) or value < 0.0:
         raise GeometryError(f"{context}: invalid ROS timestamp {value!r}")
     return value
+
+
+def _stamp_to_ns(stamp: Any, context: str) -> int:
+    """Read the exact integral representation of a ROS1 time value."""
+
+    try:
+        seconds = int(stamp.secs)
+        nanoseconds = int(stamp.nsecs)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise GeometryError(f"{context}: unreadable integral ROS timestamp") from exc
+    if seconds < 0 or not 0 <= nanoseconds < 1_000_000_000:
+        raise GeometryError(
+            f"{context}: invalid integral ROS timestamp {seconds}s {nanoseconds}ns"
+        )
+    return seconds * 1_000_000_000 + nanoseconds
 
 
 def _validate_frame(message: Any, expected_frame: str, context: str) -> float:
@@ -301,6 +352,373 @@ def _infer_namespace(topic_names: Iterable[str]) -> str:
     return candidates[0]
 
 
+def _paired_stamp_delta_summary_ns(
+    left: Sequence[int], right: Sequence[int], context: str
+) -> dict[str, int | float | bool]:
+    """Summarize paired ROS timestamp deltas without using them to associate."""
+
+    if len(left) != len(right) or not left:
+        raise GeometryError(
+            f"{context}: paired timestamp diagnostics require equal nonzero counts"
+        )
+    deltas_ns = tuple(left_stamp - right_stamp for left_stamp, right_stamp in zip(left, right))
+    minimum = min(deltas_ns)
+    maximum = max(deltas_ns)
+    return {
+        "count": len(deltas_ns),
+        "minimum_ns": minimum,
+        "median_ns": float(statistics.median(deltas_ns)),
+        "maximum_ns": maximum,
+        "range_ns": maximum - minimum,
+        "maximum_absolute_ns": max(abs(value) for value in deltas_ns),
+        "unique_delta_count": len(set(deltas_ns)),
+        "all_deltas_identical": len(set(deltas_ns)) == 1,
+    }
+
+
+def _strictly_increasing(values: Sequence[int]) -> bool:
+    return all(current > previous for previous, current in zip(values, values[1:]))
+
+
+def _header_sequence_proof(values: Sequence[int]) -> dict[str, Any]:
+    valid_range = bool(values) and all(0 <= value <= 0xFFFFFFFF for value in values)
+    increments_exactly_one = valid_range and all(
+        current == previous + 1
+        for previous, current in zip(values, values[1:])
+    )
+    return {
+        "accepted": bool(valid_range and increments_exactly_one),
+        "count": len(values),
+        "all_values_are_uint32": valid_range,
+        "increments_exactly_one_without_gap_or_wrap": increments_exactly_one,
+        "first": values[0] if values else None,
+        "last": values[-1] if values else None,
+    }
+
+
+def _unique_nearest_indices_ns(
+    source: Sequence[int], target: Sequence[int]
+) -> tuple[tuple[int, ...], int, int | None, int | None]:
+    """Return exact nearest indices and the tie count for integral timestamps."""
+
+    if not source or not target or not _strictly_increasing(target):
+        return tuple(), len(source), None, None
+    indices: list[int] = []
+    tie_count = 0
+    margins: list[tuple[int, int]] = []
+    for source_index, stamp in enumerate(source):
+        insertion = bisect.bisect_left(target, stamp)
+        candidates = tuple(
+            index
+            for index in range(insertion - 2, insertion + 2)
+            if 0 <= index < len(target)
+        )
+        if not candidates:
+            return tuple(), len(source), None, None
+        ranked = sorted(
+            ((abs(stamp - target[index]), index) for index in candidates),
+            key=lambda value: (value[0], value[1]),
+        )
+        minimum = ranked[0][0]
+        winners = tuple(
+            index
+            for distance, index in ranked
+            if distance == minimum
+        )
+        if len(winners) != 1:
+            tie_count += 1
+        indices.append(winners[0])
+        if len(ranked) >= 2:
+            margins.append((ranked[1][0] - ranked[0][0], source_index))
+    if not margins:
+        return tuple(indices), tie_count, None, None
+    minimum_margin, worst_source_index = min(margins)
+    return tuple(indices), tie_count, minimum_margin, worst_source_index
+
+
+def _direct_points_suffix_proof(
+    point_record_stamps_ns: Sequence[int],
+    pose_record_stamps_ns: Sequence[int],
+    pose_prefix_count: int,
+) -> dict[str, Any]:
+    """Test a forced point-ordinal to pose-suffix mapping without interpolation."""
+
+    expected = tuple(
+        range(pose_prefix_count, pose_prefix_count + len(point_record_stamps_ns))
+    )
+    shape_valid = (
+        bool(point_record_stamps_ns)
+        and 0 <= pose_prefix_count < len(pose_record_stamps_ns)
+        and len(point_record_stamps_ns) + pose_prefix_count
+        == len(pose_record_stamps_ns)
+    )
+    point_monotonic = _strictly_increasing(point_record_stamps_ns)
+    pose_monotonic = _strictly_increasing(pose_record_stamps_ns)
+    (
+        observed,
+        tie_count,
+        minimum_margin,
+        worst_margin_ordinal,
+    ) = _unique_nearest_indices_ns(point_record_stamps_ns, pose_record_stamps_ns)
+    nearest_strictly_increasing = (
+        len(observed) == len(point_record_stamps_ns)
+        and _strictly_increasing(observed)
+    )
+    mismatch_count = (
+        sum(left != right for left, right in zip(observed, expected))
+        + abs(len(observed) - len(expected))
+    )
+    offset_summary: dict[str, Any] | None = None
+    if shape_valid:
+        offset_summary = _paired_stamp_delta_summary_ns(
+            point_record_stamps_ns,
+            pose_record_stamps_ns[pose_prefix_count:],
+            "points_* minus forced poseimu-suffix bag-record offsets",
+        )
+        offset_summary["maximum_allowed_absolute_ns"] = (
+            POINTS_SUFFIX_PROOF_MAX_DELTA_NS
+        )
+        offset_summary["within_declared_bound"] = (
+            offset_summary["maximum_absolute_ns"]
+            <= POINTS_SUFFIX_PROOF_MAX_DELTA_NS
+        )
+    accepted = bool(
+        shape_valid
+        and point_monotonic
+        and pose_monotonic
+        and tie_count == 0
+        and nearest_strictly_increasing
+        and mismatch_count == 0
+        and minimum_margin is not None
+        and minimum_margin >= POINTS_SUFFIX_PROOF_MIN_NEAREST_MARGIN_NS
+        and offset_summary is not None
+        and offset_summary["within_declared_bound"]
+    )
+    return {
+        "policy": (
+            "forced_count_difference_suffix_then_unique_nearest_bag_record_time_gate"
+        ),
+        "accepted": accepted,
+        "pose_prefix_count": pose_prefix_count,
+        "shape_is_exact_contiguous_suffix": shape_valid,
+        "point_record_stamps_strictly_increasing": point_monotonic,
+        "poseimu_record_stamps_strictly_increasing": pose_monotonic,
+        "unique_nearest_for_every_message": tie_count == 0 and len(observed) == len(expected),
+        "nearest_tie_count": tie_count,
+        "nearest_indices_strictly_increasing_and_unique": nearest_strictly_increasing,
+        "nearest_indices_exact_forced_suffix": mismatch_count == 0,
+        "nearest_index_mismatch_count": mismatch_count,
+        "minimum_nearest_competitor_margin_ns": minimum_margin,
+        "minimum_required_nearest_competitor_margin_ns": (
+            POINTS_SUFFIX_PROOF_MIN_NEAREST_MARGIN_NS
+        ),
+        "worst_nearest_competitor_margin_source_ordinal_zero_based": (
+            worst_margin_ordinal
+        ),
+        "nearest_competitor_margin_within_declared_requirement": (
+            minimum_margin is not None
+            and minimum_margin >= POINTS_SUFFIX_PROOF_MIN_NEAREST_MARGIN_NS
+        ),
+        "first_nearest_poseimu_ordinal_zero_based": observed[0] if observed else None,
+        "last_nearest_poseimu_ordinal_zero_based": observed[-1] if observed else None,
+        "bag_record_offset_diagnostics": offset_summary,
+        "timestamp_interpolation_used": False,
+    }
+
+
+def _point_header_to_pose_record_suffix_proof(
+    point_header_stamps_ns: Sequence[int],
+    point_record_stamps_ns: Sequence[int],
+    pose_record_stamps_ns: Sequence[int],
+    pose_prefix_count: int,
+) -> dict[str, Any]:
+    """Prove the forced suffix using publisher wall time versus pose receipt time."""
+
+    proof = _direct_points_suffix_proof(
+        point_header_stamps_ns,
+        pose_record_stamps_ns,
+        pose_prefix_count,
+    )
+    shape_matches_own_records = (
+        len(point_header_stamps_ns) == len(point_record_stamps_ns)
+    )
+    causal = shape_matches_own_records and all(
+        header <= record
+        for header, record in zip(point_header_stamps_ns, point_record_stamps_ns)
+    )
+    proof["policy"] = (
+        "forced_count_difference_suffix_then_unique_nearest_point_wall_header_"
+        "to_poseimu_bag_record_gate"
+    )
+    proof["accepted"] = bool(proof["accepted"] and causal)
+    proof["point_header_count_matches_own_record_count"] = (
+        shape_matches_own_records
+    )
+    proof["every_point_header_not_after_own_bag_record_time"] = causal
+    proof["point_wall_header_is_sensor_time"] = False
+    proof["point_wall_header_to_poseimu_record_offset_diagnostics"] = proof.pop(
+        "bag_record_offset_diagnostics"
+    )
+    proof["point_header_stamps_strictly_increasing"] = proof.pop(
+        "point_record_stamps_strictly_increasing"
+    )
+    proof["poseimu_bag_record_stamps_strictly_increasing"] = proof.pop(
+        "poseimu_record_stamps_strictly_increasing"
+    )
+    return proof
+
+
+def _peer_header_suffix_proof(
+    point_header_stamps_ns: Sequence[int],
+    point_record_stamps_ns: Sequence[int],
+    peer_header_stamps_ns: Sequence[int],
+    point_pose_prefix_count: int,
+    peer_pose_prefix_count: int,
+) -> dict[str, Any]:
+    """Prove point ordinals via one already-associated point-stream peer."""
+
+    expected = tuple(
+        point_pose_prefix_count + index - peer_pose_prefix_count
+        for index in range(len(point_header_stamps_ns))
+    )
+    shape_valid = (
+        bool(point_header_stamps_ns)
+        and len(point_header_stamps_ns) == len(point_record_stamps_ns)
+        and all(0 <= index < len(peer_header_stamps_ns) for index in expected)
+    )
+    point_monotonic = _strictly_increasing(point_header_stamps_ns)
+    peer_monotonic = _strictly_increasing(peer_header_stamps_ns)
+    point_headers_causal = shape_valid and all(
+        header <= record
+        for header, record in zip(point_header_stamps_ns, point_record_stamps_ns)
+    )
+    (
+        observed,
+        tie_count,
+        minimum_margin,
+        worst_margin_ordinal,
+    ) = _unique_nearest_indices_ns(point_header_stamps_ns, peer_header_stamps_ns)
+    nearest_strictly_increasing = (
+        len(observed) == len(point_header_stamps_ns)
+        and _strictly_increasing(observed)
+    )
+    mismatch_count = (
+        sum(left != right for left, right in zip(observed, expected))
+        + abs(len(observed) - len(expected))
+    )
+    offset_summary: dict[str, Any] | None = None
+    if shape_valid:
+        paired_peer = tuple(peer_header_stamps_ns[index] for index in expected)
+        offset_summary = _paired_stamp_delta_summary_ns(
+            point_header_stamps_ns,
+            paired_peer,
+            "points_* minus peer points_* wall-header offsets",
+        )
+        offset_summary["maximum_allowed_absolute_ns"] = (
+            POINTS_SUFFIX_PROOF_MAX_DELTA_NS
+        )
+        offset_summary["within_declared_bound"] = (
+            offset_summary["maximum_absolute_ns"]
+            <= POINTS_SUFFIX_PROOF_MAX_DELTA_NS
+        )
+    accepted = bool(
+        shape_valid
+        and point_monotonic
+        and peer_monotonic
+        and point_headers_causal
+        and tie_count == 0
+        and nearest_strictly_increasing
+        and mismatch_count == 0
+        and minimum_margin is not None
+        and minimum_margin >= POINTS_SUFFIX_PROOF_MIN_NEAREST_MARGIN_NS
+        and offset_summary is not None
+        and offset_summary["within_declared_bound"]
+    )
+    return {
+        "policy": (
+            "forced_pose_suffix_then_unique_nearest_established_peer_wall_header_gate"
+        ),
+        "accepted": accepted,
+        "point_pose_prefix_count": point_pose_prefix_count,
+        "peer_pose_prefix_count": peer_pose_prefix_count,
+        "shape_has_peer_for_every_forced_pose_ordinal": shape_valid,
+        "point_header_stamps_strictly_increasing": point_monotonic,
+        "peer_header_stamps_strictly_increasing": peer_monotonic,
+        "every_point_header_not_after_own_bag_record_time": point_headers_causal,
+        "unique_nearest_for_every_message": tie_count == 0 and len(observed) == len(expected),
+        "nearest_tie_count": tie_count,
+        "nearest_indices_strictly_increasing_and_unique": nearest_strictly_increasing,
+        "nearest_indices_exact_forced_peer_suffix": mismatch_count == 0,
+        "nearest_index_mismatch_count": mismatch_count,
+        "minimum_nearest_competitor_margin_ns": minimum_margin,
+        "minimum_required_nearest_competitor_margin_ns": (
+            POINTS_SUFFIX_PROOF_MIN_NEAREST_MARGIN_NS
+        ),
+        "worst_nearest_competitor_margin_source_ordinal_zero_based": (
+            worst_margin_ordinal
+        ),
+        "nearest_competitor_margin_within_declared_requirement": (
+            minimum_margin is not None
+            and minimum_margin >= POINTS_SUFFIX_PROOF_MIN_NEAREST_MARGIN_NS
+        ),
+        "first_nearest_peer_ordinal_zero_based": observed[0] if observed else None,
+        "last_nearest_peer_ordinal_zero_based": observed[-1] if observed else None,
+        "wall_header_offset_diagnostics": offset_summary,
+        "wall_header_is_sensor_time": False,
+        "timestamp_interpolation_used": False,
+    }
+
+
+def _point_header_anchor_proof(
+    point_header_stamps_ns: Sequence[int],
+    point_record_stamps_ns: Sequence[int],
+) -> dict[str, Any]:
+    """Validate that one established point stream is safe as a header peer."""
+
+    shape_valid = (
+        bool(point_header_stamps_ns)
+        and len(point_header_stamps_ns) == len(point_record_stamps_ns)
+    )
+    header_monotonic = _strictly_increasing(point_header_stamps_ns)
+    record_monotonic = _strictly_increasing(point_record_stamps_ns)
+    causal = shape_valid and all(
+        header <= record
+        for header, record in zip(point_header_stamps_ns, point_record_stamps_ns)
+    )
+    lag_summary: dict[str, Any] | None = None
+    if shape_valid:
+        lag_summary = _paired_stamp_delta_summary_ns(
+            point_record_stamps_ns,
+            point_header_stamps_ns,
+            "points_* bag-record minus own wall-header offsets",
+        )
+        lag_summary["maximum_allowed_absolute_ns"] = (
+            POINTS_SUFFIX_PROOF_MAX_DELTA_NS
+        )
+        lag_summary["within_declared_bound"] = (
+            lag_summary["maximum_absolute_ns"]
+            <= POINTS_SUFFIX_PROOF_MAX_DELTA_NS
+        )
+    accepted = bool(
+        shape_valid
+        and header_monotonic
+        and record_monotonic
+        and causal
+        and lag_summary is not None
+        and lag_summary["within_declared_bound"]
+    )
+    return {
+        "policy": "strict_monotonic_causal_wall_header_with_bounded_record_lag",
+        "accepted": accepted,
+        "count_parity": shape_valid,
+        "header_stamps_strictly_increasing": header_monotonic,
+        "bag_record_stamps_strictly_increasing": record_monotonic,
+        "every_header_not_after_own_bag_record_time": causal,
+        "bag_record_minus_header_lag_diagnostics": lag_summary,
+        "wall_header_is_sensor_time": False,
+    }
+
+
 def read_feature_bag(
     bag_path: Path,
     namespace: str | None = None,
@@ -318,6 +736,11 @@ def read_feature_bag(
     grouped_messages: dict[str, list[Any]] = {suffix: [] for suffix in REQUIRED_SUFFIXES}
     header_stamps: dict[str, list[float]] = {suffix: [] for suffix in REQUIRED_SUFFIXES}
     record_stamps: dict[str, list[float]] = {suffix: [] for suffix in REQUIRED_SUFFIXES}
+    header_stamps_ns: dict[str, list[int]] = {suffix: [] for suffix in REQUIRED_SUFFIXES}
+    record_stamps_ns: dict[str, list[int]] = {suffix: [] for suffix in REQUIRED_SUFFIXES}
+    header_sequences: dict[str, list[int]] = {
+        suffix: [] for suffix in REQUIRED_SUFFIXES
+    }
     message_types: dict[str, str] = {}
     record_counts: dict[str, int] = {}
 
@@ -334,6 +757,11 @@ def read_feature_bag(
                 suffix: _topic(resolved_namespace, suffix)
                 for suffix in REQUIRED_SUFFIXES
             }
+            unexpected_topics = sorted(set(topic_info) - set(topics.values()))
+            if unexpected_topics:
+                raise GeometryError(
+                    f"feature bag contains unexpected topics: {unexpected_topics}"
+                )
             for suffix, topic_name in topics.items():
                 if topic_name not in topic_info:
                     raise GeometryError(f"feature bag lacks required topic {topic_name}")
@@ -359,6 +787,9 @@ def read_feature_bag(
                 record_stamps[suffix].append(
                     _stamp_to_float(record_stamp, f"{topic_name} bag record")
                 )
+                record_stamps_ns[suffix].append(
+                    _stamp_to_ns(record_stamp, f"{topic_name} bag record")
+                )
                 header_stamps[suffix].append(
                     _validate_frame(
                         message,
@@ -366,6 +797,18 @@ def read_feature_bag(
                         f"{topic_name} message {len(grouped_messages[suffix]) - 1}",
                     )
                 )
+                header_stamps_ns[suffix].append(
+                    _stamp_to_ns(
+                        message.header.stamp,
+                        f"{topic_name} message {len(grouped_messages[suffix]) - 1} header",
+                    )
+                )
+                try:
+                    header_sequences[suffix].append(int(message.header.seq))
+                except (AttributeError, TypeError, ValueError) as exc:
+                    raise GeometryError(
+                        f"{topic_name}: unreadable header sequence"
+                    ) from exc
     except GeometryError:
         raise
     except Exception as exc:
@@ -381,15 +824,15 @@ def read_feature_bag(
     if pose_count == 0:
         raise GeometryError("feature bag contains no poseimu states")
     ordinal_suffixes = ("points_slam", "points_msckf", "points_aruco")
-    mismatches = {
+    invalid_point_counts = {
         suffix: len(grouped_messages[suffix])
         for suffix in ordinal_suffixes
-        if len(grouped_messages[suffix]) != pose_count
+        if not 0 < len(grouped_messages[suffix]) <= pose_count
     }
-    if mismatches:
+    if invalid_point_counts:
         raise GeometryError(
-            "ordinal points_* stream count mismatch against "
-            f"poseimu={pose_count}: {mismatches}"
+            "points_* counts must be nonzero and cannot exceed "
+            f"poseimu={pose_count}: {invalid_point_counts}"
         )
 
     poses = tuple(
@@ -400,46 +843,261 @@ def read_feature_bag(
         if current.timestamp <= previous.timestamp:
             raise GeometryError("poseimu sensor timestamps are not strictly increasing")
 
-    clouds: dict[str, tuple[tuple[tuple[float, float, float], ...], ...]] = {}
+    raw_point_clouds: dict[
+        str, tuple[tuple[tuple[float, float, float], ...], ...]
+    ] = {}
     for suffix in ordinal_suffixes:
-        clouds[suffix] = tuple(
+        raw_point_clouds[suffix] = tuple(
             _pointcloud2_xyz(message, expected_frame, f"{topics[suffix]} message {index}")
             for index, message in enumerate(grouped_messages[suffix])
         )
 
-    # loop_feats is produced only when active-track timestamps and clone state
-    # are available.  Unlike points_*, its header is dataset time, so retain
-    # every published cloud and place it at its unique pose timestamp.  Empty
-    # tuple slots explicitly represent updates at which nothing was emitted.
-    pose_timestamp_to_index: dict[int, int] = {}
-    for index, pose in enumerate(poses):
-        stamp_ns = int(round(pose.timestamp * 1e9))
-        if stamp_ns in pose_timestamp_to_index:
-            raise GeometryError("poseimu timestamps collide after nanosecond normalization")
-        pose_timestamp_to_index[stamp_ns] = index
-    loop_by_pose: list[tuple[tuple[float, float, float], ...]] = [
-        tuple() for _ in poses
-    ]
-    matched_loop_indices: set[int] = set()
-    for message_index, message in enumerate(grouped_messages["loop_feats"]):
-        stamp_ns = int(round(header_stamps["loop_feats"][message_index] * 1e9))
-        pose_index = pose_timestamp_to_index.get(stamp_ns)
-        if pose_index is None:
-            raise GeometryError(
-                f"{topics['loop_feats']} message {message_index}: sensor timestamp "
-                "does not match a poseimu timestamp"
+    # A count difference forces exactly one possible suffix offset if and only
+    # if the missing messages are a recorder-start pose prefix.  Prove that
+    # forced mapping; never search over offsets or interpolate timestamps.
+    point_prefix_counts = {
+        suffix: pose_count - len(raw_point_clouds[suffix])
+        for suffix in ordinal_suffixes
+    }
+    header_sequence_proofs = {
+        suffix: _header_sequence_proof(header_sequences[suffix])
+        for suffix in REQUIRED_SUFFIXES
+    }
+    if any(point_prefix_counts.values()) and not header_sequence_proofs[
+        "poseimu"
+    ]["accepted"]:
+        raise GeometryError(
+            "poseimu header sequence is not contiguous during points_* suffix proof"
+        )
+    direct_point_proofs = {
+        suffix: _direct_points_suffix_proof(
+            record_stamps_ns[suffix],
+            record_stamps_ns["poseimu"],
+            point_prefix_counts[suffix],
+        )
+        for suffix in ordinal_suffixes
+    }
+    point_header_to_pose_record_proofs = {
+        suffix: _point_header_to_pose_record_suffix_proof(
+            header_stamps_ns[suffix],
+            record_stamps_ns[suffix],
+            record_stamps_ns["poseimu"],
+            point_prefix_counts[suffix],
+        )
+        for suffix in ordinal_suffixes
+    }
+    point_header_anchor_proofs = {
+        suffix: _point_header_anchor_proof(
+            header_stamps_ns[suffix], record_stamps_ns[suffix]
+        )
+        for suffix in ordinal_suffixes
+    }
+    established_topics = {
+        suffix
+        for suffix in ordinal_suffixes
+        if point_prefix_counts[suffix] == 0
+        or (
+            direct_point_proofs[suffix]["accepted"]
+            and header_sequence_proofs[suffix]["accepted"]
+        )
+    }
+    peer_header_anchor_topics = {
+        suffix
+        for suffix in established_topics
+        if point_header_anchor_proofs[suffix]["accepted"]
+        and header_sequence_proofs[suffix]["accepted"]
+    }
+    point_associations: dict[str, Any] = {}
+    clouds: dict[str, tuple[tuple[tuple[float, float, float], ...], ...]] = {}
+    for suffix in ordinal_suffixes:
+        prefix_count = point_prefix_counts[suffix]
+        peer_proofs: dict[str, Any] = {}
+        accepted_peers: list[str] = []
+        if prefix_count == 0:
+            mode = "V2_EXACT_COUNT_PUBLISH_ORDINAL"
+            proof_used = "EXACT_COUNT_PARITY"
+        elif (
+            direct_point_proofs[suffix]["accepted"]
+            and header_sequence_proofs[suffix]["accepted"]
+        ):
+            mode = "PROVEN_CONTIGUOUS_POSE_SUFFIX_BAG_RECORD_TIME"
+            proof_used = "UNIQUE_NEAREST_BAG_RECORD_TIME"
+        else:
+            for peer in ordinal_suffixes:
+                if peer == suffix or peer not in peer_header_anchor_topics:
+                    continue
+                proof = _peer_header_suffix_proof(
+                    header_stamps_ns[suffix],
+                    record_stamps_ns[suffix],
+                    header_stamps_ns[peer],
+                    prefix_count,
+                    point_prefix_counts[peer],
+                )
+                peer_proofs[peer] = proof
+                if proof["accepted"]:
+                    accepted_peers.append(peer)
+            if (
+                not point_header_to_pose_record_proofs[suffix]["accepted"]
+                or not header_sequence_proofs[suffix]["accepted"]
+                or not accepted_peers
+            ):
+                raise GeometryError(
+                    f"{topics[suffix]}: count deficit cannot be proved as a "
+                    f"recorder-start contiguous poseimu suffix; poseimu={pose_count}, "
+                    f"points={len(raw_point_clouds[suffix])}, prefix={prefix_count}, "
+                    f"direct_record_proof={direct_point_proofs[suffix]}, "
+                    "point_header_to_pose_record_proof="
+                    f"{point_header_to_pose_record_proofs[suffix]}, "
+                    f"header_sequence_proof={header_sequence_proofs[suffix]}, "
+                    f"peer_header_proofs={peer_proofs}"
+                )
+            mode = (
+                "PROVEN_CONTIGUOUS_POSE_SUFFIX_HEADER_TO_POSE_RECORD_"
+                "AND_PEER_HEADER_TIME"
             )
-        if pose_index in matched_loop_indices:
-            raise GeometryError(
-                f"{topics['loop_feats']} message {message_index}: duplicate pose timestamp"
+            proof_used = (
+                "UNIQUE_NEAREST_POINT_WALL_HEADER_TO_POSE_RECORD_AND_"
+                "ESTABLISHED_PEER_WALL_HEADER"
             )
-        matched_loop_indices.add(pose_index)
-        loop_by_pose[pose_index] = _legacy_pointcloud_xyz(
+
+        clouds[suffix] = raw_point_clouds[suffix]
+        point_associations[suffix] = {
+            "mode": mode,
+            "proof_used": proof_used,
+            "raw_message_count": len(raw_point_clouds[suffix]),
+            "poseimu_message_count": pose_count,
+            "exact_count_parity": prefix_count == 0,
+            "unobserved_leading_poseimu_count": prefix_count,
+            "snapshot_associated_count": len(raw_point_clouds[suffix]),
+            "first_associated_poseimu_ordinal_zero_based": prefix_count,
+            "last_associated_poseimu_ordinal_zero_based": pose_count - 1,
+            "direct_bag_record_proof": direct_point_proofs[suffix],
+            "point_wall_header_to_poseimu_bag_record_proof": (
+                point_header_to_pose_record_proofs[suffix]
+            ),
+            "own_wall_header_anchor_proof": point_header_anchor_proofs[suffix],
+            "header_sequence_proof": header_sequence_proofs[suffix],
+            "peer_wall_header_proofs": peer_proofs,
+            "accepted_peer_topics": accepted_peers,
+            "mapping_is_fixed_ordinal_suffix_after_proof": True,
+            "internal_or_trailing_gaps_permitted": False,
+            "timestamp_interpolation_used": False,
+        }
+
+    # loop_feats uses camera time rather than the poseimu state time.  Decode
+    # every raw cloud first.  Full-count streams have one publication per
+    # update and are associated by the same per-topic bag/publish ordinal used
+    # for points_*.  When sparse, the missing publication ordinal is unknowable:
+    # bag-record nearest-neighbor matching can collide and would manufacture an
+    # association.  Keep every raw cloud for the aggregate evidence PLY, but
+    # deliberately populate no pose snapshot loop layer.
+    raw_loop_clouds = tuple(
+        _legacy_pointcloud_xyz(
             message,
             expected_frame,
             f"{topics['loop_feats']} message {message_index}",
         )
+        for message_index, message in enumerate(grouped_messages["loop_feats"])
+    )
+    loop_count = len(raw_loop_clouds)
+    if loop_count > pose_count:
+        raise GeometryError(
+            f"loop_feats count {loop_count} exceeds poseimu count {pose_count}"
+        )
+
+    if loop_count == pose_count:
+        loop_by_pose = raw_loop_clouds
+        loop_mode = "FULL_COUNT_PUBLISH_ORDINAL"
+        snapshot_associated_count = pose_count
+        snapshot_explicit_empty_count = 0
+        header_offset_diagnostics = _paired_stamp_delta_summary_ns(
+            header_stamps_ns["loop_feats"],
+            header_stamps_ns["poseimu"],
+            "loop_feats minus poseimu ordinal header offsets",
+        )
+        header_offset_diagnostics.update(
+            {
+                "diagnostic_only_not_association_gate": True,
+                "declared_near_invariant_range_tolerance_ns": (
+                    LOOP_HEADER_OFFSET_STABILITY_TOLERANCE_NS
+                ),
+                "within_declared_near_invariant_range_tolerance": (
+                    header_offset_diagnostics["range_ns"]
+                    <= LOOP_HEADER_OFFSET_STABILITY_TOLERANCE_NS
+                ),
+            }
+        )
+        record_offset_diagnostics: dict[str, Any] | None = (
+            _paired_stamp_delta_summary_ns(
+                record_stamps_ns["loop_feats"],
+                record_stamps_ns["poseimu"],
+                "loop_feats minus poseimu ordinal bag-record offsets",
+            )
+        )
+    else:
+        loop_by_pose = tuple(tuple() for _ in poses)
+        loop_mode = "SPARSE_RAW_ONLY_UNASSOCIATED"
+        snapshot_associated_count = 0
+        snapshot_explicit_empty_count = pose_count
+        header_offset_diagnostics = None
+        record_offset_diagnostics = None
     clouds["loop_feats"] = tuple(loop_by_pose)
+
+    association: dict[str, Any] = {
+        "points_policy": (
+            "per_topic_publish_ordinal_after_exact_count_or_proven_"
+            "contiguous_terminal_poseimu_suffix"
+        ),
+        "points_v2_exact_count_publish_ordinal_behavior_retained": True,
+        "points_poseimu_prefix_suffix_extension_enabled": True,
+        "points_suffix_proof_maximum_absolute_delta_ns": (
+            POINTS_SUFFIX_PROOF_MAX_DELTA_NS
+        ),
+        "points_suffix_proof_minimum_nearest_competitor_margin_ns": (
+            POINTS_SUFFIX_PROOF_MIN_NEAREST_MARGIN_NS
+        ),
+        "points_prefix_interpretation": (
+            "consistent_with_recorder_start_subscription_lag_not_observed_cause"
+        ),
+        "points_internal_or_trailing_gaps_permitted": False,
+        "points_timestamp_interpolation_used": False,
+        "points_topics": [
+            "points_slam",
+            "points_msckf",
+            "points_aruco",
+        ],
+        "points_all_streams_exact_count_parity": all(
+            point_prefix_counts[suffix] == 0 for suffix in ordinal_suffixes
+        ),
+        "points_topic_associations": point_associations,
+        "points_reason": (
+            "OpenVINS points_* PointCloud2 headers carry wall time; wall headers "
+            "can prove same-update peer ordinals but are never sensor time"
+        ),
+        "points_header_timestamps_are_never_treated_as_sensor_time": True,
+        "points_bag_record_and_peer_header_times_are_proof_gates_only": True,
+        "loop_feats_mode": loop_mode,
+        "loop_feats_policy": (
+            "publish_ordinal_only_under_exact_poseimu_count_parity; "
+            "otherwise_raw_only_unassociated"
+        ),
+        "loop_feats_count_parity": loop_count == pose_count,
+        "loop_feats_raw_message_count": loop_count,
+        "loop_feats_raw_point_count": sum(len(cloud) for cloud in raw_loop_clouds),
+        "loop_feats_snapshot_associated_count": snapshot_associated_count,
+        "loop_feats_snapshot_explicit_empty_count": snapshot_explicit_empty_count,
+        "loop_feats_unassociated_raw_message_count": (
+            0 if loop_count == pose_count else loop_count
+        ),
+        "loop_feats_sparse_stream_timestamp_matching_forbidden": True,
+        "loop_feats_header_offset_diagnostics": header_offset_diagnostics,
+        "loop_feats_bag_record_offset_diagnostics": record_offset_diagnostics,
+        "loop_feats_offset_sign_convention": "loop_feats_minus_poseimu_at_same_publish_ordinal",
+        "loop_feats_offsets_are_diagnostic_only": True,
+        "header_sequence_diagnostics": header_sequence_proofs,
+        "poseimu_first_sensor_timestamp_s": poses[0].timestamp,
+        "poseimu_last_sensor_timestamp_s": poses[-1].timestamp,
+    }
 
     return RecordedStream(
         namespace=resolved_namespace,
@@ -448,8 +1106,13 @@ def read_feature_bag(
         record_counts=record_counts,
         poses=poses,
         clouds=clouds,
+        raw_loop_clouds=raw_loop_clouds,
         header_stamps={key: tuple(value) for key, value in header_stamps.items()},
         bag_record_stamps={key: tuple(value) for key, value in record_stamps.items()},
+        header_stamps_ns={key: tuple(value) for key, value in header_stamps_ns.items()},
+        bag_record_stamps_ns={key: tuple(value) for key, value in record_stamps_ns.items()},
+        header_sequences={key: tuple(value) for key, value in header_sequences.items()},
+        association=association,
     )
 
 
@@ -513,15 +1176,38 @@ def validate_capture_trajectory(
     trajectory: Sequence[Pose],
     timestamp_tolerance_s: float = 5.1e-6,
     pose_tolerance: float = 2.0e-6,
-) -> dict[str, float | int]:
-    if len(recorded) != len(trajectory):
-        raise GeometryError(
-            f"capture trajectory count {len(trajectory)} != poseimu count {len(recorded)}"
-        )
+) -> dict[str, Any]:
+    if not recorded or not trajectory:
+        raise GeometryError("capture trajectory validation requires nonempty inputs")
     max_timestamp_error = 0.0
     max_position_error = 0.0
     max_quaternion_error = 0.0
-    for index, (message_pose, text_pose) in enumerate(zip(recorded, trajectory)):
+    trajectory_stamps = [pose.timestamp for pose in trajectory]
+    matched_indices: list[int] = []
+    previous_trajectory_index = -1
+    for index, message_pose in enumerate(recorded):
+        insertion = bisect.bisect_left(
+            trajectory_stamps,
+            message_pose.timestamp,
+            lo=previous_trajectory_index + 1,
+        )
+        candidates = [
+            candidate
+            for candidate in (insertion - 1, insertion)
+            if previous_trajectory_index < candidate < len(trajectory)
+        ]
+        if not candidates:
+            raise GeometryError(
+                f"capture trajectory has no unique row for poseimu ordinal {index}"
+            )
+        trajectory_index = min(
+            candidates,
+            key=lambda candidate: (
+                abs(trajectory[candidate].timestamp - message_pose.timestamp),
+                candidate,
+            ),
+        )
+        text_pose = trajectory[trajectory_index]
         timestamp_error = abs(message_pose.timestamp - text_pose.timestamp)
         position_error = max(
             abs(left - right)
@@ -538,7 +1224,8 @@ def validate_capture_trajectory(
         quaternion_error = min(direct_q_error, flipped_q_error)
         if timestamp_error > timestamp_tolerance_s:
             raise GeometryError(
-                f"capture trajectory timestamp mismatch at ordinal {index}: {timestamp_error:.12g}s"
+                f"capture trajectory has no unique row within tolerance for poseimu ordinal "
+                f"{index}: nearest error {timestamp_error:.12g}s"
             )
         if position_error > pose_tolerance:
             raise GeometryError(
@@ -551,8 +1238,21 @@ def validate_capture_trajectory(
         max_timestamp_error = max(max_timestamp_error, timestamp_error)
         max_position_error = max(max_position_error, position_error)
         max_quaternion_error = max(max_quaternion_error, quaternion_error)
+        matched_indices.append(trajectory_index)
+        previous_trajectory_index = trajectory_index
     return {
         "row_count": len(recorded),
+        "poseimu_row_count": len(recorded),
+        "capture_trajectory_row_count": len(trajectory),
+        "association_policy": "each_poseimu_to_unique_monotonic_nearest_capture_trajectory_timestamp",
+        "exact_row_count_parity": len(recorded) == len(trajectory),
+        "first_matched_capture_trajectory_index_zero_based": matched_indices[0],
+        "last_matched_capture_trajectory_index_zero_based": matched_indices[-1],
+        "unmatched_capture_rows_before_first_match": matched_indices[0],
+        "unmatched_capture_rows_after_last_match": len(trajectory) - matched_indices[-1] - 1,
+        "unmatched_capture_rows_between_matches": (
+            matched_indices[-1] - matched_indices[0] + 1 - len(matched_indices)
+        ),
         "max_timestamp_error_s": max_timestamp_error,
         "max_position_component_error_m": max_position_error,
         "max_quaternion_component_error": max_quaternion_error,
@@ -1144,6 +1844,31 @@ def _relative_if_within(path: Path, root: Path) -> str | None:
         return None
 
 
+def _validated_output_destination(run_dir: Path, relative: str) -> Path:
+    """Resolve one fixed output without following a nested output symlink."""
+
+    relative_path = Path(relative)
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        raise GeometryError(f"unsafe geometry output path: {relative}")
+    destination = run_dir / relative_path
+    current = run_dir
+    for component in relative_path.parts[:-1]:
+        current = current / component
+        if current.is_symlink():
+            raise GeometryError(
+                f"refusing output through symlinked directory: {current}"
+            )
+        if current.exists() and not current.is_dir():
+            raise GeometryError(f"geometry output parent is not a directory: {current}")
+    try:
+        destination.parent.resolve(strict=False).relative_to(run_dir)
+    except ValueError as exc:
+        raise GeometryError(f"geometry output escapes run directory: {destination}") from exc
+    if destination.exists() or destination.is_symlink():
+        raise GeometryError(f"refusing to overwrite geometry output: {destination}")
+    return destination
+
+
 def build_bundle(
     feature_bag: Path,
     capture_trajectory_path: Path,
@@ -1180,14 +1905,41 @@ def build_bundle(
     selected_snapshots, snapshot_metadata = select_snapshots(
         ground_truth, recorded.poses
     )
+    point_associations = recorded.association["points_topic_associations"]
+    maximum_point_prefix = max(
+        value["unobserved_leading_poseimu_count"]
+        for value in point_associations.values()
+    )
+    snapshots_before_full_point_coverage = {
+        label: index
+        for label, index in selected_snapshots.items()
+        if index < maximum_point_prefix
+    }
+    if snapshots_before_full_point_coverage:
+        raise GeometryError(
+            "required qualitative snapshot precedes complete points_* recorder "
+            f"coverage at poseimu ordinal {maximum_point_prefix}: "
+            f"{snapshots_before_full_point_coverage}"
+        )
+    snapshot_metadata["points_stream_coverage_gate"] = {
+        "maximum_unobserved_leading_poseimu_count": maximum_point_prefix,
+        "every_required_snapshot_at_or_after_complete_points_coverage": True,
+    }
 
     final_slam_index = len(recorded.poses) - 1
-    final_slam = recorded.clouds["points_slam"][final_slam_index]
+    final_slam = _point_cloud_at_pose(
+        recorded, "points_slam", final_slam_index
+    )
     final_slam_empty = len(final_slam) == 0
     aggregate_msckf = tuple(
         point
         for frame_points in recorded.clouds["points_msckf"]
         for point in frame_points
+    )
+    aggregate_loop = tuple(
+        point
+        for raw_message_points in recorded.raw_loop_clouds
+        for point in raw_message_points
     )
     aligned_capture_trajectory = tuple(
         apply_alignment_pose_position(pose, alignment)
@@ -1204,12 +1956,7 @@ def build_bundle(
         raise GeometryError(f"run directory path is not a directory: {run_dir}")
     run_dir.mkdir(parents=True, exist_ok=True)
     for relative in OUTPUT_PATHS:
-        destination = run_dir / relative
-        if destination.exists() or destination.is_symlink():
-            raise GeometryError(f"refusing to overwrite geometry output: {destination}")
-    for directory in (run_dir / "geometry", run_dir / "figures"):
-        if directory.is_symlink():
-            raise GeometryError(f"refusing output through symlinked directory: {directory}")
+        _validated_output_destination(run_dir, relative)
 
     input_hashes = {
         "feature_stream_bag": {
@@ -1300,25 +2047,8 @@ def build_bundle(
             "topics": recorded.topics,
             "message_types": recorded.message_types,
             "message_counts": recorded.record_counts,
-            "association": {
-                "points_policy": "ordinal_to_poseimu_sensor_timestamp",
-                "points_count_parity_required": True,
-                "points_count_parity_topics": [
-                    "points_slam",
-                    "points_msckf",
-                    "points_aruco",
-                ],
-                "points_reason": "OpenVINS points_* PointCloud2 headers carry wall time",
-                "loop_feats_policy": "exact_sensor_header_to_unique_poseimu_timestamp",
-                "loop_feats_sparse_emission_allowed": True,
-                "loop_feats_emitted_count": recorded.record_counts["loop_feats"],
-                "loop_feats_missing_pose_count": (
-                    len(recorded.poses) - recorded.record_counts["loop_feats"]
-                ),
-                "poseimu_first_sensor_timestamp_s": recorded.poses[0].timestamp,
-                "poseimu_last_sensor_timestamp_s": recorded.poses[-1].timestamp,
-                "points_header_timestamps_are_not_used_for_association": True,
-            },
+            "association": recorded.association,
+            "raw_feature_bag_is_authoritative": True,
         },
         "capture_trajectory_validation": trajectory_validation,
         "semantics": {
@@ -1327,12 +2057,19 @@ def build_bundle(
                 "current active sparse state, not a persistent map"
             ),
             "msckf_update_points": (
-                "all transient last-update MSCKF point samples concatenated in estimator-state order; "
+                "all recorded transient last-update MSCKF point samples over the "
+                "exact/proved topic coverage, concatenated in raw message order; "
                 "duplicates may occur; not a persistent map"
             ),
+            "loop_active_tracks_aggregate": (
+                "all validated loop_feats points concatenated in raw bag message/point order; "
+                "transient active tracks, deliberately unassociated, not a persistent map"
+            ),
             "snapshots": (
-                "one ordinal estimator update each; semantic_id 1=active SLAM, 2=transient MSCKF, "
-                "3=active ARUCO, 4=active loop features; none is a dense map"
+                "one estimator update each after exact/proved per-topic ordinal association; "
+                "required snapshots before complete point-stream recorder coverage fail closed; "
+                "semantic_id 1=active SLAM, 2=transient MSCKF, 3=active ARUCO, "
+                "4=active loop features; none is a dense map"
             ),
         },
         "selection": {
@@ -1354,9 +2091,13 @@ def build_bundle(
         "views": {},
         "limitations": [
             "The canonical SLAM PLY is the literal final active filter state, may have zero vertices, and is not a persistent accumulated map.",
-            "MSCKF points are transient update visualizations concatenated over time and may repeat physical features.",
-            "The three points_* clouds are associated by ordinal only after exact stream-count parity; their wall-time headers are not sensor time.",
-            "loop_feats may be absent at an update and is associated only by its dataset-time header to a unique poseimu timestamp; missing emissions remain empty snapshot layers.",
+            "MSCKF points are recorded transient update visualizations over the exact/proved topic coverage, concatenated over time, and may repeat physical features.",
+            "Exact-count points_* streams retain v2 publish-ordinal association; a shorter stream is retained at raw count and mapped only after a forced contiguous-suffix proof, with its leading pose interval labeled unobserved rather than empty.",
+            "Exact-count points_* streams retain the v2 parity assumption and do not newly exclude a hypothetical balanced leading-extra plus trailing-missing defect; v3's stronger proof gates apply to count-deficit streams only.",
+            "A points_* suffix proof requires unique monotonic nearest bag-record times, or unique bounded wall-header matches to an already-associated peer point stream; wall headers remain non-sensor-time proof evidence and no timestamp is interpolated.",
+            "Internal point-stream gaps, trailing gaps, excess point messages, ambiguous nearest matches, and proof deltas above the declared bound fail closed.",
+            "loop_feats uses camera-time headers offset from poseimu: it is associated by publish ordinal only under exact count parity; header and bag-record offsets are diagnostics, never association gates.",
+            "A sparse loop_feats stream is never timestamp-matched: every pose snapshot loop layer is explicitly empty, while all validated raw points remain in the unassociated aggregate PLY and authoritative raw bag.",
             "SVGs use one evo-compatible no-scale SE(3) alignment fitted once from associated estimate/GT positions; the identical transform is applied to every rendered estimate and feature point.",
             "SVGs use GT-only bounds and clip out-of-bounds aligned geometry for display; raw-frame PLY files retain every validated point.",
             "No trajectory smoothing, interpolation, scale correction, or per-method crop is applied.",
@@ -1412,15 +2153,33 @@ def build_bundle(
                 (("points_msckf", aggregate_msckf),),
                 (
                     "coordinate_frame raw estimator global frame; no render alignment applied",
-                    "semantics aggregate of transient last-update MSCKF points; duplicates may occur; not a persistent map",
-                    "ordering poseimu ordinal then point ordinal",
+                    "semantics all recorded transient last-update MSCKF points over exact/proved topic coverage; duplicates may occur; not a persistent map",
+                    "ordering raw feature_stream.bag points_msckf message ordinal then point ordinal",
+                ),
+            ),
+            (
+                "geometry/loop_active_tracks_aggregate.ply",
+                (("loop_feats", aggregate_loop),),
+                (
+                    "coordinate_frame raw estimator global frame; no render alignment applied",
+                    "semantics aggregate of transient active loop tracks; deliberately unassociated; not a persistent map",
+                    "ordering raw feature_stream.bag loop_feats message ordinal then point ordinal",
+                    "authoritative_source geometry/feature_stream.bag",
+                    f"association_mode {recorded.association['loop_feats_mode']}",
                 ),
             ),
         ]
         for label in ("25", "50", "75", "max_angular_rate"):
             index = selected_snapshots[label]
             groups = tuple(
-                (suffix, recorded.clouds[suffix][index])
+                (
+                    suffix,
+                    (
+                        recorded.clouds[suffix][index]
+                        if suffix == "loop_feats"
+                        else _point_cloud_at_pose(recorded, suffix, index)
+                    ),
+                )
                 for suffix in (
                     "points_slam",
                     "points_msckf",
@@ -1506,9 +2265,20 @@ def build_bundle(
         ] + ["geometry_manifest.json", "SHA256SUMS"]
         for relative in publish_order:
             source = staging / relative
-            destination = run_dir / relative
+            destination = _validated_output_destination(run_dir, relative)
             destination.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(source, destination)
+            destination = _validated_output_destination(run_dir, relative)
+            try:
+                os.link(source, destination)
+            except FileExistsError as exc:
+                raise GeometryError(
+                    f"refusing to overwrite geometry output: {destination}"
+                ) from exc
+            except OSError as exc:
+                raise GeometryError(
+                    f"cannot publish geometry output {destination}: {exc}"
+                ) from exc
+            source.unlink()
 
     return manifest
 
