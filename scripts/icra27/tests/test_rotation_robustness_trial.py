@@ -86,6 +86,26 @@ class RuntimeSeamTests(unittest.TestCase):
         self.assertEqual(binding["status"], "AVAILABLE")
         self.assertTrue(binding["runtime_matches_static_census"])
 
+    def test_recovery_flag_accepts_exact_opencv_yaml_directive_only(self) -> None:
+        self.assertTrue(
+            TRIAL.candidate_recovery_enabled(
+                "%YAML:1.0\nlong_gap_recovery_enabled: true\n"
+            )
+        )
+        self.assertFalse(
+            TRIAL.candidate_recovery_enabled(
+                "%YAML:1.0\r\nlong_gap_recovery_enabled: false\r\n"
+            )
+        )
+        with self.assertRaisesRegex(TRIAL.TrialError, "YAML is invalid"):
+            TRIAL.candidate_recovery_enabled(
+                "%YAML:9.9\nlong_gap_recovery_enabled: true\n"
+            )
+        with self.assertRaisesRegex(TRIAL.TrialError, "must be Boolean"):
+            TRIAL.candidate_recovery_enabled(
+                "%YAML:1.0\nlong_gap_recovery_enabled: yes\n"
+            )
+
     def test_crash_without_runtime_summary_retains_static_census(self) -> None:
         crash_console = (
             "terminate called after throwing an instance of 'cv::Exception'\n"

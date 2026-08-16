@@ -964,13 +964,26 @@ def parse_roslaunch_child_deaths(text: str) -> Dict[str, Any]:
 
 
 def candidate_recovery_enabled(config_text: str) -> bool:
+    # OpenCV FileStorage uses the historical ``%YAML:1.0`` directive, which
+    # PyYAML does not recognize even though the estimator accepts it. Strip
+    # only that exact first-line marker; the original config bytes remain
+    # separately hash-bound by the harness.
+    lines = config_text.splitlines(keepends=True)
+    if lines and lines[0].rstrip("\r\n").startswith("%YAML:"):
+        if lines[0].rstrip("\r\n") != "%YAML:1.0":
+            raise TrialError("candidate config YAML is invalid")
+        config_text = "".join(lines[1:])
     try:
         value = yaml.safe_load(config_text)
+        lexical_value = yaml.load(config_text, Loader=yaml.BaseLoader)
     except yaml.YAMLError as exc:
         raise TrialError("candidate config YAML is invalid") from exc
-    if not isinstance(value, dict):
+    if not isinstance(value, dict) or not isinstance(lexical_value, dict):
         raise TrialError("candidate config is not a YAML mapping")
     enabled = value.get("long_gap_recovery_enabled", False)
+    lexical_enabled = lexical_value.get("long_gap_recovery_enabled")
+    if lexical_enabled is not None and lexical_enabled not in ("true", "false"):
+        raise TrialError("long_gap_recovery_enabled must be Boolean")
     if not isinstance(enabled, bool):
         raise TrialError("long_gap_recovery_enabled must be Boolean")
     return enabled
