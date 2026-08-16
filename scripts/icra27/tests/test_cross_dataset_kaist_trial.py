@@ -1,5 +1,5 @@
 #!/usr/bin/python3.8
-"""Focused synthetic tests for the CDSC-1R1 fresh-KAIST adapter."""
+"""Focused synthetic tests for the CDSC-1R2 fresh-KAIST adapter."""
 
 from __future__ import annotations
 
@@ -177,7 +177,7 @@ class FixedContractTests(unittest.TestCase):
             [
                 "run",
                 "--protocol-id",
-                "CDSC-1R1",
+                "CDSC-1R2",
                 "--protocol",
                 str(MODULE.CANONICAL_PROTOCOL),
                 "--matrix",
@@ -286,7 +286,7 @@ class PairingAndOutcomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             args = argparse.Namespace(
-                protocol_id="CDSC-1R1",
+                protocol_id="CDSC-1R2",
                 protocol_file=MODULE.CANONICAL_PROTOCOL,
                 matrix_file=MODULE.CANONICAL_MATRIX,
                 run_id="preflight-failure",
@@ -321,7 +321,7 @@ class PairingAndOutcomeTests(unittest.TestCase):
             bag = root / "wrong-matrix-bag.bag"
             bag.write_bytes(b"not opened because matrix binding fails first")
             args = argparse.Namespace(
-                protocol_id="CDSC-1R1",
+                protocol_id="CDSC-1R2",
                 protocol_file=MODULE.CANONICAL_PROTOCOL,
                 matrix_file=MODULE.CANONICAL_MATRIX,
                 run_id="runner-binding-failure",
@@ -507,7 +507,7 @@ class HistoricalAndPostPairTests(unittest.TestCase):
                     path.write_text("synthetic\n", encoding="ascii")
             manifest = {
                 "schema": MODULE.SCHEMA,
-                "protocol_id": "CDSC-1R1",
+                "protocol_id": "CDSC-1R2",
                 "dataset": "kaist_vio",
                 "sequence": "rotation/rotation.bag",
                 "system": system,

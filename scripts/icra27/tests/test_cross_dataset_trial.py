@@ -11,7 +11,9 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+import types
 import unittest
+from unittest import mock
 
 import yaml
 
@@ -57,6 +59,50 @@ def _complete_facts(**changes) -> dict:
 
 
 class ArtifactPublicationTests(unittest.TestCase):
+    def test_ros_latest_symlink_is_removed_before_symlink_free_checksum_closure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run = TRIAL.create_run_directory(Path(temporary), "fixture-ros-latest")
+            target = run / "ros-logs" / "session-1"
+            target.mkdir()
+            (target / "node.log").write_text("retained log\n", encoding="utf-8")
+            latest = run / "ros-logs" / "latest"
+            latest.symlink_to(target.name, target_is_directory=True)
+
+            cleanup = TRIAL.remove_run_owned_ros_latest_symlink(run)
+            checksums = TRIAL.write_sha256sums(run)
+
+            self.assertEqual(
+                cleanup["status"], "REMOVED_RUN_OWNED_EPHEMERAL_SYMLINK"
+            )
+            self.assertEqual(cleanup["link_target"], "session-1")
+            self.assertEqual(cleanup["resolved_target"], str(target.resolve()))
+            self.assertFalse(latest.exists())
+            self.assertFalse(latest.is_symlink())
+            self.assertTrue(target.is_dir())
+            self.assertIn("ros-logs/session-1/node.log", checksums)
+
+    def test_ros_latest_symlink_cannot_point_outside_the_run_log_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = TRIAL.create_run_directory(root, "fixture-foreign-ros-latest")
+            outside = root / "outside-logs"
+            outside.mkdir()
+            latest = run / "ros-logs" / "latest"
+            latest.symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(TRIAL.TrialError, "run-owned"):
+                TRIAL.remove_run_owned_ros_latest_symlink(run)
+            self.assertTrue(latest.is_symlink())
+            self.assertTrue(outside.is_dir())
+
+    def test_checksum_publication_rejects_every_other_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run = TRIAL.create_run_directory(Path(temporary), "fixture-foreign-link")
+            target = run / "diagnostics" / "real.log"
+            target.write_text("evidence\n", encoding="utf-8")
+            (run / "diagnostics" / "alias.log").symlink_to(target.name)
+            with self.assertRaisesRegex(TRIAL.TrialError, "symlink"):
+                TRIAL.write_sha256sums(run)
+
     def test_append_only_publication_and_run_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -74,7 +120,7 @@ class ArtifactPublicationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             args = argparse.Namespace(
-                protocol_id="CDSC-1R1",
+                protocol_id="CDSC-1R2",
                 protocol_file=TRIAL.CANONICAL_PROTOCOL,
                 matrix_file=TRIAL.CANONICAL_MATRIX,
                 run_id="fixture-infra-failure",
@@ -189,7 +235,7 @@ class CampaignAndParameterTests(unittest.TestCase):
     def test_matrix_binding_selects_exact_start_aware_row(self) -> None:
         bag = Path("/home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag").resolve()
         value = TRIAL.validate_campaign_bindings(
-            "CDSC-1R1",
+            "CDSC-1R2",
             TRIAL.CANONICAL_PROTOCOL.resolve(),
             TRIAL.CANONICAL_MATRIX.resolve(),
             "euroc_mav",
@@ -202,7 +248,7 @@ class CampaignAndParameterTests(unittest.TestCase):
         self.assertEqual(value["expected_bag"]["path"], str(bag))
         with self.assertRaisesRegex(TRIAL.TrialError, "bag start"):
             TRIAL.validate_campaign_bindings(
-                "CDSC-1R1",
+                "CDSC-1R2",
                 TRIAL.CANONICAL_PROTOCOL.resolve(),
                 TRIAL.CANONICAL_MATRIX.resolve(),
                 "euroc_mav",
@@ -270,6 +316,89 @@ class NativeProjectionAndPassageTests(unittest.TestCase):
         self.assertEqual(len(selected), 2)
         self.assertEqual(len(native.pairs), 1)
         self.assertEqual(native.pairs[0].camera_timestamp_ns, 141_000_000_000)
+
+    def test_corrupt_public_chunk_bounds_cannot_change_cpp_view_projection(self) -> None:
+        """Index extrema, including exact boundaries, govern the native view."""
+
+        def entry(timestamp_ns: int):
+            seconds, nanoseconds = divmod(timestamp_ns, 1_000_000_000)
+            return types.SimpleNamespace(
+                time=types.SimpleNamespace(secs=seconds, nsecs=nanoseconds)
+            )
+
+        class FakeBag:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def get_start_time(self) -> float:
+                return 2.0
+
+            def get_end_time(self) -> float:
+                return 9.0
+
+            def _get_indexes(self, connections):
+                if connections is not None:
+                    raise AssertionError("all-topic index request must use None")
+                return (
+                    [entry(0), entry(10_000_000_000)],
+                    [entry(5_000_000_000), entry(9_995_000_000)],
+                    [entry(5_005_000_000), entry(10_000_000_000)],
+                )
+
+        messages = [
+            self._camera(TRIAL.pairing.KIND_CAMERA0, 5.0, 105.0),
+            self._camera(TRIAL.pairing.KIND_CAMERA1, 5.005, 105.0),
+            self._camera(TRIAL.pairing.KIND_CAMERA0, 9.995, 110.0),
+            self._camera(TRIAL.pairing.KIND_CAMERA1, 10.0, 110.0),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            bag = Path(temporary) / "corrupt-chunk-bounds.bag"
+            bag.write_bytes(b"synthetic rosbag identity\n")
+            bag_identity = TRIAL.file_identity(bag)
+            fake_rosbag = types.SimpleNamespace(
+                Bag=lambda *_args, **_kwargs: FakeBag(),
+                bag=types.SimpleNamespace(__file__=str(TRIAL.ROSBAG_INDEX_MODULE)),
+            )
+            with mock.patch.object(
+                TRIAL.pairing,
+                "read_bag",
+                return_value=(messages, bag_identity, {}),
+            ), mock.patch.dict(sys.modules, {"rosbag": fake_rosbag}):
+                census, identity = TRIAL.native_pair_census(bag, 5.0, -1.0)
+
+        interval = census["input_interval"]
+        self.assertEqual(identity["sha256"], bag_identity["sha256"])
+        self.assertEqual(interval["selected_pair_count"], 2)
+        self.assertEqual(interval["first_selected_input_timestamp_ns"], 105_000_000_000)
+        self.assertEqual(interval["last_selected_input_timestamp_ns"], 110_000_000_000)
+        self.assertEqual(interval["bag_full_index_start_record_timestamp_ns"], 0)
+        self.assertEqual(
+            interval["bag_full_index_end_record_timestamp_ns"], 10_000_000_000
+        )
+        self.assertEqual(interval["bag_view_start_record_timestamp_ns"], 5_000_000_000)
+        self.assertEqual(interval["bag_view_end_record_timestamp_ns"], 10_000_000_000)
+        self.assertEqual(interval["bag_public_start_record_timestamp_s"], 2.0)
+        self.assertEqual(interval["bag_public_end_record_timestamp_s"], 9.0)
+        self.assertEqual(interval["bag_public_start_minus_full_index_start_s"], 2.0)
+        self.assertEqual(interval["bag_public_end_minus_full_index_end_s"], -1.0)
+        self.assertFalse(interval["bag_public_bounds_match_full_index_extrema"])
+        self.assertEqual(
+            interval["bag_view_bounds_source"],
+            "all_topic_connection_index_extrema_matching_cpp_rosbag_view",
+        )
+        self.assertEqual(census["diagnostics"]["all_topic_index_entry_count"], 6)
+        self.assertEqual(
+            census["rosbag_index_reader"]["api"],
+            "rosbag.bag.Bag._get_indexes(None)",
+        )
+        self.assertTrue(census["rosbag_index_reader"]["frozen_module_identity_match"])
+        self.assertEqual(
+            census["rosbag_index_reader"]["module"]["sha256"],
+            TRIAL.ROSBAG_INDEX_MODULE_SHA256,
+        )
 
     def test_late_initialization_is_descriptive_not_failure(self) -> None:
         interval = {

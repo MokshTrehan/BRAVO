@@ -63,7 +63,7 @@ def _write_checksums(run: Path) -> None:
 def _base_result(run: Path, mode: str, status: str, artifacts: dict) -> dict:
     return {
         "schema": MODULE.RESULT_SCHEMA,
-        "protocol_id": "CDSC-1R1",
+        "protocol_id": "CDSC-1R2",
         "run_id": "fixture-{}-{}".format(mode, status.lower().replace("_", "-")),
         "attempt_index": 1,
         "dataset": "tum_vi",

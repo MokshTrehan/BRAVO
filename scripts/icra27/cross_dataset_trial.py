@@ -56,7 +56,7 @@ import kaist_runtime_identity as pinned_runtime  # noqa: E402
 
 
 SCHEMA = "schurvio.icra27.cross_dataset.sequence_result.v1"
-NATIVE_CENSUS_SCHEMA = "schurvio.icra27.cross_dataset.native_pair_census.v1"
+NATIVE_CENSUS_SCHEMA = "schurvio.icra27.cross_dataset.native_pair_census.v2"
 SYSTEMS = ("U0", "S1")
 MODES = ("scored", "capture")
 DATASETS = ("euroc_mav", "tum_vi")
@@ -206,6 +206,13 @@ S1_BUILD_PROVENANCE_SHA256 = (
 )
 CANONICAL_PROTOCOL = REPO_ROOT / "docs" / "icra27" / "CROSS_DATASET_SYSTEM_COMPARISON_PROTOCOL.md"
 CANONICAL_MATRIX = REPO_ROOT / "project" / "icra27_cross_dataset_matrix.yaml"
+ROSBAG_INDEX_MODULE = Path(
+    "/opt/ros/noetic/lib/python3/dist-packages/rosbag/bag.py"
+)
+ROSBAG_INDEX_MODULE_SIZE = 115588
+ROSBAG_INDEX_MODULE_SHA256 = (
+    "8c2e1f4b0e1bead5e03694c493a35b10f898bb7b051ca96aef219611b5253422"
+)
 CANONICAL_LAUNCHES: Mapping[str, Tuple[Path, str]] = {
     "U0": (
         REPO_ROOT / "project" / "icra27_cross_dataset_u0_serial.launch",
@@ -445,6 +452,12 @@ def write_sha256sums(run_dir: Path) -> Dict[str, str]:
         raise TrialError("refusing to overwrite SHA256SUMS")
     identities: Dict[str, str] = {}
     for path in run_dir.rglob("*"):
+        if path.is_symlink():
+            raise TrialError(
+                "refusing checksum publication with symlink: {}".format(
+                    path.relative_to(run_dir).as_posix()
+                )
+            )
         if not path.is_file() or path == destination:
             continue
         relative = path.relative_to(run_dir).as_posix()
@@ -454,6 +467,49 @@ def write_sha256sums(run_dir: Path) -> Dict[str, str]:
     lines = ["{}  {}\n".format(identities[name], name) for name in sorted(identities)]
     _atomic_write_new_bytes(destination, "".join(lines).encode("utf-8"))
     return identities
+
+
+def remove_run_owned_ros_latest_symlink(run_dir: Path) -> Dict[str, Any]:
+    """Remove only ROS's ephemeral ``ros-logs/latest`` link before closure."""
+
+    ros_logs = run_dir / "ros-logs"
+    latest = ros_logs / "latest"
+    if latest.is_symlink():
+        target = os.readlink(str(latest))
+        try:
+            resolved_logs = ros_logs.resolve(strict=True)
+            resolved_target = latest.resolve(strict=True)
+            resolved_target.relative_to(resolved_logs)
+        except (OSError, ValueError) as exc:
+            raise TrialError(
+                "ros-logs/latest does not target a retained run-owned log directory"
+            ) from exc
+        if not resolved_target.is_dir():
+            raise TrialError("ros-logs/latest target is not a directory")
+        latest.unlink()
+        directory_descriptor = os.open(str(ros_logs), os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+        if latest.exists() or latest.is_symlink():
+            raise TrialError("ROS latest symlink survived removal")
+        return {
+            "path": "ros-logs/latest",
+            "status": "REMOVED_RUN_OWNED_EPHEMERAL_SYMLINK",
+            "link_target": target,
+            "resolved_target": str(resolved_target),
+            "run_tree_symlink_policy": "NO_SYMLINKS_AT_CHECKSUM_CLOSURE",
+        }
+    if latest.exists():
+        raise TrialError("ros-logs/latest exists but is not ROS's expected symlink")
+    return {
+        "path": "ros-logs/latest",
+        "status": "ABSENT",
+        "link_target": None,
+        "resolved_target": None,
+        "run_tree_symlink_policy": "NO_SYMLINKS_AT_CHECKSUM_CLOSURE",
+    }
 
 
 def create_run_directory(output_root: Path, run_id: str) -> Path:
@@ -832,9 +888,9 @@ def validate_canonical_paths_and_hashes(
     if launch != expected_launch:
         raise TrialError("launch is not the canonical {} path".format(system))
     if protocol != CANONICAL_PROTOCOL.resolve(strict=True):
-        raise TrialError("protocol is not the canonical CDSC-1R1 path")
+        raise TrialError("protocol is not the canonical CDSC-1R2 path")
     if matrix != CANONICAL_MATRIX.resolve(strict=True):
-        raise TrialError("matrix is not the canonical CDSC-1R1 path")
+        raise TrialError("matrix is not the canonical CDSC-1R2 path")
     config_identity = file_identity(config)
     launch_identity = file_identity(launch)
     if config_identity["sha256"] != DATASET_CONFIG_SHA256[dataset]:
@@ -1098,6 +1154,157 @@ def validate_resolved_parameters(
     }
 
 
+def _duration_nanoseconds(seconds: float, label: str) -> int:
+    """Convert a nonnegative ROS duration to its integer-nanosecond value."""
+
+    if not math.isfinite(seconds) or seconds < 0:
+        raise TrialError("{} must be finite and nonnegative".format(label))
+    # ros::Duration(double) rounds to the nearest integer nanosecond.  Frozen
+    # campaign offsets are integral seconds, but retaining this conversion here
+    # keeps the projection defined for any future finite fractional offset.
+    whole_seconds = int(math.floor(seconds))
+    nanoseconds = int(
+        math.floor((seconds - float(whole_seconds)) * 1.0e9 + 0.5)
+    )
+    if nanoseconds == 1_000_000_000:
+        whole_seconds += 1
+        nanoseconds = 0
+    return whole_seconds * 1_000_000_000 + nanoseconds
+
+
+def _ros_time_nanoseconds(value: Any) -> int:
+    """Return an exact nonnegative ROS time from a Python rosbag index entry."""
+
+    try:
+        seconds = int(value.secs)
+        nanoseconds = int(value.nsecs)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise TrialError("rosbag index entry has an invalid time") from exc
+    if seconds < 0 or nanoseconds < 0 or nanoseconds >= 1_000_000_000:
+        raise TrialError("rosbag index entry time is outside the ROS1 domain")
+    return seconds * 1_000_000_000 + nanoseconds
+
+
+def rosbag_view_full_bounds(opened: Any) -> Dict[str, Any]:
+    """Recover the all-topic bounds used by C++ ``rosbag::View``.
+
+    Python ``Bag.get_start_time()`` and ``get_end_time()`` use the first and
+    last chunk-info headers for ROS bag v2 files.  Those diagnostic headers are
+    not authoritative for message selection and can disagree with the actual
+    connection index entries.  The serial OpenVINS executables construct an
+    unfiltered C++ ``rosbag::View`` and use its index-entry extrema, so the
+    prospective census must do the same.
+    """
+
+    public_start: Optional[float]
+    public_end: Optional[float]
+    try:
+        public_start = float(opened.get_start_time())
+        if not math.isfinite(public_start):
+            public_start = None
+    except (AttributeError, TypeError, ValueError):
+        public_start = None
+    try:
+        public_end = float(opened.get_end_time())
+        if not math.isfinite(public_end):
+            public_end = None
+    except (AttributeError, TypeError, ValueError):
+        public_end = None
+
+    get_indexes = getattr(opened, "_get_indexes", None)
+    if not callable(get_indexes):
+        raise TrialError("ROS1 rosbag does not expose connection index entries")
+    try:
+        indexes = get_indexes(None)
+    except Exception as exc:
+        raise TrialError("unable to read all-topic rosbag connection indexes") from exc
+
+    first_ns: Optional[int] = None
+    last_ns: Optional[int] = None
+    entry_count = 0
+    connection_count = 0
+    for index in indexes:
+        if not index:
+            continue
+        connection_count += 1
+        previous_ns: Optional[int] = None
+        for entry in index:
+            timestamp_ns = _ros_time_nanoseconds(entry.time)
+            if previous_ns is not None and timestamp_ns < previous_ns:
+                raise TrialError("rosbag connection index timestamps reverse")
+            previous_ns = timestamp_ns
+            first_ns = timestamp_ns if first_ns is None else min(first_ns, timestamp_ns)
+            last_ns = timestamp_ns if last_ns is None else max(last_ns, timestamp_ns)
+            entry_count += 1
+    if first_ns is None or last_ns is None or last_ns < first_ns:
+        raise TrialError("rosbag has no valid all-topic index-entry bounds")
+
+    first_s = pairing._cpp_ros_time_to_sec(first_ns)
+    last_s = pairing._cpp_ros_time_to_sec(last_ns)
+    public_matches = bool(
+        public_start is not None
+        and public_end is not None
+        and public_start == first_s
+        and public_end == last_s
+    )
+    public_start_delta = (
+        None if public_start is None else public_start - first_s
+    )
+    public_end_delta = None if public_end is None else public_end - last_s
+    return {
+        "source": "all_topic_connection_index_extrema_matching_cpp_rosbag_view",
+        "first_record_timestamp_ns": first_ns,
+        "last_record_timestamp_ns": last_ns,
+        "first_record_timestamp_s": first_s,
+        "last_record_timestamp_s": last_s,
+        "connection_count": connection_count,
+        "entry_count": entry_count,
+        "python_public_start_record_timestamp_s": public_start,
+        "python_public_end_record_timestamp_s": public_end,
+        "python_public_start_minus_index_start_s": public_start_delta,
+        "python_public_end_minus_index_end_s": public_end_delta,
+        "python_public_bounds_match_index_extrema": public_matches,
+    }
+
+
+def project_native_bag_view_exact(
+    messages: Sequence[Any],
+    full_start_ns: int,
+    full_end_ns: int,
+    bag_start: float,
+    bag_duration: float,
+) -> Tuple[List[Any], Any, int, int]:
+    """Apply the serial runner's exact integer ROS-time View before pairing."""
+
+    if not isinstance(full_start_ns, int) or not isinstance(full_end_ns, int):
+        raise TrialError("full bag bounds must be integer nanoseconds")
+    if full_start_ns < 0 or full_end_ns < full_start_ns:
+        raise TrialError("full bag bounds are invalid")
+    if not math.isfinite(bag_start) or bag_start < 0:
+        raise TrialError("bag start must be finite and nonnegative")
+    if not math.isfinite(bag_duration) or bag_duration == 0:
+        raise TrialError("bag duration must be finite and nonzero")
+    view_start_ns = full_start_ns + _duration_nanoseconds(bag_start, "bag start")
+    view_end_ns = (
+        full_end_ns
+        if bag_duration < 0
+        else view_start_ns + _duration_nanoseconds(bag_duration, "bag duration")
+    )
+    if view_end_ns <= view_start_ns:
+        raise TrialError("selected bag view is empty")
+    selected_messages = [
+        message
+        for message in messages
+        if view_start_ns <= message.record_time_ns <= view_end_ns
+    ]
+    if not selected_messages:
+        raise TrialError("selected bag view has no native sensor messages")
+    native = pairing.select_upstream_native(selected_messages)
+    if not native.pairs:
+        raise TrialError("selected bag view has no native stereo pair")
+    return selected_messages, native, view_start_ns, view_end_ns
+
+
 def project_native_bag_view(
     messages: Sequence[Any],
     full_start: float,
@@ -1105,27 +1312,23 @@ def project_native_bag_view(
     bag_start: float,
     bag_duration: float,
 ) -> Tuple[List[Any], Any, float, float]:
-    """Apply the serial runner's full-bag-relative View before pairing."""
+    """Compatibility wrapper for synthetic callers supplying second bounds."""
 
-    if not math.isfinite(bag_start) or bag_start < 0:
-        raise TrialError("bag start must be finite and nonnegative")
-    if not math.isfinite(bag_duration) or bag_duration == 0:
-        raise TrialError("bag duration must be finite and nonzero")
-    view_start = full_start + bag_start
-    view_end = full_end if bag_duration < 0 else view_start + bag_duration
-    if view_end <= view_start:
-        raise TrialError("selected bag view is empty")
-    selected_messages = [
-        message
-        for message in messages
-        if view_start <= pairing._cpp_ros_time_to_sec(message.record_time_ns) <= view_end
-    ]
-    if not selected_messages:
-        raise TrialError("selected bag view has no native sensor messages")
-    native = pairing.select_upstream_native(selected_messages)
-    if not native.pairs:
-        raise TrialError("selected bag view has no native stereo pair")
-    return selected_messages, native, view_start, view_end
+    if not math.isfinite(full_start) or not math.isfinite(full_end):
+        raise TrialError("full bag bounds must be finite")
+    selected, native, view_start_ns, view_end_ns = project_native_bag_view_exact(
+        messages,
+        _duration_nanoseconds(full_start, "full bag start"),
+        _duration_nanoseconds(full_end, "full bag end"),
+        bag_start,
+        bag_duration,
+    )
+    return (
+        selected,
+        native,
+        pairing._cpp_ros_time_to_sec(view_start_ns),
+        pairing._cpp_ros_time_to_sec(view_end_ns),
+    )
 
 
 def native_pair_census(
@@ -1139,10 +1342,32 @@ def native_pair_census(
     except ImportError as exc:
         raise TrialError("ROS1 rosbag Python bindings are unavailable") from exc
     with rosbag.Bag(str(bag), "r") as opened:
-        full_start = float(opened.get_start_time())
-        full_end = float(opened.get_end_time())
-    selected_messages, native, view_start, view_end = project_native_bag_view(
-        messages, full_start, full_end, bag_start, bag_duration
+        full_bounds = rosbag_view_full_bounds(opened)
+    try:
+        rosbag_module_path = Path(rosbag.bag.__file__)  # type: ignore[attr-defined]
+    except (AttributeError, TypeError) as exc:
+        raise TrialError("cannot identify the pinned Python rosbag.bag module") from exc
+    rosbag_module_identity = file_identity(rosbag_module_path)
+    if Path(rosbag_module_identity["path"]) != ROSBAG_INDEX_MODULE:
+        raise TrialError("Python rosbag.bag module path drift")
+    if (
+        rosbag_module_identity["size_bytes"] != ROSBAG_INDEX_MODULE_SIZE
+        or rosbag_module_identity["sha256"] != ROSBAG_INDEX_MODULE_SHA256
+    ):
+        raise TrialError("Python rosbag.bag module identity drift")
+    rosbag_index_reader = {
+        "api": "rosbag.bag.Bag._get_indexes(None)",
+        "module": rosbag_module_identity,
+        "frozen_module_identity_match": True,
+    }
+    selected_messages, native, view_start_ns, view_end_ns = (
+        project_native_bag_view_exact(
+            messages,
+            int(full_bounds["first_record_timestamp_ns"]),
+            int(full_bounds["last_record_timestamp_ns"]),
+            bag_start,
+            bag_duration,
+        )
     )
     timestamps_ns = [pair.camera_timestamp_ns for pair in native.pairs]
     if any(right <= left for left, right in zip(timestamps_ns, timestamps_ns[1:])):
@@ -1166,8 +1391,40 @@ def native_pair_census(
         "first_selected_input_timestamp_ns": timestamps_ns[0],
         "last_selected_input_timestamp_ns": timestamps_ns[-1],
         "selected_pair_count": len(native.pairs),
-        "bag_view_start_record_timestamp_s": view_start,
-        "bag_view_end_record_timestamp_s": view_end,
+        "bag_view_bounds_source": full_bounds["source"],
+        "bag_full_index_start_record_timestamp_ns": full_bounds[
+            "first_record_timestamp_ns"
+        ],
+        "bag_full_index_end_record_timestamp_ns": full_bounds[
+            "last_record_timestamp_ns"
+        ],
+        "bag_full_index_start_record_timestamp_s": full_bounds[
+            "first_record_timestamp_s"
+        ],
+        "bag_full_index_end_record_timestamp_s": full_bounds[
+            "last_record_timestamp_s"
+        ],
+        "bag_public_start_record_timestamp_s": full_bounds[
+            "python_public_start_record_timestamp_s"
+        ],
+        "bag_public_end_record_timestamp_s": full_bounds[
+            "python_public_end_record_timestamp_s"
+        ],
+        "bag_public_start_minus_full_index_start_s": full_bounds[
+            "python_public_start_minus_index_start_s"
+        ],
+        "bag_public_end_minus_full_index_end_s": full_bounds[
+            "python_public_end_minus_index_end_s"
+        ],
+        "bag_public_bounds_match_full_index_extrema": full_bounds[
+            "python_public_bounds_match_index_extrema"
+        ],
+        "bag_view_start_record_timestamp_ns": view_start_ns,
+        "bag_view_end_record_timestamp_ns": view_end_ns,
+        "bag_view_start_record_timestamp_s": pairing._cpp_ros_time_to_sec(
+            view_start_ns
+        ),
+        "bag_view_end_record_timestamp_s": pairing._cpp_ros_time_to_sec(view_end_ns),
         "gaps_over_threshold": gaps_over_threshold,
     }
     census = {
@@ -1178,10 +1435,13 @@ def native_pair_census(
             "imu": IMU_TOPIC,
         },
         "bag": bag_identity,
+        "rosbag_index_reader": rosbag_index_reader,
         "topic_identity": topic_identity,
         "input_interval": interval,
         "diagnostics": {
             "filtered_message_count": len(selected_messages),
+            "all_topic_index_connection_count": full_bounds["connection_count"],
+            "all_topic_index_entry_count": full_bounds["entry_count"],
             "used_index_outer_skip_count": native.used_index_outer_skip_count,
             "no_pair_outer_skip_count": native.no_pair_outer_skip_count,
             "reused_candidate_message_count": len(reused),
@@ -1923,6 +2183,18 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             "first_selected_input_timestamp_ns": None,
             "last_selected_input_timestamp_ns": None,
             "selected_pair_count": None,
+            "bag_view_bounds_source": None,
+            "bag_full_index_start_record_timestamp_ns": None,
+            "bag_full_index_end_record_timestamp_ns": None,
+            "bag_full_index_start_record_timestamp_s": None,
+            "bag_full_index_end_record_timestamp_s": None,
+            "bag_public_start_record_timestamp_s": None,
+            "bag_public_end_record_timestamp_s": None,
+            "bag_public_start_minus_full_index_start_s": None,
+            "bag_public_end_minus_full_index_end_s": None,
+            "bag_public_bounds_match_full_index_extrema": None,
+            "bag_view_start_record_timestamp_ns": None,
+            "bag_view_end_record_timestamp_ns": None,
             "bag_view_start_record_timestamp_s": None,
             "bag_view_end_record_timestamp_s": None,
             "gaps_over_threshold": [],
@@ -2440,6 +2712,9 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         result["checks"]["status_known"] = result["status"] in STATUSES
         result["checks"]["teardown_complete"] = facts["teardown_ok"]
         result["checks"]["native_failure_retained"] = result["status"] not in ELIGIBLE_STATUSES
+        result["checks"]["ros_latest_symlink_cleanup"] = (
+            remove_run_owned_ros_latest_symlink(run_dir)
+        )
         if result["failure"] is None and result["status"] not in ELIGIBLE_STATUSES:
             result["failure"] = {
                 "stage": "classification",

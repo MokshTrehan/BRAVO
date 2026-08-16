@@ -1,9 +1,10 @@
 # Cross-dataset U0--S1 system comparison protocol
 
-- Protocol ID: `CDSC-1R1`
+- Protocol ID: `CDSC-1R2`
 - Status: **PROSPECTIVE_NOT_RUN**
-- Frozen on: 2026-08-16, before the first CDSC-1R1 estimator attempt
-- Restart lineage: supersedes the stopped `CDSC-1` tooling pilot described below
+- Frozen on: 2026-08-16, before the first CDSC-1R2 estimator attempt
+- Restart lineage: supersedes the stopped `CDSC-1` and `CDSC-1R1` tooling
+  campaigns described below
 - Systems: pinned stock OpenVINS `U0` and frozen SchurVIO-Lite `S1`
 - Datasets: EuRoC MAV, every runnable local TUM-VI bag, and fresh KAIST-11
 - Primary question: post-initialization passage robustness
@@ -11,6 +12,8 @@
 - Qualitative requirement: retain and review every emitted sparse geometry map
 
 ## 0. Restart provenance
+
+### 0.1 Stopped `CDSC-1` tooling pilot
 
 The original `CDSC-1` tooling freeze at commit
 `3199bb4fa3f2f77b8a7d181663e66b79992ea090` used protocol SHA-256
@@ -21,18 +24,69 @@ Only the two order-1 `MH_01_easy` estimator cells closed: U0 manifest SHA-256
 `c541d35eb8e95a8ea9a0a6c8b9595ecf68717b3ec2a83295bdee9f0fa89c1812`
 and S1 manifest SHA-256
 `db523eb4ca129ecdfb774b99092c6787890ad2b2b41a5068badcbb772fc5d12c`.
-The campaign then stopped before publishing any pair metric because the driver
-passed each `sequence_result.json` where the evaluator required its enclosing
-run directory. A post-close diagnostic also established that the exact
-six-decimal EuRoC reference quaternions require the bounded evo-only projection
-frozen in section 7. No capture cell or later scored cell was attempted.
+The campaign stopped before publishing a pair metric because the driver passed
+each `sequence_result.json` where the evaluator required its enclosing run
+directory. A post-close diagnostic also established the bounded evo-only
+quaternion projection frozen in section 7. No capture or later scored cell was
+attempted.
 
-Those two estimator outputs and the failure receipt remain immutable diagnostic
-evidence but are excluded from every `CDSC-1R1` denominator and metric. This
-restart changes only protocol/evaluator/orchestration tooling. U0, S1 estimator
-source and binaries, configs, inputs, the 25-row matrix, and all scientific
-acceptance rules are unchanged. Every `CDSC-1R1` estimator cell starts in a new
-artifact root after this amended protocol and tooling commit are sealed.
+### 0.2 Stopped `CDSC-1R1` endpoint-semantics campaign
+
+The `CDSC-1R1` tooling freeze at commit
+`f448ff0e6ed5629f5d75d8a66d8ec1da3e127589`, tree
+`5c39b7969cd4696e0c6c2c4852b5907527070d55`, used protocol SHA-256
+`81d3b795abf6e03161cf79fb01b565b9e85ea26d977cd58222cee9555be0220c`.
+Its append-only artifact root is
+`/home/moksh/schurvio-icra27-artifacts/cross-dataset-system-comparison/cdsc1r1-20260816T144509Z`.
+It contains nine closed scored manifests and three closed pair manifests:
+
+| Artifact | SHA-256 |
+|---|---|
+| `01-MH_01_easy/U0` | `e4e67d0d0e3ede7756685b2766970b6200b2f7009eba22073d236bbccddb0822` |
+| `01-MH_01_easy/S1` | `d2f9b5c62ea3ab4e9c544c7656b1c848f4bfa562d236816904e1ee519241eccc` |
+| `02-MH_02_easy/U0` | `f92595b53d0ac5fca38167d6296ce05cec42a11b272aac8b40144a17941ed1be` |
+| `02-MH_02_easy/S1` | `9ebc1e58be12d4b7e3b2fd49553e6c94167abd7b08cc71a817e96ca04836f1f7` |
+| `03-MH_03_medium/U0` | `f95038eb48c15eb3531ae3404716b22a6ffa5740d258434f0ee4f72b349cf5c7` |
+| `03-MH_03_medium/S1` | `133f63316971e22b26907bdf886d140c1228b74d51f7ddf417534c673cd5a942` |
+| `04-MH_04_difficult/U0` | `7c8c6847e8de5e470632addac2b9fc56bc72f395786e4a529b1f9df97ef6d908` |
+| `04-MH_04_difficult/S1` | `5c71914e3a56e0b3527dcd6c92c6535700ef83c80fe9de2babbca4d56afb1cdd` |
+| `05-MH_05_difficult/U0` | `af4c52ce9e1563ac8604cc8c50df6c44f561458831d4c123d37b6f67a9bd0082` |
+| Pair `01-MH_01_easy` | `547413e7817ad4265abe60bd41b5c2eff21b96b3dfc4b9bca19a2b3622392d34` |
+| Pair `03-MH_03_medium` | `8f5b5b4ddb5cc23fce39573069d5ea0f2b18ea4e16ddc9a8bfabfc24b31b5015` |
+| Pair `04-MH_04_difficult` | `3ade3272b851a9fefaf50f8e6b86981d8a59a23c8cb5dbe45fe7c81168ea418f` |
+
+Every file listed in the twelve published `SHA256SUMS` sets passes its recorded
+digest. The R1 run trees nevertheless contain ROS-generated, unchecksummed
+`ros-logs/latest` convenience symlinks, so they do not satisfy the final
+exact-membership closure now enforced in R2 section 10. There are no capture
+artifacts. The order-5 S1 directory was interrupted externally after estimator
+output but before `sequence_result.json`, TUM conversion, checksum closure, or
+a campaign receipt; it is unclosed diagnostic material and not estimator
+evidence.
+
+The campaign was prospectively stopped after a system-independent runner bug
+was discovered. Its native-input census used Python rosbag chunk-header
+`get_start_time()/get_end_time()` metadata, while both frozen serial estimators
+form their interval from the actual indexed-message extrema exposed by C++
+`rosbag::View`. On `MH_02_easy`, the metadata ended 0.528629 seconds before the
+last indexed message and falsely labeled both otherwise terminal U0 and S1
+outputs `PARTIAL`. The corrected rule in section 4 exactly mirrors C++ View
+semantics; it does not alter either estimator, input bag, configuration, start
+offset, or acceptance threshold.
+
+A read-only preflight over all fourteen EuRoC/TUM-VI bags found that this
+correction changes the native pair population on `MH_01_easy` (2,865 to
+2,883), `MH_02_easy` (2,317 to 2,364), and `V1_01_easy` (2,871 to 2,889).
+The other eleven populations are unchanged; all three local TUM-VI bags are
+unaffected. These input-derived facts are frozen before any `CDSC-1R2`
+estimator attempt.
+
+All closed artifacts from both stopped campaigns remain immutable audit
+evidence, but every `CDSC-1` and `CDSC-1R1` cell and pair is excluded from all
+`CDSC-1R2` denominators and metrics. No output is reused. The complete 25-pair
+matrix restarts in a new artifact root only after this protocol and tooling are
+committed, tagged, clean, and revalidated. U0 and S1 source, binaries, configs,
+inputs, matrix order, and scientific acceptance rules remain unchanged.
 
 ## 1. Purpose and claim boundary
 
@@ -101,7 +155,7 @@ validated KAIST recovery study:
 
 The reporting commit and tag may identify the completed prior study, but each
 run must bind the science source snapshot and compiled-input provenance above.
-No S1 source, threshold, or estimator behavior may change during CDSC-1R1.
+No S1 source, threshold, or estimator behavior may change during CDSC-1R2.
 
 S1 uses two deliberately different dataset configuration rules:
 
@@ -119,7 +173,7 @@ S1 uses two deliberately different dataset configuration rules:
    zero `[LONG-GAP-RECOVERY]` records. The existing EuRoC profile
    `config/euroc_mav/estimator_config_gate_d_schur_one_pass.yaml`, SHA-256
    `39279fd929ae91dc1ec63c44f17ff66c369dcd4c9f094ffbf7b95acae07f6d33`,
-   already demonstrates exactly this two-key delta. For CDSC-1R1, both datasets
+   already demonstrates exactly this two-key delta. For CDSC-1R2, both datasets
    use their byte-exact native config files and the two selectors are applied
    as typed parameters by the hash-frozen S1 launch file. The resolved
    parameter map and launch contract must prove that these are the only
@@ -129,7 +183,7 @@ S1 uses two deliberately different dataset configuration rules:
 
 2. **KAIST:** use the already-validated
    `config/kaist_vio_rotation_robustness/estimator_config.yaml` and its exact
-   calibration files. This is the only CDSC-1R1 dataset on which long-gap
+   calibration files. This is the only CDSC-1R2 dataset on which long-gap
    recovery is enabled.
 
 The recovery boundary is intentional. The frozen recovery implementation and
@@ -137,7 +191,7 @@ runtime contract are KAIST pinhole/radtan, fixed-calibration evidence. Native
 EuRoC/TUM-VI configurations do not satisfy that contract; TUM-VI is
 equidistant and the native profiles enable online camera calibration. Enabling
 recovery there would be a new algorithm/configuration study and is forbidden
-in CDSC-1R1. In particular, the prior TUM-VI camera-conditioning profile is not
+in CDSC-1R2. In particular, the prior TUM-VI camera-conditioning profile is not
 eligible: it fixed calibration and set `max_slam: 0`, so it is neither native
 S1 nor capable of supplying C2's retained SLAM landmarks.
 
@@ -145,7 +199,7 @@ S1 nor capable of supplying C2's retained SLAM landmarks.
 
 All local candidates must be checked before any download. Exact bag size and
 the recorded checksum are verified first; a missing or irreparably corrupt
-candidate may be acquired only before the CDSC-1R1 input manifest is frozen.
+candidate may be acquired only before the CDSC-1R2 input manifest is frozen.
 No bag is overwritten. The tracked `project/datasets.yaml` TUM-VI entries are
 stale: they refer to old pending paths, while the three runnable bags are
 already present under `calibrated/512_16`.
@@ -265,6 +319,18 @@ identity:
   stereo rule because the KAIST exact-header option is false.
 - On KAIST, U0 retains the upstream record-time `<20 ms` stereo rule and S1
   retains its frozen exact-header seam.
+
+For EuRoC and TUM-VI, the full-bag record-time bounds are the minimum and
+maximum actual indexed message times across the bag, matching C++
+`rosbag::View(bag).getBeginTime()/getEndTime()`. Python
+`Bag.get_start_time()/get_end_time()` chunk-header metadata is diagnostic only
+and never defines the selected view; it may omit indexed messages at either
+endpoint. The native start offset and duration are projected from the indexed
+bounds before stereo pairing. The private index API is frozen to
+`rosbag.bag.Bag._get_indexes(None)` in
+`/opt/ros/noetic/lib/python3/dist-packages/rosbag/bag.py`, SHA-256
+`8c2e1f4b0e1bead5e03694c493a35b10f898bb7b051ca96aef219611b5253422`;
+every census revalidates and records that module identity.
 
 Every cell therefore retains a deterministic pairing census: input topic
 counts, exact-header matches and unmatched images, native selected/skipped
@@ -513,6 +579,15 @@ absence, manifest, and checksums. Finalized attempt directories are never
 overwritten. Git tracks this protocol, small indices, reports, and small
 figures; large raw artifacts remain checksum-bound outside Git.
 
+ROS may create the run-owned convenience symlink `ros-logs/latest`. After all
+runtime services close and before publishing `sequence_result.json` and
+`SHA256SUMS`, the runner first proves its target is a retained directory inside
+that run's `ros-logs`, removes only the ephemeral symlink, records its target
+and removal, and rejects any broken/external target or unexpected real
+file/directory at that path.
+Checksum publication rejects every remaining symlink, so the final aggregate's
+exact symlink-free membership check and the runner's closure policy agree.
+
 ## 11. Retry, continuation, and stop rules
 
 One valid scored attempt is scheduled for each system/sequence cell. An
@@ -571,4 +646,4 @@ It must name the datasets, state that corridor4/outdoors4 lack accuracy scores,
 and preserve strict process-health defects. “S1 is more accurate,” “Schur
 caused the improvement,” “S1 tracked every dataset from the beginning,” and
 general robustness/superiority claims require separate evidence and are not
-authorized by CDSC-1R1.
+authorized by CDSC-1R2.

@@ -1,5 +1,5 @@
 #!/usr/bin/python3.8
-"""Append-only fresh-KAIST adapter for the CDSC-1R1 U0/S1 comparison.
+"""Append-only fresh-KAIST adapter for the CDSC-1R2 U0/S1 comparison.
 
 This module deliberately does not alter either estimator.  U0 runs the pinned
 upstream executable, native KAIST configuration, and native record-time stereo
@@ -289,9 +289,9 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
 
 def validate_canonical_campaign(protocol: Path, matrix: Path) -> Dict[str, Any]:
     if protocol != CANONICAL_PROTOCOL.resolve(strict=True):
-        raise TrialError("protocol is not the canonical CDSC-1R1 path")
+        raise TrialError("protocol is not the canonical CDSC-1R2 path")
     if matrix != CANONICAL_MATRIX.resolve(strict=True):
-        raise TrialError("matrix is not the canonical CDSC-1R1 path")
+        raise TrialError("matrix is not the canonical CDSC-1R2 path")
     return {"protocol": common.file_identity(protocol), "matrix": common.file_identity(matrix)}
 
 
@@ -305,7 +305,7 @@ def launch_arguments(
     run_dir: Path,
 ) -> List[str]:
     if bag_duration != -1.0:
-        raise TrialError("CDSC-1R1 KAIST must run from the frozen start to bag end")
+        raise TrialError("CDSC-1R2 KAIST must run from the frozen start to bag end")
     paths = {
         "state": run_dir / "trajectory" / "state_estimate.txt",
         "std": run_dir / "trajectory" / "state_deviation.txt",
@@ -453,7 +453,7 @@ def kaist_pair_census(
     """Return normalized CDSC evidence, the full KAIST census, and bag identity."""
 
     if bag_start != 0.0 or bag_duration != -1.0:
-        raise TrialError("CDSC-1R1 KAIST census requires the complete adapted bag")
+        raise TrialError("CDSC-1R2 KAIST census requires the complete adapted bag")
     messages, bag_identity_raw, topic_identity = pairing.read_bag(
         bag, CAMERA0_TOPIC, CAMERA1_TOPIC, IMU_TOPIC
     )
@@ -826,7 +826,7 @@ def assess_kaist_output_coverage(
 def _start_geometry_recorder(
     run_dir: Path, environment: Mapping[str, str], system: str
 ) -> common.ManagedProcess:
-    recorder_name = "icra27_cdsc1r1_kaist_geometry_recorder"
+    recorder_name = "icra27_cdsc1r2_kaist_geometry_recorder"
     recorder = common.start_managed_process(
         "geometry_recorder",
         [
@@ -1170,7 +1170,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
     started = time.monotonic()
     result: Dict[str, Any] = {
         "schema": SCHEMA,
-        "adapter": "fresh_kaist_cdsc1r1",
+        "adapter": "fresh_kaist_cdsc1r2",
         "protocol_id": args.protocol_id,
         "run_id": args.run_id,
         "attempt_index": args.attempt_index,
@@ -1820,6 +1820,9 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         result["checks"]["teardown_complete"] = facts["teardown_ok"]
         result["checks"]["native_failure_retained"] = result["status"] not in ELIGIBLE_STATUSES
         result["checks"]["passage_independent_of_rotation_target_thresholds"] = True
+        result["checks"]["ros_latest_symlink_cleanup"] = (
+            common.remove_run_owned_ros_latest_symlink(run_dir)
+        )
         if result["failure"] is None and result["status"] not in ELIGIBLE_STATUSES:
             result["failure"] = {
                 "stage": "classification",
@@ -1949,7 +1952,7 @@ def _load_result(
         raise TrialError("{} sequence result is not an object".format(system))
     expected = {
         "schema": SCHEMA,
-        "protocol_id": "CDSC-1R1",
+        "protocol_id": "CDSC-1R2",
         "dataset": DATASET,
         "sequence": "rotation/rotation.bag",
         "system": system,
@@ -2067,13 +2070,13 @@ def _s1_rotation_artifact_precondition(
 def _matrix_rotation_declared_binding(matrix_path: Path) -> Dict[str, Any]:
     """Bind the rotation row without resolving or opening its ground truth."""
 
-    matrix_path = common._regular_file(matrix_path, "CDSC-1R1 matrix")
+    matrix_path = common._regular_file(matrix_path, "CDSC-1R2 matrix")
     if matrix_path != CANONICAL_MATRIX.resolve(strict=True):
-        raise TrialError("post-pair matrix is not the canonical CDSC-1R1 path")
+        raise TrialError("post-pair matrix is not the canonical CDSC-1R2 path")
     try:
         matrix = yaml.safe_load(matrix_path.read_text(encoding="utf-8", errors="strict"))
     except yaml.YAMLError as exc:
-        raise TrialError("CDSC-1R1 matrix is invalid YAML") from exc
+        raise TrialError("CDSC-1R2 matrix is invalid YAML") from exc
     rows = matrix.get("sequences") if isinstance(matrix, dict) else None
     matches = [
         row
@@ -2210,7 +2213,7 @@ def _post_pair_result_base(
         "schema": POST_PAIR_SCHEMA,
         "status": "C2_VALIDATION_FAILURE",
         "pass": False,
-        "protocol_id": "CDSC-1R1",
+        "protocol_id": "CDSC-1R2",
         "dataset": DATASET,
         "sequence": "rotation/rotation.bag",
         "source_runs": dict(source_runs),
