@@ -1,5 +1,5 @@
 #!/usr/bin/python3.8
-"""Focused non-ROS tests for the resume-safe CDSC-1R3 campaign driver."""
+"""Focused non-ROS tests for the resume-safe CDSC-1R4 campaign driver."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from unittest import mock
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "cross_dataset_campaign.py"
@@ -23,6 +24,34 @@ SPEC.loader.exec_module(campaign)
 
 def _digest(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def _kaist_gate_preflight_cells() -> List[Dict[str, Any]]:
+    cells: List[Dict[str, Any]] = []
+    for sequence, populations in campaign.EXPECTED_KAIST_GATE_POPULATIONS.items():
+        for system in campaign.SYSTEMS:
+            raw, accepted, dropped, first, last, gaps = populations[system]
+            identity = "{}:{}".format(sequence, system)
+            cells.append(
+                {
+                    "sequence": sequence,
+                    "system": system,
+                    "track_frequency_hz": 31.0,
+                    "raw_dispatch_count": raw,
+                    "accepted_callback_count": accepted,
+                    "frequency_dropped_count": dropped,
+                    "first_accepted_camera_timestamp_ns": first,
+                    "last_accepted_camera_timestamp_ns": last,
+                    "accepted_gaps_over_threshold_ns": [list(gap) for gap in gaps],
+                    "raw_dispatch_sequence_sha256": _digest(
+                        ("raw:" + identity).encode("ascii")
+                    ),
+                    "accepted_callback_sequence_sha256": _digest(
+                        ("accepted:" + identity).encode("ascii")
+                    ),
+                }
+            )
+    return cells
 
 
 def _write_json(path: Path, value: Mapping[str, Any]) -> None:
@@ -115,6 +144,139 @@ def _publish_sequence_result(
         if runtime_valid and linkage_valid
         else ("CAPTURE_LINK_INVALID" if lane == "capture" and not linkage_valid else "INVALID_INFRA")
     )
+    kaist_evidence: Dict[str, Any] = {}
+    if row.dataset == "kaist_vio" and runtime_valid:
+        fixture_bag = root / "fixture-inputs" / (campaign.safe_sequence(row.sequence) + ".bag")
+        fixture_bag.parent.mkdir(parents=True, exist_ok=True)
+        if not fixture_bag.exists():
+            fixture_bag.write_bytes(b"synthetic immutable KAIST bag identity\n")
+        bag_identity = campaign.file_identity(fixture_bag)
+        full_census: Dict[str, Any] = {
+            "schema": campaign.KAIST_FULL_CENSUS_SCHEMA,
+            "bag": bag_identity,
+            "topics": {
+                "camera0": {"name": "/turnsafe/kaist/infra1/image_raw"},
+                "camera1": {"name": "/turnsafe/kaist/infra2/image_raw"},
+                "imu": {"name": "/mavros/imu/data"},
+            },
+            "census": {
+                "u0_native_pair_count": 3,
+                "s1_exact_pair_count": 3,
+                "u0_first_selected_header_stamp_ns": 1_000_000_000,
+                "u0_last_selected_header_stamp_ns": 1_040_000_000,
+                "s1_first_selected_header_stamp_ns": 1_000_000_000,
+                "s1_last_selected_header_stamp_ns": 1_040_000_000,
+            },
+            "selection_bounds": {
+                "u0_native": {
+                    "pair_count": 3,
+                    "first_camera0_header_stamp_ns": 1_000_000_000,
+                    "last_camera0_header_stamp_ns": 1_040_000_000,
+                },
+                "s1_exact_header": {
+                    "pair_count": 3,
+                    "first_camera0_header_stamp_ns": 1_000_000_000,
+                    "last_camera0_header_stamp_ns": 1_040_000_000,
+                },
+            },
+            "pair_sets": {
+                "u0_native": {"count": 3, "sha256": "3" * 64},
+                "s1_exact_header": {"count": 3, "sha256": "4" * 64},
+            },
+            "u0_native_diagnostics": {"residual_used_index_count": 3},
+        }
+        selector_source = (
+            "upstream_native_record_time_first_forward_stereo"
+            if system == "U0"
+            else "frozen_s1_exact_header_stereo"
+        )
+        delivery = selector_source + "_plus_stock_visualizer_frequency_gate"
+        input_interval = {
+            "source": delivery,
+            "selector_source": selector_source,
+            "raw_serial_dispatch_pair_count": 3,
+            "selected_pair_count": 2,
+            "visualizer_frequency_dropped_pair_count": 1,
+            "first_selected_input_timestamp_ns": 1_000_000_000,
+            "last_selected_input_timestamp_ns": 1_040_000_000,
+            "first_selected_input_timestamp_s": 1.0,
+            "last_selected_input_timestamp_s": 1.04,
+            "bag_view_start_record_timestamp_s": 1.0,
+            "bag_view_end_record_timestamp_s": 1.04,
+            "gaps_over_threshold": [],
+        }
+        gate = {
+            "track_frequency_source": "canonical_dataset_config",
+            "track_frequency_hz": 31.0,
+            "raw_serial_dispatch_count": 3,
+            "accepted_visualizer_callback_count": 2,
+            "frequency_dropped_dispatch_count": 1,
+            "dropped_dispatches": [
+                {
+                    "camera_timestamp_ns": 1_010_000_000,
+                    "reason": (
+                        "timestamp_less_than_previous_accepted_plus_"
+                        "inverse_track_frequency"
+                    ),
+                }
+            ],
+            "raw_serial_dispatch_sequence_sha256": "1" * 64,
+            "accepted_visualizer_callback_sequence_sha256": "2" * 64,
+            "accepted_camera_timestamps_strictly_increasing": True,
+            "accepted_final_camera_timestamp_ns": 1_040_000_000,
+            "accepted_maximum_camera_timestamp_ns": 1_040_000_000,
+            "raw_final_camera_timestamp_ns": 1_040_000_000,
+            "raw_maximum_camera_timestamp_ns": 1_040_000_000,
+            "raw_adjacent_reversed_camera_timestamp_count": 0,
+            "raw_adjacent_equal_camera_timestamp_count": 0,
+        }
+        normalized_census = {
+            "schema": campaign.KAIST_CENSUS_SCHEMA,
+            "system": system,
+            "delivery": delivery,
+            "input_interval": input_interval,
+            "visualizer_track_frequency_gate": gate,
+            "static_census_schema": full_census["schema"],
+            "static_census": full_census["census"],
+            "selection_bounds": full_census["selection_bounds"],
+            "pair_sets": full_census["pair_sets"],
+            "u0_native_diagnostics": full_census["u0_native_diagnostics"],
+        }
+        diagnostics = location.run_directory / "diagnostics"
+        diagnostics.mkdir()
+        normalized_path = diagnostics / "native_pair_census.json"
+        full_path = diagnostics / "kaist_pairing_census.json"
+        _write_json(normalized_path, normalized_census)
+        _write_json(full_path, full_census)
+        kaist_evidence = {
+            "config_contract": {
+                "track_frequency_source": "canonical_kaist_config",
+                "track_frequency_hz": 31.0,
+            },
+            "input_interval": input_interval,
+            "native_pair_census": campaign.file_identity(normalized_path),
+            "kaist_pairing_census": campaign.file_identity(full_path),
+        }
+        if system == "S1" and eligible:
+            kaist_evidence["pairing_runtime"] = {
+                "status": "AVAILABLE",
+                "visualizer_gate_binding": {
+                    "status": "PASS",
+                    "runtime_matches_projected_visualizer_gate": True,
+                    "accepted_input": {
+                        "first_header_stamp_ns": input_interval[
+                            "first_selected_input_timestamp_ns"
+                        ],
+                        "last_header_stamp_ns": input_interval[
+                            "last_selected_input_timestamp_ns"
+                        ],
+                        "callback_count": input_interval["selected_pair_count"],
+                        "ordered_callback_sequence_sha256": gate[
+                            "accepted_visualizer_callback_sequence_sha256"
+                        ],
+                    },
+                },
+            }
     scored_linkage = None
     if lane == "capture":
         scored_path = campaign.run_location(root, "scored", row, system).result_path.resolve(
@@ -192,10 +354,58 @@ def _publish_sequence_result(
             "append_only_run_directory": True,
         },
         "scored_linkage": scored_linkage,
+        **kaist_evidence,
     }
+    if kaist_evidence:
+        helper_inputs = {
+            "bag": bag_identity,
+            "visualizer_gate_projection_module": campaign.file_identity(
+                campaign.GENERIC_RUNNER
+            ),
+            "runtime_summary_parser_module": campaign.file_identity(
+                campaign.SCRIPT_DIR / "rotation_robustness_trial.py"
+            ),
+        }
+        value["inputs"].update(helper_inputs)
+        value["input_identities_after"] = dict(helper_inputs)
     _write_json(location.result_path, value)
     _publish_checksums(location.run_directory, "sequence_result.json")
     return location.result_path
+
+
+def _republish_kaist_fixture_mutation(
+    result_path: Path,
+    mutate: Callable[[Dict[str, Any], Dict[str, Any]], None],
+) -> None:
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    census_path = result_path.parent / "diagnostics" / "native_pair_census.json"
+    census = json.loads(census_path.read_text(encoding="utf-8"))
+    mutate(result, census)
+    _write_json(census_path, census)
+    result["native_pair_census"] = campaign.file_identity(census_path)
+    _write_json(result_path, result)
+    (result_path.parent / "SHA256SUMS").unlink()
+    _publish_checksums(result_path.parent, "sequence_result.json")
+
+
+def _republish_kaist_full_fixture_mutation(
+    result_path: Path,
+    mutate: Callable[[Dict[str, Any], Dict[str, Any], Dict[str, Any]], None],
+) -> None:
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    diagnostics = result_path.parent / "diagnostics"
+    census_path = diagnostics / "native_pair_census.json"
+    full_path = diagnostics / "kaist_pairing_census.json"
+    census = json.loads(census_path.read_text(encoding="utf-8"))
+    full = json.loads(full_path.read_text(encoding="utf-8"))
+    mutate(result, census, full)
+    _write_json(census_path, census)
+    _write_json(full_path, full)
+    result["native_pair_census"] = campaign.file_identity(census_path)
+    result["kaist_pairing_census"] = campaign.file_identity(full_path)
+    _write_json(result_path, result)
+    (result_path.parent / "SHA256SUMS").unlink()
+    _publish_checksums(result_path.parent, "sequence_result.json")
 
 
 class Clock:
@@ -430,7 +640,7 @@ class CampaignTest(unittest.TestCase):
         u0.mkdir()
         protocol = self.base / "protocol.md"
         matrix = self.base / "matrix.yaml"
-        protocol.write_text("- Protocol ID: `CDSC-1R3`\nPROSPECTIVE_NOT_RUN\n", encoding="utf-8")
+        protocol.write_text("- Protocol ID: `CDSC-1R4`\nPROSPECTIVE_NOT_RUN\n", encoding="utf-8")
         matrix.write_text("fixture: true\n", encoding="utf-8")
         self.paths = campaign.RuntimePaths(
             repo_root=repo,
@@ -503,6 +713,350 @@ class CampaignTest(unittest.TestCase):
             wall_time_fn=self.clock.wall_time,
             git_validator=self._git_validator,
         )
+
+    def test_exact_kaist_gate_preflight_fixture_passes_with_explicit_digest(self) -> None:
+        cells = _kaist_gate_preflight_cells()
+        record_sha256 = campaign._kaist_preflight_projection_digest(cells)
+
+        validated = campaign.validate_kaist_gate_preflight_record(
+            cells, expected_record_sha256=record_sha256
+        )
+
+        self.assertEqual(len(cells), 22)
+        self.assertEqual(validated["cell_count"], 22)
+        self.assertEqual(validated["projection_sha256"], record_sha256)
+        self.assertEqual(validated["cells"], cells)
+
+    def test_kaist_gate_preflight_rejects_each_population_count(self) -> None:
+        for field in (
+            "raw_dispatch_count",
+            "accepted_callback_count",
+            "frequency_dropped_count",
+        ):
+            with self.subTest(field=field):
+                cells = _kaist_gate_preflight_cells()
+                cells[0][field] += 1
+                record_sha256 = campaign._kaist_preflight_projection_digest(cells)
+                with self.assertRaisesRegex(campaign.CampaignError, "differs for"):
+                    campaign.validate_kaist_gate_preflight_record(
+                        cells, expected_record_sha256=record_sha256
+                    )
+
+    def test_kaist_gate_preflight_rejects_first_and_last_endpoint_drift(self) -> None:
+        for field in (
+            "first_accepted_camera_timestamp_ns",
+            "last_accepted_camera_timestamp_ns",
+        ):
+            with self.subTest(field=field):
+                cells = _kaist_gate_preflight_cells()
+                cells[0][field] += 1
+                record_sha256 = campaign._kaist_preflight_projection_digest(cells)
+                with self.assertRaisesRegex(campaign.CampaignError, "differs for"):
+                    campaign.validate_kaist_gate_preflight_record(
+                        cells, expected_record_sha256=record_sha256
+                    )
+
+    def test_kaist_gate_preflight_rejects_gap_endpoint_drift(self) -> None:
+        cells = _kaist_gate_preflight_cells()
+        rotation_u0 = next(
+            cell
+            for cell in cells
+            if cell["sequence"] == "rotation/rotation.bag" and cell["system"] == "U0"
+        )
+        rotation_u0["accepted_gaps_over_threshold_ns"][0][1] += 1
+        record_sha256 = campaign._kaist_preflight_projection_digest(cells)
+
+        with self.assertRaisesRegex(campaign.CampaignError, "differs for"):
+            campaign.validate_kaist_gate_preflight_record(
+                cells, expected_record_sha256=record_sha256
+            )
+
+    def test_kaist_gate_preflight_rejects_malformed_callback_digests(self) -> None:
+        for field in (
+            "raw_dispatch_sequence_sha256",
+            "accepted_callback_sequence_sha256",
+        ):
+            with self.subTest(field=field):
+                cells = _kaist_gate_preflight_cells()
+                cells[0][field] = "not-a-sha256"
+                record_sha256 = campaign._kaist_preflight_projection_digest(cells)
+                with self.assertRaisesRegex(campaign.CampaignError, "digest is malformed"):
+                    campaign.validate_kaist_gate_preflight_record(
+                        cells, expected_record_sha256=record_sha256
+                    )
+
+    def test_kaist_gate_preflight_rejects_frequency_drift(self) -> None:
+        cells = _kaist_gate_preflight_cells()
+        cells[0]["track_frequency_hz"] = 30.0
+        record_sha256 = campaign._kaist_preflight_projection_digest(cells)
+
+        with self.assertRaisesRegex(campaign.CampaignError, "frequency drift"):
+            campaign.validate_kaist_gate_preflight_record(
+                cells, expected_record_sha256=record_sha256
+            )
+
+    def test_kaist_gate_preflight_rejects_duplicate_or_missing_arm(self) -> None:
+        complete = _kaist_gate_preflight_cells()
+        cases = {
+            "missing": complete[:-1],
+            "duplicate": complete[:-1] + [dict(complete[0])],
+        }
+        for name, cells in cases.items():
+            with self.subTest(case=name):
+                record_sha256 = campaign._kaist_preflight_projection_digest(cells)
+                with self.assertRaisesRegex(campaign.CampaignError, "frozen 22 arms"):
+                    campaign.validate_kaist_gate_preflight_record(
+                        cells, expected_record_sha256=record_sha256
+                    )
+
+    def test_kaist_gate_preflight_rejects_wrong_record_digest_pin(self) -> None:
+        cells = _kaist_gate_preflight_cells()
+
+        with self.assertRaisesRegex(campaign.CampaignError, "record digest drift"):
+            campaign.validate_kaist_gate_preflight_record(
+                cells, expected_record_sha256="0" * 64
+            )
+
+    def test_enforced_preflight_failures_create_no_artifacts_or_executor_calls(self) -> None:
+        row = _row(1)
+        for failing_stage in ("static", "kaist"):
+            with self.subTest(failing_stage=failing_stage):
+                artifact_root = self.base / ("artifacts-" + failing_stage)
+                options = campaign.CampaignOptions(
+                    artifact_root=artifact_root,
+                    lane="scored",
+                    dataset="all",
+                    start_order=None,
+                    end_order=None,
+                    expected_tooling_commit="a" * 40,
+                    expected_tooling_tree="d" * 40,
+                )
+                fake = FakeExecutor(artifact_root, [row])
+                driver = self._campaign([row], fake, options)
+                static_error = (
+                    campaign.CampaignError("static preflight rejected")
+                    if failing_stage == "static"
+                    else None
+                )
+                kaist_error = campaign.CampaignError("KAIST preflight rejected")
+                with mock.patch.object(
+                    campaign,
+                    "validate_static_inputs",
+                    return_value={},
+                    side_effect=static_error,
+                ) as validate_static, mock.patch.object(
+                    campaign,
+                    "preflight_all_kaist_gate_populations",
+                    side_effect=kaist_error,
+                ) as validate_kaist, mock.patch.object(campaign, "EventLog") as event_log:
+                    expected = "static preflight rejected|KAIST preflight rejected"
+                    with self.assertRaisesRegex(campaign.CampaignError, expected):
+                        driver.run(enforce_static=True)
+
+                validate_static.assert_called_once()
+                if failing_stage == "static":
+                    validate_kaist.assert_not_called()
+                else:
+                    validate_kaist.assert_called_once()
+                event_log.assert_not_called()
+                self.assertIsNone(driver.events)
+                self.assertFalse(artifact_root.exists())
+                self.assertEqual(fake.calls, [])
+
+    def _kaist_fixture(self, system: str = "S1") -> Tuple[campaign.MatrixRow, Path]:
+        row = _row(
+            19,
+            dataset="kaist_vio",
+            sequence="rotation/rotation.bag",
+            capability="full_trajectory",
+        )
+        result_path = _publish_sequence_result(
+            self.artifacts,
+            "scored",
+            row,
+            system,
+            runner_path=self.paths.kaist_runner,
+        )
+        return row, result_path
+
+    def test_retained_kaist_fixture_has_valid_census_evidence(self) -> None:
+        row, result_path = self._kaist_fixture()
+        validated = campaign.validate_sequence_result(
+            result_path,
+            row,
+            "S1",
+            "scored",
+            expected_runner=self.paths.kaist_runner,
+        )
+        self.assertEqual(validated.classification, "retained_algorithm_outcome")
+
+    def test_kaist_fixture_rejects_mutated_census_count_after_republication(self) -> None:
+        row, result_path = self._kaist_fixture()
+
+        def mutate(result: Dict[str, Any], census: Dict[str, Any]) -> None:
+            census["input_interval"]["selected_pair_count"] = 3
+            result["input_interval"] = census["input_interval"]
+
+        _republish_kaist_fixture_mutation(result_path, mutate)
+        with self.assertRaisesRegex(campaign.CampaignError, "population does not close"):
+            campaign.validate_sequence_result(
+                result_path,
+                row,
+                "S1",
+                "scored",
+                expected_runner=self.paths.kaist_runner,
+            )
+
+    def test_kaist_fixture_rejects_mutated_gate_frequency_after_republication(self) -> None:
+        row, result_path = self._kaist_fixture()
+
+        def mutate(result: Dict[str, Any], census: Dict[str, Any]) -> None:
+            result["config_contract"]["track_frequency_hz"] = 30.0
+            census["visualizer_track_frequency_gate"]["track_frequency_hz"] = 30.0
+
+        _republish_kaist_fixture_mutation(result_path, mutate)
+        with self.assertRaisesRegex(campaign.CampaignError, "frequency binding mismatch"):
+            campaign.validate_sequence_result(
+                result_path,
+                row,
+                "S1",
+                "scored",
+                expected_runner=self.paths.kaist_runner,
+            )
+
+    def test_kaist_fixture_rejects_mutated_gate_digest_after_republication(self) -> None:
+        row, result_path = self._kaist_fixture()
+
+        def mutate(_result: Dict[str, Any], census: Dict[str, Any]) -> None:
+            census["visualizer_track_frequency_gate"][
+                "accepted_visualizer_callback_sequence_sha256"
+            ] = "3" * 64
+
+        _republish_kaist_fixture_mutation(result_path, mutate)
+        with self.assertRaisesRegex(
+            campaign.CampaignError, "does not bind the accepted KAIST population"
+        ):
+            campaign.validate_sequence_result(
+                result_path,
+                row,
+                "S1",
+                "scored",
+                expected_runner=self.paths.kaist_runner,
+            )
+
+    def test_kaist_fixture_rejects_mutated_s1_runtime_accepted_binding_after_republication(
+        self,
+    ) -> None:
+        row, result_path = self._kaist_fixture()
+
+        def mutate(result: Dict[str, Any], _census: Dict[str, Any]) -> None:
+            accepted = result["pairing_runtime"]["visualizer_gate_binding"][
+                "accepted_input"
+            ]
+            accepted["callback_count"] += 1
+
+        _republish_kaist_fixture_mutation(result_path, mutate)
+        with self.assertRaisesRegex(
+            campaign.CampaignError, "does not bind the accepted KAIST population"
+        ):
+            campaign.validate_sequence_result(
+                result_path,
+                row,
+                "S1",
+                "scored",
+                expected_runner=self.paths.kaist_runner,
+            )
+
+    def test_kaist_fixture_rejects_selector_to_gate_count_join_drift(self) -> None:
+        row, result_path = self._kaist_fixture()
+
+        def mutate(
+            _result: Dict[str, Any],
+            _census: Dict[str, Any],
+            full: Dict[str, Any],
+        ) -> None:
+            full["census"]["s1_exact_pair_count"] = 4
+
+        _republish_kaist_full_fixture_mutation(result_path, mutate)
+        with self.assertRaisesRegex(campaign.CampaignError, "selector/gate population join"):
+            campaign.validate_sequence_result(
+                result_path,
+                row,
+                "S1",
+                "scored",
+                expected_runner=self.paths.kaist_runner,
+            )
+
+    def test_kaist_fixture_rejects_first_endpoint_join_drift(self) -> None:
+        row, result_path = self._kaist_fixture()
+
+        def mutate(result: Dict[str, Any], census: Dict[str, Any]) -> None:
+            census["input_interval"]["first_selected_input_timestamp_ns"] += 1
+            result["input_interval"] = census["input_interval"]
+
+        _republish_kaist_fixture_mutation(result_path, mutate)
+        with self.assertRaisesRegex(campaign.CampaignError, "selector/gate population join"):
+            campaign.validate_sequence_result(
+                result_path,
+                row,
+                "S1",
+                "scored",
+                expected_runner=self.paths.kaist_runner,
+            )
+
+    def test_kaist_fixture_rejects_incomplete_drop_ledger(self) -> None:
+        row, result_path = self._kaist_fixture()
+
+        def mutate(_result: Dict[str, Any], census: Dict[str, Any]) -> None:
+            census["visualizer_track_frequency_gate"]["dropped_dispatches"] = []
+
+        _republish_kaist_fixture_mutation(result_path, mutate)
+        with self.assertRaisesRegex(campaign.CampaignError, "population does not close"):
+            campaign.validate_sequence_result(
+                result_path,
+                row,
+                "S1",
+                "scored",
+                expected_runner=self.paths.kaist_runner,
+            )
+
+    def test_kaist_fixture_rejects_normalized_full_census_drift(self) -> None:
+        row, result_path = self._kaist_fixture()
+
+        def mutate(
+            _result: Dict[str, Any],
+            census: Dict[str, Any],
+            _full: Dict[str, Any],
+        ) -> None:
+            census["pair_sets"]["s1_exact_header"]["sha256"] = "5" * 64
+
+        _republish_kaist_full_fixture_mutation(result_path, mutate)
+        with self.assertRaisesRegex(campaign.CampaignError, "does not bind the full raw census"):
+            campaign.validate_sequence_result(
+                result_path,
+                row,
+                "S1",
+                "scored",
+                expected_runner=self.paths.kaist_runner,
+            )
+
+    def test_kaist_fixture_rejects_scientific_helper_postflight_drift(self) -> None:
+        row, result_path = self._kaist_fixture()
+
+        def mutate(result: Dict[str, Any], _census: Dict[str, Any]) -> None:
+            result["input_identities_after"][
+                "visualizer_gate_projection_module"
+            ]["sha256"] = "6" * 64
+
+        _republish_kaist_fixture_mutation(result_path, mutate)
+        with self.assertRaisesRegex(campaign.CampaignError, "scientific helper identity drift"):
+            campaign.validate_sequence_result(
+                result_path,
+                row,
+                "S1",
+                "scored",
+                expected_runner=self.paths.kaist_runner,
+            )
 
     def test_resume_adopts_terminal_result_and_runs_only_missing_cell(self) -> None:
         row = _row(1)

@@ -142,7 +142,7 @@ class SyntheticPair:
         write_tum(estimate, trajectory_rows(system, start, stop))
         manifest = {
             "schema": MODULE.RUN_SCHEMA,
-            "protocol_id": "CDSC-1R3",
+            "protocol_id": "CDSC-1R4",
             "dataset": "synthetic",
             "sequence": "long_curve",
             "run_id": f"synthetic-{system.lower()}",

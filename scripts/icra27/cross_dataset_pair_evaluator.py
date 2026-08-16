@@ -41,7 +41,7 @@ CORE_SPEC.loader.exec_module(CORE)
 SCHEMA = "schurvio.icra27.cross_dataset.pair_result.v1"
 RUN_SCHEMA = "schurvio.icra27.cross_dataset.sequence_result.v1"
 MATRIX_SCHEMA = "schurvio.icra27.cross_dataset_matrix.v1"
-EXPECTED_PROTOCOL_ID = "CDSC-1R3"
+EXPECTED_PROTOCOL_ID = "CDSC-1R4"
 SYSTEMS = ("U0", "S1")
 ELIGIBLE_STATUSES = {"COMPLETED", "COMPLETED_WITH_TEARDOWN_DEFECT"}
 MINIMUM_COMMON_POSES = 100

@@ -1,10 +1,10 @@
 # Cross-dataset U0--S1 system comparison protocol
 
-- Protocol ID: `CDSC-1R3`
+- Protocol ID: `CDSC-1R4`
 - Status: **PROSPECTIVE_NOT_RUN**
-- Frozen on: 2026-08-16, before the first CDSC-1R3 estimator attempt
-- Restart lineage: supersedes the stopped `CDSC-1`, `CDSC-1R1`, and
-  `CDSC-1R2` tooling campaigns described below
+- Frozen on: 2026-08-16, before the first CDSC-1R4 estimator attempt
+- Restart lineage: supersedes the stopped `CDSC-1`, `CDSC-1R1`, `CDSC-1R2`,
+  and `CDSC-1R3` tooling campaigns described below
 - Systems: pinned stock OpenVINS `U0` and frozen SchurVIO-Lite `S1`
 - Datasets: EuRoC MAV, every runnable local TUM-VI bag, and fresh KAIST-11
 - Primary question: post-initialization passage robustness
@@ -58,7 +58,7 @@ It contains nine closed scored manifests and three closed pair manifests:
 Every file listed in the twelve published `SHA256SUMS` sets passes its recorded
 digest. The R1 run trees nevertheless contain ROS-generated, unchecksummed
 `ros-logs/latest` convenience symlinks, so they do not satisfy the final
-exact-membership closure now enforced in R3 section 10. There are no capture
+exact-membership closure now enforced in R4 section 10. There are no capture
 artifacts. The order-5 S1 directory was interrupted externally after estimator
 output but before `sequence_result.json`, TUM conversion, checksum closure, or
 a campaign receipt; it is unclosed diagnostic material and not estimator
@@ -137,6 +137,49 @@ protocol and tooling are committed, tagged, clean, and revalidated. U0 and S1
 source, binaries, configs, inputs, matrix order, and scientific acceptance
 rules remain unchanged.
 
+### 0.4 Stopped `CDSC-1R3` KAIST-census campaign
+
+The `CDSC-1R3` tooling freeze at commit
+`380510baa45855111b2172cd28d63d697af08269`, tree
+`991107e9fec429b47dea224e1e8cc6a5b179d90a`, used protocol SHA-256
+`a26678bb7597bf520695e906927674392ce7f98dd282993d9a88f4452a39dff8`
+and matrix SHA-256
+`fd4411b7fb5cbd1b62882f929591f37114d06d1fc26d5fd20ff1dc39f04c8708`.
+Its append-only artifact root is
+`/home/moksh/schurvio-icra27-artifacts/cross-dataset-system-comparison/cdsc1r3-20260816T155623Z`.
+It contains 29 sequence manifests, 12 pair manifests, and three TUM-VI
+reference-extraction manifests. All 722 entries in the 44 published
+`SHA256SUMS` sets verify. The root contains zero symlinks and zero capture
+attempts.
+
+All 28 generic EuRoC/TUM-VI estimator cells closed and satisfy the full
+post-initialization passage rule: both U0 and S1 on each of the fourteen
+generic sequences. Twelve eligible pair evaluations and all three TUM-VI
+reference extractions also closed. These results remain immutable descriptive
+audit evidence, but every R3 sequence, pair, reference, and metric is wholly
+excluded from every R4 denominator, comparison, and claim. None is reused.
+
+The campaign has exactly 45 control events. Event 45 is the final event and
+records order-15 `infinite/infinite_fast.bag` U0 as `INFRASTRUCTURE_FAILED`
+at stage `kaist_pair_census`, with `estimator_attempted=false`; its retained
+sequence manifest SHA-256 is
+`5a203d34a8b9c5f34b928a006d0f78f10e5b867f0c201f1856ac4cdd9cc300e9`.
+The final receipt SHA-256 is
+`2cc378033b22d68ee1c8d1e6163037263a2d5040ebc3f7cc6e7ca9e1a9992f38`
+and the corresponding state SHA-256 is
+`7f864ebd9d0f3052d6788028e2d347801dcc9e190f8deceadd64fc9d6484c1db`.
+No KAIST estimator was launched, and no later attempt exists.
+
+The R3 normalized KAIST census incorrectly required U0's raw pre-gate native
+dispatch timestamps to be strictly increasing. Stock U0 legitimately emits
+repeated raw timestamps, which the unchanged stock visualizer frequency gate
+drops before decode and estimator feed. Section 4 freezes the corrected
+two-layer semantics prospectively. This is an evaluation-harness correction:
+no U0 or S1 estimator source, binary, configuration, calibration, input,
+selector, or algorithm behavior changes. R4 reruns the complete 25-pair matrix
+from the beginning in a new artifact root after the R4 protocol and tooling
+are committed, tagged, clean, and revalidated.
+
 ## 1. Purpose and claim boundary
 
 This is a paired, whole-system comparison. It asks whether the frozen S1
@@ -204,7 +247,7 @@ validated KAIST recovery study:
 
 The reporting commit and tag may identify the completed prior study, but each
 run must bind the science source snapshot and compiled-input provenance above.
-No S1 source, threshold, or estimator behavior may change during CDSC-1R3.
+No S1 source, threshold, or estimator behavior may change during CDSC-1R4.
 
 S1 uses two deliberately different dataset configuration rules:
 
@@ -222,7 +265,7 @@ S1 uses two deliberately different dataset configuration rules:
    zero `[LONG-GAP-RECOVERY]` records. The existing EuRoC profile
    `config/euroc_mav/estimator_config_gate_d_schur_one_pass.yaml`, SHA-256
    `39279fd929ae91dc1ec63c44f17ff66c369dcd4c9f094ffbf7b95acae07f6d33`,
-   already demonstrates exactly this two-key delta. For CDSC-1R3, both datasets
+   already demonstrates exactly this two-key delta. For CDSC-1R4, both datasets
    use their byte-exact native config files and the two selectors are applied
    as typed parameters by the hash-frozen S1 launch file. The resolved
    parameter map and launch contract must prove that these are the only
@@ -232,7 +275,7 @@ S1 uses two deliberately different dataset configuration rules:
 
 2. **KAIST:** use the already-validated
    `config/kaist_vio_rotation_robustness/estimator_config.yaml` and its exact
-   calibration files. This is the only CDSC-1R3 dataset on which long-gap
+   calibration files. This is the only CDSC-1R4 dataset on which long-gap
    recovery is enabled.
 
 The recovery boundary is intentional. The frozen recovery implementation and
@@ -240,7 +283,7 @@ runtime contract are KAIST pinhole/radtan, fixed-calibration evidence. Native
 EuRoC/TUM-VI configurations do not satisfy that contract; TUM-VI is
 equidistant and the native profiles enable online camera calibration. Enabling
 recovery there would be a new algorithm/configuration study and is forbidden
-in CDSC-1R3. In particular, the prior TUM-VI camera-conditioning profile is not
+in CDSC-1R4. In particular, the prior TUM-VI camera-conditioning profile is not
 eligible: it fixed calibration and set `max_slam: 0`, so it is neither native
 S1 nor capable of supplying C2's retained SLAM landmarks.
 
@@ -248,7 +291,7 @@ S1 nor capable of supplying C2's retained SLAM landmarks.
 
 All local candidates must be checked before any download. Exact bag size and
 the recorded checksum are verified first; a missing or irreparably corrupt
-candidate may be acquired only before the CDSC-1R3 input manifest is frozen.
+candidate may be acquired only before the CDSC-1R4 input manifest is frozen.
 No bag is overwritten. The tracked `project/datasets.yaml` TUM-VI entries are
 stale: they refer to old pending paths, while the three runnable bags are
 already present under `calibrated/512_16`.
@@ -361,13 +404,17 @@ timing/resource values are diagnostic only.
 
 ## 4. Native input delivery and recovery expectations
 
-The comparison preserves native delivery rather than forcing callback
-identity:
+The comparison preserves each system's raw native selector dispatches rather
+than forcing callback identity:
 
 - On EuRoC and TUM-VI, both serial runners use the inherited record-time
   stereo rule because the KAIST exact-header option is false.
-- On KAIST, U0 retains the upstream record-time `<20 ms` stereo rule and S1
-  retains its frozen exact-header seam.
+- On KAIST, raw U0 dispatches retain the upstream record-time `<20 ms` native
+  selector and raw S1 dispatches retain the frozen exact-header selector.
+
+Raw selector dispatches are not assumed to equal estimator-fed callbacks.
+Both systems subsequently apply their unchanged stock
+`ROS1Visualizer` camera-frequency gate before image decode and estimator feed.
 
 For EuRoC and TUM-VI, the full-bag record-time bounds are the minimum and
 maximum actual indexed message times across the bag, matching C++
@@ -433,6 +480,71 @@ strict. These are input-derived facts, not tuned thresholds. Every cell
 recomputes and records both populations from the live bag and config. A native
 pairing skip or visualizer frequency drop is a frozen system behavior, not an
 infrastructure or estimator failure.
+
+The KAIST census applies the same two-layer model independently to each native
+selector and serializes the normalized record as
+`schurvio.icra27.cross_dataset.kaist_pair_census.v2`. It reads the exact
+positive `track_frequency: 31.0` from each canonical KAIST config and projects
+the common stock gate with binary64 `ros::Time::toSec()` using the same strict
+expression above. Exact threshold equality is accepted, and the previous
+accepted timestamp is updated before decode, exactly as in the stock runtime.
+
+For both KAIST arms, raw and accepted ordered identities/timestamps receive
+separate order-sensitive digests. Every drop is retained in a complete ledger
+with its raw dispatch identity, ordinal, timestamp, previous accepted
+timestamp, threshold, delta, and reason. Only the gate-accepted population
+defines selected-input counts, first/final endpoints, gaps, recovery binding,
+tail coverage, and passage. Raw counts, extrema, adjacent equality/reversal
+counts, and digests remain diagnostic evidence. For S1, runtime serializer
+`queued_pairs` and `processed_pairs` must each equal the projected accepted
+count, `frequency_thinned_pairs` must equal the projected drop count, and
+`queued_pairs + frequency_thinned_pairs` must equal the raw exact-header
+count. The read-only preflight projection exactly matches those frozen S1
+runtime counters on all eleven bags; every fresh R4 S1 cell must re-establish
+the binding, and a mismatch fails closed.
+
+Before either lane may launch its first estimator, the campaign independently
+recomputes all 22 U0/S1 KAIST projections from the eleven live bags and their
+canonical configs. The order-sensitive compact preflight record (counts,
+accepted endpoints, accepted gaps, and raw/accepted callback digests) must have
+SHA-256
+`915d816de64a408d10c0e362dad1368454a7ba465c6dba1302d565de06efef4b`.
+This all-matrix gate is repeated by each individual run rather than replacing
+its per-cell census.
+
+Every KAIST run binds and rehashes before and after estimator execution both
+`cross_dataset_trial.py`, which implements the stock visualizer-gate
+projection/digests, and `rotation_robustness_trial.py`, which parses the S1
+runtime counters used by the exact population binding. The campaign consumer
+and final aggregator revalidate those identities; restoring a helper after a
+run cannot make intervening bytes eligible.
+
+The prospective exact 31 Hz projection over all eleven KAIST bags is:
+
+| Sequence | U0 raw -> accepted | U0 drops | S1 raw -> accepted | S1 drops |
+|---|---:|---:|---:|---:|
+| `infinite_fast` | 6,307 -> 5,444 | 863 | 6,335 -> 5,471 | 864 |
+| `square_fast` | 4,338 -> 3,660 | 678 | 4,352 -> 3,670 | 682 |
+| `square` | 4,812 -> 4,089 | 723 | 4,821 -> 4,102 | 719 |
+| `circle_head` | 4,437 -> 3,766 | 671 | 4,462 -> 3,782 | 680 |
+| `rotation` | 4,671 -> 3,898 | 773 | 4,687 -> 3,920 | 767 |
+| `infinite` | 4,456 -> 3,841 | 615 | 4,476 -> 3,854 | 622 |
+| `square_head` | 8,346 -> 7,051 | 1,295 | 8,377 -> 7,078 | 1,299 |
+| `circle` | 4,736 -> 4,024 | 712 | 4,761 -> 4,048 | 713 |
+| `rotation_fast` | 3,745 -> 3,169 | 576 | 3,760 -> 3,182 | 578 |
+| `circle_fast` | 4,508 -> 3,906 | 602 | 4,522 -> 3,923 | 599 |
+| `infinite_head` | 4,740 -> 4,088 | 652 | 4,757 -> 4,104 | 653 |
+| **Total** | **55,096 -> 46,936** | **8,160** | **55,310 -> 47,134** | **8,176** |
+
+U0 has 50 raw adjacent-equal timestamps across nine of eleven bags and zero
+raw reversals. S1 has zero raw adjacent equality and zero raw reversals. Every
+accepted stream is strictly increasing, and U0 and S1 have identical accepted
+first and final timestamps on every bag. In both arms, `infinite` is the only
+sequence whose raw terminal callback is dropped; its accepted terminal is
+exactly 31,813,560 ns earlier than its raw terminal. `rotation` is the only
+sequence containing a gate-accepted input gap greater than 0.20 s. These are
+input-derived preflight facts, not tuned thresholds or estimator outcomes;
+every fresh U0 and S1 cell recomputes and binds its own live population.
 
 The expected S1 recovery evidence is fixed:
 
@@ -676,6 +788,9 @@ absence, manifest, and checksums. Finalized attempt directories are never
 overwritten. Git tracks this protocol, small indices, reports, and small
 figures; large raw artifacts remain checksum-bound outside Git.
 
+Every active run ID begins with `cdsc1r4-`. R4 may use only a new timestamped
+root; no stopped-campaign directory may be resumed, amended, or imported.
+
 ROS may create the run-owned convenience symlink `ros-logs/latest`. After all
 runtime services close and before publishing `sequence_result.json` and
 `SHA256SUMS`, the runner first proves its target is a retained directory inside
@@ -743,4 +858,4 @@ It must name the datasets, state that corridor4/outdoors4 lack accuracy scores,
 and preserve strict process-health defects. “S1 is more accurate,” “Schur
 caused the improvement,” “S1 tracked every dataset from the beginning,” and
 general robustness/superiority claims require separate evidence and are not
-authorized by CDSC-1R3.
+authorized by CDSC-1R4.

@@ -900,9 +900,9 @@ def validate_canonical_paths_and_hashes(
     if launch != expected_launch:
         raise TrialError("launch is not the canonical {} path".format(system))
     if protocol != CANONICAL_PROTOCOL.resolve(strict=True):
-        raise TrialError("protocol is not the canonical CDSC-1R3 path")
+        raise TrialError("protocol is not the canonical CDSC-1R4 path")
     if matrix != CANONICAL_MATRIX.resolve(strict=True):
-        raise TrialError("matrix is not the canonical CDSC-1R3 path")
+        raise TrialError("matrix is not the canonical CDSC-1R4 path")
     config_identity = file_identity(config)
     launch_identity = file_identity(launch)
     if config_identity["sha256"] != DATASET_CONFIG_SHA256[dataset]:

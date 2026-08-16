@@ -1,5 +1,5 @@
 #!/usr/bin/python3.8
-"""Resume-safe CDSC-1R3 U0/S1 campaign orchestrator.
+"""Resume-safe CDSC-1R4 U0/S1 campaign orchestrator.
 
 The estimator-facing runners remain the sole owners of a trial directory.  This
 driver only chooses the frozen matrix order, launches a runner from the correct
@@ -39,7 +39,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 PYTHON = Path("/usr/bin/python3.8")
 BASH = Path("/bin/bash")
-PROTOCOL_ID = "CDSC-1R3"
+PROTOCOL_ID = "CDSC-1R4"
 PROTOCOL_FILE = REPO_ROOT / "docs" / "icra27" / "CROSS_DATASET_SYSTEM_COMPARISON_PROTOCOL.md"
 MATRIX_FILE = REPO_ROOT / "project" / "icra27_cross_dataset_matrix.yaml"
 
@@ -78,6 +78,8 @@ KAIST_CONFIG = {
 
 RUN_SCHEMA = "schurvio.icra27.cross_dataset.sequence_result.v1"
 PAIR_SCHEMA = "schurvio.icra27.cross_dataset.pair_result.v1"
+KAIST_CENSUS_SCHEMA = "schurvio.icra27.cross_dataset.kaist_pair_census.v2"
+KAIST_FULL_CENSUS_SCHEMA = "schurvio.icra27.kaist_pairing_census.v1"
 TUM_REFERENCE_SCHEMA = "schurvio.icra27.tum_vi_reference_extract.v1"
 MATRIX_SCHEMA = "schurvio.icra27.cross_dataset_matrix.v1"
 EVENT_SCHEMA = "schurvio.icra27.cross_dataset.campaign_event.v1"
@@ -144,6 +146,78 @@ EXPECTED_ROWS: Tuple[Tuple[str, str, float], ...] = (
     ("kaist_vio", "rotation/rotation_fast.bag", 0.0),
     ("kaist_vio", "circle/circle_fast.bag", 0.0),
     ("kaist_vio", "infinite/infinite_head.bag", 0.0),
+)
+
+# Frozen, read-only projection of the exact estimator-facing KAIST callback
+# populations.  Each tuple is raw dispatch count, gate-accepted count,
+# frequency-drop count, first accepted camera-header nanoseconds, last accepted
+# camera-header nanoseconds, and the exact accepted >0.20 s gap endpoint pairs.
+# The accompanying frozen record digest additionally binds both ordered
+# raw/accepted callback digests.
+EXPECTED_KAIST_GATE_POPULATIONS: Mapping[
+    str, Mapping[str, Tuple[int, int, int, int, int, Tuple[Tuple[int, int], ...]]]
+] = {
+    "infinite/infinite_fast.bag": {
+        "U0": (6307, 5444, 863, 1598871941366774760, 1598872152875608572, ()),
+        "S1": (6335, 5471, 864, 1598871941366774760, 1598872152875608572, ()),
+    },
+    "square/square_fast.bag": {
+        "U0": (4338, 3660, 678, 1599132677029715590, 1599132822230981657, ()),
+        "S1": (4352, 3670, 682, 1599132677029715590, 1599132822230981657, ()),
+    },
+    "square/square.bag": {
+        "U0": (4812, 4089, 723, 1599132361270392782, 1599132521949611397, ()),
+        "S1": (4821, 4102, 719, 1599132361270392782, 1599132521949611397, ()),
+    },
+    "circle/circle_head.bag": {
+        "U0": (4437, 3766, 671, 1598871243198335600, 1598871392076656683, ()),
+        "S1": (4462, 3782, 680, 1598871243198335600, 1598871392076656683, ()),
+    },
+    "rotation/rotation.bag": {
+        "U0": (
+            4671,
+            3898,
+            773,
+            1599131118058088320,
+            1599131288008853966,
+            ((1599131266390101559, 1599131279804864812),),
+        ),
+        "S1": (
+            4687,
+            3920,
+            767,
+            1599131118058088320,
+            1599131288008853966,
+            ((1599131266390101559, 1599131279832098734),),
+        ),
+    },
+    "infinite/infinite.bag": {
+        "U0": (4456, 3841, 615, 1598871591153193119, 1598871740590119893, ()),
+        "S1": (4476, 3854, 622, 1598871591153193119, 1598871740590119893, ()),
+    },
+    "square/square_head.bag": {
+        "U0": (8346, 7051, 1295, 1599132943663684321, 1599133223160248982, ()),
+        "S1": (8377, 7078, 1299, 1599132943663684321, 1599133223160248982, ()),
+    },
+    "circle/circle.bag": {
+        "U0": (4736, 4024, 712, 1598870181880224435, 1598870340716870986, ()),
+        "S1": (4761, 4048, 713, 1598870181880224435, 1598870340716870986, ()),
+    },
+    "rotation/rotation_fast.bag": {
+        "U0": (3745, 3169, 576, 1599131363257816311, 1599131488634830502, ()),
+        "S1": (3760, 3182, 578, 1599131363257816311, 1599131488634830502, ()),
+    },
+    "circle/circle_fast.bag": {
+        "U0": (4508, 3906, 602, 1598870816620848170, 1598870967371229865, ()),
+        "S1": (4522, 3923, 599, 1598870816620848170, 1598870967371229865, ()),
+    },
+    "infinite/infinite_head.bag": {
+        "U0": (4740, 4088, 652, 1598872236838785409, 1598872395623072618, ()),
+        "S1": (4757, 4104, 653, 1598872236838785409, 1598872395623072618, ()),
+    },
+}
+EXPECTED_KAIST_GATE_PREFLIGHT_SHA256 = (
+    "915d816de64a408d10c0e362dad1368454a7ba465c6dba1302d565de06efef4b"
 )
 
 
@@ -356,7 +430,7 @@ def row_key(row: MatrixRow) -> str:
 
 def run_location(root: Path, lane: str, row: MatrixRow, system: str) -> RunLocation:
     key = row_key(row)
-    run_id = "cdsc1r3-{:02d}-{}-{}-{}-a1".format(
+    run_id = "cdsc1r4-{:02d}-{}-{}-{}-a1".format(
         row.order, safe_sequence(row.sequence), system.lower(), lane
     )
     output_root = root / lane / key / system
@@ -393,7 +467,7 @@ def load_matrix(path: Path, require_canonical: bool = True) -> Tuple[MatrixRow, 
     except OSError as exc:
         raise CampaignError("campaign matrix does not resolve") from exc
     if require_canonical and resolved != MATRIX_FILE.resolve(strict=True):
-        raise CampaignError("campaign matrix is not the canonical CDSC-1R3 path")
+        raise CampaignError("campaign matrix is not the canonical CDSC-1R4 path")
     try:
         value = yaml.load(resolved.read_text(encoding="utf-8"), Loader=_UniqueLoader)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
@@ -513,7 +587,7 @@ def sourced_command(setup: Path, command: Sequence[str]) -> List[str]:
         "--norc",
         "-c",
         'source "$1" || exit $?; shift; exec "$@"',
-        "cdsc1r3-source",
+        "cdsc1r4-source",
         str(setup),
         *[str(item) for item in command],
     ]
@@ -820,6 +894,260 @@ def _validate_capture_linkage(
         raise CampaignError("capture outcome lacks exact scored linkage")
 
 
+def _validate_kaist_census_evidence(
+    result: Mapping[str, Any],
+    run_directory: Path,
+    checksummed_paths: Sequence[str],
+    system: str,
+) -> None:
+    inputs = result.get("inputs")
+    after = result.get("input_identities_after")
+    if not isinstance(inputs, Mapping) or not isinstance(after, Mapping):
+        raise CampaignError("KAIST input pre/postflight identities are absent")
+    for name, path in (
+        ("visualizer_gate_projection_module", GENERIC_RUNNER),
+        ("runtime_summary_parser_module", SCRIPT_DIR / "rotation_robustness_trial.py"),
+    ):
+        live = file_identity(path)
+        if (
+            not _same_identity(inputs.get(name), live, name + " preflight")
+            or not _same_identity(after.get(name), live, name + " postflight")
+        ):
+            raise CampaignError("KAIST scientific helper identity drift: {}".format(name))
+
+    records: Dict[str, Mapping[str, Any]] = {}
+    values: Dict[str, Mapping[str, Any]] = {}
+    for name, relative in (
+        ("native_pair_census", "diagnostics/native_pair_census.json"),
+        ("kaist_pairing_census", "diagnostics/kaist_pairing_census.json"),
+    ):
+        recorded = result.get(name)
+        _validate_identity_record(recorded, name)
+        path = run_directory / relative
+        live = file_identity(path)
+        if not _same_identity(recorded, live, name):
+            raise CampaignError("{} identity differs from live bytes".format(name))
+        if relative not in checksummed_paths:
+            raise CampaignError("{} is absent from checksum closure".format(name))
+        value, loaded_identity = load_json(path, name)
+        if not _same_identity(live, loaded_identity, name + " loaded identity"):
+            raise CampaignError("{} changed while being validated".format(name))
+        records[name] = live
+        values[name] = value
+
+    normalized = values["native_pair_census"]
+    full = values["kaist_pairing_census"]
+    if (
+        normalized.get("schema") != KAIST_CENSUS_SCHEMA
+        or normalized.get("system") != system
+        or full.get("schema") != KAIST_FULL_CENSUS_SCHEMA
+    ):
+        raise CampaignError("KAIST census schema/system binding mismatch")
+    interval = normalized.get("input_interval")
+    gate = normalized.get("visualizer_track_frequency_gate")
+    config = result.get("config_contract")
+    full_bag = full.get("bag")
+    full_topics = full.get("topics")
+    full_census = full.get("census")
+    full_bounds = full.get("selection_bounds")
+    if not all(
+        isinstance(item, Mapping)
+        for item in (
+            interval,
+            gate,
+            config,
+            full_bag,
+            full_topics,
+            full_census,
+            full_bounds,
+        )
+    ):
+        raise CampaignError("KAIST census lacks interval/gate/config evidence")
+    if not _same_identity(full_bag, inputs.get("bag"), "KAIST full census bag"):
+        raise CampaignError("KAIST full census bag differs from estimator input")
+    expected_topics = {
+        "camera0": "/turnsafe/kaist/infra1/image_raw",
+        "camera1": "/turnsafe/kaist/infra2/image_raw",
+        "imu": "/mavros/imu/data",
+    }
+    if set(full_topics) != set(expected_topics) or any(
+        not isinstance(full_topics[name], Mapping)
+        or full_topics[name].get("name") != topic
+        for name, topic in expected_topics.items()
+    ):
+        raise CampaignError("KAIST full census topic binding mismatch")
+    if dict(interval) != result.get("input_interval"):
+        raise CampaignError("KAIST census interval differs from sequence result")
+    config_frequency = config.get("track_frequency_hz")
+    gate_frequency = gate.get("track_frequency_hz")
+    if (
+        config.get("track_frequency_source") != "canonical_kaist_config"
+        or gate.get("track_frequency_source") != "canonical_dataset_config"
+        or isinstance(config_frequency, bool)
+        or not isinstance(config_frequency, (int, float))
+        or isinstance(gate_frequency, bool)
+        or not isinstance(gate_frequency, (int, float))
+        or not math.isfinite(float(config_frequency))
+        or not math.isfinite(float(gate_frequency))
+        or float(config_frequency) != float(gate_frequency)
+        or float(gate_frequency) != 31.0
+    ):
+        raise CampaignError("KAIST visualizer gate frequency binding mismatch")
+
+    integer_fields = (
+        interval.get("raw_serial_dispatch_pair_count"),
+        interval.get("selected_pair_count"),
+        interval.get("visualizer_frequency_dropped_pair_count"),
+        gate.get("raw_serial_dispatch_count"),
+        gate.get("accepted_visualizer_callback_count"),
+        gate.get("frequency_dropped_dispatch_count"),
+    )
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in integer_fields):
+        raise CampaignError("KAIST visualizer gate counts are not integers")
+    raw_count, accepted_count, dropped_count, gate_raw, gate_accepted, gate_dropped = (
+        int(value) for value in integer_fields
+    )
+    selector_contract = {
+        "U0": {
+            "source": "upstream_native_record_time_first_forward_stereo",
+            "count": "u0_native_pair_count",
+            "first": "u0_first_selected_header_stamp_ns",
+            "last": "u0_last_selected_header_stamp_ns",
+            "bounds": "u0_native",
+        },
+        "S1": {
+            "source": "frozen_s1_exact_header_stereo",
+            "count": "s1_exact_pair_count",
+            "first": "s1_first_selected_header_stamp_ns",
+            "last": "s1_last_selected_header_stamp_ns",
+            "bounds": "s1_exact_header",
+        },
+    }[system]
+    selector_bounds = full_bounds.get(selector_contract["bounds"])
+    expected_delivery = (
+        selector_contract["source"] + "_plus_stock_visualizer_frequency_gate"
+    )
+    if (
+        not isinstance(selector_bounds, Mapping)
+        or normalized.get("delivery") != expected_delivery
+        or interval.get("source") != expected_delivery
+        or interval.get("selector_source") != selector_contract["source"]
+        or full_census.get(selector_contract["count"]) != raw_count
+        or selector_bounds.get("pair_count") != raw_count
+        or full_census.get(selector_contract["first"])
+        != interval.get("first_selected_input_timestamp_ns")
+        or selector_bounds.get("first_camera0_header_stamp_ns")
+        != interval.get("first_selected_input_timestamp_ns")
+        or full_census.get(selector_contract["last"])
+        != gate.get("raw_final_camera_timestamp_ns")
+        or selector_bounds.get("last_camera0_header_stamp_ns")
+        != gate.get("raw_final_camera_timestamp_ns")
+    ):
+        raise CampaignError("KAIST raw selector/gate population join mismatch")
+    dropped = gate.get("dropped_dispatches")
+    if (
+        raw_count <= 0
+        or accepted_count <= 0
+        or dropped_count < 0
+        or raw_count != accepted_count + dropped_count
+        or (raw_count, accepted_count, dropped_count)
+        != (gate_raw, gate_accepted, gate_dropped)
+        or not isinstance(dropped, list)
+        or len(dropped) != dropped_count
+    ):
+        raise CampaignError("KAIST visualizer gate population does not close")
+    if any(
+        not isinstance(record, Mapping)
+        or record.get("reason")
+        != "timestamp_less_than_previous_accepted_plus_inverse_track_frequency"
+        for record in dropped
+    ):
+        raise CampaignError("KAIST visualizer drop ledger policy mismatch")
+    for name in (
+        "raw_serial_dispatch_sequence_sha256",
+        "accepted_visualizer_callback_sequence_sha256",
+    ):
+        if SHA256_RE.fullmatch(str(gate.get(name, ""))) is None:
+            raise CampaignError("KAIST visualizer gate digest is invalid")
+    if (
+        gate.get("accepted_camera_timestamps_strictly_increasing") is not True
+        or gate.get("accepted_final_camera_timestamp_ns")
+        != gate.get("accepted_maximum_camera_timestamp_ns")
+        or gate.get("accepted_final_camera_timestamp_ns")
+        != interval.get("last_selected_input_timestamp_ns")
+        or interval.get("first_selected_input_timestamp_ns") is None
+        or interval.get("last_selected_input_timestamp_ns") is None
+    ):
+        raise CampaignError("KAIST accepted callback endpoint contract mismatch")
+    if gate.get("raw_adjacent_reversed_camera_timestamp_count") != 0:
+        raise CampaignError("KAIST raw callback order reverses")
+    if system == "S1" and gate.get("raw_adjacent_equal_camera_timestamp_count") != 0:
+        raise CampaignError("S1 exact-header raw callbacks are not strict")
+
+    gaps = interval.get("gaps_over_threshold")
+    if not isinstance(gaps, list):
+        raise CampaignError("KAIST accepted input gaps are malformed")
+    for gap in gaps:
+        if not isinstance(gap, Mapping):
+            raise CampaignError("KAIST accepted input gap is not an object")
+        start_ns = gap.get("start_timestamp_ns")
+        end_ns = gap.get("end_timestamp_ns")
+        if (
+            isinstance(start_ns, bool)
+            or not isinstance(start_ns, int)
+            or isinstance(end_ns, bool)
+            or not isinstance(end_ns, int)
+            or end_ns <= start_ns
+        ):
+            raise CampaignError("KAIST accepted input gap endpoints are malformed")
+        start_s = (start_ns // 1_000_000_000) + (start_ns % 1_000_000_000) * 1.0e-9
+        end_s = (end_ns // 1_000_000_000) + (end_ns % 1_000_000_000) * 1.0e-9
+        if (
+            gap.get("start_timestamp_s") != start_s
+            or gap.get("end_timestamp_s") != end_s
+            or gap.get("duration_s") != end_s - start_s
+            or end_s - start_s <= 0.20
+        ):
+            raise CampaignError("KAIST accepted input gap arithmetic mismatch")
+
+    if (
+        normalized.get("static_census_schema") != full.get("schema")
+        or normalized.get("static_census") != full.get("census")
+        or normalized.get("selection_bounds") != full.get("selection_bounds")
+        or normalized.get("pair_sets") != full.get("pair_sets")
+        or normalized.get("u0_native_diagnostics") != full.get("u0_native_diagnostics")
+    ):
+        raise CampaignError("KAIST normalized census does not bind the full raw census")
+
+    if system == "S1" and result.get("status") in ELIGIBLE_STATUSES:
+        runtime = result.get("pairing_runtime")
+        binding = (
+            runtime.get("visualizer_gate_binding")
+            if isinstance(runtime, Mapping)
+            else None
+        )
+        accepted_input = (
+            binding.get("accepted_input") if isinstance(binding, Mapping) else None
+        )
+        expected_accepted_input = {
+            "first_header_stamp_ns": interval.get("first_selected_input_timestamp_ns"),
+            "last_header_stamp_ns": interval.get("last_selected_input_timestamp_ns"),
+            "callback_count": accepted_count,
+            "ordered_callback_sequence_sha256": gate.get(
+                "accepted_visualizer_callback_sequence_sha256"
+            ),
+        }
+        if (
+            not isinstance(runtime, Mapping)
+            or runtime.get("status") != "AVAILABLE"
+            or not isinstance(binding, Mapping)
+            or binding.get("status") != "PASS"
+            or binding.get("runtime_matches_projected_visualizer_gate") is not True
+            or accepted_input != expected_accepted_input
+        ):
+            raise CampaignError("S1 runtime does not bind the accepted KAIST population")
+
+
 def validate_sequence_result(
     path: Path,
     row: MatrixRow,
@@ -901,6 +1229,13 @@ def validate_sequence_result(
         classification = "fatal"
     elif status == "INVALID_LINKAGE" and evidence_validity != "CAPTURE_LINK_INVALID":
         raise CampaignError("invalid capture linkage lacks its evidence classification")
+    if row.dataset == "kaist_vio" and classification in (
+        "retained_algorithm_outcome",
+        "retained_capture_link_mismatch",
+    ):
+        _validate_kaist_census_evidence(
+            value, run_directory, checksummed_paths, system
+        )
     close = value.get("estimator_close_receipt")
     if not isinstance(close, dict):
         raise CampaignError("sequence result lacks a close receipt")
@@ -1068,9 +1403,190 @@ def validate_static_inputs(
             _regular_required(_config_path(paths, row.dataset, system), "{} {} config".format(row.dataset, system))
             _regular_required(_launch_path(paths, row.dataset, system), "{} {} launch".format(row.dataset, system))
     protocol_text = paths.protocol.read_text(encoding="utf-8", errors="strict")
-    if "PROSPECTIVE_NOT_RUN" not in protocol_text or "Protocol ID: `CDSC-1R3`" not in protocol_text:
+    if "PROSPECTIVE_NOT_RUN" not in protocol_text or "Protocol ID: `CDSC-1R4`" not in protocol_text:
         raise CampaignError("protocol identity/freeze marker is absent")
     return {label: file_identity(path) for label, path in required.items()}
+
+
+def _kaist_preflight_projection_digest(cells: Sequence[Mapping[str, Any]]) -> str:
+    payload = json.dumps(
+        list(cells),
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+    return sha256_bytes(payload)
+
+
+def validate_kaist_gate_preflight_record(
+    cells: Sequence[Mapping[str, Any]],
+    expected_record_sha256: Optional[str] = EXPECTED_KAIST_GATE_PREFLIGHT_SHA256,
+) -> Mapping[str, Any]:
+    """Fail closed on the complete frozen 22-arm KAIST gate projection."""
+
+    if not isinstance(cells, Sequence) or isinstance(cells, (str, bytes)):
+        raise CampaignError("KAIST gate preflight cells are malformed")
+    expected_keys = [
+        (sequence, system)
+        for sequence in EXPECTED_KAIST_GATE_POPULATIONS
+        for system in SYSTEMS
+    ]
+    observed_keys: List[Tuple[str, str]] = []
+    normalized: List[Mapping[str, Any]] = []
+    for cell in cells:
+        if not isinstance(cell, Mapping):
+            raise CampaignError("KAIST gate preflight cell is not an object")
+        sequence = cell.get("sequence")
+        system = cell.get("system")
+        if not isinstance(sequence, str) or system not in SYSTEMS:
+            raise CampaignError("KAIST gate preflight cell identity is malformed")
+        observed_keys.append((sequence, str(system)))
+        expected = EXPECTED_KAIST_GATE_POPULATIONS.get(sequence, {}).get(str(system))
+        if expected is None:
+            raise CampaignError("unexpected KAIST gate preflight cell")
+        gaps_raw = cell.get("accepted_gaps_over_threshold_ns")
+        if not isinstance(gaps_raw, list):
+            raise CampaignError("KAIST gate preflight gap list is malformed")
+        gaps: List[Tuple[int, int]] = []
+        for gap in gaps_raw:
+            if (
+                not isinstance(gap, list)
+                or len(gap) != 2
+                or any(isinstance(value, bool) or not isinstance(value, int) for value in gap)
+            ):
+                raise CampaignError("KAIST gate preflight gap endpoint is malformed")
+            if gap[1] <= gap[0]:
+                raise CampaignError("KAIST gate preflight gap endpoint order is invalid")
+            gaps.append((int(gap[0]), int(gap[1])))
+        observed = (
+            cell.get("raw_dispatch_count"),
+            cell.get("accepted_callback_count"),
+            cell.get("frequency_dropped_count"),
+            cell.get("first_accepted_camera_timestamp_ns"),
+            cell.get("last_accepted_camera_timestamp_ns"),
+            tuple(gaps),
+        )
+        if observed != expected:
+            raise CampaignError(
+                "KAIST gate preflight differs for {} {}: observed={} expected={}".format(
+                    sequence, system, observed, expected
+                )
+            )
+        for name in (
+            "raw_dispatch_sequence_sha256",
+            "accepted_callback_sequence_sha256",
+        ):
+            if SHA256_RE.fullmatch(str(cell.get(name, ""))) is None:
+                raise CampaignError("KAIST gate preflight digest is malformed")
+        if cell.get("track_frequency_hz") != 31.0:
+            raise CampaignError("KAIST gate preflight frequency drift")
+        normalized.append(dict(cell))
+    if observed_keys != expected_keys or len(set(observed_keys)) != len(expected_keys):
+        raise CampaignError("KAIST gate preflight does not contain the frozen 22 arms")
+    projection_sha256 = _kaist_preflight_projection_digest(normalized)
+    if (
+        expected_record_sha256 is not None
+        and projection_sha256 != expected_record_sha256
+    ):
+        raise CampaignError(
+            "KAIST gate preflight record digest drift: observed={} expected={}".format(
+                projection_sha256, expected_record_sha256
+            )
+        )
+    return {
+        "schema": "schurvio.icra27.cross_dataset.kaist_gate_preflight.v1",
+        "protocol_id": PROTOCOL_ID,
+        "status": "PASS",
+        "all_11_sequences_both_arms_projected_before_estimator_launch": True,
+        "cell_count": len(normalized),
+        "track_frequency_hz": 31.0,
+        "projection_sha256": projection_sha256,
+        "cells": normalized,
+    }
+
+
+def preflight_all_kaist_gate_populations(
+    paths: RuntimePaths, rows: Sequence[MatrixRow]
+) -> Mapping[str, Any]:
+    """Read only all KAIST metadata and freeze estimator-facing populations."""
+
+    if str(SCRIPT_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPT_DIR))
+    try:
+        import cross_dataset_kaist_trial as kaist
+    except ImportError as exc:
+        raise CampaignError("cannot import the frozen KAIST runner for preflight") from exc
+    kaist_rows = [row for row in rows if row.dataset == "kaist_vio"]
+    if [row.sequence for row in kaist_rows] != list(EXPECTED_KAIST_GATE_POPULATIONS):
+        raise CampaignError("KAIST preflight matrix population/order drift")
+    cells: List[Mapping[str, Any]] = []
+    for row in kaist_rows:
+        bag = Path(str(row.bag["path"]))
+        for system in SYSTEMS:
+            try:
+                config = kaist.validate_config_contract(
+                    system, _config_path(paths, row.dataset, system)
+                )
+                normalized, _full, bag_identity = kaist.kaist_pair_census(
+                    system,
+                    bag,
+                    row.bag_start_seconds,
+                    -1.0,
+                    float(config["track_frequency_hz"]),
+                )
+            except Exception as exc:
+                raise CampaignError(
+                    "KAIST gate preflight failed for {} {}: {}".format(
+                        row.sequence, system, exc
+                    )
+                ) from exc
+            if (
+                str(Path(str(bag_identity.get("path"))).resolve(strict=True))
+                != str(Path(str(row.bag["path"])).resolve(strict=True))
+                or bag_identity.get("size_bytes") != row.bag.get("bytes")
+                or bag_identity.get("sha256") != row.bag.get("sha256")
+            ):
+                raise CampaignError("KAIST preflight bag identity differs from matrix")
+            interval = normalized.get("input_interval")
+            gate = normalized.get("visualizer_track_frequency_gate")
+            if not isinstance(interval, Mapping) or not isinstance(gate, Mapping):
+                raise CampaignError("KAIST preflight lacks interval/gate evidence")
+            gaps = interval.get("gaps_over_threshold")
+            if not isinstance(gaps, list):
+                raise CampaignError("KAIST preflight gap evidence is malformed")
+            cells.append(
+                {
+                    "sequence": row.sequence,
+                    "system": system,
+                    "track_frequency_hz": float(config["track_frequency_hz"]),
+                    "raw_dispatch_count": interval.get(
+                        "raw_serial_dispatch_pair_count"
+                    ),
+                    "accepted_callback_count": interval.get("selected_pair_count"),
+                    "frequency_dropped_count": interval.get(
+                        "visualizer_frequency_dropped_pair_count"
+                    ),
+                    "first_accepted_camera_timestamp_ns": interval.get(
+                        "first_selected_input_timestamp_ns"
+                    ),
+                    "last_accepted_camera_timestamp_ns": interval.get(
+                        "last_selected_input_timestamp_ns"
+                    ),
+                    "accepted_gaps_over_threshold_ns": [
+                        [gap.get("start_timestamp_ns"), gap.get("end_timestamp_ns")]
+                        for gap in gaps
+                        if isinstance(gap, Mapping)
+                    ],
+                    "raw_dispatch_sequence_sha256": gate.get(
+                        "raw_serial_dispatch_sequence_sha256"
+                    ),
+                    "accepted_callback_sequence_sha256": gate.get(
+                        "accepted_visualizer_callback_sequence_sha256"
+                    ),
+                }
+            )
+    return validate_kaist_gate_preflight_record(cells)
 
 
 def _subprocess_executor(command: Sequence[str]) -> CommandResult:
@@ -1309,7 +1825,7 @@ class Campaign:
 
     def validate_capture_prerequisites(self) -> Mapping[Tuple[int, str], ValidatedResult]:
         scored: Dict[Tuple[int, str], ValidatedResult] = {}
-        # CDSC-1R3 freezes the complete 50-cell scored lane before *any* capture
+        # CDSC-1R4 freezes the complete 50-cell scored lane before *any* capture
         # replay, even when this invocation selects only one dataset/range.
         for row in self.rows:
             for system in row.system_order:
@@ -1325,6 +1841,11 @@ class Campaign:
 
     def validate_only(self, enforce_static: bool = True) -> Mapping[str, Any]:
         static = validate_static_inputs(self.paths, self.selected, self.options.lane) if enforce_static else {}
+        kaist_preflight = (
+            preflight_all_kaist_gate_populations(self.paths, self.rows)
+            if enforce_static
+            else None
+        )
         git = self._check_git()
         existing: Dict[str, Any] = {}
         if self.options.lane == "capture":
@@ -1340,6 +1861,7 @@ class Campaign:
             "selected_orders": [row.order for row in self.selected],
             "lane": self.options.lane,
             "static_input_count": len(static),
+            "kaist_gate_preflight": kaist_preflight,
             "git": git,
             "existing": existing,
         }
@@ -1412,8 +1934,12 @@ class Campaign:
         return commands
 
     def run(self, enforce_static: bool = True) -> Mapping[str, Any]:
+        kaist_preflight = None
         if enforce_static:
             validate_static_inputs(self.paths, self.selected, self.options.lane)
+            kaist_preflight = preflight_all_kaist_gate_populations(
+                self.paths, self.rows
+            )
         git_identity_record = self._check_git()
         self.events = EventLog(self.options.artifact_root)
         self._append(
@@ -1424,6 +1950,7 @@ class Campaign:
                 "tooling_git": git_identity_record,
                 "matrix": file_identity(self.paths.matrix),
                 "protocol": file_identity(self.paths.protocol),
+                "kaist_gate_preflight": kaist_preflight,
             },
         )
         scored_prerequisites = (
@@ -1462,6 +1989,7 @@ class Campaign:
             "selected_orders": [row.order for row in self.selected],
             "results": completed,
             "capture_prerequisite_count": len(scored_prerequisites),
+            "kaist_gate_preflight": kaist_preflight,
         }
 
     def _run_cell(self, row: MatrixRow, system: str) -> ValidatedResult:

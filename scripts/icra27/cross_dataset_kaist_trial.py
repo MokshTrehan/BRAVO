@@ -1,5 +1,5 @@
 #!/usr/bin/python3.8
-"""Append-only fresh-KAIST adapter for the CDSC-1R3 U0/S1 comparison.
+"""Append-only fresh-KAIST adapter for the CDSC-1R4 U0/S1 comparison.
 
 This module deliberately does not alter either estimator.  U0 runs the pinned
 upstream executable, native KAIST configuration, and native record-time stereo
@@ -45,7 +45,7 @@ import rotation_robustness_trial as rotation  # noqa: E402
 
 SCHEMA = common.SCHEMA
 POST_PAIR_SCHEMA = "schurvio.icra27.cross_dataset.kaist_rotation_post_pair.v1"
-KAIST_CENSUS_SCHEMA = "schurvio.icra27.cross_dataset.kaist_pair_census.v1"
+KAIST_CENSUS_SCHEMA = "schurvio.icra27.cross_dataset.kaist_pair_census.v2"
 DATASET = "kaist_vio"
 SYSTEMS = common.SYSTEMS
 MODES = common.MODES
@@ -201,6 +201,15 @@ def validate_config_contract(system: str, config: Path) -> Dict[str, Any]:
     mapping, text = common._opencv_yaml_mapping(config)
     if mapping.get("use_stereo") is not True or mapping.get("max_cameras") != 2:
         raise TrialError("KAIST config no longer declares two-camera stereo")
+    raw_track_frequency = mapping.get("track_frequency")
+    if (
+        isinstance(raw_track_frequency, bool)
+        or not isinstance(raw_track_frequency, (int, float))
+    ):
+        raise TrialError("KAIST track_frequency must be numeric")
+    track_frequency_hz = float(raw_track_frequency)
+    if not math.isfinite(track_frequency_hz) or track_frequency_hz <= 0.0:
+        raise TrialError("KAIST track_frequency must be finite and positive")
     # The stock U0 file keeps an inline comment on its OpenCV YAML directive;
     # inspect the one Boolean key lexically without normalizing either file.
     enabled = common._strict_boolean_key(text, "long_gap_recovery_enabled", False)
@@ -228,6 +237,8 @@ def validate_config_contract(system: str, config: Path) -> Dict[str, Any]:
         "native_unmodified_upstream": system == "U0",
         "recovery_enabled": enabled,
         "s1_frozen_c2": system == "S1",
+        "track_frequency_hz": track_frequency_hz,
+        "track_frequency_source": "canonical_kaist_config",
         "dependencies": dependencies,
     }
 
@@ -289,9 +300,9 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
 
 def validate_canonical_campaign(protocol: Path, matrix: Path) -> Dict[str, Any]:
     if protocol != CANONICAL_PROTOCOL.resolve(strict=True):
-        raise TrialError("protocol is not the canonical CDSC-1R3 path")
+        raise TrialError("protocol is not the canonical CDSC-1R4 path")
     if matrix != CANONICAL_MATRIX.resolve(strict=True):
-        raise TrialError("matrix is not the canonical CDSC-1R3 path")
+        raise TrialError("matrix is not the canonical CDSC-1R4 path")
     return {"protocol": common.file_identity(protocol), "matrix": common.file_identity(matrix)}
 
 
@@ -305,7 +316,7 @@ def launch_arguments(
     run_dir: Path,
 ) -> List[str]:
     if bag_duration != -1.0:
-        raise TrialError("CDSC-1R3 KAIST must run from the frozen start to bag end")
+        raise TrialError("CDSC-1R4 KAIST must run from the frozen start to bag end")
     paths = {
         "state": run_dir / "trajectory" / "state_estimate.txt",
         "std": run_dir / "trajectory" / "state_deviation.txt",
@@ -438,44 +449,68 @@ def _selected_pairs(
 def _gap_records(timestamps_ns: Sequence[int]) -> List[Dict[str, float]]:
     return [
         {
-            "start_timestamp_s": left / 1.0e9,
-            "end_timestamp_s": right / 1.0e9,
-            "duration_s": (right - left) / 1.0e9,
+            "start_timestamp_ns": left,
+            "end_timestamp_ns": right,
+            "start_timestamp_s": pairing._cpp_ros_time_to_sec(left),
+            "end_timestamp_s": pairing._cpp_ros_time_to_sec(right),
+            "duration_s": (
+                pairing._cpp_ros_time_to_sec(right)
+                - pairing._cpp_ros_time_to_sec(left)
+            ),
         }
         for left, right in zip(timestamps_ns, timestamps_ns[1:])
-        if (right - left) / 1.0e9 > common.MAXIMUM_STATE_GAP_SECONDS
+        if (
+            pairing._cpp_ros_time_to_sec(right)
+            - pairing._cpp_ros_time_to_sec(left)
+            > common.MAXIMUM_STATE_GAP_SECONDS
+        )
     ]
 
 
 def kaist_pair_census(
-    system: str, bag: Path, bag_start: float, bag_duration: float
+    system: str,
+    bag: Path,
+    bag_start: float,
+    bag_duration: float,
+    track_frequency_hz: float,
 ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """Return normalized CDSC evidence, the full KAIST census, and bag identity."""
 
     if bag_start != 0.0 or bag_duration != -1.0:
-        raise TrialError("CDSC-1R3 KAIST census requires the complete adapted bag")
+        raise TrialError("CDSC-1R4 KAIST census requires the complete adapted bag")
     messages, bag_identity_raw, topic_identity = pairing.read_bag(
         bag, CAMERA0_TOPIC, CAMERA1_TOPIC, IMU_TOPIC
     )
     full = dict(pairing.build_census(messages, bag_identity_raw, topic_identity))
-    selected = list(_selected_pairs(system, messages))
-    if not selected:
+    raw_selected = tuple(_selected_pairs(system, messages))
+    if not raw_selected:
         raise TrialError("KAIST selected stereo stream is empty")
-    timestamps_ns = [item.camera_timestamp_ns for item in selected]
-    if any(right <= left for left, right in zip(timestamps_ns, timestamps_ns[1:])):
-        raise TrialError("KAIST selected callback timestamps are not strictly increasing")
-    source = (
+    accepted, visualizer_gate = common.apply_visualizer_track_frequency_gate(
+        raw_selected, track_frequency_hz
+    )
+    timestamps_ns = [int(item.camera_timestamp_ns) for item in accepted]
+    selector_source = (
         "upstream_native_record_time_first_forward_stereo"
         if system == "U0"
         else "frozen_s1_exact_header_stereo"
     )
+    source = selector_source + "_plus_stock_visualizer_frequency_gate"
     interval = {
         "source": source,
-        "first_selected_input_timestamp_s": timestamps_ns[0] / 1.0e9,
-        "last_selected_input_timestamp_s": timestamps_ns[-1] / 1.0e9,
+        "selector_source": selector_source,
+        "first_selected_input_timestamp_s": pairing._cpp_ros_time_to_sec(
+            timestamps_ns[0]
+        ),
+        "last_selected_input_timestamp_s": pairing._cpp_ros_time_to_sec(
+            timestamps_ns[-1]
+        ),
         "first_selected_input_timestamp_ns": timestamps_ns[0],
         "last_selected_input_timestamp_ns": timestamps_ns[-1],
         "selected_pair_count": len(timestamps_ns),
+        "raw_serial_dispatch_pair_count": len(raw_selected),
+        "visualizer_frequency_dropped_pair_count": visualizer_gate[
+            "frequency_dropped_dispatch_count"
+        ],
         "bag_view_start_record_timestamp_s": int(
             bag_identity_raw["first_filtered_record_stamp_ns"]
         )
@@ -490,6 +525,7 @@ def kaist_pair_census(
         "schema": KAIST_CENSUS_SCHEMA,
         "system": system,
         "delivery": source,
+        "visualizer_track_frequency_gate": visualizer_gate,
         "input_interval": interval,
         "static_census_schema": full.get("schema"),
         "static_census": full.get("census"),
@@ -505,6 +541,83 @@ def kaist_pair_census(
         "executable": False,
     }
     return normalized, full, bag_identity
+
+
+def validate_s1_visualizer_gate_runtime_binding(
+    summaries: Mapping[str, Any], census: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Bind S1's runtime queue counters to the projected 31 Hz population."""
+
+    if census.get("schema") != KAIST_CENSUS_SCHEMA or census.get("system") != "S1":
+        raise TrialError("S1 visualizer gate binding received the wrong census")
+    interval = census.get("input_interval")
+    enqueue_record = summaries.get("camera_enqueue")
+    enqueue = (
+        enqueue_record.get("counts")
+        if isinstance(enqueue_record, Mapping)
+        else None
+    )
+    if not isinstance(interval, Mapping) or not isinstance(enqueue, Mapping):
+        raise TrialError("S1 visualizer gate binding lacks interval/runtime counts")
+    expected = {
+        "queued_pairs": interval.get("selected_pair_count"),
+        "processed_pairs": interval.get("selected_pair_count"),
+        "frequency_thinned_pairs": interval.get(
+            "visualizer_frequency_dropped_pair_count"
+        ),
+        "raw_exact_header_pairs": interval.get("raw_serial_dispatch_pair_count"),
+    }
+    runtime_counts = {
+        "queued_pairs": enqueue.get("queued_pairs"),
+        "processed_pairs": enqueue.get("processed_pairs"),
+        "frequency_thinned_pairs": enqueue.get("frequency_thinned_pairs"),
+    }
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in (*expected.values(), *runtime_counts.values())
+    ):
+        raise TrialError("S1 visualizer gate binding counts are malformed")
+    observed = {
+        **runtime_counts,
+        "raw_exact_header_pairs": (
+            runtime_counts["queued_pairs"]
+            + runtime_counts["frequency_thinned_pairs"]
+        ),
+    }
+    mismatches = {
+        key: {"runtime": observed[key], "projected": value}
+        for key, value in expected.items()
+        if observed[key] != value
+    }
+    if mismatches:
+        raise TrialError(
+            "S1 runtime/projected visualizer gate mismatch: {}".format(mismatches)
+        )
+    return {
+        "status": "PASS",
+        "runtime_matches_projected_visualizer_gate": True,
+        "accepted_input": {
+            "first_header_stamp_ns": interval.get(
+                "first_selected_input_timestamp_ns"
+            ),
+            "last_header_stamp_ns": interval.get(
+                "last_selected_input_timestamp_ns"
+            ),
+            "callback_count": interval.get("selected_pair_count"),
+            "ordered_callback_sequence_sha256": census.get(
+                "visualizer_track_frequency_gate", {}
+            ).get("accepted_visualizer_callback_sequence_sha256"),
+        },
+        "projected": expected,
+        "runtime": observed,
+    }
+
+
+def _s1_pairing_runtime_evidence_observed(console_text: str) -> bool:
+    return bool(
+        rotation.SERIAL_SUMMARY_PREFIX in console_text
+        or rotation.ENQUEUE_SUMMARY_PREFIX in console_text
+    )
 
 
 def _clean_recovery_lines(text: str) -> Tuple[List[str], List[str]]:
@@ -826,7 +939,7 @@ def assess_kaist_output_coverage(
 def _start_geometry_recorder(
     run_dir: Path, environment: Mapping[str, str], system: str
 ) -> common.ManagedProcess:
-    recorder_name = "icra27_cdsc1r3_kaist_geometry_recorder"
+    recorder_name = "icra27_cdsc1r4_kaist_geometry_recorder"
     recorder = common.start_managed_process(
         "geometry_recorder",
         [
@@ -1172,7 +1285,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
     started = time.monotonic()
     result: Dict[str, Any] = {
         "schema": SCHEMA,
-        "adapter": "fresh_kaist_cdsc1r3",
+        "adapter": "fresh_kaist_cdsc1r4",
         "protocol_id": args.protocol_id,
         "run_id": args.run_id,
         "attempt_index": args.attempt_index,
@@ -1191,11 +1304,14 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         "run_directory": str(run_dir),
         "input_interval": {
             "source": None,
+            "selector_source": None,
             "first_selected_input_timestamp_s": None,
             "last_selected_input_timestamp_s": None,
             "first_selected_input_timestamp_ns": None,
             "last_selected_input_timestamp_ns": None,
             "selected_pair_count": None,
+            "raw_serial_dispatch_pair_count": None,
+            "visualizer_frequency_dropped_pair_count": None,
             "bag_view_start_record_timestamp_s": None,
             "bag_view_end_record_timestamp_s": None,
             "gaps_over_threshold": [],
@@ -1212,6 +1328,8 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             "converter": None,
             "pairing_census_tool": None,
             "runtime_identity_validator": None,
+            "visualizer_gate_projection_module": None,
+            "runtime_summary_parser_module": None,
             "config_dependencies": None,
         },
         "artifacts": initial_artifacts(args.system),
@@ -1290,6 +1408,12 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         runtime_identity_tool = common._regular_file(
             RUNTIME_IDENTITY_TOOL, "runtime identity validator"
         )
+        visualizer_gate_module = common._regular_file(
+            Path(common.__file__).resolve(), "visualizer gate projection module"
+        )
+        runtime_summary_module = common._regular_file(
+            Path(rotation.__file__).resolve(), "runtime summary parser module"
+        )
         input_paths = {
             "bag": bag,
             "config": config,
@@ -1301,6 +1425,8 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             "converter": converter,
             "pairing_census_tool": pairing_tool,
             "runtime_identity_validator": runtime_identity_tool,
+            "visualizer_gate_projection_module": visualizer_gate_module,
+            "runtime_summary_parser_module": runtime_summary_module,
         }
         for name, path in input_paths.items():
             if name != "bag":
@@ -1330,7 +1456,11 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
 
         stage = "kaist_pair_census"
         normalized_census, full_census, bag_identity = kaist_pair_census(
-            args.system, bag, args.bag_start, args.bag_duration
+            args.system,
+            bag,
+            args.bag_start,
+            args.bag_duration,
+            float(config_contract["track_frequency_hz"]),
         )
         common.validate_matrix_bag_identity(campaign, bag_identity)
         result["inputs"]["bag"] = bag_identity
@@ -1493,18 +1623,30 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             try:
                 summaries = rotation.parse_runtime_summaries(console_text)
                 binding = rotation.bind_pairing_census(summaries, full_census)
+                gate_binding = validate_s1_visualizer_gate_runtime_binding(
+                    summaries, normalized_census
+                )
                 result["pairing_runtime"] = {
                     "summaries": summaries,
-                    "binding": binding,
+                    "raw_selector_binding": binding,
+                    "visualizer_gate_binding": gate_binding,
                     "status": "AVAILABLE",
                 }
-                runtime_pairing_valid = binding.get("status") == "AVAILABLE"
+                runtime_pairing_valid = bool(
+                    binding.get("status") == "AVAILABLE"
+                    and gate_binding.get("status") == "PASS"
+                )
             except KAIST_VALIDATION_ERRORS as exc:
                 result["pairing_runtime"] = {
                     "status": "UNAVAILABLE",
                     "reason": str(exc),
                     "static_census_retained": True,
+                    "runtime_evidence_observed": (
+                        _s1_pairing_runtime_evidence_observed(console_text)
+                    ),
                 }
+                if _s1_pairing_runtime_evidence_observed(console_text):
+                    runtime_contract_valid = False
                 common._record_error(result, "pairing_runtime", exc)
         else:
             result["pairing_runtime"] = {
@@ -1967,7 +2109,7 @@ def _load_result(
         raise TrialError("{} sequence result is not an object".format(system))
     expected = {
         "schema": SCHEMA,
-        "protocol_id": "CDSC-1R3",
+        "protocol_id": "CDSC-1R4",
         "dataset": DATASET,
         "sequence": "rotation/rotation.bag",
         "system": system,
@@ -2085,13 +2227,13 @@ def _s1_rotation_artifact_precondition(
 def _matrix_rotation_declared_binding(matrix_path: Path) -> Dict[str, Any]:
     """Bind the rotation row without resolving or opening its ground truth."""
 
-    matrix_path = common._regular_file(matrix_path, "CDSC-1R3 matrix")
+    matrix_path = common._regular_file(matrix_path, "CDSC-1R4 matrix")
     if matrix_path != CANONICAL_MATRIX.resolve(strict=True):
-        raise TrialError("post-pair matrix is not the canonical CDSC-1R3 path")
+        raise TrialError("post-pair matrix is not the canonical CDSC-1R4 path")
     try:
         matrix = yaml.safe_load(matrix_path.read_text(encoding="utf-8", errors="strict"))
     except yaml.YAMLError as exc:
-        raise TrialError("CDSC-1R3 matrix is invalid YAML") from exc
+        raise TrialError("CDSC-1R4 matrix is invalid YAML") from exc
     rows = matrix.get("sequences") if isinstance(matrix, dict) else None
     matches = [
         row
@@ -2228,7 +2370,7 @@ def _post_pair_result_base(
         "schema": POST_PAIR_SCHEMA,
         "status": "C2_VALIDATION_FAILURE",
         "pass": False,
-        "protocol_id": "CDSC-1R3",
+        "protocol_id": "CDSC-1R4",
         "dataset": DATASET,
         "sequence": "rotation/rotation.bag",
         "source_runs": dict(source_runs),

@@ -1,5 +1,5 @@
 #!/usr/bin/python3.8
-"""Focused synthetic tests for the CDSC-1R3 fresh-KAIST adapter."""
+"""Focused synthetic tests for the CDSC-1R4 fresh-KAIST adapter."""
 
 from __future__ import annotations
 
@@ -129,6 +129,11 @@ class FixedContractTests(unittest.TestCase):
             config_contract = MODULE.validate_config_contract(system, config)
             launch_contract = MODULE.validate_launch_contract(system, launch)
             self.assertEqual(config_contract["identity"]["sha256"], policy["config_sha256"])
+            self.assertEqual(config_contract["track_frequency_hz"], 31.0)
+            self.assertEqual(
+                config_contract["track_frequency_source"],
+                "canonical_kaist_config",
+            )
             self.assertEqual(launch_contract["identity"]["sha256"], policy["launch_sha256"])
             self.assertTrue(launch_contract["ground_truth_bindings_absent"])
         self.assertTrue(
@@ -177,7 +182,7 @@ class FixedContractTests(unittest.TestCase):
             [
                 "run",
                 "--protocol-id",
-                "CDSC-1R3",
+                "CDSC-1R4",
                 "--protocol",
                 str(MODULE.CANONICAL_PROTOCOL),
                 "--matrix",
@@ -245,17 +250,144 @@ class PairingAndOutcomeTests(unittest.TestCase):
                 MODULE.pairing, "read_bag", return_value=(messages, bag_record, topics)
             ):
                 for system, source in (
-                    ("U0", "upstream_native_record_time_first_forward_stereo"),
-                    ("S1", "frozen_s1_exact_header_stereo"),
+                    (
+                        "U0",
+                        "upstream_native_record_time_first_forward_stereo_"
+                        "plus_stock_visualizer_frequency_gate",
+                    ),
+                    (
+                        "S1",
+                        "frozen_s1_exact_header_stereo_"
+                        "plus_stock_visualizer_frequency_gate",
+                    ),
                 ):
                     normalized, full, observed = MODULE.kaist_pair_census(
-                        system, bag, 0.0, -1.0
+                        system, bag, 0.0, -1.0, 31.0
                     )
+                    self.assertEqual(normalized["schema"], MODULE.KAIST_CENSUS_SCHEMA)
                     self.assertEqual(normalized["input_interval"]["source"], source)
                     self.assertEqual(normalized["input_interval"]["selected_pair_count"], 2)
+                    self.assertEqual(
+                        normalized["input_interval"]["raw_serial_dispatch_pair_count"],
+                        2,
+                    )
+                    self.assertEqual(
+                        normalized["input_interval"][
+                            "visualizer_frequency_dropped_pair_count"
+                        ],
+                        0,
+                    )
                     self.assertEqual(len(normalized["input_interval"]["gaps_over_threshold"]), 1)
                     self.assertEqual(full["schema"], MODULE.pairing.SCHEMA)
                     self.assertEqual(observed["sha256"], bag_record["sha256"])
+
+    def test_kaist_census_applies_31hz_gate_to_both_delivery_seams(self) -> None:
+        F = MODULE.pairing.FilteredMessage
+        cases = {
+            "U0": [
+                F("camera1", 1_000_000_000, 100_000_000_000),
+                F("camera1", 1_010_000_000, 100_050_000_000),
+                F("camera0", 1_011_000_000, 100_000_000_000),
+                F("camera1", 1_060_000_000, 100_100_000_000),
+                F("camera0", 1_061_000_000, 100_050_000_000),
+            ],
+            "S1": [
+                F("camera0", 1_000_000_000, 100_000_000_000),
+                F("camera1", 1_001_000_000, 100_000_000_000),
+                F("camera0", 2_000_000_000, 100_010_000_000),
+                F("camera1", 2_001_000_000, 100_010_000_000),
+                F("camera0", 3_000_000_000, 100_040_000_000),
+                F("camera1", 3_001_000_000, 100_040_000_000),
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            bag = Path(temporary) / "input.bag"
+            bag.write_bytes(b"synthetic")
+            topics = {
+                "camera0": {"name": MODULE.CAMERA0_TOPIC},
+                "camera1": {"name": MODULE.CAMERA1_TOPIC},
+                "imu": {"name": MODULE.IMU_TOPIC},
+            }
+            for system, messages in cases.items():
+                bag_record = {
+                    "path": str(bag.resolve()),
+                    "size_bytes": bag.stat().st_size,
+                    "sha256": hashlib.sha256(bag.read_bytes()).hexdigest(),
+                    "first_filtered_record_stamp_ns": messages[0].record_time_ns,
+                    "last_filtered_record_stamp_ns": messages[-1].record_time_ns,
+                    "compression": "none",
+                    "rosbag_version": 200,
+                    "filtered_message_count": len(messages),
+                }
+                with self.subTest(system=system), mock.patch.object(
+                    MODULE.pairing,
+                    "read_bag",
+                    return_value=(messages, bag_record, topics),
+                ):
+                    normalized, _, _ = MODULE.kaist_pair_census(
+                        system, bag, 0.0, -1.0, 31.0
+                    )
+                interval = normalized["input_interval"]
+                gate = normalized["visualizer_track_frequency_gate"]
+                self.assertGreater(interval["raw_serial_dispatch_pair_count"], 1)
+                self.assertEqual(
+                    interval["selected_pair_count"],
+                    interval["raw_serial_dispatch_pair_count"] - 1,
+                )
+                self.assertEqual(interval["visualizer_frequency_dropped_pair_count"], 1)
+                self.assertEqual(gate["track_frequency_hz"], 31.0)
+                self.assertTrue(gate["accepted_camera_timestamps_strictly_increasing"])
+                self.assertEqual(len(gate["dropped_dispatches"]), 1)
+                if system == "U0":
+                    self.assertEqual(
+                        gate["dropped_dispatches"][0][
+                            "delta_from_previous_accepted_ns"
+                        ],
+                        0,
+                    )
+                else:
+                    self.assertEqual(
+                        gate["dropped_dispatches"][0][
+                            "delta_from_previous_accepted_ns"
+                        ],
+                        10_000_000,
+                    )
+                    summaries = {
+                        "camera_enqueue": {
+                            "counts": {
+                                "queued_pairs": interval["selected_pair_count"],
+                                "processed_pairs": interval["selected_pair_count"],
+                                "frequency_thinned_pairs": interval[
+                                    "visualizer_frequency_dropped_pair_count"
+                                ],
+                            }
+                        }
+                    }
+                    binding = MODULE.validate_s1_visualizer_gate_runtime_binding(
+                        summaries, normalized
+                    )
+                    self.assertTrue(
+                        binding["runtime_matches_projected_visualizer_gate"]
+                    )
+                    bad = {
+                        "camera_enqueue": {
+                            "counts": {
+                                **summaries["camera_enqueue"]["counts"],
+                                "frequency_thinned_pairs": (
+                                    interval[
+                                        "visualizer_frequency_dropped_pair_count"
+                                    ]
+                                    + 1
+                                ),
+                            }
+                        }
+                    }
+                    with self.assertRaisesRegex(
+                        MODULE.TrialError, "runtime/projected"
+                    ):
+                        MODULE.validate_s1_visualizer_gate_runtime_binding(
+                            bad, normalized
+                        )
 
     def test_algorithm_crash_is_not_relabelled_infrastructure_failure(self) -> None:
         facts = {
@@ -286,11 +418,59 @@ class PairingAndOutcomeTests(unittest.TestCase):
         facts["input_decode_valid"] = False
         self.assertEqual(MODULE.classify_outcome(facts), "TRACKING_LOSS")
 
+    def test_observed_s1_pairing_mismatch_is_infrastructure_even_without_output(self) -> None:
+        console = (
+            "[SERIAL-KAIST]: exact_header_pairs=100 camera0_without_match=2 "
+            "camera1_without_match=3 record_delta_ge_20ms=7 "
+            "maximum_record_delta_ns=42000000\n"
+            "[SERIAL-KAIST]: queued_pairs=80 processed_pairs=80 "
+            "frequency_thinned_pairs=20 cam0_decode_failures=0 "
+            "cam1_decode_failures=0 pending_pairs=0\n"
+        )
+        summaries = MODULE.rotation.parse_runtime_summaries(console)
+        normalized = {
+            "schema": MODULE.KAIST_CENSUS_SCHEMA,
+            "system": "S1",
+            "input_interval": {
+                "selected_pair_count": 79,
+                "visualizer_frequency_dropped_pair_count": 21,
+                "raw_serial_dispatch_pair_count": 100,
+                "first_selected_input_timestamp_ns": 1,
+                "last_selected_input_timestamp_ns": 2,
+            },
+            "visualizer_track_frequency_gate": {
+                "accepted_visualizer_callback_sequence_sha256": "0" * 64,
+            },
+        }
+        self.assertTrue(MODULE._s1_pairing_runtime_evidence_observed(console))
+        with self.assertRaisesRegex(MODULE.TrialError, "runtime/projected"):
+            MODULE.validate_s1_visualizer_gate_runtime_binding(
+                summaries, normalized
+            )
+        self.assertEqual(
+            MODULE.classify_outcome(
+                {
+                    "mode": "scored",
+                    "teardown_ok": True,
+                    "runtime_contract_valid": False,
+                    "numeric_integrity_valid": True,
+                    "state_kind": "missing",
+                    "launch_abnormal": True,
+                }
+            ),
+            "INFRASTRUCTURE_FAILED",
+        )
+        self.assertFalse(
+            MODULE._s1_pairing_runtime_evidence_observed(
+                "estimator died before runtime summaries\n"
+            )
+        )
+
     def test_preflight_failure_is_published_as_infrastructure_not_no_init(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             args = argparse.Namespace(
-                protocol_id="CDSC-1R3",
+                protocol_id="CDSC-1R4",
                 protocol_file=MODULE.CANONICAL_PROTOCOL,
                 matrix_file=MODULE.CANONICAL_MATRIX,
                 run_id="preflight-failure",
@@ -326,7 +506,7 @@ class PairingAndOutcomeTests(unittest.TestCase):
             bag = root / "wrong-matrix-bag.bag"
             bag.write_bytes(b"not opened because matrix binding fails first")
             args = argparse.Namespace(
-                protocol_id="CDSC-1R3",
+                protocol_id="CDSC-1R4",
                 protocol_file=MODULE.CANONICAL_PROTOCOL,
                 matrix_file=MODULE.CANONICAL_MATRIX,
                 run_id="runner-binding-failure",
@@ -512,7 +692,7 @@ class HistoricalAndPostPairTests(unittest.TestCase):
                     path.write_text("synthetic\n", encoding="ascii")
             manifest = {
                 "schema": MODULE.SCHEMA,
-                "protocol_id": "CDSC-1R3",
+                "protocol_id": "CDSC-1R4",
                 "dataset": "kaist_vio",
                 "sequence": "rotation/rotation.bag",
                 "system": system,

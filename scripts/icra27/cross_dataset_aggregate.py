@@ -1,5 +1,5 @@
 #!/usr/bin/python3.8
-"""Validate and publish the final CDSC-1R3 comparison report.
+"""Validate and publish the final CDSC-1R4 comparison report.
 
 This is a read-only consumer of a completed campaign artifact tree.  It fails
 closed on missing, duplicate, moved, or checksum-invalid evidence, but it does
@@ -36,7 +36,7 @@ SCHEMA = "schurvio.icra27.cross_dataset.aggregate.v1"
 PAIR_SCHEMA = "schurvio.icra27.cross_dataset.pair_result.v1"
 GEOMETRY_SCHEMA = "schurvio.icra27.cross_dataset_geometry_bundle.v1"
 MECHANISM_SCHEMA = "schurvio.icra27.cross_dataset.kaist_rotation_post_pair.v1"
-PROTOCOL_ID = "CDSC-1R3"
+PROTOCOL_ID = "CDSC-1R4"
 SYSTEMS = ("U0", "S1")
 LANES = ("scored", "capture")
 DATASETS = ("euroc_mav", "tum_vi", "kaist_vio")
@@ -64,7 +64,7 @@ SHA256_RE = campaign.SHA256_RE
 
 
 class AggregateError(RuntimeError):
-    """A final evidence tree cannot support a CDSC-1R3 publication."""
+    """A final evidence tree cannot support a CDSC-1R4 publication."""
 
 
 def utc_now() -> str:
@@ -317,7 +317,7 @@ def _validate_run_bindings(
         _require_same_identity(value["protocol_identity"], protocol_identity, "protocol alias")
     if value.get("matrix_identity") is not None:
         _require_same_identity(value["matrix_identity"], matrix_identity, "matrix alias")
-    for name in (
+    input_names = [
         "protocol",
         "matrix",
         "runner",
@@ -327,10 +327,25 @@ def _validate_run_bindings(
         "converter",
         "pairing_census_tool",
         "runtime_identity_validator",
-    ):
+    ]
+    if row.dataset == "kaist_vio":
+        input_names.extend(
+            ("visualizer_gate_projection_module", "runtime_summary_parser_module")
+        )
+    for name in input_names:
         _revalidate_live_identity(
             inputs.get(name), "run input {}".format(name), live_identity_cache
         )
+    if row.dataset == "kaist_vio":
+        if not isinstance(after, dict):
+            raise AggregateError("KAIST run input postflight set is absent")
+        for name in (
+            "visualizer_gate_projection_module",
+            "runtime_summary_parser_module",
+        ):
+            _require_same_identity(
+                after.get(name), inputs.get(name), "KAIST helper pre/postflight {}".format(name)
+            )
     dependencies = inputs.get("config_dependencies")
     if not isinstance(dependencies, dict) or not dependencies:
         raise AggregateError("run configuration/calibration dependency set is absent")
@@ -1240,7 +1255,7 @@ def render_report(aggregate: Mapping[str, Any]) -> str:
     accuracy = aggregate["accuracy"]
     qualitative = aggregate["qualitative"]
     lines = [
-        "# CDSC-1R3 U0--S1 whole-system comparison",
+        "# CDSC-1R4 U0--S1 whole-system comparison",
         "",
         "## Claim boundary",
         "",
@@ -1432,7 +1447,7 @@ def aggregate_campaign(
     matrix_resolved = matrix_path.expanduser().resolve(strict=True)
     protocol_resolved = protocol_path.expanduser().resolve(strict=True)
     if matrix_resolved != campaign.MATRIX_FILE.resolve(strict=True) or protocol_resolved != campaign.PROTOCOL_FILE.resolve(strict=True):
-        raise AggregateError("CDSC-1R3 aggregate requires the canonical matrix and protocol paths")
+        raise AggregateError("CDSC-1R4 aggregate requires the canonical matrix and protocol paths")
     rows = campaign.load_matrix(matrix_resolved, require_canonical=True)
     matrix_identity = file_identity(matrix_resolved)
     protocol_identity = file_identity(protocol_resolved)
