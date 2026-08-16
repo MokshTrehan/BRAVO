@@ -778,7 +778,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 )
             if set_name == "integrity":
                 gate = integrity_gate(root, records)
-                driver.events.append("integrity-gate", gate)
+                driver.events.append("integrity-gate", {"integrity_gate": gate})
                 print("INTEGRITY_GATE {}".format(gate["verdict"]), flush=True)
                 if gate["verdict"] != "PASS":
                     exit_code = 3
