@@ -80,7 +80,24 @@ CANONICAL_INPUTS: Mapping[str, Mapping[str, Any]] = {
         "node": "kaist_vio_turnsafe_baseline",
         "namespace": "/kaist_vio_turnsafe_baseline",
     },
+    # PERTURB-1 matched nullspace control: same binary, config, calibration,
+    # recovery setting, node name, and namespace as S1; the launch differs only
+    # by up_msckf_landmark_elimination=nullspace.
+    "N0": {
+        "config": S1_CONFIG,
+        "config_sha256": "fa387a5c2146ef2a0471a4cf7acec392e43632a4e51983bb29f9ca8244d9d4b2",
+        "launch": REPO_ROOT / "project" / "icra27_kaist_n0_serial.launch",
+        "launch_sha256": "256fd81971445e9ec927bcb3a075a4c24d24b782ba9f014bb0ba04bfd97eb5cd",
+        "node": "kaist_vio_turnsafe_baseline",
+        "namespace": "/kaist_vio_turnsafe_baseline",
+    },
 }
+# Systems that run the frozen S1 executable and exact-header seam.
+S1_LIKE_SYSTEMS: Tuple[str, ...] = ("S1", "N0")
+LANDMARK_ELIMINATION = {"S1": "schur", "N0": "nullspace"}
+PERTURBATION_SYSTEMS: Tuple[str, ...] = ("U0", "S1", "N0")
+PERTURBATION_CAMPAIGN_ID = "PERTURB-1"
+PERTURBATION_SEED_LABELS: Tuple[str, ...] = ("frozen",)
 
 KAIST_SEQUENCES: Tuple[str, ...] = (
     "infinite/infinite_fast.bag",
@@ -144,7 +161,7 @@ KAIST_VALIDATION_ERRORS = (
 
 
 def geometry_topics(system: str) -> Tuple[str, ...]:
-    if system not in SYSTEMS:
+    if system not in PERTURBATION_SYSTEMS:
         raise TrialError("unknown system: {}".format(system))
     namespace = str(CANONICAL_INPUTS[system]["namespace"])
     return tuple(
@@ -237,6 +254,10 @@ def validate_config_contract(system: str, config: Path) -> Dict[str, Any]:
         "native_unmodified_upstream": system == "U0",
         "recovery_enabled": enabled,
         "s1_frozen_c2": system == "S1",
+        "n0_matched_nullspace_control": system == "N0",
+        "n0_yaml_selector_shadowed_by_launch_parameter": (
+            "up_msckf_landmark_elimination=nullspace" if system == "N0" else None
+        ),
         "track_frequency_hz": track_frequency_hz,
         "track_frequency_source": "canonical_kaist_config",
         "dependencies": dependencies,
@@ -286,6 +307,20 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
         for name in parameter_names
     ):
         raise TrialError("U0 launch changes the original algorithm or delivery seam")
+    landmark_elimination = None
+    if system in S1_LIKE_SYSTEMS:
+        values = [
+            element.get("value")
+            for element in node.findall("./param")
+            if element.get("name") == "up_msckf_landmark_elimination"
+        ]
+        if values != [LANDMARK_ELIMINATION[system]]:
+            raise TrialError(
+                "{} launch does not select up_msckf_landmark_elimination={}".format(
+                    system, LANDMARK_ELIMINATION[system]
+                )
+            )
+        landmark_elimination = values[0]
     return {
         "identity": identity,
         "node_name": policy["node"],
@@ -293,7 +328,9 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
         "argument_names": sorted(arguments),
         "parameter_names": sorted(str(name) for name in parameter_names),
         "u0_native_record_time_pairing": system == "U0",
-        "s1_exact_header_pairing": system == "S1",
+        "s1_exact_header_pairing": system in S1_LIKE_SYSTEMS,
+        "launch_landmark_elimination": landmark_elimination,
+        "n0_matched_nullspace_control": system == "N0",
         "ground_truth_bindings_absent": True,
     }
 
@@ -364,7 +401,7 @@ def _expected_resolved_parameters(
         "record_timing_information": True,
         "record_timing_filepath": str(run_dir / "diagnostics" / "timing_openvins.csv"),
     }
-    if system == "S1":
+    if system in S1_LIKE_SYSTEMS:
         common_values.update(
             {
                 "verbosity": "INFO",
@@ -374,7 +411,7 @@ def _expected_resolved_parameters(
                 "cam0_distortion_model": "radtan",
                 "cam1_distortion_model": "radtan",
                 "feat_rep_msckf": "GLOBAL_3D",
-                "up_msckf_landmark_elimination": "schur",
+                "up_msckf_landmark_elimination": LANDMARK_ELIMINATION[system],
                 "up_msckf_max_visual_passes": 1,
                 "calib_cam_extrinsics": False,
                 "calib_cam_intrinsics": False,
@@ -434,7 +471,10 @@ def validate_resolved_parameters(
         "parameters": normalized,
         "ground_truth_parameters_absent": True,
         "u0_original_native_seam": system == "U0",
-        "s1_frozen_exact_header_c2_seam": system == "S1",
+        "s1_frozen_exact_header_c2_seam": system in S1_LIKE_SYSTEMS,
+        "landmark_elimination": (
+            LANDMARK_ELIMINATION.get(system) if system in S1_LIKE_SYSTEMS else "upstream_native"
+        ),
     }
 
 
@@ -473,15 +513,80 @@ def kaist_pair_census(
     bag_start: float,
     bag_duration: float,
     track_frequency_hz: float,
+    perturbation: bool = False,
 ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """Return normalized CDSC evidence, the full KAIST census, and bag identity."""
 
-    if bag_start != 0.0 or bag_duration != -1.0:
+    if bag_duration != -1.0:
+        raise TrialError("CDSC-1R4 KAIST census requires the complete adapted bag")
+    if bag_start != 0.0 and not perturbation:
         raise TrialError("CDSC-1R4 KAIST census requires the complete adapted bag")
     messages, bag_identity_raw, topic_identity = pairing.read_bag(
         bag, CAMERA0_TOPIC, CAMERA1_TOPIC, IMU_TOPIC
     )
+    perturbation_view: Optional[Dict[str, Any]] = None
+    if perturbation:
+        # PERTURB-1: project the exact integer-nanosecond C++ rosbag::View
+        # [begin + bag_start, end] over the all-topic index bounds before any
+        # selector runs, mirroring ros1_serial_msckf (view.addQuery(bag,
+        # time_init, time_finish) plus the explicit < time_init skip).  Both
+        # native and exact-header selectors and the runtime SERIAL-KAIST
+        # summaries operate on that sub-view.
+        try:
+            import rosbag  # type: ignore
+        except ImportError as exc:  # pragma: no cover - environment guard
+            raise TrialError("ROS1 rosbag Python bindings are unavailable") from exc
+        with rosbag.Bag(str(bag), "r") as opened:
+            full_bounds = common.rosbag_view_full_bounds(opened)
+        full_start_ns = int(full_bounds["first_record_timestamp_ns"])
+        full_end_ns = int(full_bounds["last_record_timestamp_ns"])
+        view_start_ns = full_start_ns + common._duration_nanoseconds(bag_start, "bag start")
+        view_end_ns = full_end_ns
+        if view_end_ns <= view_start_ns:
+            raise TrialError("perturbed KAIST bag view is empty")
+        all_messages = list(messages)
+        messages = [
+            message
+            for message in all_messages
+            if view_start_ns <= message.record_time_ns <= view_end_ns
+        ]
+        if not messages:
+            raise TrialError("perturbed KAIST bag view has no sensor messages")
+        perturbation_view = {
+            "bag_start_seconds": bag_start,
+            "bag_start_nanoseconds_ros_rounding": common._duration_nanoseconds(
+                bag_start, "bag start"
+            ),
+            "full_bounds": full_bounds,
+            "view_start_record_timestamp_ns": view_start_ns,
+            "view_end_record_timestamp_ns": view_end_ns,
+            "full_filtered_message_count": len(all_messages),
+            "view_filtered_message_count": len(messages),
+            "excluded_leading_message_count": len(all_messages) - len(messages),
+            "excluded_leading_camera0_count": sum(
+                1
+                for message in all_messages
+                if message.record_time_ns < view_start_ns and message.kind == pairing.KIND_CAMERA0
+            ),
+            "excluded_leading_camera1_count": sum(
+                1
+                for message in all_messages
+                if message.record_time_ns < view_start_ns and message.kind == pairing.KIND_CAMERA1
+            ),
+            "excluded_leading_imu_count": sum(
+                1
+                for message in all_messages
+                if message.record_time_ns < view_start_ns and message.kind == pairing.KIND_IMU
+            ),
+            "semantics": "cpp_rosbag_view_all_topic_begin_plus_bag_start_inclusive_to_end",
+        }
+        bag_identity_raw = dict(bag_identity_raw)
+        bag_identity_raw["first_filtered_record_stamp_ns"] = messages[0].record_time_ns
+        bag_identity_raw["last_filtered_record_stamp_ns"] = messages[-1].record_time_ns
+        bag_identity_raw["filtered_message_count"] = len(messages)
     full = dict(pairing.build_census(messages, bag_identity_raw, topic_identity))
+    if perturbation_view is not None:
+        full["perturbation_view"] = perturbation_view
     raw_selected = tuple(_selected_pairs(system, messages))
     if not raw_selected:
         raise TrialError("KAIST selected stereo stream is empty")
@@ -533,6 +638,8 @@ def kaist_pair_census(
         "pair_sets": full.get("pair_sets"),
         "u0_native_diagnostics": full.get("u0_native_diagnostics"),
     }
+    if perturbation_view is not None:
+        normalized["perturbation_view"] = perturbation_view
     bag_identity = {
         "path": str(Path(str(bag_identity_raw["path"])).resolve(strict=True)),
         "size_bytes": int(bag_identity_raw["size_bytes"]),
@@ -548,7 +655,7 @@ def validate_s1_visualizer_gate_runtime_binding(
 ) -> Dict[str, Any]:
     """Bind S1's runtime queue counters to the projected 31 Hz population."""
 
-    if census.get("schema") != KAIST_CENSUS_SCHEMA or census.get("system") != "S1":
+    if census.get("schema") != KAIST_CENSUS_SCHEMA or census.get("system") not in S1_LIKE_SYSTEMS:
         raise TrialError("S1 visualizer gate binding received the wrong census")
     interval = census.get("input_interval")
     enqueue_record = summaries.get("camera_enqueue")
@@ -1127,7 +1234,7 @@ def assess_kaist_output_coverage(
     result = common.assess_output_coverage(input_interval, state)
     result["recovery_supported_state_gap_count"] = 0
     result["recovery_supported_state_gaps"] = []
-    if system != "S1" or sequence != "rotation/rotation.bag":
+    if system not in S1_LIKE_SYSTEMS or sequence != "rotation/rotation.bag":
         return result
     if mechanism.get("pass") is not True:
         return result
@@ -1459,6 +1566,72 @@ def historical_determinism_check(
     }
 
 
+def perturbation_requested(args: argparse.Namespace) -> bool:
+    return getattr(args, "perturbation_campaign_id", None) is not None
+
+
+def perturbation_record(args: argparse.Namespace) -> Dict[str, Any]:
+    """Validate and describe one PERTURB-1 request; raise TrialError if unrunnable.
+
+    The frozen CDSC-1R4 matrix start stays in ``args.bag_start`` (used for the
+    matrix binding); the estimator receives ``frozen + offset_frames /
+    frame_rate_hz``.  Nothing else changes.  A negative shifted start has no
+    lead-in data and is rejected here (the driver records such cells as
+    NOT_RUNNABLE without launching).
+    """
+
+    campaign_id = getattr(args, "perturbation_campaign_id", None)
+    if campaign_id != PERTURBATION_CAMPAIGN_ID:
+        raise TrialError("unknown perturbation campaign id: {}".format(campaign_id))
+    offset_frames = getattr(args, "perturbation_offset_frames", None)
+    frame_rate_hz = getattr(args, "perturbation_frame_rate_hz", None)
+    seed_label = getattr(args, "perturbation_seed_label", None)
+    if isinstance(offset_frames, bool) or not isinstance(offset_frames, int):
+        raise TrialError("perturbation offset must be an integer frame count")
+    if (
+        isinstance(frame_rate_hz, bool)
+        or not isinstance(frame_rate_hz, (int, float))
+        or not math.isfinite(float(frame_rate_hz))
+        or float(frame_rate_hz) <= 0.0
+    ):
+        raise TrialError("perturbation frame rate must be finite and positive")
+    if seed_label not in PERTURBATION_SEED_LABELS:
+        raise TrialError(
+            "perturbation seed label {!r} is not runnable: the frozen estimator has no "
+            "runtime RNG seed parameter (cv::setRNGSeed(0) is compiled in)".format(seed_label)
+        )
+    if args.system not in PERTURBATION_SYSTEMS:
+        raise TrialError("unknown perturbation system: {}".format(args.system))
+    frozen_start = float(args.bag_start)
+    shift_seconds = float(offset_frames) / float(frame_rate_hz)
+    estimator_start = frozen_start + shift_seconds
+    if not math.isfinite(estimator_start) or estimator_start < 0.0:
+        raise TrialError(
+            "NOT_RUNNABLE_NEGATIVE_OFFSET: shifted start {!r} s precedes the bag begin; "
+            "no lead-in data".format(estimator_start)
+        )
+    return {
+        "campaign_id": campaign_id,
+        "axis": getattr(args, "perturbation_axis", "offset"),
+        "offset_frames": offset_frames,
+        "frame_rate_hz": float(frame_rate_hz),
+        "shift_seconds": shift_seconds,
+        "shift_seconds_repr": repr(shift_seconds),
+        "seed_label": seed_label,
+        "seed_delta": 0,
+        "seed_mechanism": "compiled_constant_cv_setRNGSeed_0_not_a_runtime_parameter",
+        "frozen_matrix_bag_start_seconds": frozen_start,
+        "estimator_bag_start_seconds": estimator_start,
+        "estimator_bag_start_seconds_repr": repr(estimator_start),
+        "estimator_bag_start_launch_argument": format(estimator_start, ".17g"),
+        "imu_and_camera_share_the_shifted_view": True,
+        "system": args.system,
+        "landmark_elimination": (
+            LANDMARK_ELIMINATION.get(args.system) if args.system in S1_LIKE_SYSTEMS else "upstream_native"
+        ),
+    }
+
+
 def _validate_request(args: argparse.Namespace) -> None:
     for value, label in ((args.protocol_id, "protocol ID"), (args.run_id, "run ID")):
         if common.SAFE_ID_RE.fullmatch(value) is None:
@@ -1471,12 +1644,68 @@ def _validate_request(args: argparse.Namespace) -> None:
         raise TrialError("timeout must be finite and positive")
     if args.bag_start != 0.0 or args.bag_duration != -1.0:
         raise TrialError("KAIST uses the frozen full-bag start/duration")
+    if perturbation_requested(args):
+        perturbation_record(args)
+    elif args.system not in SYSTEMS:
+        raise TrialError("system {} requires the PERTURB-1 perturbation mode".format(args.system))
     if args.attempt_index < 1:
         raise TrialError("attempt index must be positive")
     if args.mode == "capture" and args.scored_result is None:
         raise TrialError("capture mode requires --scored-result")
     if args.mode == "scored" and args.scored_result is not None:
         raise TrialError("scored mode forbids --scored-result")
+
+
+def describe_recovery_events(console_text: str) -> Dict[str, Any]:
+    """Purely descriptive, never-gating summary of long-gap recovery lines.
+
+    PERTURB-1 keeps the existing (strict) C2 passage binding for completion.
+    This record lets the aggregator report, for a non-completion, whether a
+    recovery commit occurred at all and where, so both readings can be shown.
+    """
+
+    clean_lines = [rotation.ANSI_RE.sub("", line) for line in console_text.splitlines()]
+    recovery_lines = [line for line in clean_lines if rotation.RECOVERY_PREFIX in line]
+    names: List[str] = []
+    for line in recovery_lines:
+        match = re.search(r"\bevent=([a-z0-9_]+)(?:\s|$)", line)
+        names.append(match.group(1) if match else "unparsed")
+    counts = {name: names.count(name) for name in sorted(set(names))}
+    triggers = []
+    commits = []
+    for line, name in zip(recovery_lines, names):
+        if name == "trigger":
+            match = rotation.RECOVERY_TRIGGER_RE.fullmatch(line)
+            triggers.append(
+                {key: float(value) if key != "epoch" and key != "activation" else int(value)
+                 for key, value in match.groupdict().items()}
+                if match
+                else {"unparsed_line": line}
+            )
+        elif name == "relocalization_commit":
+            match = rotation.RECOVERY_COMMIT_RE.fullmatch(line)
+            commits.append(
+                {key: value for key, value in match.groupdict().items()}
+                if match
+                else {"unparsed_line": line}
+            )
+    summary = None
+    for line, name in zip(recovery_lines, names):
+        if name == "summary":
+            match = rotation.RECOVERY_SUMMARY_RE.fullmatch(line)
+            summary = (
+                {key: int(value) for key, value in match.groupdict().items()}
+                if match
+                else {"unparsed_line": line}
+            )
+    return {
+        "descriptive_only_never_gates_completion": True,
+        "event_line_count": len(recovery_lines),
+        "event_counts": counts,
+        "triggers": triggers,
+        "commits": commits,
+        "summary": summary,
+    }
 
 
 def _recovery_evidence(
@@ -1518,11 +1747,16 @@ def _recovery_evidence(
 
 def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
     _validate_request(args)
+    perturbation = perturbation_record(args) if perturbation_requested(args) else None
+    estimator_bag_start = (
+        float(perturbation["estimator_bag_start_seconds"]) if perturbation else args.bag_start
+    )
     run_dir = common.create_run_directory(args.output_root, args.run_id)
     started = time.monotonic()
     result: Dict[str, Any] = {
         "schema": SCHEMA,
-        "adapter": "fresh_kaist_cdsc1r4",
+        "adapter": "fresh_kaist_cdsc1r4" if perturbation is None else "fresh_kaist_cdsc1r4_perturb1",
+        "perturbation": perturbation,
         "protocol_id": args.protocol_id,
         "run_id": args.run_id,
         "attempt_index": args.attempt_index,
@@ -1588,7 +1822,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             "pass": None,
             "post_pair_rotation_evaluation": (
                 "PENDING"
-                if args.system == "S1" and args.sequence == "rotation/rotation.bag"
+                if args.system in S1_LIKE_SYSTEMS and args.sequence == "rotation/rotation.bag"
                 else "NOT_APPLICABLE"
             ),
         },
@@ -1677,7 +1911,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             matrix,
             DATASET,
             args.sequence,
-            args.system,
+            "S1" if args.system == "N0" else args.system,
             bag,
             args.bag_start,
         )
@@ -1696,9 +1930,10 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         normalized_census, full_census, bag_identity = kaist_pair_census(
             args.system,
             bag,
-            args.bag_start,
+            estimator_bag_start,
             args.bag_duration,
             float(config_contract["track_frequency_hz"]),
+            perturbation=perturbation is not None,
         )
         common.validate_matrix_bag_identity(campaign, bag_identity)
         result["inputs"]["bag"] = bag_identity
@@ -1716,7 +1951,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             launch,
             config,
             bag,
-            args.bag_start,
+            estimator_bag_start,
             args.bag_duration,
             run_dir,
         )
@@ -1736,7 +1971,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             dump_path.read_text(encoding="utf-8", errors="strict"),
             config,
             bag,
-            args.bag_start,
+            estimator_bag_start,
             run_dir,
         )
         resolved["artifact"] = common.file_identity(dump_path)
@@ -1857,7 +2092,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             )
 
         runtime_pairing_valid = args.system == "U0"
-        if args.system == "S1":
+        if args.system in S1_LIKE_SYSTEMS:
             try:
                 pairing_runtime = assess_s1_pairing_runtime(
                     console_text, full_census, normalized_census
@@ -1896,11 +2131,15 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                 "reason": str(exc),
                 "post_pair_rotation_evaluation": (
                     "BLOCKED_BY_RUNTIME_CONTRACT"
-                    if args.system == "S1" and args.sequence == "rotation/rotation.bag"
+                    if args.system in S1_LIKE_SYSTEMS and args.sequence == "rotation/rotation.bag"
                     else "NOT_APPLICABLE"
                 ),
             }
             common._record_error(result, "recovery_runtime", exc)
+        if perturbation is not None:
+            result["perturbation_recovery_descriptive"] = describe_recovery_events(
+                console_text
+            )
 
         numeric_integrity_valid = not any(
             console[name]
@@ -2035,7 +2274,20 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
 
         stage = "capture_validation"
         result["artifacts"] = refresh_artifacts(run_dir, args.system)
-        if args.mode == "scored":
+        if args.mode == "scored" and (
+            perturbation is not None
+            and (args.system != "S1" or estimator_bag_start != 0.0)
+        ):
+            result["historical_determinism"] = {
+                "status": "NOT_APPLICABLE_PERTURBED_OR_CONTROL_CELL",
+                "reason": (
+                    "no compatible historical byte expectation exists for system {} at "
+                    "estimator start {!r}".format(args.system, estimator_bag_start)
+                ),
+                "fresh_outputs_never_replaced": True,
+                "mismatch_is_not_infrastructure_invalid": True,
+            }
+        elif args.mode == "scored":
             try:
                 result["historical_determinism"] = historical_determinism_check(
                     args.system, args.sequence, result["artifacts"]
@@ -2146,7 +2398,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                 or bool(child.get("estimator_required_child_died"))
             )
         )
-        if args.system == "S1" and launch_record is not None:
+        if args.system in S1_LIKE_SYSTEMS and launch_record is not None:
             pairing_runtime = result.get("pairing_runtime")
             if not isinstance(pairing_runtime, Mapping):
                 pairing_runtime = {}
@@ -2917,7 +3169,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--attempt-index", type=int, default=1)
     run.add_argument("--dataset", required=True, choices=(DATASET,))
     run.add_argument("--sequence", required=True)
-    run.add_argument("--system", required=True, choices=SYSTEMS)
+    run.add_argument("--system", required=True, choices=PERTURBATION_SYSTEMS)
     run.add_argument("--mode", choices=MODES, default="scored")
     run.add_argument("--bag", required=True, type=Path)
     run.add_argument("--bag-start", type=float, default=0.0)
@@ -2930,6 +3182,13 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--timeout-seconds", type=float, default=21600.0)
     run.add_argument("--cpu-list", default="8-15")
     run.add_argument("--scored-result", type=Path)
+    # PERTURB-1 thin extension (docs/icra27/PERTURBATION_PREREG.md).  Absent
+    # by default so CDSC-1R4 behaviour is unchanged.
+    run.add_argument("--perturbation-campaign-id", default=None)
+    run.add_argument("--perturbation-offset-frames", type=int, default=0)
+    run.add_argument("--perturbation-frame-rate-hz", type=float, default=30.0)
+    run.add_argument("--perturbation-seed-label", default="frozen")
+    run.add_argument("--perturbation-axis", choices=("offset", "seed"), default="offset")
 
     post = commands.add_parser(
         "post-pair-rotation",

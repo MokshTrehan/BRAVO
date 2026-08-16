@@ -58,6 +58,13 @@ import kaist_runtime_identity as pinned_runtime  # noqa: E402
 SCHEMA = "schurvio.icra27.cross_dataset.sequence_result.v1"
 NATIVE_CENSUS_SCHEMA = "schurvio.icra27.cross_dataset.native_pair_census.v3"
 SYSTEMS = ("U0", "S1")
+# PERTURB-1 (docs/icra27/PERTURBATION_PREREG.md): N0 is the matched nullspace
+# control on the frozen S1 executable; it is accepted only in perturbation mode.
+S1_LIKE_SYSTEMS = ("S1", "N0")
+LANDMARK_ELIMINATION = {"S1": "schur", "N0": "nullspace"}
+PERTURBATION_SYSTEMS = ("U0", "S1", "N0")
+PERTURBATION_CAMPAIGN_ID = "PERTURB-1"
+PERTURBATION_SEED_LABELS = ("frozen",)
 MODES = ("scored", "capture")
 DATASETS = ("euroc_mav", "tum_vi")
 ELIGIBLE_STATUSES = ("COMPLETED", "COMPLETED_WITH_TEARDOWN_DEFECT")
@@ -222,6 +229,10 @@ CANONICAL_LAUNCHES: Mapping[str, Tuple[Path, str]] = {
     "S1": (
         REPO_ROOT / "project" / "icra27_cross_dataset_s1_serial.launch",
         "68a15b64495cb34a1ec00321e9002d3c6ed8d277ff1d3969c0d51750f0f96255",
+    ),
+    "N0": (
+        REPO_ROOT / "project" / "icra27_cross_dataset_n0_serial.launch",
+        "59498adb9dab301de90ca3181d9a4eda5c985f8914175b2b8491e660058934ab",
     ),
 }
 DATASET_CONFIG_SHA256: Mapping[str, str] = {
@@ -1041,9 +1052,13 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
             )
         )
     by_name = {str(element.get("name")): element for element in parameters}
-    if system == "S1":
-        if by_name["up_msckf_landmark_elimination"].get("value") != "schur":
-            raise TrialError("S1 launch does not select Schur elimination")
+    if system in S1_LIKE_SYSTEMS:
+        if by_name["up_msckf_landmark_elimination"].get("value") != LANDMARK_ELIMINATION[system]:
+            raise TrialError(
+                "{} launch does not select {} elimination".format(
+                    system, LANDMARK_ELIMINATION[system]
+                )
+            )
         if (
             by_name["up_msckf_max_visual_passes"].get("type") != "int"
             or by_name["up_msckf_max_visual_passes"].get("value") != "1"
@@ -1055,10 +1070,14 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
         "parameter_names": sorted(names),
         "u0_native_only_bindings": system == "U0",
         "s1_only_algorithm_deltas": (
-            ["up_msckf_landmark_elimination=schur", "up_msckf_max_visual_passes=1"]
-            if system == "S1"
+            [
+                "up_msckf_landmark_elimination=" + LANDMARK_ELIMINATION[system],
+                "up_msckf_max_visual_passes=1",
+            ]
+            if system in S1_LIKE_SYSTEMS
             else []
         ),
+        "n0_matched_nullspace_control": system == "N0",
         "recovery_parameter_absent": "long_gap_recovery_enabled" not in names,
     }
 
@@ -1129,10 +1148,10 @@ def validate_resolved_parameters(
             run_dir / "diagnostics" / "timing_openvins.csv"
         ),
     }
-    if system == "S1":
+    if system in S1_LIKE_SYSTEMS:
         expected.update(
             {
-                namespace + "up_msckf_landmark_elimination": "schur",
+                namespace + "up_msckf_landmark_elimination": LANDMARK_ELIMINATION[system],
                 namespace + "up_msckf_max_visual_passes": 1,
             }
         )
@@ -2359,14 +2378,87 @@ def _validate_request(args: argparse.Namespace) -> None:
         raise TrialError("capture mode requires --scored-result")
     if args.mode == "scored" and args.scored_result is not None:
         raise TrialError("scored mode forbids --scored-result")
+    if perturbation_requested(args):
+        perturbation_record(args)
+    elif args.system not in SYSTEMS:
+        raise TrialError("system {} requires the PERTURB-1 perturbation mode".format(args.system))
+
+
+def perturbation_requested(args: argparse.Namespace) -> bool:
+    return getattr(args, "perturbation_campaign_id", None) is not None
+
+
+def perturbation_record(args: argparse.Namespace) -> Dict[str, Any]:
+    """Validate and describe one PERTURB-1 request; raise TrialError if unrunnable.
+
+    ``args.bag_start`` keeps the frozen CDSC-1R4 matrix start (matrix binding);
+    the estimator receives ``frozen + offset_frames / frame_rate_hz``.  A
+    negative shifted start has no lead-in data and is rejected.
+    """
+
+    campaign_id = getattr(args, "perturbation_campaign_id", None)
+    if campaign_id != PERTURBATION_CAMPAIGN_ID:
+        raise TrialError("unknown perturbation campaign id: {}".format(campaign_id))
+    offset_frames = getattr(args, "perturbation_offset_frames", None)
+    frame_rate_hz = getattr(args, "perturbation_frame_rate_hz", None)
+    seed_label = getattr(args, "perturbation_seed_label", None)
+    if isinstance(offset_frames, bool) or not isinstance(offset_frames, int):
+        raise TrialError("perturbation offset must be an integer frame count")
+    if (
+        isinstance(frame_rate_hz, bool)
+        or not isinstance(frame_rate_hz, (int, float))
+        or not math.isfinite(float(frame_rate_hz))
+        or float(frame_rate_hz) <= 0.0
+    ):
+        raise TrialError("perturbation frame rate must be finite and positive")
+    if seed_label not in PERTURBATION_SEED_LABELS:
+        raise TrialError(
+            "perturbation seed label {!r} is not runnable: the frozen estimator has no "
+            "runtime RNG seed parameter (cv::setRNGSeed(0) is compiled in)".format(seed_label)
+        )
+    if args.system not in PERTURBATION_SYSTEMS:
+        raise TrialError("unknown perturbation system: {}".format(args.system))
+    frozen_start = float(args.bag_start)
+    shift_seconds = float(offset_frames) / float(frame_rate_hz)
+    estimator_start = frozen_start + shift_seconds
+    if not math.isfinite(estimator_start) or estimator_start < 0.0:
+        raise TrialError(
+            "NOT_RUNNABLE_NEGATIVE_OFFSET: shifted start {!r} s precedes the bag begin; "
+            "no lead-in data".format(estimator_start)
+        )
+    return {
+        "campaign_id": campaign_id,
+        "axis": getattr(args, "perturbation_axis", "offset"),
+        "offset_frames": offset_frames,
+        "frame_rate_hz": float(frame_rate_hz),
+        "shift_seconds": shift_seconds,
+        "shift_seconds_repr": repr(shift_seconds),
+        "seed_label": seed_label,
+        "seed_delta": 0,
+        "seed_mechanism": "compiled_constant_cv_setRNGSeed_0_not_a_runtime_parameter",
+        "frozen_matrix_bag_start_seconds": frozen_start,
+        "estimator_bag_start_seconds": estimator_start,
+        "estimator_bag_start_seconds_repr": repr(estimator_start),
+        "estimator_bag_start_launch_argument": format(estimator_start, ".17g"),
+        "imu_and_camera_share_the_shifted_view": True,
+        "system": args.system,
+        "landmark_elimination": (
+            LANDMARK_ELIMINATION.get(args.system) if args.system in S1_LIKE_SYSTEMS else "upstream_native"
+        ),
+    }
 
 
 def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
     _validate_request(args)
+    perturbation = perturbation_record(args) if perturbation_requested(args) else None
+    estimator_bag_start = (
+        float(perturbation["estimator_bag_start_seconds"]) if perturbation else args.bag_start
+    )
     run_dir = create_run_directory(args.output_root, args.run_id)
     started = time.monotonic()
     result: Dict[str, Any] = {
         "schema": SCHEMA,
+        "perturbation": perturbation,
         "protocol_id": args.protocol_id,
         "run_id": args.run_id,
         "attempt_index": args.attempt_index,
@@ -2532,7 +2624,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             matrix,
             args.dataset,
             args.sequence,
-            args.system,
+            "S1" if args.system == "N0" else args.system,
             bag,
             args.bag_start,
         )
@@ -2557,7 +2649,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         stage = "native_pair_census"
         census, bag_identity = native_pair_census(
             bag,
-            args.bag_start,
+            estimator_bag_start,
             args.bag_duration,
             config_contract["track_frequency_hz"],
         )
@@ -2570,7 +2662,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
 
         stage = "resolved_parameters"
         launch_arguments = _launch_arguments(
-            launch, config, bag, args.bag_start, args.bag_duration, run_dir
+            launch, config, bag, estimator_bag_start, args.bag_duration, run_dir
         )
         result["estimator_launch_arguments"] = launch_arguments
         dump_path = run_dir / "diagnostics" / "resolved_ros_parameters.yaml"
@@ -2588,7 +2680,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             dump_path.read_text(encoding="utf-8", errors="strict"),
             config,
             bag,
-            args.bag_start,
+            estimator_bag_start,
             args.bag_duration,
             run_dir,
         )
@@ -2972,7 +3064,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--attempt-index", type=int, default=1)
     parser.add_argument("--dataset", required=True, choices=DATASETS)
     parser.add_argument("--sequence", required=True)
-    parser.add_argument("--system", required=True, choices=SYSTEMS)
+    parser.add_argument("--system", required=True, choices=PERTURBATION_SYSTEMS)
     parser.add_argument("--mode", choices=MODES, default="scored")
     parser.add_argument("--bag", required=True, type=Path)
     parser.add_argument("--bag-start", type=float, default=0.0)
@@ -2985,6 +3077,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-seconds", type=float, default=21600.0)
     parser.add_argument("--cpu-list", default="8-15")
     parser.add_argument("--scored-result", type=Path)
+    # PERTURB-1 thin extension (docs/icra27/PERTURBATION_PREREG.md).  Absent
+    # by default so CDSC-1R4 behaviour is unchanged.
+    parser.add_argument("--perturbation-campaign-id", default=None)
+    parser.add_argument("--perturbation-offset-frames", type=int, default=0)
+    parser.add_argument("--perturbation-frame-rate-hz", type=float, default=20.0)
+    parser.add_argument("--perturbation-seed-label", default="frozen")
+    parser.add_argument("--perturbation-axis", choices=("offset", "seed"), default="offset")
     return parser
 
 
