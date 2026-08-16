@@ -74,7 +74,7 @@ class ArtifactPublicationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             args = argparse.Namespace(
-                protocol_id="CDSC-1",
+                protocol_id="CDSC-1R1",
                 protocol_file=TRIAL.CANONICAL_PROTOCOL,
                 matrix_file=TRIAL.CANONICAL_MATRIX,
                 run_id="fixture-infra-failure",
@@ -189,7 +189,7 @@ class CampaignAndParameterTests(unittest.TestCase):
     def test_matrix_binding_selects_exact_start_aware_row(self) -> None:
         bag = Path("/home/moksh/Downloads/machine_hall/MH_01_easy/MH_01_easy.bag").resolve()
         value = TRIAL.validate_campaign_bindings(
-            "CDSC-1",
+            "CDSC-1R1",
             TRIAL.CANONICAL_PROTOCOL.resolve(),
             TRIAL.CANONICAL_MATRIX.resolve(),
             "euroc_mav",
@@ -202,7 +202,7 @@ class CampaignAndParameterTests(unittest.TestCase):
         self.assertEqual(value["expected_bag"]["path"], str(bag))
         with self.assertRaisesRegex(TRIAL.TrialError, "bag start"):
             TRIAL.validate_campaign_bindings(
-                "CDSC-1",
+                "CDSC-1R1",
                 TRIAL.CANONICAL_PROTOCOL.resolve(),
                 TRIAL.CANONICAL_MATRIX.resolve(),
                 "euroc_mav",

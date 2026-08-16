@@ -1,5 +1,5 @@
 #!/usr/bin/python3.8
-"""Focused non-ROS tests for the resume-safe CDSC-1 campaign driver."""
+"""Focused non-ROS tests for the resume-safe CDSC-1R1 campaign driver."""
 
 from __future__ import annotations
 
@@ -430,7 +430,7 @@ class CampaignTest(unittest.TestCase):
         u0.mkdir()
         protocol = self.base / "protocol.md"
         matrix = self.base / "matrix.yaml"
-        protocol.write_text("- Protocol ID: `CDSC-1`\nPROSPECTIVE_NOT_RUN\n", encoding="utf-8")
+        protocol.write_text("- Protocol ID: `CDSC-1R1`\nPROSPECTIVE_NOT_RUN\n", encoding="utf-8")
         matrix.write_text("fixture: true\n", encoding="utf-8")
         self.paths = campaign.RuntimePaths(
             repo_root=repo,
@@ -649,6 +649,18 @@ class CampaignTest(unittest.TestCase):
         matrix_index = command.index("--matrix")
         self.assertEqual(command[matrix_index + 1], str(self.paths.matrix))
         self.assertEqual(command[matrix_index + 2], "--output")
+        u0_index = command.index("--u0-run")
+        s1_index = command.index("--s1-run")
+        self.assertEqual(
+            command[u0_index + 1],
+            str(campaign.run_location(self.artifacts, "scored", row, "U0").run_directory),
+        )
+        self.assertEqual(
+            command[s1_index + 1],
+            str(campaign.run_location(self.artifacts, "scored", row, "S1").run_directory),
+        )
+        self.assertFalse(command[u0_index + 1].endswith("sequence_result.json"))
+        self.assertFalse(command[s1_index + 1].endswith("sequence_result.json"))
 
     def test_accuracy_unassessable_pair_is_retained_without_stopping(self) -> None:
         row = _row(1, capability="full_trajectory")

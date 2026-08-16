@@ -41,7 +41,7 @@ CORE_SPEC.loader.exec_module(CORE)
 SCHEMA = "schurvio.icra27.cross_dataset.pair_result.v1"
 RUN_SCHEMA = "schurvio.icra27.cross_dataset.sequence_result.v1"
 MATRIX_SCHEMA = "schurvio.icra27.cross_dataset_matrix.v1"
-EXPECTED_PROTOCOL_ID = "CDSC-1"
+EXPECTED_PROTOCOL_ID = "CDSC-1R1"
 SYSTEMS = ("U0", "S1")
 ELIGIBLE_STATUSES = {"COMPLETED", "COMPLETED_WITH_TEARDOWN_DEFECT"}
 MINIMUM_COMMON_POSES = 100
@@ -53,10 +53,121 @@ EXPECTED_RUNTIME_PINS_SHA256 = (
 EXPECTED_MATH_CORE_SHA256 = (
     "24c30b19c65f95c644065eda35534e803d4ffc72825f9e6aa0ffb9a2bbffaa7c"
 )
+MAX_EVO_QUATERNION_NORM_ERROR = 5.0e-4
 
 
 class EvaluationError(RuntimeError):
     """A fail-closed paired-evaluation contract violation."""
+
+
+def _read_tum_with_bounded_quaternion_projection(
+    path: Path, label: str
+) -> tuple[Sequence[Any], Dict[str, Any]]:
+    """Parse exact TUM rows and project only their in-memory evo quaternion."""
+
+    resolved = path.resolve(strict=True)
+    if not resolved.is_file():
+        raise EvaluationError(f"{label} is not a regular file: {resolved}")
+    rows = []
+    norms = []
+    errors = []
+    for line_number, source_line in enumerate(resolved.read_bytes().splitlines(), 1):
+        stripped = source_line.strip()
+        if not stripped or stripped.startswith(b"#"):
+            continue
+        try:
+            text = stripped.decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise EvaluationError(f"{label} has a non-ASCII row") from exc
+        tokens = tuple(text.split())
+        if len(tokens) != 8:
+            raise EvaluationError(
+                f"{label} row {line_number} has {len(tokens)} columns, expected 8"
+            )
+        try:
+            raw_values = tuple(float(token) for token in tokens)
+        except ValueError as exc:
+            raise EvaluationError(f"{label} has a nonnumeric row") from exc
+        if not all(math.isfinite(value) for value in raw_values):
+            raise EvaluationError(f"{label} has a nonfinite row")
+        quaternion = raw_values[4:8]
+        norm = math.sqrt(sum(value * value for value in quaternion))
+        error = abs(norm - 1.0)
+        if (
+            not math.isfinite(norm)
+            or norm <= 0.0
+            or error > MAX_EVO_QUATERNION_NORM_ERROR
+        ):
+            raise EvaluationError(
+                f"{label} row {line_number} quaternion norm is outside the "
+                "frozen evo-projection boundary"
+            )
+        projected_values = (
+            *raw_values[:4],
+            *(value / norm for value in quaternion),
+        )
+        row_index = len(rows)
+        row_id = hashlib.sha256(
+            str(row_index).encode("ascii")
+            + b"\0"
+            + str(line_number).encode("ascii")
+            + b"\0"
+            + stripped
+        ).hexdigest()
+        rows.append(
+            CORE.TumRow(
+                data_index=row_index,
+                source_line_number=line_number,
+                source_bytes=stripped,
+                tokens=tokens,
+                values=tuple(projected_values),
+                row_id=row_id,
+            )
+        )
+        norms.append(norm)
+        errors.append(error)
+    if not rows:
+        raise EvaluationError(f"{label} contains no data rows")
+    timestamps = CORE.np.asarray([row.timestamp for row in rows], dtype=CORE.np.float64)
+    if not CORE.np.all(CORE.np.diff(timestamps) > 0.0):
+        raise EvaluationError(f"{label} timestamps are not unique and increasing")
+    projected = CORE.rows_to_evo(rows)
+    valid, details = projected.check()
+    if not valid:
+        raise EvaluationError(f"{label} projected evo trajectory is invalid: {details}")
+    return rows, {
+        "policy": "q_over_l2_norm_for_evo_objects_only",
+        "maximum_allowed_abs_norm_error": MAX_EVO_QUATERNION_NORM_ERROR,
+        "source_row_count": len(rows),
+        "rows_projected": sum(error != 0.0 for error in errors),
+        "minimum_source_norm": min(norms),
+        "maximum_source_norm": max(norms),
+        "maximum_abs_source_norm_error": max(errors),
+        "source_bytes_unchanged": True,
+        "source_tokens_unchanged": True,
+        "row_ids_from_raw_source_bytes": True,
+    }
+
+
+def _project_loaded_evo_trajectory(value: Any, label: str) -> Any:
+    quaternions = CORE.np.asarray(value.orientations_quat_wxyz, dtype=CORE.np.float64)
+    norms = CORE.np.linalg.norm(quaternions, axis=1)
+    errors = CORE.np.abs(norms - 1.0)
+    if (
+        not CORE.np.all(CORE.np.isfinite(norms))
+        or CORE.np.any(norms <= 0.0)
+        or CORE.np.any(errors > MAX_EVO_QUATERNION_NORM_ERROR)
+    ):
+        raise EvaluationError(f"{label} quaternion projection boundary failed")
+    projected = CORE.trajectory.PoseTrajectory3D(
+        positions_xyz=CORE.np.asarray(value.positions_xyz, dtype=CORE.np.float64),
+        orientations_quat_wxyz=quaternions / norms[:, None],
+        timestamps=CORE.np.asarray(value.timestamps, dtype=CORE.np.float64),
+    )
+    valid, details = projected.check()
+    if not valid:
+        raise EvaluationError(f"{label} projected evo trajectory is invalid: {details}")
+    return projected
 
 
 def sha256_file(path: Path) -> str:
@@ -723,12 +834,20 @@ def evaluate_pair(
         matrix_binding = _validate_matrix_binding(
             matrix_path, runs, gt_identity, initial_identity_cache
         )
-        gt_rows = CORE.read_tum_exact(gt_path, "ground truth")
-        estimate_rows = {
-            system: CORE.read_tum_exact(
-                runs[system]["trajectory_path"], f"{system} estimate"
+        gt_rows, gt_projection = _read_tum_with_bounded_quaternion_projection(
+            gt_path, "ground truth"
+        )
+        estimate_rows = {}
+        estimate_projection = {}
+        for system in SYSTEMS:
+            estimate_rows[system], estimate_projection[system] = (
+                _read_tum_with_bounded_quaternion_projection(
+                    runs[system]["trajectory_path"], f"{system} estimate"
+                )
             )
-            for system in SYSTEMS
+        quaternion_projection = {
+            "ground_truth": gt_projection,
+            **estimate_projection,
         }
         associations = {
             system: _associate_or_empty(gt_rows, estimate_rows[system])
@@ -771,6 +890,7 @@ def evaluate_pair(
                 for system in SYSTEMS
             },
             "ground_truth": gt_identity,
+            "quaternion_projection": quaternion_projection,
             "matrix_binding": matrix_binding,
             "association": {
                 "implementation": "evo 1.31.1 matching_time_indices",
@@ -793,6 +913,7 @@ def evaluate_pair(
             "ground_truth_opened_only_by_post_close_evaluator": True,
             "identical_common_gt_population": True,
             "evaluator_runtime_pinned": True,
+            "bounded_quaternion_projection_for_evo_only": True,
         }
         if len(common_gt) < MINIMUM_COMMON_POSES:
             result = {
@@ -847,7 +968,9 @@ def evaluate_pair(
         for system in SYSTEMS:
             CORE.write_tum(paths[system], common_estimate[system], common_gt)
         trajectories = {
-            name: CORE.file_interface.read_tum_trajectory_file(str(path))
+            name: _project_loaded_evo_trajectory(
+                CORE.file_interface.read_tum_trajectory_file(str(path)), name
+            )
             for name, path in paths.items()
         }
         reference = trajectories["reference"]

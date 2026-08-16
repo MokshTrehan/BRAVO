@@ -142,7 +142,7 @@ class SyntheticPair:
         write_tum(estimate, trajectory_rows(system, start, stop))
         manifest = {
             "schema": MODULE.RUN_SCHEMA,
-            "protocol_id": "CDSC-1",
+            "protocol_id": "CDSC-1R1",
             "dataset": "synthetic",
             "sequence": "long_curve",
             "run_id": f"synthetic-{system.lower()}",
@@ -251,6 +251,103 @@ class CrossDatasetPairEvaluatorTests(unittest.TestCase):
                 digest, relative = line.split("  ", 1)
                 self.assertEqual(MODULE.sha256_file(output / relative), digest)
             self.assert_no_staging(root, "pair")
+
+    def test_quantized_quaternions_are_projected_with_raw_identity_retained(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pair = SyntheticPair(root)
+            quantized_rows = []
+            for row in trajectory_rows("GT", 0, 150):
+                tokens = row.split()
+                for index in range(4, 8):
+                    tokens[index] = format(float(tokens[index]) * 1.0002, ".12f")
+                quantized_rows.append(" ".join(tokens))
+            write_tum(pair.gt, quantized_rows)
+            gt_identity = file_identity(pair.gt)
+            pair.matrix_value["sequences"][0]["ground_truth"].update(
+                {
+                    "bytes": gt_identity["size_bytes"],
+                    "sha256": gt_identity["sha256"],
+                }
+            )
+            pair.write_matrix()
+            for system in MODULE.SYSTEMS:
+                manifest = pair.manifest(system)
+                manifest["inputs"]["ground_truth"] = gt_identity
+                manifest["inputs"]["matrix"] = file_identity(pair.matrix)
+                pair.write_manifest(system, manifest)
+
+            output = root / "quantized"
+            result = MODULE.evaluate_pair(
+                pair.runs["U0"], pair.runs["S1"], pair.gt, pair.matrix, output
+            )
+            record = result["quaternion_projection"]["ground_truth"]
+            self.assertEqual(record["source_row_count"], 150)
+            self.assertTrue(record["source_bytes_unchanged"])
+            self.assertTrue(record["source_tokens_unchanged"])
+            self.assertTrue(record["row_ids_from_raw_source_bytes"])
+            self.assertGreater(record["maximum_abs_source_norm_error"], 1.0e-4)
+            self.assertLessEqual(
+                record["maximum_abs_source_norm_error"],
+                MODULE.MAX_EVO_QUATERNION_NORM_ERROR,
+            )
+            common_path = output / "common/ground_truth_common.tum"
+            common = MODULE.CORE.np.loadtxt(common_path)
+            self.assertGreater(
+                float(
+                    MODULE.CORE.np.max(
+                        MODULE.CORE.np.abs(
+                            MODULE.CORE.np.linalg.norm(common[:, 4:8], axis=1) - 1.0
+                        )
+                    )
+                ),
+                1.0e-4,
+            )
+            first_common_tokens = next(
+                line.split()
+                for line in common_path.read_text(encoding="ascii").splitlines()
+                if line and not line.startswith("#")
+            )
+            self.assertEqual(first_common_tokens[4:8], quantized_rows[20].split()[4:8])
+            self.assertEqual(result["ground_truth"]["sha256"], gt_identity["sha256"])
+
+    def test_quaternion_projection_rejects_over_bound_and_zero_atomically(self) -> None:
+        for case in ("over_bound", "zero"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                pair = SyntheticPair(root)
+                changed_rows = []
+                for row in trajectory_rows("GT", 0, 150):
+                    tokens = row.split()
+                    if case == "over_bound":
+                        for index in range(4, 8):
+                            tokens[index] = format(float(tokens[index]) * 1.0006, ".12f")
+                    else:
+                        tokens[4:8] = ["0", "0", "0", "0"]
+                    changed_rows.append(" ".join(tokens))
+                write_tum(pair.gt, changed_rows)
+                gt_identity = file_identity(pair.gt)
+                pair.matrix_value["sequences"][0]["ground_truth"].update(
+                    {
+                        "bytes": gt_identity["size_bytes"],
+                        "sha256": gt_identity["sha256"],
+                    }
+                )
+                pair.write_matrix()
+                for system in MODULE.SYSTEMS:
+                    manifest = pair.manifest(system)
+                    manifest["inputs"]["ground_truth"] = gt_identity
+                    manifest["inputs"]["matrix"] = file_identity(pair.matrix)
+                    pair.write_manifest(system, manifest)
+                output = root / "rejected"
+                with self.assertRaisesRegex(
+                    MODULE.EvaluationError, "evo-projection boundary"
+                ):
+                    MODULE.evaluate_pair(
+                        pair.runs["U0"], pair.runs["S1"], pair.gt, pair.matrix, output
+                    )
+                self.assertFalse(output.exists())
+                self.assert_no_staging(root, "rejected")
 
     def test_common_population_below_100_publishes_unassessable_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

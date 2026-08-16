@@ -1,5 +1,5 @@
 #!/usr/bin/python3.8
-"""Resume-safe CDSC-1 U0/S1 campaign orchestrator.
+"""Resume-safe CDSC-1R1 U0/S1 campaign orchestrator.
 
 The estimator-facing runners remain the sole owners of a trial directory.  This
 driver only chooses the frozen matrix order, launches a runner from the correct
@@ -39,7 +39,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 PYTHON = Path("/usr/bin/python3.8")
 BASH = Path("/bin/bash")
-PROTOCOL_ID = "CDSC-1"
+PROTOCOL_ID = "CDSC-1R1"
 PROTOCOL_FILE = REPO_ROOT / "docs" / "icra27" / "CROSS_DATASET_SYSTEM_COMPARISON_PROTOCOL.md"
 MATRIX_FILE = REPO_ROOT / "project" / "icra27_cross_dataset_matrix.yaml"
 
@@ -356,7 +356,7 @@ def row_key(row: MatrixRow) -> str:
 
 def run_location(root: Path, lane: str, row: MatrixRow, system: str) -> RunLocation:
     key = row_key(row)
-    run_id = "cdsc1-{:02d}-{}-{}-{}-a1".format(
+    run_id = "cdsc1r1-{:02d}-{}-{}-{}-a1".format(
         row.order, safe_sequence(row.sequence), system.lower(), lane
     )
     output_root = root / lane / key / system
@@ -393,7 +393,7 @@ def load_matrix(path: Path, require_canonical: bool = True) -> Tuple[MatrixRow, 
     except OSError as exc:
         raise CampaignError("campaign matrix does not resolve") from exc
     if require_canonical and resolved != MATRIX_FILE.resolve(strict=True):
-        raise CampaignError("campaign matrix is not the canonical CDSC-1 path")
+        raise CampaignError("campaign matrix is not the canonical CDSC-1R1 path")
     try:
         value = yaml.load(resolved.read_text(encoding="utf-8"), Loader=_UniqueLoader)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
@@ -513,7 +513,7 @@ def sourced_command(setup: Path, command: Sequence[str]) -> List[str]:
         "--norc",
         "-c",
         'source "$1" || exit $?; shift; exec "$@"',
-        "cdsc1-source",
+        "cdsc1r1-source",
         str(setup),
         *[str(item) for item in command],
     ]
@@ -581,9 +581,9 @@ def build_pair_command(paths: RuntimePaths, root: Path, row: MatrixRow) -> List[
         str(PYTHON),
         str(paths.pair_evaluator),
         "--u0-run",
-        str(run_location(root, "scored", row, "U0").result_path),
+        str(run_location(root, "scored", row, "U0").run_directory),
         "--s1-run",
-        str(run_location(root, "scored", row, "S1").result_path),
+        str(run_location(root, "scored", row, "S1").run_directory),
         "--ground-truth",
         str(row.ground_truth["canonical_path"]),
         "--matrix",
@@ -1068,7 +1068,7 @@ def validate_static_inputs(
             _regular_required(_config_path(paths, row.dataset, system), "{} {} config".format(row.dataset, system))
             _regular_required(_launch_path(paths, row.dataset, system), "{} {} launch".format(row.dataset, system))
     protocol_text = paths.protocol.read_text(encoding="utf-8", errors="strict")
-    if "PROSPECTIVE_NOT_RUN" not in protocol_text or "Protocol ID: `CDSC-1`" not in protocol_text:
+    if "PROSPECTIVE_NOT_RUN" not in protocol_text or "Protocol ID: `CDSC-1R1`" not in protocol_text:
         raise CampaignError("protocol identity/freeze marker is absent")
     return {label: file_identity(path) for label, path in required.items()}
 
@@ -1309,7 +1309,7 @@ class Campaign:
 
     def validate_capture_prerequisites(self) -> Mapping[Tuple[int, str], ValidatedResult]:
         scored: Dict[Tuple[int, str], ValidatedResult] = {}
-        # CDSC-1 freezes the complete 50-cell scored lane before *any* capture
+        # CDSC-1R1 freezes the complete 50-cell scored lane before *any* capture
         # replay, even when this invocation selects only one dataset/range.
         for row in self.rows:
             for system in row.system_order:

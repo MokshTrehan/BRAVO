@@ -1,13 +1,38 @@
 # Cross-dataset U0--S1 system comparison protocol
 
-- Protocol ID: `CDSC-1`
+- Protocol ID: `CDSC-1R1`
 - Status: **PROSPECTIVE_NOT_RUN**
-- Frozen on: 2026-08-16, before the first CDSC-1 estimator attempt
+- Frozen on: 2026-08-16, before the first CDSC-1R1 estimator attempt
+- Restart lineage: supersedes the stopped `CDSC-1` tooling pilot described below
 - Systems: pinned stock OpenVINS `U0` and frozen SchurVIO-Lite `S1`
 - Datasets: EuRoC MAV, every runnable local TUM-VI bag, and fresh KAIST-11
 - Primary question: post-initialization passage robustness
 - Secondary question: accuracy on an identical ground-truth population
 - Qualitative requirement: retain and review every emitted sparse geometry map
+
+## 0. Restart provenance
+
+The original `CDSC-1` tooling freeze at commit
+`3199bb4fa3f2f77b8a7d181663e66b79992ea090` used protocol SHA-256
+`85d2d9a81a4a36e513653a87aa0c788b15a34fe02056791fd33e65b0a6c142fb`.
+Its append-only artifact root is
+`/home/moksh/schurvio-icra27-artifacts/cross-dataset-system-comparison/cdsc1-20260816T142909Z`.
+Only the two order-1 `MH_01_easy` estimator cells closed: U0 manifest SHA-256
+`c541d35eb8e95a8ea9a0a6c8b9595ecf68717b3ec2a83295bdee9f0fa89c1812`
+and S1 manifest SHA-256
+`db523eb4ca129ecdfb774b99092c6787890ad2b2b41a5068badcbb772fc5d12c`.
+The campaign then stopped before publishing any pair metric because the driver
+passed each `sequence_result.json` where the evaluator required its enclosing
+run directory. A post-close diagnostic also established that the exact
+six-decimal EuRoC reference quaternions require the bounded evo-only projection
+frozen in section 7. No capture cell or later scored cell was attempted.
+
+Those two estimator outputs and the failure receipt remain immutable diagnostic
+evidence but are excluded from every `CDSC-1R1` denominator and metric. This
+restart changes only protocol/evaluator/orchestration tooling. U0, S1 estimator
+source and binaries, configs, inputs, the 25-row matrix, and all scientific
+acceptance rules are unchanged. Every `CDSC-1R1` estimator cell starts in a new
+artifact root after this amended protocol and tooling commit are sealed.
 
 ## 1. Purpose and claim boundary
 
@@ -76,7 +101,7 @@ validated KAIST recovery study:
 
 The reporting commit and tag may identify the completed prior study, but each
 run must bind the science source snapshot and compiled-input provenance above.
-No S1 source, threshold, or estimator behavior may change during CDSC-1.
+No S1 source, threshold, or estimator behavior may change during CDSC-1R1.
 
 S1 uses two deliberately different dataset configuration rules:
 
@@ -94,7 +119,7 @@ S1 uses two deliberately different dataset configuration rules:
    zero `[LONG-GAP-RECOVERY]` records. The existing EuRoC profile
    `config/euroc_mav/estimator_config_gate_d_schur_one_pass.yaml`, SHA-256
    `39279fd929ae91dc1ec63c44f17ff66c369dcd4c9f094ffbf7b95acae07f6d33`,
-   already demonstrates exactly this two-key delta. For CDSC-1, both datasets
+   already demonstrates exactly this two-key delta. For CDSC-1R1, both datasets
    use their byte-exact native config files and the two selectors are applied
    as typed parameters by the hash-frozen S1 launch file. The resolved
    parameter map and launch contract must prove that these are the only
@@ -104,7 +129,7 @@ S1 uses two deliberately different dataset configuration rules:
 
 2. **KAIST:** use the already-validated
    `config/kaist_vio_rotation_robustness/estimator_config.yaml` and its exact
-   calibration files. This is the only CDSC-1 dataset on which long-gap
+   calibration files. This is the only CDSC-1R1 dataset on which long-gap
    recovery is enabled.
 
 The recovery boundary is intentional. The frozen recovery implementation and
@@ -112,7 +137,7 @@ runtime contract are KAIST pinhole/radtan, fixed-calibration evidence. Native
 EuRoC/TUM-VI configurations do not satisfy that contract; TUM-VI is
 equidistant and the native profiles enable online camera calibration. Enabling
 recovery there would be a new algorithm/configuration study and is forbidden
-in CDSC-1. In particular, the prior TUM-VI camera-conditioning profile is not
+in CDSC-1R1. In particular, the prior TUM-VI camera-conditioning profile is not
 eligible: it fixed calibration and set `max_slam: 0`, so it is neither native
 S1 nor capable of supplying C2's retained SLAM landmarks.
 
@@ -120,7 +145,7 @@ S1 nor capable of supplying C2's retained SLAM landmarks.
 
 All local candidates must be checked before any download. Exact bag size and
 the recorded checksum are verified first; a missing or irreparably corrupt
-candidate may be acquired only before the CDSC-1 input manifest is frozen.
+candidate may be acquired only before the CDSC-1R1 input manifest is frozen.
 No bag is overwritten. The tracked `project/datasets.yaml` TUM-VI entries are
 stale: they refer to old pending paths, while the three runnable bags are
 already present under `calibrated/512_16`.
@@ -361,17 +386,24 @@ in the completion denominator and receive no invented error.
 
 The one common evaluator and reference contract is:
 
-1. Associate each estimate independently to unique nearest reference rows
+1. Retain and hash every original TUM row, token, and row identity unchanged.
+   For evo objects only, project each finite nonzero quaternion as
+   `q / ||q||` when `abs(||q|| - 1) <= 0.0005`; reject the pair if any source
+   quaternion falls outside that frozen bound. Derived common-population TUM
+   files retain the source pose tokens. Record the source norm range, row
+   count, and maximum absolute norm error separately for the reference and
+   both estimates.
+2. Associate each estimate independently to unique nearest reference rows
    within 0.01 s.
-2. Intersect the exact reference-row identities associated to both systems.
+3. Intersect the exact reference-row identities associated to both systems.
    The two estimates are then evaluated on that identical common population.
-3. Require at least 100 common poses. Report the common start/end timestamps,
+4. Require at least 100 common poses. Report the common start/end timestamps,
    duration, spatial coverage, and fraction of each reference retained so late
    starts remain visible.
-4. Align each estimate independently to the identical reference population by
+5. Align each estimate independently to the identical reference population by
    SE(3) Umeyama alignment without scale.
-5. Report translation ATE RMSE.
-6. Construct one 1 m all-pairs-from-reference endpoint list from the common
+6. Report translation ATE RMSE.
+7. Construct one 1 m all-pairs-from-reference endpoint list from the common
    reference population and apply the identical list to both systems. Require
    at least 100 pairs, then report translation RPE RMSE and rotation RPE RMSE
    in degrees.
@@ -539,4 +571,4 @@ It must name the datasets, state that corridor4/outdoors4 lack accuracy scores,
 and preserve strict process-health defects. “S1 is more accurate,” “Schur
 caused the improvement,” “S1 tracked every dataset from the beginning,” and
 general robustness/superiority claims require separate evidence and are not
-authorized by CDSC-1.
+authorized by CDSC-1R1.

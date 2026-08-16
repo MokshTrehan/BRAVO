@@ -1,5 +1,5 @@
 #!/usr/bin/python3.8
-"""Validate and publish the final CDSC-1 comparison report.
+"""Validate and publish the final CDSC-1R1 comparison report.
 
 This is a read-only consumer of a completed campaign artifact tree.  It fails
 closed on missing, duplicate, moved, or checksum-invalid evidence, but it does
@@ -36,7 +36,7 @@ SCHEMA = "schurvio.icra27.cross_dataset.aggregate.v1"
 PAIR_SCHEMA = "schurvio.icra27.cross_dataset.pair_result.v1"
 GEOMETRY_SCHEMA = "schurvio.icra27.cross_dataset_geometry_bundle.v1"
 MECHANISM_SCHEMA = "schurvio.icra27.cross_dataset.kaist_rotation_post_pair.v1"
-PROTOCOL_ID = "CDSC-1"
+PROTOCOL_ID = "CDSC-1R1"
 SYSTEMS = ("U0", "S1")
 LANES = ("scored", "capture")
 DATASETS = ("euroc_mav", "tum_vi", "kaist_vio")
@@ -59,11 +59,12 @@ S1_SOURCE_TREE = "b3f9191b8bce3852ebff71e1ebf180181bcd6d05"
 ACCURACY_MINIMUM_PAIRS = 8
 ACCURACY_MEDIAN_LIMIT = 0.10
 ACCURACY_INDIVIDUAL_LIMIT = 0.20
+PAIR_QUATERNION_NORM_MAX_ERROR = 5.0e-4
 SHA256_RE = campaign.SHA256_RE
 
 
 class AggregateError(RuntimeError):
-    """A final evidence tree cannot support a CDSC-1 publication."""
+    """A final evidence tree cannot support a CDSC-1R1 publication."""
 
 
 def utc_now() -> str:
@@ -729,6 +730,54 @@ def _validate_ratio_record(
     return record
 
 
+def _validate_quaternion_projection(
+    value: Any, checks: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    if checks.get("bounded_quaternion_projection_for_evo_only") is not True:
+        raise AggregateError("pair quaternion-projection check is absent")
+    if not isinstance(value, dict) or set(value) != {"ground_truth", "U0", "S1"}:
+        raise AggregateError("pair quaternion-projection record is malformed")
+    for label in ("ground_truth", "U0", "S1"):
+        record = value.get(label)
+        if not isinstance(record, dict):
+            raise AggregateError("pair quaternion-projection member is absent")
+        row_count = record.get("source_row_count")
+        projected = record.get("rows_projected")
+        if (
+            record.get("policy") != "q_over_l2_norm_for_evo_objects_only"
+            or record.get("maximum_allowed_abs_norm_error")
+            != PAIR_QUATERNION_NORM_MAX_ERROR
+            or isinstance(row_count, bool)
+            or not isinstance(row_count, int)
+            or row_count <= 0
+            or isinstance(projected, bool)
+            or not isinstance(projected, int)
+            or projected < 0
+            or projected > row_count
+            or record.get("source_bytes_unchanged") is not True
+            or record.get("source_tokens_unchanged") is not True
+            or record.get("row_ids_from_raw_source_bytes") is not True
+        ):
+            raise AggregateError("pair quaternion-projection policy drift")
+        minimum = _finite_number(record.get("minimum_source_norm"), label + " min q norm")
+        maximum = _finite_number(record.get("maximum_source_norm"), label + " max q norm")
+        maximum_error = _finite_number(
+            record.get("maximum_abs_source_norm_error"), label + " max q norm error", 0.0
+        )
+        observed_error = max(abs(minimum - 1.0), abs(maximum - 1.0))
+        if (
+            minimum <= 0.0
+            or maximum < minimum
+            or maximum_error > PAIR_QUATERNION_NORM_MAX_ERROR
+            or observed_error > PAIR_QUATERNION_NORM_MAX_ERROR
+            or not math.isclose(
+                maximum_error, observed_error, rel_tol=1.0e-12, abs_tol=1.0e-15
+            )
+        ):
+            raise AggregateError("pair quaternion-projection bound failed")
+    return value
+
+
 def _validate_pair_result(
     path: Path,
     row: campaign.MatrixRow,
@@ -778,6 +827,7 @@ def _validate_pair_result(
     checks = value.get("checks")
     if not isinstance(checks, dict):
         raise AggregateError("pair checks are absent")
+    _validate_quaternion_projection(value.get("quaternion_projection"), checks)
     common = value.get("common_population")
     rpe = value.get("rpe_reference_pairs")
     if not isinstance(common, dict) or not isinstance(rpe, dict):
@@ -1190,7 +1240,7 @@ def render_report(aggregate: Mapping[str, Any]) -> str:
     accuracy = aggregate["accuracy"]
     qualitative = aggregate["qualitative"]
     lines = [
-        "# CDSC-1 U0--S1 whole-system comparison",
+        "# CDSC-1R1 U0--S1 whole-system comparison",
         "",
         "## Claim boundary",
         "",
@@ -1382,7 +1432,7 @@ def aggregate_campaign(
     matrix_resolved = matrix_path.expanduser().resolve(strict=True)
     protocol_resolved = protocol_path.expanduser().resolve(strict=True)
     if matrix_resolved != campaign.MATRIX_FILE.resolve(strict=True) or protocol_resolved != campaign.PROTOCOL_FILE.resolve(strict=True):
-        raise AggregateError("CDSC-1 aggregate requires the canonical matrix and protocol paths")
+        raise AggregateError("CDSC-1R1 aggregate requires the canonical matrix and protocol paths")
     rows = campaign.load_matrix(matrix_resolved, require_canonical=True)
     matrix_identity = file_identity(matrix_resolved)
     protocol_identity = file_identity(protocol_resolved)

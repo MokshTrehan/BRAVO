@@ -175,6 +175,46 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual(result["complete_pair_result_count"], 7)
 
 
+class PairQuaternionProjectionTests(unittest.TestCase):
+    @staticmethod
+    def record():
+        member = {
+            "policy": "q_over_l2_norm_for_evo_objects_only",
+            "maximum_allowed_abs_norm_error": 5.0e-4,
+            "source_row_count": 100,
+            "rows_projected": 100,
+            "minimum_source_norm": 0.9998,
+            "maximum_source_norm": 1.0003,
+            "maximum_abs_source_norm_error": 0.0003,
+            "source_bytes_unchanged": True,
+            "source_tokens_unchanged": True,
+            "row_ids_from_raw_source_bytes": True,
+        }
+        return {name: dict(member) for name in ("ground_truth", "U0", "S1")}
+
+    def test_exact_projection_contract_passes(self):
+        record = self.record()
+        self.assertIs(
+            aggregate._validate_quaternion_projection(
+                record, {"bounded_quaternion_projection_for_evo_only": True}
+            ),
+            record,
+        )
+
+    def test_missing_or_over_bound_projection_fails_closed(self):
+        with self.assertRaises(aggregate.AggregateError):
+            aggregate._validate_quaternion_projection(
+                None, {"bounded_quaternion_projection_for_evo_only": True}
+            )
+        record = self.record()
+        record["ground_truth"]["maximum_source_norm"] = 1.0006
+        record["ground_truth"]["maximum_abs_source_norm_error"] = 0.0006
+        with self.assertRaises(aggregate.AggregateError):
+            aggregate._validate_quaternion_projection(
+                record, {"bounded_quaternion_projection_for_evo_only": True}
+            )
+
+
 class ClosureAndAccountingTests(unittest.TestCase):
     @staticmethod
     def write_closed(root: Path) -> Path:
