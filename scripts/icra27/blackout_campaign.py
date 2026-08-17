@@ -574,7 +574,8 @@ def validate_closed_result(cell: Cell, result_path: Path) -> Dict[str, Any]:
     if cell.masked:
         if not isinstance(blackout, dict) or blackout.get("arm") != cell.arm or float(blackout.get("k_seconds", math.nan)) != float(cell.k):
             raise BlackoutCampaignError("sequence result blackout record differs from the planned cell")
-        if int(round(float(blackout.get("mask_start_s", 0.0)) * NS)) != cell.mask_start_ns:
+        start_ns = ((blackout.get("manifest_summary") or {}).get("mask") or {}).get("start_header_stamp_ns")
+        if start_ns is None or int(start_ns) != cell.mask_start_ns:
             raise BlackoutCampaignError("sequence result mask start differs from the committed injection point")
     elif blackout is not None:
         raise BlackoutCampaignError("un-injected replica unexpectedly ran through the masking path")
