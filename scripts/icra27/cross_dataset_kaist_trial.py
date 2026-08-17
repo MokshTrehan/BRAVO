@@ -41,6 +41,7 @@ import cross_dataset_trial as common  # noqa: E402
 import kaist_pairing_census as pairing  # noqa: E402
 import kaist_pair_evaluator as metric_core  # noqa: E402
 import rotation_robustness_trial as rotation  # noqa: E402
+import blackout_runner_support as blackout  # noqa: E402
 
 
 SCHEMA = common.SCHEMA
@@ -124,7 +125,7 @@ RECOVERY_SWITCH_PARAMETER = "long_gap_recovery_enabled"
 LANDMARK_ELIMINATION = {"S1": "schur", "N0": "nullspace", "S1-recOFF": "schur", "N0-recOFF": "nullspace"}
 PERTURBATION_SYSTEMS: Tuple[str, ...] = ("U0", "S1", "N0", "S1-recOFF", "N0-recOFF")
 PERTURBATION_CAMPAIGN_ID = "PERTURB-1"
-PERTURBATION_CAMPAIGN_IDS: Tuple[str, ...] = ("PERTURB-1", "ABLATE-REC-1")
+PERTURBATION_CAMPAIGN_IDS: Tuple[str, ...] = ("PERTURB-1", "ABLATE-REC-1", "BLACKOUT-1")
 PERTURBATION_SEED_LABELS: Tuple[str, ...] = ("frozen",)
 
 KAIST_SEQUENCES: Tuple[str, ...] = (
@@ -1824,6 +1825,41 @@ def _recovery_evidence(
     return result
 
 
+def _blackout_recovery_evidence(system: str, console_text: str) -> Dict[str, Any]:
+    """BLACKOUT-1 (D6): descriptive recovery record; only the enabled-contract lines gate."""
+    if system == "U0":
+        event_lines = [line for line in console_text.splitlines() if rotation.RECOVERY_PREFIX in line]
+        if event_lines:
+            raise TrialError("original U0 unexpectedly emitted S1 recovery events")
+        return {
+            "status": "NOT_APPLICABLE",
+            "reason": "PINNED_ORIGINAL_UPSTREAM_HAS_NO_C2_RECOVERY",
+            "sequence_contract": "ORIGINAL_U0",
+            "pass": True,
+            "event_line_count": 0,
+            "blackout_recovery": blackout.describe_recovery(console_text, False),
+        }
+    enabled = system not in RECOVERY_ABLATED_SYSTEMS
+    described = blackout.describe_recovery(console_text, enabled)
+    if not described["contract_lines_ok"]:
+        raise TrialError(
+            "BLACKOUT-1 recovery contract lines: expected {} ; observed counts {}".format(
+                "exactly one contract_validated and one summary line" if enabled else "zero recovery lines",
+                described["event_counts"],
+            )
+        )
+    return {
+        "status": "DESCRIPTIVE_BLACKOUT",
+        "reason": "BLACKOUT_1_RECOVERY_EVIDENCE_IS_DESCRIPTIVE_D6",
+        "sequence_contract": "BLACKOUT_ENABLED" if enabled else "ABLATED_OFF",
+        "pass": True,
+        "enabled": enabled,
+        "event_line_count": described["event_line_count"],
+        "blackout_recovery": described,
+        "post_pair_rotation_evaluation": "NOT_APPLICABLE",
+    }
+
+
 def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
     _validate_request(args)
     perturbation = perturbation_record(args) if perturbation_requested(args) else None
@@ -1948,6 +1984,19 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
     try:
         common.assert_port_available(args.ros_port)
         bag = common._regular_file(args.bag, "adapted KAIST bag")
+        # BLACKOUT-1: the frozen bag stays bound to the matrix; the estimator
+        # replays the masked copy described by the manifest (DECISIONS D4).
+        blackout_record: Optional[Dict[str, Any]] = None
+        estimator_bag = bag
+        if blackout.requested(args):
+            blackout_record = blackout.bind(args, bag)
+            estimator_bag = common._regular_file(Path(blackout_record["masked_bag_path"]), "masked replay bag")
+            result["blackout"] = {k: v for k, v in blackout_record.items() if k != "manifest"}
+            result["blackout"]["manifest_summary"] = {
+                k: blackout_record["manifest"].get(k)
+                for k in ("source_bag", "masked_bag", "mask", "dropped_per_topic", "kept_per_topic", "imu_messages_kept", "tool")
+            }
+            input_paths_blackout_manifest = Path(blackout_record["manifest_path"])
         config = common._regular_file(args.config, "estimator config")
         launch = common._regular_file(args.launch, "KAIST launch")
         binary = common._regular_file(args.binary, "estimator binary")
@@ -1966,7 +2015,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             Path(rotation.__file__).resolve(), "runtime summary parser module"
         )
         input_paths = {
-            "bag": bag,
+            "bag": estimator_bag,
             "config": config,
             "launch": launch,
             "binary": binary,
@@ -1979,6 +2028,9 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             "visualizer_gate_projection_module": visualizer_gate_module,
             "runtime_summary_parser_module": runtime_summary_module,
         }
+        if blackout_record is not None:
+            input_paths["blackout_manifest"] = input_paths_blackout_manifest
+            input_paths["blackout_support_module"] = Path(blackout.__file__).resolve()
         for name, path in input_paths.items():
             if name != "bag":
                 result["inputs"][name] = common.file_identity(path)
@@ -2008,13 +2060,21 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         stage = "kaist_pair_census"
         normalized_census, full_census, bag_identity = kaist_pair_census(
             args.system,
-            bag,
+            estimator_bag,
             estimator_bag_start,
             args.bag_duration,
             float(config_contract["track_frequency_hz"]),
             perturbation=perturbation is not None,
         )
-        common.validate_matrix_bag_identity(campaign, bag_identity)
+        if blackout_record is None:
+            common.validate_matrix_bag_identity(campaign, bag_identity)
+        else:
+            # frozen source bound to the matrix through the manifest; masked bag bound to the manifest
+            result["blackout"]["source_binding"] = blackout.verify_source_identity(
+                blackout_record, campaign["expected_bag"]
+            )
+            result["blackout"]["masked_binding"] = blackout.verify_masked_identity(blackout_record, bag_identity)
+            result["inputs"]["blackout_source_bag"] = dict(campaign["expected_bag"])
         result["inputs"]["bag"] = bag_identity
         result["input_interval"] = normalized_census["input_interval"]
         census_path = run_dir / "diagnostics" / "native_pair_census.json"
@@ -2029,7 +2089,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             args.system,
             launch,
             config,
-            bag,
+            estimator_bag,
             estimator_bag_start,
             args.bag_duration,
             run_dir,
@@ -2049,7 +2109,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             args.system,
             dump_path.read_text(encoding="utf-8", errors="strict"),
             config,
-            bag,
+            estimator_bag,
             estimator_bag_start,
             run_dir,
         )
@@ -2200,9 +2260,12 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             }
 
         try:
-            result["robustness_mechanism"] = _recovery_evidence(
-                args.system, args.sequence, console_text, result["input_interval"]
-            )
+            if blackout_record is not None:
+                result["robustness_mechanism"] = _blackout_recovery_evidence(args.system, console_text)
+            else:
+                result["robustness_mechanism"] = _recovery_evidence(
+                    args.system, args.sequence, console_text, result["input_interval"]
+                )
         except KAIST_VALIDATION_ERRORS as exc:
             result["robustness_mechanism"] = {
                 "status": "FAIL",
@@ -2291,7 +2354,12 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                 == tum["timestamp_sequence_sha256"]
             )
             timing_contract = None
-            if timing is not None and result["robustness_mechanism"].get("pass") is True:
+            if timing is not None and blackout_record is not None:
+                timing_contract = blackout.timing_descriptive(
+                    rotation._table_timestamps(state_path), rotation._table_timestamps(timing_path, ",")
+                )
+                result["robustness_mechanism"]["timing"] = timing_contract
+            elif timing is not None and result["robustness_mechanism"].get("pass") is True:
                 try:
                     recovery_runtime = (
                         {"status": "NOT_ENABLED", "sequence_contract": "DEFAULT_OFF"}
@@ -2335,6 +2403,13 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                     state,
                     result["robustness_mechanism"],
                 )
+                if blackout_record is not None:
+                    result["completion"] = blackout.blackout_completion(
+                        result["completion"],
+                        blackout_record,
+                        result["robustness_mechanism"].get("blackout_recovery") or {},
+                        blackout.read_timestamps(state_path),
+                    )
                 coverage_pass = bool(result["completion"]["pass"])
                 continuity_pass = bool(result["completion"]["maximum_state_gap_pass"])
                 tail_pass = bool(result["completion"]["tail_gap_pass"])
@@ -2355,7 +2430,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         result["artifacts"] = refresh_artifacts(run_dir, args.system)
         if args.mode == "scored" and (
             perturbation is not None
-            and (args.system != "S1" or estimator_bag_start != 0.0)
+            and (args.system != "S1" or estimator_bag_start != 0.0 or (blackout_record is not None and blackout_record["mask_active"]))
         ):
             result["historical_determinism"] = {
                 "status": "NOT_APPLICABLE_PERTURBED_OR_CONTROL_CELL",
@@ -3268,6 +3343,10 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--perturbation-frame-rate-hz", type=float, default=30.0)
     run.add_argument("--perturbation-seed-label", default="frozen")
     run.add_argument("--perturbation-axis", choices=("offset", "seed"), default="offset")
+    # BLACKOUT-1 (docs/icra27/BLACKOUT_PREREG.md): replay-layer camera masking.
+    run.add_argument("--blackout-manifest", type=Path, default=None)
+    run.add_argument("--blackout-arm", choices=("A", "B"), default=None)
+    run.add_argument("--blackout-k-seconds", type=float, default=None)
 
     post = commands.add_parser(
         "post-pair-rotation",

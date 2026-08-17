@@ -53,6 +53,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 import kaist_pairing_census as pairing  # noqa: E402
 import kaist_runtime_identity as pinned_runtime  # noqa: E402
+import blackout_runner_support as blackout  # noqa: E402
 
 
 SCHEMA = "schurvio.icra27.cross_dataset.sequence_result.v1"
@@ -65,13 +66,18 @@ SYSTEMS = ("U0", "S1")
 # =false.  Outside KAIST the frozen S1 configuration never enables recovery
 # (the key is absent from config/euroc_mav, executable default false), so the
 # switch is expected to be inert here; that expectation is what P2 tests.
-S1_LIKE_SYSTEMS = ("S1", "N0", "S1-recOFF", "N0-recOFF")
+# BLACKOUT-1 (docs/icra27/BLACKOUT_PREREG.md, DECISIONS D5): S1-recON-euroc is the
+# declared EuRoC STUDY configuration = frozen S1 launch + the single added ROS
+# parameter long_gap_recovery_enabled=true; accepted only in BLACKOUT-1 mode.
+S1_LIKE_SYSTEMS = ("S1", "N0", "S1-recOFF", "N0-recOFF", "S1-recON-euroc")
 RECOVERY_ABLATED_SYSTEMS = {"S1-recOFF": "S1", "N0-recOFF": "N0"}
+RECOVERY_STUDY_SYSTEMS = {"S1-recON-euroc": "S1"}
 RECOVERY_SWITCH_PARAMETER = "long_gap_recovery_enabled"
-LANDMARK_ELIMINATION = {"S1": "schur", "N0": "nullspace", "S1-recOFF": "schur", "N0-recOFF": "nullspace"}
-PERTURBATION_SYSTEMS = ("U0", "S1", "N0", "S1-recOFF", "N0-recOFF")
+LANDMARK_ELIMINATION = {"S1": "schur", "N0": "nullspace", "S1-recOFF": "schur", "N0-recOFF": "nullspace", "S1-recON-euroc": "schur"}
+PERTURBATION_SYSTEMS = ("U0", "S1", "N0", "S1-recOFF", "N0-recOFF", "S1-recON-euroc")
 PERTURBATION_CAMPAIGN_ID = "PERTURB-1"
-PERTURBATION_CAMPAIGN_IDS = ("PERTURB-1", "ABLATE-REC-1")
+PERTURBATION_CAMPAIGN_IDS = ("PERTURB-1", "ABLATE-REC-1", "BLACKOUT-1")
+BLACKOUT_CAMPAIGN_ID = "BLACKOUT-1"
 PERTURBATION_SEED_LABELS = ("frozen",)
 MODES = ("scored", "capture")
 DATASETS = ("euroc_mav", "tum_vi")
@@ -124,6 +130,7 @@ S1_NODE_PARAMETERS = frozenset(
     (*COMMON_NODE_PARAMETERS, "up_msckf_landmark_elimination", "up_msckf_max_visual_passes")
 )
 RECOFF_NODE_PARAMETERS = frozenset((*S1_NODE_PARAMETERS, RECOVERY_SWITCH_PARAMETER))
+RECON_STUDY_NODE_PARAMETERS = RECOFF_NODE_PARAMETERS
 LAUNCH_ARGUMENTS = frozenset(
     (
         "config_path",
@@ -251,6 +258,11 @@ CANONICAL_LAUNCHES: Mapping[str, Tuple[Path, str]] = {
     "N0-recOFF": (
         REPO_ROOT / "project" / "icra27_cross_dataset_n0_recoff_serial.launch",
         "7d183c5dd3db7c6f34fb0d4570a8f5e9c8113661cae63d6516319072a50a2442",
+    ),
+    # BLACKOUT-1: recON study launch = S1 launch + the single added long_gap_recovery_enabled=true.
+    "S1-recON-euroc": (
+        REPO_ROOT / "project" / "icra27_cross_dataset_s1_recon_euroc_serial.launch",
+        "722087c24c1da54010e5e1fd7f73e43d13686c8e6f5ae91c003d12a5908e1e49",
     ),
 }
 DATASET_CONFIG_SHA256: Mapping[str, str] = {
@@ -1066,6 +1078,8 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
         expected = COMMON_NODE_PARAMETERS
     elif system in RECOVERY_ABLATED_SYSTEMS:
         expected = RECOFF_NODE_PARAMETERS
+    elif system in RECOVERY_STUDY_SYSTEMS:
+        expected = RECON_STUDY_NODE_PARAMETERS
     else:
         expected = S1_NODE_PARAMETERS
     if None in names or set(names) != expected or len(names) != len(expected):
@@ -1092,6 +1106,11 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
             or by_name[RECOVERY_SWITCH_PARAMETER].get("value") != "false"
         ):
             raise TrialError("{} launch does not set {}=false".format(system, RECOVERY_SWITCH_PARAMETER))
+        if system in RECOVERY_STUDY_SYSTEMS and (
+            by_name[RECOVERY_SWITCH_PARAMETER].get("type") != "bool"
+            or by_name[RECOVERY_SWITCH_PARAMETER].get("value") != "true"
+        ):
+            raise TrialError("{} launch does not set {}=true".format(system, RECOVERY_SWITCH_PARAMETER))
     return {
         "node_name": NODE_NAME,
         "argument_names": sorted(arguments),
@@ -1108,8 +1127,11 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
         "n0_matched_nullspace_control": system == "N0",
         "recovery_parameter_absent": "long_gap_recovery_enabled" not in names,
         "recovery_ablated_system": system in RECOVERY_ABLATED_SYSTEMS,
-        "recon_counterpart_system": RECOVERY_ABLATED_SYSTEMS.get(system),
-        "launch_recovery_switch": "false" if system in RECOVERY_ABLATED_SYSTEMS else None,
+        "recon_counterpart_system": RECOVERY_ABLATED_SYSTEMS.get(system) or RECOVERY_STUDY_SYSTEMS.get(system),
+        "recovery_study_system": system in RECOVERY_STUDY_SYSTEMS,
+        "launch_recovery_switch": (
+            "false" if system in RECOVERY_ABLATED_SYSTEMS else ("true" if system in RECOVERY_STUDY_SYSTEMS else None)
+        ),
     }
 
 
@@ -1188,6 +1210,8 @@ def validate_resolved_parameters(
         )
         if system in RECOVERY_ABLATED_SYSTEMS:
             expected[namespace + RECOVERY_SWITCH_PARAMETER] = False
+        if system in RECOVERY_STUDY_SYSTEMS:
+            expected[namespace + RECOVERY_SWITCH_PARAMETER] = True
     if normalized != expected:
         missing = sorted(set(expected) - set(normalized))
         extra = sorted(set(normalized) - set(expected))
@@ -1211,6 +1235,7 @@ def validate_resolved_parameters(
         or (
             key.rsplit("/", 1)[-1] == RECOVERY_SWITCH_PARAMETER
             and not (system in RECOVERY_ABLATED_SYSTEMS and normalized[key] is False)
+            and not (system in RECOVERY_STUDY_SYSTEMS and normalized[key] is True)
         )
     ]
     if forbidden:
@@ -1225,7 +1250,7 @@ def validate_resolved_parameters(
         ),
         "recovery_switch_resolved": (
             normalized.get(NODE_NAMESPACE + "/" + RECOVERY_SWITCH_PARAMETER)
-            if system in RECOVERY_ABLATED_SYSTEMS
+            if (system in RECOVERY_ABLATED_SYSTEMS or system in RECOVERY_STUDY_SYSTEMS)
             else "ABSENT_DEFAULT_OFF"
         ),
     }
@@ -2464,6 +2489,8 @@ def perturbation_record(args: argparse.Namespace) -> Dict[str, Any]:
         )
     if args.system not in PERTURBATION_SYSTEMS:
         raise TrialError("unknown perturbation system: {}".format(args.system))
+    if args.system in RECOVERY_STUDY_SYSTEMS and campaign_id != BLACKOUT_CAMPAIGN_ID:
+        raise TrialError("system {} is accepted only in the BLACKOUT-1 study campaign".format(args.system))
     frozen_start = float(args.bag_start)
     shift_seconds = float(offset_frames) / float(frame_rate_hz)
     estimator_start = frozen_start + shift_seconds
@@ -2625,6 +2652,18 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
     try:
         assert_port_available(args.ros_port)
         bag = _regular_file(args.bag, "input bag")
+        # BLACKOUT-1: the frozen bag stays bound to the matrix; the estimator
+        # replays the masked copy described by the manifest (DECISIONS D4).
+        blackout_record: Optional[Dict[str, Any]] = None
+        estimator_bag = bag
+        if blackout.requested(args):
+            blackout_record = blackout.bind(args, bag)
+            estimator_bag = _regular_file(Path(blackout_record["masked_bag_path"]), "masked replay bag")
+            result["blackout"] = {k: v for k, v in blackout_record.items() if k != "manifest"}
+            result["blackout"]["manifest_summary"] = {
+                k: blackout_record["manifest"].get(k)
+                for k in ("source_bag", "masked_bag", "mask", "dropped_per_topic", "kept_per_topic", "imu_messages_kept", "tool")
+            }
         config = _regular_file(args.config, "estimator config")
         launch = _regular_file(args.launch, "cross-dataset launch")
         binary = _regular_file(args.binary, "estimator binary")
@@ -2637,7 +2676,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             RUNTIME_IDENTITY_TOOL, "runtime identity validator"
         )
         input_paths = {
-            "bag": bag,
+            "bag": estimator_bag,
             "config": config,
             "launch": launch,
             "binary": binary,
@@ -2648,6 +2687,9 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             "pairing_census_tool": pairing_tool,
             "runtime_identity_validator": runtime_identity_tool,
         }
+        if blackout_record is not None:
+            input_paths["blackout_manifest"] = Path(blackout_record["manifest_path"])
+            input_paths["blackout_support_module"] = Path(blackout.__file__).resolve()
         result["inputs"].update(
             {
                 "config": file_identity(config),
@@ -2700,12 +2742,19 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
 
         stage = "native_pair_census"
         census, bag_identity = native_pair_census(
-            bag,
+            estimator_bag,
             estimator_bag_start,
             args.bag_duration,
             config_contract["track_frequency_hz"],
         )
-        validate_matrix_bag_identity(campaign, bag_identity)
+        if blackout_record is None:
+            validate_matrix_bag_identity(campaign, bag_identity)
+        else:
+            result["blackout"]["source_binding"] = blackout.verify_source_identity(
+                blackout_record, campaign["expected_bag"]
+            )
+            result["blackout"]["masked_binding"] = blackout.verify_masked_identity(blackout_record, bag_identity)
+            result["inputs"]["blackout_source_bag"] = dict(campaign["expected_bag"])
         result["inputs"]["bag"] = bag_identity
         result["input_interval"] = census["input_interval"]
         census_path = run_dir / "diagnostics" / "native_pair_census.json"
@@ -2714,7 +2763,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
 
         stage = "resolved_parameters"
         launch_arguments = _launch_arguments(
-            launch, config, bag, estimator_bag_start, args.bag_duration, run_dir
+            launch, config, estimator_bag, estimator_bag_start, args.bag_duration, run_dir
         )
         result["estimator_launch_arguments"] = launch_arguments
         dump_path = run_dir / "diagnostics" / "resolved_ros_parameters.yaml"
@@ -2731,7 +2780,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             args.system,
             dump_path.read_text(encoding="utf-8", errors="strict"),
             config,
-            bag,
+            estimator_bag,
             estimator_bag_start,
             args.bag_duration,
             run_dir,
@@ -2840,16 +2889,49 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                 stage,
                 TrialError("roslaunch did not report exactly one expected estimator start"),
             )
-        if console["recovery_event_line_count"] != 0:
-            runtime_contract_valid = False
-            _record_error(
-                result,
-                stage,
-                TrialError("long-gap recovery emitted events in a default-off campaign"),
+        if blackout_record is not None:
+            # BLACKOUT-1 (D6): recovery evidence is descriptive; only the
+            # enabled-contract lines gate (study system: exactly one
+            # contract_validated + one summary; recOFF/U0: zero lines).
+            console_text_full = (run_dir / "diagnostics" / "console.log").read_text(
+                encoding="utf-8", errors="replace"
             )
-        result["checks"]["recovery_runtime_event_count_zero"] = (
-            console["recovery_event_line_count"] == 0
-        )
+            recovery_enabled_here = args.system in RECOVERY_STUDY_SYSTEMS
+            described = blackout.describe_recovery(console_text_full, recovery_enabled_here)
+            result["robustness_mechanism"] = {
+                "status": "DESCRIPTIVE_BLACKOUT",
+                "reason": "BLACKOUT_1_RECOVERY_EVIDENCE_IS_DESCRIPTIVE_D6",
+                "sequence_contract": "BLACKOUT_ENABLED" if recovery_enabled_here else "DEFAULT_OFF",
+                "pass": bool(described["contract_lines_ok"]),
+                "enabled": recovery_enabled_here,
+                "event_line_count": described["event_line_count"],
+                "blackout_recovery": described,
+            }
+            if not described["contract_lines_ok"]:
+                runtime_contract_valid = False
+                _record_error(
+                    result,
+                    stage,
+                    TrialError(
+                        "BLACKOUT-1 recovery contract lines: expected {}; observed {}".format(
+                            "exactly one contract_validated and one summary line" if recovery_enabled_here else "zero recovery lines",
+                            described["event_counts"],
+                        )
+                    ),
+                )
+            result["checks"]["recovery_runtime_event_count_zero"] = console["recovery_event_line_count"] == 0
+            result["checks"]["recovery_default_off"] = not recovery_enabled_here
+        else:
+            if console["recovery_event_line_count"] != 0:
+                runtime_contract_valid = False
+                _record_error(
+                    result,
+                    stage,
+                    TrialError("long-gap recovery emitted events in a default-off campaign"),
+                )
+            result["checks"]["recovery_runtime_event_count_zero"] = (
+                console["recovery_event_line_count"] == 0
+            )
         numeric_integrity_valid = not any(
             console[name]
             for name in (
@@ -2931,6 +3013,13 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             }
             try:
                 result["completion"] = assess_output_coverage(result["input_interval"], state)
+                if blackout_record is not None:
+                    result["completion"] = blackout.blackout_completion(
+                        result["completion"],
+                        blackout_record,
+                        (result.get("robustness_mechanism") or {}).get("blackout_recovery") or {},
+                        blackout.read_timestamps(state_path),
+                    )
                 coverage_pass = bool(result["completion"]["pass"])
                 continuity_pass = bool(result["completion"]["maximum_state_gap_pass"])
                 tail_pass = bool(result["completion"]["tail_gap_pass"])
@@ -3117,6 +3206,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset", required=True, choices=DATASETS)
     parser.add_argument("--sequence", required=True)
     parser.add_argument("--system", required=True, choices=PERTURBATION_SYSTEMS)
+    # BLACKOUT-1 (docs/icra27/BLACKOUT_PREREG.md): replay-layer camera masking.
+    parser.add_argument("--blackout-manifest", type=Path, default=None)
+    parser.add_argument("--blackout-arm", choices=("A", "B"), default=None)
+    parser.add_argument("--blackout-k-seconds", type=float, default=None)
     parser.add_argument("--mode", choices=MODES, default="scored")
     parser.add_argument("--bag", required=True, type=Path)
     parser.add_argument("--bag-start", type=float, default=0.0)
