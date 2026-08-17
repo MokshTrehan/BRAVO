@@ -262,7 +262,7 @@ def _count(rows: Sequence[Mapping[str, Any]], key: str) -> Dict[str, int]:
 
 def verdicts(rows: Sequence[Mapping[str, Any]], gates: Mapping[str, Any]) -> Dict[str, Any]:
     look = cell_lookup(rows)
-    recon = [r for r in rows if r["role"] == "recON" and r["arm"] in ("A", "B") and r["executed"] and not r["study_check"]]
+    recon = [r for r in rows if r["role"] == "recON" and r["arm"] in ("A", "B") and r["executed"] and not r["study_check"] and r["k"] in DURATIONS]
     recon_valid = [r for r in recon if r["valid"]]
     # ---- B5
     all_commits = sum(r["commits"] for r in recon)
