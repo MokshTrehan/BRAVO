@@ -921,7 +921,11 @@ def integrity_gate(root: Path, records: Sequence[Mapping[str, Any]], label: str)
     }
     directory = root / "integrity"
     directory.mkdir(parents=True, exist_ok=True)
-    _write_new(directory / "{}_GATE.json".format(label.upper()), _json_bytes(result))
+    target = directory / "{}_GATE.json".format(label.upper())
+    if target.exists():  # re-entry: keep the first gate file, add a timestamped re-evaluation
+        target = directory / "{}_GATE.{}.json".format(label.upper(), dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ"))
+        result["re_evaluation_on_re_entry"] = True
+    _write_new(target, _json_bytes(result))
     perturb._write_sha256sums(directory)
     return result
 
