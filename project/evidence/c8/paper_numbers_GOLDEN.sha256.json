@@ -1,0 +1,7 @@
+{
+ "cells_universal.csv": "a3e5555d92880619a3c2adcb573f778a5688e1b3ff07db2f4e4797244eb29e6d",
+ "completion_matrix.csv": "f97ce91ba8ba3067805936f261cd37d38fa969f12c39b05a716740e73c39675e",
+ "accuracy_coverage.csv": "d4abe56f89b7c877f936fa037815123c5860ddb4ca79a14a81315f1115ee759b",
+ "severity_axis.csv": "87cbbbc614e3a140dfe5e8535ebec924a3c8e36fb316d61ea21020173b16c3d4",
+ "dual_reading_flips.csv": "4a9d8ad2a55b034a457f3a2969b9ef929fd4ba2544cbaf8046097224ab8048a3"
+}
