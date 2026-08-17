@@ -530,7 +530,7 @@ def validate_resolved_parameters(
             LANDMARK_ELIMINATION.get(system) if system in S1_LIKE_SYSTEMS else "upstream_native"
         ),
         "recovery_switch_resolved": (
-            normalized.get(namespace + RECOVERY_SWITCH_PARAMETER)
+            normalized.get(str(CANONICAL_INPUTS[system]["namespace"]) + "/" + RECOVERY_SWITCH_PARAMETER)
             if system in RECOVERY_ABLATED_SYSTEMS
             else "ABSENT_YAML_GOVERNS"
         ),
