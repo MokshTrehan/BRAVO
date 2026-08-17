@@ -243,6 +243,15 @@ CANONICAL_LAUNCHES: Mapping[str, Tuple[Path, str]] = {
         REPO_ROOT / "project" / "icra27_cross_dataset_n0_serial.launch",
         "59498adb9dab301de90ca3181d9a4eda5c985f8914175b2b8491e660058934ab",
     ),
+    # ABLATE-REC-1: recON launch + the single added long_gap_recovery_enabled=false.
+    "S1-recOFF": (
+        REPO_ROOT / "project" / "icra27_cross_dataset_s1_recoff_serial.launch",
+        "4ef30188b44cd6d3835b8de496624b6ffa6a28de446e38203944c236633718c7",
+    ),
+    "N0-recOFF": (
+        REPO_ROOT / "project" / "icra27_cross_dataset_n0_recoff_serial.launch",
+        "7d183c5dd3db7c6f34fb0d4570a8f5e9c8113661cae63d6516319072a50a2442",
+    ),
 }
 DATASET_CONFIG_SHA256: Mapping[str, str] = {
     "euroc_mav": "b706f0082106e49e20c3292147d238b7e225b0df414106b9d4ac009bbb123f3b",
