@@ -1,0 +1,715 @@
+{
+ "durations_s": [
+  2,
+  5,
+  10,
+  15,
+  20
+ ],
+ "generated_utc": "2026-08-17T13:12:40Z",
+ "rules": {
+  "arm_A": "view_start + 0.40 x view_duration on cam0 header stamps inside the frozen replay view, snapped to the nearest cam0 frame (ties earlier)",
+  "arm_B": "centre of the minimum-mean-GT-speed 3 s window; centres are cam0 header stamps; window inside [reference first_state_timestamp, view_end] (DECISIONS D2); ties earliest; unconstrained minimum reported alongside",
+  "gt_speed": "|central finite difference| of GT position per sample; window mean over samples in [c-1.5, c+1.5]",
+  "not_runnable": "mask_past_end: t_b + k >= view_end; overlaps_arm_a: arm-B masked interval intersects arm-A masked interval at the same k (D3)"
+ },
+ "schema": "schurvio.icra27.blackout.injection_points.v1",
+ "sequences": [
+  {
+   "arm_A": {
+    "arm": "A",
+    "fraction_of_view": 0.39991617567048215,
+    "gt_sample_distance_s": 0.008818626403808594,
+    "gt_sample_time_s": 1598870245.39275,
+    "gt_speed_3s_window_mean_mps": 0.6760111749144094,
+    "gt_speed_3s_window_samples": 150,
+    "gt_speed_instantaneous_mps": 0.3342455852049948,
+    "header_stamp_ns": 1598870245401568680,
+    "header_stamp_s": 1598870245.4015687,
+    "per_k": {
+     "10": {
+      "mask_end_ns": 1598870255401568680,
+      "mask_past_end": false,
+      "overlaps_arm_b": true,
+      "post_mask_seconds": 85.315302306
+     },
+     "15": {
+      "mask_end_ns": 1598870260401568680,
+      "mask_past_end": false,
+      "overlaps_arm_b": true,
+      "post_mask_seconds": 80.315302306
+     },
+     "2": {
+      "mask_end_ns": 1598870247401568680,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 93.315302306
+     },
+     "20": {
+      "mask_end_ns": 1598870265401568680,
+      "mask_past_end": false,
+      "overlaps_arm_b": true,
+      "post_mask_seconds": 75.315302306
+     },
+     "5": {
+      "mask_end_ns": 1598870250401568680,
+      "mask_past_end": false,
+      "overlaps_arm_b": true,
+      "post_mask_seconds": 90.315302306
+     }
+    },
+    "seconds_after_reference_initialization": 6.435108776,
+    "seconds_from_view_start": 63.521344245
+   },
+   "arm_A_target_ns_before_snap": 1598870245414883055,
+   "arm_B": {
+    "arm": "B",
+    "fraction_of_view": 0.3812076631355876,
+    "gt_sample_distance_s": 0.0032286643981933594,
+    "gt_sample_time_s": 1598870242.4332,
+    "gt_speed_3s_window_mean_mps": 0.07426494982534791,
+    "gt_speed_3s_window_samples": 150,
+    "gt_speed_instantaneous_mps": 0.050271041740602845,
+    "header_stamp_ns": 1598870242429971287,
+    "header_stamp_s": 1598870242.4299712,
+    "per_k": {
+     "10": {
+      "mask_end_ns": 1598870252429971287,
+      "mask_past_end": false,
+      "overlaps_arm_a": true,
+      "post_mask_seconds": 88.286899699
+     },
+     "15": {
+      "mask_end_ns": 1598870257429971287,
+      "mask_past_end": false,
+      "overlaps_arm_a": true,
+      "post_mask_seconds": 83.286899699
+     },
+     "2": {
+      "mask_end_ns": 1598870244429971287,
+      "mask_past_end": false,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": 96.286899699
+     },
+     "20": {
+      "mask_end_ns": 1598870262429971287,
+      "mask_past_end": false,
+      "overlaps_arm_a": true,
+      "post_mask_seconds": 78.286899699
+     },
+     "5": {
+      "mask_end_ns": 1598870247429971287,
+      "mask_past_end": false,
+      "overlaps_arm_a": true,
+      "post_mask_seconds": 93.286899699
+     }
+    },
+    "seconds_after_reference_initialization": 3.463511383,
+    "seconds_from_view_start": 60.549746852
+   },
+   "arm_B_search": {
+    "constrained": {
+     "candidate_centers_evaluated": 2958,
+     "center_header_stamp_ns": 1598870242429971287,
+     "window_mean_speed_mps": 0.07426494982534791,
+     "window_sample_count": 150
+    },
+    "constrained_equals_unconstrained": false,
+    "feasible_center_range_ns": [
+     1598870240466459904,
+     1598870339216870986
+    ],
+    "unconstrained": {
+     "candidate_centers_evaluated": 4672,
+     "center_header_stamp_ns": 1598870192459670728,
+     "window_mean_speed_mps": 0.0011008345786930858,
+     "window_sample_count": 149
+    }
+   },
+   "bag": {
+    "path": "/home/moksh/datasets/KAIST_VIO/raw/turnsafe_adapted/circle/circle.bag",
+    "sha256": "d3d317e6deb4470b938bd7e6c123f576cd087d7c949214bae1ef79df22829a7f",
+    "size_bytes": 2935969045
+   },
+   "cam0_frames_in_view": 4764,
+   "camera_topics": [
+    "/turnsafe/kaist/infra1/image_raw",
+    "/turnsafe/kaist/infra2/image_raw"
+   ],
+   "dataset": "kaist_vio",
+   "frozen_bag_start_seconds": 0.0,
+   "ground_truth": {
+    "path": "/home/moksh/schurvio-lite-rotation-robustness/ov_data/kaist_vio/circle.txt",
+    "rows": 8361,
+    "sha256": "6d67aef090aef87a5d90b82bb4f59a13f2df894d6eddb65f6a82b384a87bff4f"
+   },
+   "imu_topic": "/mavros/imu/data",
+   "order": 22,
+   "reference_first_state_timestamp_s": 1598870238.96646,
+   "reference_run_directory": "/home/moksh/schurvio-icra27-artifacts/cross-dataset-system-comparison/cdsc1r4-20260816T173621Z/scored/22-circle_circle.bag/S1/cdsc1r4-22-circle_circle.bag-s1-scored-a1",
+   "scan_file": "/home/moksh/schurvio-icra27-artifacts/blackout-campaign/blackout1-20260817T130445Z/step0/scans/circle_circle.bag.scan.json",
+   "sequence": "circle/circle.bag",
+   "sequence_key": "22-circle_circle.bag",
+   "view_duration_s": 158.836646551,
+   "view_end_header_stamp_ns": 1598870340716870986,
+   "view_start_header_stamp_ns": 1598870181880224435
+  },
+  {
+   "arm_A": {
+    "arm": "A",
+    "fraction_of_view": 0.3999242159024376,
+    "gt_sample_distance_s": 0.002851724624633789,
+    "gt_sample_time_s": 1598871650.92651,
+    "gt_speed_3s_window_mean_mps": 1.8583533140749593,
+    "gt_speed_3s_window_samples": 144,
+    "gt_speed_instantaneous_mps": 0.28438090014176715,
+    "header_stamp_ns": 1598871650929361899,
+    "header_stamp_s": 1598871650.9293618,
+    "per_k": {
+     "10": {
+      "mask_end_ns": 1598871660929361899,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 79.692571554
+     },
+     "15": {
+      "mask_end_ns": 1598871665929361899,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 74.692571554
+     },
+     "2": {
+      "mask_end_ns": 1598871652929361899,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 87.692571554
+     },
+     "20": {
+      "mask_end_ns": 1598871670929361899,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 69.692571554
+     },
+     "5": {
+      "mask_end_ns": 1598871655929361899,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 84.692571554
+     }
+    },
+    "seconds_after_reference_initialization": 55.801911787,
+    "seconds_from_view_start": 59.77616878
+   },
+   "arm_A_target_ns_before_snap": 1598871650940689253,
+   "arm_B": {
+    "arm": "B",
+    "fraction_of_view": 0.23431974073466605,
+    "gt_sample_distance_s": 0.009270429611206055,
+    "gt_sample_time_s": 1598871626.18594,
+    "gt_speed_3s_window_mean_mps": 0.0007963570769969611,
+    "gt_speed_3s_window_samples": 140,
+    "gt_speed_instantaneous_mps": 0.0006301346303435282,
+    "header_stamp_ns": 1598871626176669602,
+    "header_stamp_s": 1598871626.1766696,
+    "per_k": {
+     "10": {
+      "mask_end_ns": 1598871636176669602,
+      "mask_past_end": false,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": 104.445263851
+     },
+     "15": {
+      "mask_end_ns": 1598871641176669602,
+      "mask_past_end": false,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": 99.445263851
+     },
+     "2": {
+      "mask_end_ns": 1598871628176669602,
+      "mask_past_end": false,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": 112.445263851
+     },
+     "20": {
+      "mask_end_ns": 1598871646176669602,
+      "mask_past_end": false,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": 94.445263851
+     },
+     "5": {
+      "mask_end_ns": 1598871631176669602,
+      "mask_past_end": false,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": 109.445263851
+     }
+    },
+    "seconds_after_reference_initialization": 31.04921949,
+    "seconds_from_view_start": 35.023476483
+   },
+   "arm_B_search": {
+    "constrained": {
+     "candidate_centers_evaluated": 4270,
+     "center_header_stamp_ns": 1598871626176669602,
+     "window_mean_speed_mps": 0.0007963570769969611,
+     "window_sample_count": 140
+    },
+    "constrained_equals_unconstrained": true,
+    "feasible_center_range_ns": [
+     1598871596627450112,
+     1598871739121933453
+    ],
+    "unconstrained": {
+     "candidate_centers_evaluated": 4390,
+     "center_header_stamp_ns": 1598871626176669602,
+     "window_mean_speed_mps": 0.0007963570769969611,
+     "window_sample_count": 140
+    }
+   },
+   "bag": {
+    "path": "/home/moksh/datasets/KAIST_VIO/raw/turnsafe_adapted/infinite/infinite.bag",
+    "sha256": "8e0d7aea6e7aeacfc73897a5e95aceadc73bc39088e4b0108068186f79ae00a1",
+    "size_bytes": 2761858501
+   },
+   "cam0_frames_in_view": 4481,
+   "camera_topics": [
+    "/turnsafe/kaist/infra1/image_raw",
+    "/turnsafe/kaist/infra2/image_raw"
+   ],
+   "dataset": "kaist_vio",
+   "frozen_bag_start_seconds": 0.0,
+   "ground_truth": {
+    "path": "/home/moksh/schurvio-lite-rotation-robustness/ov_data/kaist_vio/infinite.txt",
+    "rows": 8516,
+    "sha256": "33f76a9230e352f7c75c33c55aab3bfbbfea2c96bffb285d6a5e384911b515a9"
+   },
+   "imu_topic": "/mavros/imu/data",
+   "order": 20,
+   "reference_first_state_timestamp_s": 1598871595.12745,
+   "reference_run_directory": "/home/moksh/schurvio-icra27-artifacts/cross-dataset-system-comparison/cdsc1r4-20260816T173621Z/scored/20-infinite_infinite.bag/S1/cdsc1r4-20-infinite_infinite.bag-s1-scored-a1",
+   "scan_file": "/home/moksh/schurvio-icra27-artifacts/blackout-campaign/blackout1-20260817T130445Z/step0/scans/infinite_infinite.bag.scan.json",
+   "sequence": "infinite/infinite.bag",
+   "sequence_key": "20-infinite_infinite.bag",
+   "view_duration_s": 149.468740334,
+   "view_end_header_stamp_ns": 1598871740621933453,
+   "view_start_header_stamp_ns": 1598871591153193119
+  },
+  {
+   "arm_A": {
+    "arm": "A",
+    "fraction_of_view": 0.40003008878834284,
+    "gt_sample_distance_s": 0.009714841842651367,
+    "gt_sample_time_s": 1599132425.5372,
+    "gt_speed_3s_window_mean_mps": 3.088313713371321,
+    "gt_speed_3s_window_samples": 145,
+    "gt_speed_instantaneous_mps": 0.25279646465522965,
+    "header_stamp_ns": 1599132425546914871,
+    "header_stamp_s": 1599132425.5469148,
+    "per_k": {
+     "10": {
+      "mask_end_ns": 1599132435546914871,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 86.402696526
+     },
+     "15": {
+      "mask_end_ns": 1599132440546914871,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 81.402696526
+     },
+     "2": {
+      "mask_end_ns": 1599132427546914871,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 94.402696526
+     },
+     "20": {
+      "mask_end_ns": 1599132445546914871,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 76.402696526
+     },
+     "5": {
+      "mask_end_ns": 1599132430546914871,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 91.402696526
+     }
+    },
+    "seconds_after_reference_initialization": 62.072844855,
+    "seconds_from_view_start": 64.276522089
+   },
+   "arm_A_target_ns_before_snap": 1599132425542080228,
+   "arm_B": {
+    "arm": "B",
+    "fraction_of_view": 0.03136062398382606,
+    "gt_sample_distance_s": 0.00211334228515625,
+    "gt_sample_time_s": 1599132366.30728,
+    "gt_speed_3s_window_mean_mps": 0.002286380498381612,
+    "gt_speed_3s_window_samples": 149,
+    "gt_speed_instantaneous_mps": 0.0007674225093773199,
+    "header_stamp_ns": 1599132366309393339,
+    "header_stamp_s": 1599132366.3093934,
+    "per_k": {
+     "10": {
+      "mask_end_ns": 1599132376309393339,
+      "mask_past_end": false,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": 145.640218058
+     },
+     "15": {
+      "mask_end_ns": 1599132381309393339,
+      "mask_past_end": false,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": 140.640218058
+     },
+     "2": {
+      "mask_end_ns": 1599132368309393339,
+      "mask_past_end": false,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": 153.640218058
+     },
+     "20": {
+      "mask_end_ns": 1599132386309393339,
+      "mask_past_end": false,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": 135.640218058
+     },
+     "5": {
+      "mask_end_ns": 1599132371309393339,
+      "mask_past_end": false,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": 150.640218058
+     }
+    },
+    "seconds_after_reference_initialization": 2.835323323,
+    "seconds_from_view_start": 5.039000557
+   },
+   "arm_B_search": {
+    "constrained": {
+     "candidate_centers_evaluated": 4663,
+     "center_header_stamp_ns": 1599132366309393339,
+     "window_mean_speed_mps": 0.002286380498381612,
+     "window_sample_count": 149
+    },
+    "constrained_equals_unconstrained": true,
+    "feasible_center_range_ns": [
+     1599132364974070016,
+     1599132520449611397
+    ],
+    "unconstrained": {
+     "candidate_centers_evaluated": 4730,
+     "center_header_stamp_ns": 1599132366309393339,
+     "window_mean_speed_mps": 0.002286380498381612,
+     "window_sample_count": 149
+    }
+   },
+   "bag": {
+    "path": "/home/moksh/datasets/KAIST_VIO/raw/turnsafe_adapted/square/square.bag",
+    "sha256": "3b5ad8626372f8b1e90f1ff74593a189e3ab4035e68b85b4930ee508c50a3b3c",
+    "size_bytes": 2971455983
+   },
+   "cam0_frames_in_view": 4821,
+   "camera_topics": [
+    "/turnsafe/kaist/infra1/image_raw",
+    "/turnsafe/kaist/infra2/image_raw"
+   ],
+   "dataset": "kaist_vio",
+   "frozen_bag_start_seconds": 0.0,
+   "ground_truth": {
+    "path": "/home/moksh/schurvio-lite-rotation-robustness/ov_data/kaist_vio/square.txt",
+    "rows": 8774,
+    "sha256": "ba6de59b6d7f4e9afd2fd085e4fdf3741d23b294d0437da8ed37836722167e76"
+   },
+   "imu_topic": "/mavros/imu/data",
+   "order": 17,
+   "reference_first_state_timestamp_s": 1599132363.47407,
+   "reference_run_directory": "/home/moksh/schurvio-icra27-artifacts/cross-dataset-system-comparison/cdsc1r4-20260816T173621Z/scored/17-square_square.bag/S1/cdsc1r4-17-square_square.bag-s1-scored-a1",
+   "scan_file": "/home/moksh/schurvio-icra27-artifacts/blackout-campaign/blackout1-20260817T130445Z/step0/scans/square_square.bag.scan.json",
+   "sequence": "square/square.bag",
+   "sequence_key": "17-square_square.bag",
+   "view_duration_s": 160.679218615,
+   "view_end_header_stamp_ns": 1599132521949611397,
+   "view_start_header_stamp_ns": 1599132361270392782
+  },
+  {
+   "arm_A": {
+    "arm": "A",
+    "fraction_of_view": 0.3998157531091663,
+    "gt_sample_distance_s": 4.76837158203125e-07,
+    "gt_sample_time_s": 1403638566.52783,
+    "gt_speed_3s_window_mean_mps": 2.049224865178509,
+    "gt_speed_3s_window_samples": 600,
+    "gt_speed_instantaneous_mps": 2.2227819334668557,
+    "header_stamp_ns": 1403638566527829500,
+    "header_stamp_s": 1403638566.5278294,
+    "per_k": {
+     "10": {
+      "mask_end_ns": 1403638576527829500,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 55.15
+     },
+     "15": {
+      "mask_end_ns": 1403638581527829500,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 50.15
+     },
+     "2": {
+      "mask_end_ns": 1403638568527829500,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 63.15
+     },
+     "20": {
+      "mask_end_ns": 1403638586527829500,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 45.15
+     },
+     "5": {
+      "mask_end_ns": 1403638571527829500,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 60.15
+     }
+    },
+    "seconds_after_reference_initialization": 27.235639548,
+    "seconds_from_view_start": 43.4
+   },
+   "arm_A_target_ns_before_snap": 1403638566547829500,
+   "arm_B": {
+    "arm": "B",
+    "fraction_of_view": 0.9838783970520497,
+    "gt_sample_distance_s": 4.76837158203125e-07,
+    "gt_sample_time_s": 1403638629.92783,
+    "gt_speed_3s_window_mean_mps": 0.14349753994247294,
+    "gt_speed_3s_window_samples": 425,
+    "gt_speed_instantaneous_mps": 0.09506328017037227,
+    "header_stamp_ns": 1403638629927829500,
+    "header_stamp_s": 1403638629.9278295,
+    "per_k": {
+     "10": {
+      "mask_end_ns": 1403638639927829500,
+      "mask_past_end": true,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": -8.25
+     },
+     "15": {
+      "mask_end_ns": 1403638644927829500,
+      "mask_past_end": true,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": -13.25
+     },
+     "2": {
+      "mask_end_ns": 1403638631927829500,
+      "mask_past_end": true,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": -0.25
+     },
+     "20": {
+      "mask_end_ns": 1403638649927829500,
+      "mask_past_end": true,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": -18.25
+     },
+     "5": {
+      "mask_end_ns": 1403638634927829500,
+      "mask_past_end": true,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": -3.25
+     }
+    },
+    "seconds_after_reference_initialization": 90.635639548,
+    "seconds_from_view_start": 106.8
+   },
+   "arm_B_search": {
+    "constrained": {
+     "candidate_centers_evaluated": 1788,
+     "center_header_stamp_ns": 1403638629927829500,
+     "window_mean_speed_mps": 0.14349753994247294,
+     "window_sample_count": 425
+    },
+    "constrained_equals_unconstrained": false,
+    "feasible_center_range_ns": [
+     1403638540792189952,
+     1403638630177829500
+    ],
+    "unconstrained": {
+     "candidate_centers_evaluated": 2112,
+     "center_header_stamp_ns": 1403638536327829500,
+     "window_mean_speed_mps": 0.0028159085780947637,
+     "window_sample_count": 600
+    }
+   },
+   "bag": {
+    "path": "/home/moksh/Downloads/machine_hall/MH_05_difficult/MH_05_difficult.bag",
+    "sha256": "0a56ceb1a4618176fde985a93aab71b546bee805a6ca054cc64e76a804c17c03",
+    "size_bytes": 1650601827
+   },
+   "cam0_frames_in_view": 2172,
+   "camera_topics": [
+    "/cam0/image_raw",
+    "/cam1/image_raw"
+   ],
+   "dataset": "euroc_mav",
+   "frozen_bag_start_seconds": 5.0,
+   "ground_truth": {
+    "path": "/home/moksh/schurvio-lite-rotation-robustness/ov_data/euroc_mav/MH_05_difficult.txt",
+    "rows": 22212,
+    "sha256": "b207efc0ad53cdba7adca75b2a9ee79f8b7ab8b5a0221b77ebe73f0bba211cb2"
+   },
+   "imu_topic": "/imu0",
+   "order": 5,
+   "reference_first_state_timestamp_s": 1403638539.29219,
+   "reference_run_directory": "/home/moksh/schurvio-icra27-artifacts/cross-dataset-system-comparison/cdsc1r4-20260816T173621Z/scored/05-MH_05_difficult/S1/cdsc1r4-05-MH_05_difficult-s1-scored-a1",
+   "scan_file": "/home/moksh/schurvio-icra27-artifacts/blackout-campaign/blackout1-20260817T130445Z/step0/scans/MH_05_difficult.scan.json",
+   "sequence": "MH_05_difficult",
+   "sequence_key": "05-MH_05_difficult",
+   "view_duration_s": 108.55,
+   "view_end_header_stamp_ns": 1403638631677829500,
+   "view_start_header_stamp_ns": 1403638523127829500
+  },
+  {
+   "arm_A": {
+    "arm": "A",
+    "fraction_of_view": 0.4000852151683,
+    "gt_sample_distance_s": 4.76837158203125e-07,
+    "gt_sample_time_s": 1413393932.95576,
+    "gt_speed_3s_window_mean_mps": 0.7669496573719622,
+    "gt_speed_3s_window_samples": 600,
+    "gt_speed_instantaneous_mps": 0.49884359137189116,
+    "header_stamp_ns": 1413393932955760500,
+    "header_stamp_s": 1413393932.9557605,
+    "per_k": {
+     "10": {
+      "mask_end_ns": 1413393942955760500,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 60.4
+     },
+     "15": {
+      "mask_end_ns": 1413393947955760500,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 55.4
+     },
+     "2": {
+      "mask_end_ns": 1413393934955760500,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 68.4
+     },
+     "20": {
+      "mask_end_ns": 1413393952955760500,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 50.4
+     },
+     "5": {
+      "mask_end_ns": 1413393937955760500,
+      "mask_past_end": false,
+      "overlaps_arm_b": false,
+      "post_mask_seconds": 65.4
+     }
+    },
+    "seconds_after_reference_initialization": 42.907360628,
+    "seconds_from_view_start": 46.95
+   },
+   "arm_A_target_ns_before_snap": 1413393932945760500,
+   "arm_B": {
+    "arm": "B",
+    "fraction_of_view": 0.9872177247550064,
+    "gt_sample_distance_s": 4.76837158203125e-07,
+    "gt_sample_time_s": 1413394001.85576,
+    "gt_speed_3s_window_mean_mps": 0.018737522746442695,
+    "gt_speed_3s_window_samples": 464,
+    "gt_speed_instantaneous_mps": 0.004043517180054882,
+    "header_stamp_ns": 1413394001855760500,
+    "header_stamp_s": 1413394001.8557606,
+    "per_k": {
+     "10": {
+      "mask_end_ns": 1413394011855760500,
+      "mask_past_end": true,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": -8.5
+     },
+     "15": {
+      "mask_end_ns": 1413394016855760500,
+      "mask_past_end": true,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": -13.5
+     },
+     "2": {
+      "mask_end_ns": 1413394003855760500,
+      "mask_past_end": true,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": -0.5
+     },
+     "20": {
+      "mask_end_ns": 1413394021855760500,
+      "mask_past_end": true,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": -18.5
+     },
+     "5": {
+      "mask_end_ns": 1413394006855760500,
+      "mask_past_end": true,
+      "overlaps_arm_a": false,
+      "post_mask_seconds": -3.5
+     }
+    },
+    "seconds_after_reference_initialization": 111.807360628,
+    "seconds_from_view_start": 115.85
+   },
+   "arm_B_search": {
+    "constrained": {
+     "candidate_centers_evaluated": 2207,
+     "center_header_stamp_ns": 1413394001855760500,
+     "window_mean_speed_mps": 0.018737522746442695,
+     "window_sample_count": 464
+    },
+    "constrained_equals_unconstrained": false,
+    "feasible_center_range_ns": [
+     1413393891548399872,
+     1413394001855760500
+    ],
+    "unconstrained": {
+     "candidate_centers_evaluated": 2288,
+     "center_header_stamp_ns": 1413393887605760500,
+     "window_mean_speed_mps": 0.008341056820682714,
+     "window_sample_count": 377
+    }
+   },
+   "bag": {
+    "path": "/home/moksh/Downloads/vicon_room2/V2_02_medium/V2_02_medium.bag",
+    "sha256": "fa020a53ef21d4e7002a0892feea41295fcd49ece383d7e3107c61c1018e3318",
+    "size_bytes": 1707681870
+   },
+   "cam0_frames_in_view": 2348,
+   "camera_topics": [
+    "/cam0/image_raw",
+    "/cam1/image_raw"
+   ],
+   "dataset": "euroc_mav",
+   "frozen_bag_start_seconds": 0.0,
+   "ground_truth": {
+    "path": "/home/moksh/schurvio-lite-rotation-robustness/ov_data/euroc_mav/V2_02_medium.txt",
+    "rows": 23091,
+    "sha256": "9e18da3f96828a80b1a020dd5731c6013d61ce3cb6d11c361f0f00230e1ed1e7"
+   },
+   "imu_topic": "/imu0",
+   "order": 10,
+   "reference_first_state_timestamp_s": 1413393890.0484,
+   "reference_run_directory": "/home/moksh/schurvio-icra27-artifacts/cross-dataset-system-comparison/cdsc1r4-20260816T173621Z/scored/10-V2_02_medium/S1/cdsc1r4-10-V2_02_medium-s1-scored-a1",
+   "scan_file": "/home/moksh/schurvio-icra27-artifacts/blackout-campaign/blackout1-20260817T130445Z/step0/scans/V2_02_medium.scan.json",
+   "sequence": "V2_02_medium",
+   "sequence_key": "10-V2_02_medium",
+   "view_duration_s": 117.35,
+   "view_end_header_stamp_ns": 1413394003355760500,
+   "view_start_header_stamp_ns": 1413393886005760500
+  }
+ ],
+ "window_seconds": 3.0
+}
