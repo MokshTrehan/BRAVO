@@ -2690,6 +2690,8 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
         if blackout_record is not None:
             input_paths["blackout_manifest"] = Path(blackout_record["manifest_path"])
             input_paths["blackout_support_module"] = Path(blackout.__file__).resolve()
+            result["inputs"]["blackout_manifest"] = file_identity(input_paths["blackout_manifest"])
+            result["inputs"]["blackout_support_module"] = file_identity(input_paths["blackout_support_module"])
         result["inputs"].update(
             {
                 "config": file_identity(config),
