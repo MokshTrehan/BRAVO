@@ -11,10 +11,4 @@ paper-numbers:
 	$(PY) scripts/icra27/paper_numbers.py --out $(OUT)
 
 paper-numbers-check: paper-numbers
-	$(PY) - <<'PYEOF'
-	import json,sys
-	g=json.load(open("$(GOLDEN)")); n=json.load(open("$(OUT)/GOLDEN.sha256.json"))
-	bad=[k for k in g if n.get(k)!=g[k]]
-	print("golden files:",len(g),"mismatch:",bad)
-	sys.exit(1 if bad else 0)
-	PYEOF
+	$(PY) scripts/icra27/paper_numbers_check.py $(GOLDEN) $(OUT)/GOLDEN.sha256.json
