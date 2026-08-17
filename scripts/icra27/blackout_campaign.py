@@ -717,8 +717,12 @@ class Driver:
         # full recovery event log, verbatim
         if recovery.get("event_lines"):
             (driver_dir / "recovery_events.log").write_text("\n".join(recovery["event_lines"]) + "\n", encoding="utf-8")
+        if manifest_path is None and isinstance(value.get("blackout"), dict):
+            candidate = Path(str(value["blackout"].get("manifest_path")))
+            manifest_path = candidate if candidate.is_file() else None
         if manifest_path is not None and manifest_path.is_file():
             shutil.copyfile(str(manifest_path), str(driver_dir / "mask_manifest.json"))
+            record.setdefault("mask_manifest", {"path": str(manifest_path), "sha256": campaign.sha256_file(manifest_path)})
         record.update({
             "outcome": "CLOSED",
             "estimator_attempted": bool((value.get("estimator_close_receipt") or {}).get("estimator_attempted")),

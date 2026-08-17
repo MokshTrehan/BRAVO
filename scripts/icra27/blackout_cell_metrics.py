@@ -265,7 +265,7 @@ def evaluate(run_directory: Path, ground_truth: Path, output: Path) -> Dict[str,
                 base["post_mask_under_pre_mask_alignment"] = {"status": "NO_ASSOCIATION", "reason": str(exc)}
         else:
             base["post_mask_under_pre_mask_alignment"] = {"status": "NO_STATE_AFTER_MASK_END"}
-        # --- post-recovery RPE (1 s delta) over [commit output, +10 s]
+        # --- post-recovery RPE (1 s time delta) over [commit output, +10 s]
         outputs = [c["state_output_timestamp_s"] for c in base["commits"] if c["state_output_timestamp_s"] is not None]
         if outputs:
             t0 = min(outputs)
@@ -274,21 +274,8 @@ def evaluate(run_directory: Path, ground_truth: Path, output: Path) -> Dict[str,
                 est_post = to_evo(est_t[window], est_p[window], est_q[window])
                 try:
                     ref_w, est_w = associate(ref, est_post)
-                    est_w_al = copy.deepcopy(est_w)
-                    est_w_al.align(ref_w, correct_scale=False, n=-1)
-                    rpe_t = metrics.RPE(PoseRelation.translation_part, delta=RPE_DELTA_S, delta_unit=Unit.seconds, all_pairs=False)
-                    rpe_r = metrics.RPE(PoseRelation.rotation_angle_deg, delta=RPE_DELTA_S, delta_unit=Unit.seconds, all_pairs=False)
-                    rpe_t.process_data((ref_w, est_w_al))
-                    rpe_r.process_data((ref_w, est_w_al))
-                    base["post_recovery_rpe_1s"] = {
-                        "window_s": [t0, t0 + POST_WINDOW_S],
-                        "associated_poses": int(est_w.num_poses),
-                        "pairs": int(rpe_t.error.size),
-                        "translation_rmse_m": float(rpe_t.get_statistic(metrics.StatisticsType.rmse)),
-                        "translation_max_m": float(rpe_t.get_statistic(metrics.StatisticsType.max)),
-                        "rotation_rmse_deg": float(rpe_r.get_statistic(metrics.StatisticsType.rmse)),
-                        "note": "descriptive; 1 s time-delta RPE on the window-aligned association",
-                    }
+                    base["post_recovery_rpe_1s"] = time_delta_rpe(ref_w, est_w, RPE_DELTA_S)
+                    base["post_recovery_rpe_1s"]["window_s"] = [t0, t0 + POST_WINDOW_S]
                 except Exception as exc:  # noqa: BLE001 - descriptive metric, never fatal
                     base["post_recovery_rpe_1s"] = {"status": "UNAVAILABLE", "reason": str(exc)}
             else:
@@ -296,6 +283,45 @@ def evaluate(run_directory: Path, ground_truth: Path, output: Path) -> Dict[str,
     base["metrics_status"] = "COMPUTED"
     _commit(output, base)
     return base
+
+
+def time_delta_rpe(ref: trajectory.PoseTrajectory3D, est: trajectory.PoseTrajectory3D, delta_s: float, tolerance_s: float = 0.05) -> Dict[str, Any]:
+    """Relative pose error at a time delta (frame-of-pose-i convention, as evo's RPE), no external unit support needed."""
+    times = ref.timestamps
+    pairs = []
+    j = 0
+    for i in range(times.shape[0]):
+        target = times[i] + delta_s
+        while j < times.shape[0] and times[j] < target - tolerance_s:
+            j += 1
+        if j >= times.shape[0]:
+            break
+        if abs(times[j] - target) <= tolerance_s and j > i:
+            pairs.append((i, j))
+    if not pairs:
+        return {"status": "NO_PAIRS", "pairs": 0}
+    trans = []
+    rot = []
+    for i, j in pairs:
+        rel_ref = np.linalg.inv(ref.poses_se3[i]) @ ref.poses_se3[j]
+        rel_est = np.linalg.inv(est.poses_se3[i]) @ est.poses_se3[j]
+        error = np.linalg.inv(rel_ref) @ rel_est
+        trans.append(float(np.linalg.norm(error[:3, 3])))
+        cos = (np.trace(error[:3, :3]) - 1.0) / 2.0
+        rot.append(float(math.degrees(math.acos(max(-1.0, min(1.0, cos))))))
+    trans_a = np.asarray(trans)
+    rot_a = np.asarray(rot)
+    return {
+        "status": "OK",
+        "delta_s": delta_s,
+        "pairs": len(pairs),
+        "associated_poses": int(ref.num_poses),
+        "translation_rmse_m": float(np.sqrt(np.mean(trans_a ** 2))),
+        "translation_median_m": float(np.median(trans_a)),
+        "translation_max_m": float(np.max(trans_a)),
+        "rotation_rmse_deg": float(np.sqrt(np.mean(rot_a ** 2))),
+        "note": "descriptive; frame-of-pose-i relative pose error at a 1 s time delta on the associated window (alignment-free)",
+    }
 
 
 def _commit(output: Path, value: Mapping[str, Any]) -> None:
