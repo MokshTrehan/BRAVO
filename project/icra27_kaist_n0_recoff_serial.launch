@@ -1,0 +1,53 @@
+<launch>
+    <!-- ABLATE-REC-1 N0-recOFF: byte-identical to icra27_kaist_n0_serial.launch except the single added ROS parameter long_gap_recovery_enabled=false (runtime disable switch of the C2 long-gap recovery subsystem). -->
+    <!-- PERTURB-1 N0 matched nullspace control: byte-identical to rotation_robustness_serial.launch except up_msckf_landmark_elimination=nullspace. Ground truth is absent by construction. -->
+    <arg name="bag" />
+    <arg name="candidate_config" />
+    <arg name="bag_start" default="0.0" />
+    <arg name="path_state" />
+    <arg name="path_std" />
+    <arg name="path_time" />
+    <arg name="verbosity" default="INFO" />
+
+    <node name="kaist_vio_turnsafe_baseline" pkg="ov_msckf"
+          type="ros1_serial_msckf" output="screen" clear_params="true"
+          required="true">
+        <param name="path_bag" type="str" value="$(arg bag)" />
+        <param name="bag_start" type="double" value="$(arg bag_start)" />
+        <param name="bag_durr" type="double" value="-1.0" />
+        <param name="verbosity" type="str" value="$(arg verbosity)" />
+        <param name="config_path" type="str" value="$(arg candidate_config)" />
+
+        <!-- Keep the frozen S1 scientific and serial-execution seams explicit. -->
+        <param name="use_fej" type="bool" value="true" />
+        <param name="use_stereo" type="bool" value="true" />
+        <param name="max_cameras" type="int" value="2" />
+        <param name="cam0_distortion_model" type="str" value="radtan" />
+        <param name="cam1_distortion_model" type="str" value="radtan" />
+        <param name="feat_rep_msckf" type="str" value="GLOBAL_3D" />
+        <param name="up_msckf_landmark_elimination" type="str" value="nullspace" />
+        <param name="up_msckf_max_visual_passes" type="int" value="1" />
+        <param name="long_gap_recovery_enabled" type="bool" value="false" />
+        <param name="calib_cam_extrinsics" type="bool" value="false" />
+        <param name="calib_cam_intrinsics" type="bool" value="false" />
+        <param name="calib_cam_timeoffset" type="bool" value="false" />
+        <param name="calib_imu_intrinsics" type="bool" value="false" />
+        <param name="calib_imu_g_sensitivity" type="bool" value="false" />
+        <param name="num_opencv_threads" type="int" value="0" />
+        <param name="multi_threading_pubs" type="bool" value="false" />
+        <param name="multi_threading_subs" type="bool" value="false" />
+        <param name="kaist_vio_exact_header_stereo" type="bool" value="true" />
+
+        <param name="cam0_rostopic" type="str"
+               value="/turnsafe/kaist/infra1/image_raw" />
+        <param name="cam1_rostopic" type="str"
+               value="/turnsafe/kaist/infra2/image_raw" />
+        <param name="imu0_rostopic" type="str" value="/mavros/imu/data" />
+
+        <param name="save_total_state" type="bool" value="true" />
+        <param name="filepath_est" type="str" value="$(arg path_state)" />
+        <param name="filepath_std" type="str" value="$(arg path_std)" />
+        <param name="record_timing_information" type="bool" value="true" />
+        <param name="record_timing_filepath" type="str" value="$(arg path_time)" />
+    </node>
+</launch>

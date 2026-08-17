@@ -60,10 +60,18 @@ NATIVE_CENSUS_SCHEMA = "schurvio.icra27.cross_dataset.native_pair_census.v3"
 SYSTEMS = ("U0", "S1")
 # PERTURB-1 (docs/icra27/PERTURBATION_PREREG.md): N0 is the matched nullspace
 # control on the frozen S1 executable; it is accepted only in perturbation mode.
-S1_LIKE_SYSTEMS = ("S1", "N0")
-LANDMARK_ELIMINATION = {"S1": "schur", "N0": "nullspace"}
-PERTURBATION_SYSTEMS = ("U0", "S1", "N0")
+# ABLATE-REC-1 (docs/icra27/ABLATION_PREREG.md): S1-recOFF / N0-recOFF are the
+# recON launches with the single added ROS parameter long_gap_recovery_enabled
+# =false.  Outside KAIST the frozen S1 configuration never enables recovery
+# (the key is absent from config/euroc_mav, executable default false), so the
+# switch is expected to be inert here; that expectation is what P2 tests.
+S1_LIKE_SYSTEMS = ("S1", "N0", "S1-recOFF", "N0-recOFF")
+RECOVERY_ABLATED_SYSTEMS = {"S1-recOFF": "S1", "N0-recOFF": "N0"}
+RECOVERY_SWITCH_PARAMETER = "long_gap_recovery_enabled"
+LANDMARK_ELIMINATION = {"S1": "schur", "N0": "nullspace", "S1-recOFF": "schur", "N0-recOFF": "nullspace"}
+PERTURBATION_SYSTEMS = ("U0", "S1", "N0", "S1-recOFF", "N0-recOFF")
 PERTURBATION_CAMPAIGN_ID = "PERTURB-1"
+PERTURBATION_CAMPAIGN_IDS = ("PERTURB-1", "ABLATE-REC-1")
 PERTURBATION_SEED_LABELS = ("frozen",)
 MODES = ("scored", "capture")
 DATASETS = ("euroc_mav", "tum_vi")
@@ -115,6 +123,7 @@ COMMON_NODE_PARAMETERS = frozenset(
 S1_NODE_PARAMETERS = frozenset(
     (*COMMON_NODE_PARAMETERS, "up_msckf_landmark_elimination", "up_msckf_max_visual_passes")
 )
+RECOFF_NODE_PARAMETERS = frozenset((*S1_NODE_PARAMETERS, RECOVERY_SWITCH_PARAMETER))
 LAUNCH_ARGUMENTS = frozenset(
     (
         "config_path",
@@ -1044,7 +1053,12 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
         raise TrialError("cross-dataset estimator node identity drift")
     parameters = node.findall("./param")
     names = [element.get("name") for element in parameters]
-    expected = COMMON_NODE_PARAMETERS if system == "U0" else S1_NODE_PARAMETERS
+    if system == "U0":
+        expected = COMMON_NODE_PARAMETERS
+    elif system in RECOVERY_ABLATED_SYSTEMS:
+        expected = RECOFF_NODE_PARAMETERS
+    else:
+        expected = S1_NODE_PARAMETERS
     if None in names or set(names) != expected or len(names) != len(expected):
         raise TrialError(
             "{} launch parameter set differs: observed={} expected={}".format(
@@ -1064,6 +1078,11 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
             or by_name["up_msckf_max_visual_passes"].get("value") != "1"
         ):
             raise TrialError("S1 launch does not select exactly one visual pass")
+        if system in RECOVERY_ABLATED_SYSTEMS and (
+            by_name[RECOVERY_SWITCH_PARAMETER].get("type") != "bool"
+            or by_name[RECOVERY_SWITCH_PARAMETER].get("value") != "false"
+        ):
+            raise TrialError("{} launch does not set {}=false".format(system, RECOVERY_SWITCH_PARAMETER))
     return {
         "node_name": NODE_NAME,
         "argument_names": sorted(arguments),
@@ -1079,6 +1098,9 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
         ),
         "n0_matched_nullspace_control": system == "N0",
         "recovery_parameter_absent": "long_gap_recovery_enabled" not in names,
+        "recovery_ablated_system": system in RECOVERY_ABLATED_SYSTEMS,
+        "recon_counterpart_system": RECOVERY_ABLATED_SYSTEMS.get(system),
+        "launch_recovery_switch": "false" if system in RECOVERY_ABLATED_SYSTEMS else None,
     }
 
 
@@ -1155,6 +1177,8 @@ def validate_resolved_parameters(
                 namespace + "up_msckf_max_visual_passes": 1,
             }
         )
+        if system in RECOVERY_ABLATED_SYSTEMS:
+            expected[namespace + RECOVERY_SWITCH_PARAMETER] = False
     if normalized != expected:
         missing = sorted(set(expected) - set(normalized))
         extra = sorted(set(normalized) - set(expected))
@@ -2397,7 +2421,7 @@ def perturbation_record(args: argparse.Namespace) -> Dict[str, Any]:
     """
 
     campaign_id = getattr(args, "perturbation_campaign_id", None)
-    if campaign_id != PERTURBATION_CAMPAIGN_ID:
+    if campaign_id not in PERTURBATION_CAMPAIGN_IDS:
         raise TrialError("unknown perturbation campaign id: {}".format(campaign_id))
     offset_frames = getattr(args, "perturbation_offset_frames", None)
     frame_rate_hz = getattr(args, "perturbation_frame_rate_hz", None)
@@ -2444,6 +2468,12 @@ def perturbation_record(args: argparse.Namespace) -> Dict[str, Any]:
         "system": args.system,
         "landmark_elimination": (
             LANDMARK_ELIMINATION.get(args.system) if args.system in S1_LIKE_SYSTEMS else "upstream_native"
+        ),
+        "recovery_ablated": args.system in RECOVERY_ABLATED_SYSTEMS,
+        "recovery_switch": (
+            {"parameter": RECOVERY_SWITCH_PARAMETER, "launch_value": False, "recon_counterpart": RECOVERY_ABLATED_SYSTEMS[args.system]}
+            if args.system in RECOVERY_ABLATED_SYSTEMS
+            else None
         ),
     }
 
@@ -2624,7 +2654,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             matrix,
             args.dataset,
             args.sequence,
-            "S1" if args.system == "N0" else args.system,
+            "S1" if args.system in S1_LIKE_SYSTEMS else args.system,
             bag,
             args.bag_start,
         )

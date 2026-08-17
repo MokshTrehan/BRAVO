@@ -91,12 +91,40 @@ CANONICAL_INPUTS: Mapping[str, Mapping[str, Any]] = {
         "node": "kaist_vio_turnsafe_baseline",
         "namespace": "/kaist_vio_turnsafe_baseline",
     },
+    # ABLATE-REC-1 (docs/icra27/ABLATION_PREREG.md) single-delta recovery
+    # ablations: same binary, config, calibration, node name and namespace as
+    # their recON counterpart (S1 / N0); the launch differs only by the one
+    # added ROS parameter long_gap_recovery_enabled=false, which the executable
+    # reads through the ordinary ROS-over-YAML parser precedence.
+    "S1-recOFF": {
+        "config": S1_CONFIG,
+        "config_sha256": "fa387a5c2146ef2a0471a4cf7acec392e43632a4e51983bb29f9ca8244d9d4b2",
+        "launch": REPO_ROOT / "project" / "icra27_kaist_s1_recoff_serial.launch",
+        "launch_sha256": "c6d7a91896056c1bf79a6a75052844eb96c9a278a44e8d32ea0ed0e71c5b2036",
+        "node": "kaist_vio_turnsafe_baseline",
+        "namespace": "/kaist_vio_turnsafe_baseline",
+    },
+    "N0-recOFF": {
+        "config": S1_CONFIG,
+        "config_sha256": "fa387a5c2146ef2a0471a4cf7acec392e43632a4e51983bb29f9ca8244d9d4b2",
+        "launch": REPO_ROOT / "project" / "icra27_kaist_n0_recoff_serial.launch",
+        "launch_sha256": "2592d69a5f3f1327add32ba9086f1e51ea0851d4d12b601a2e20858b8826e1a4",
+        "node": "kaist_vio_turnsafe_baseline",
+        "namespace": "/kaist_vio_turnsafe_baseline",
+    },
 }
 # Systems that run the frozen S1 executable and exact-header seam.
-S1_LIKE_SYSTEMS: Tuple[str, ...] = ("S1", "N0")
-LANDMARK_ELIMINATION = {"S1": "schur", "N0": "nullspace"}
-PERTURBATION_SYSTEMS: Tuple[str, ...] = ("U0", "S1", "N0")
+S1_LIKE_SYSTEMS: Tuple[str, ...] = ("S1", "N0", "S1-recOFF", "N0-recOFF")
+# Systems whose frozen configuration keeps the C2 long-gap recovery enabled and
+# whose rotation.bag completion is therefore bound to the C2 recovery-gap seam.
+RECOVERY_BOUND_SYSTEMS: Tuple[str, ...] = ("S1", "N0")
+# ABLATE-REC-1 recOFF systems -> their recON counterpart.
+RECOVERY_ABLATED_SYSTEMS = {"S1-recOFF": "S1", "N0-recOFF": "N0"}
+RECOVERY_SWITCH_PARAMETER = "long_gap_recovery_enabled"
+LANDMARK_ELIMINATION = {"S1": "schur", "N0": "nullspace", "S1-recOFF": "schur", "N0-recOFF": "nullspace"}
+PERTURBATION_SYSTEMS: Tuple[str, ...] = ("U0", "S1", "N0", "S1-recOFF", "N0-recOFF")
 PERTURBATION_CAMPAIGN_ID = "PERTURB-1"
+PERTURBATION_CAMPAIGN_IDS: Tuple[str, ...] = ("PERTURB-1", "ABLATE-REC-1")
 PERTURBATION_SEED_LABELS: Tuple[str, ...] = ("frozen",)
 
 KAIST_SEQUENCES: Tuple[str, ...] = (
@@ -258,6 +286,11 @@ def validate_config_contract(system: str, config: Path) -> Dict[str, Any]:
         "n0_yaml_selector_shadowed_by_launch_parameter": (
             "up_msckf_landmark_elimination=nullspace" if system == "N0" else None
         ),
+        "recovery_ablated_system": system in RECOVERY_ABLATED_SYSTEMS,
+        "recovery_yaml_value_shadowed_by_launch_parameter": (
+            RECOVERY_SWITCH_PARAMETER + "=false" if system in RECOVERY_ABLATED_SYSTEMS else None
+        ),
+        "recovery_effective_enabled": bool(enabled and system not in RECOVERY_ABLATED_SYSTEMS),
         "track_frequency_hz": track_frequency_hz,
         "track_frequency_source": "canonical_kaist_config",
         "dependencies": dependencies,
@@ -308,6 +341,7 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
     ):
         raise TrialError("U0 launch changes the original algorithm or delivery seam")
     landmark_elimination = None
+    recovery_switch = None
     if system in S1_LIKE_SYSTEMS:
         values = [
             element.get("value")
@@ -321,6 +355,21 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
                 )
             )
         landmark_elimination = values[0]
+        switches = [
+            (element.get("type"), element.get("value"))
+            for element in node.findall("./param")
+            if element.get("name") == RECOVERY_SWITCH_PARAMETER
+        ]
+        if system in RECOVERY_ABLATED_SYSTEMS:
+            if switches != [("bool", "false")]:
+                raise TrialError(
+                    "{} launch does not set exactly one {}=false".format(
+                        system, RECOVERY_SWITCH_PARAMETER
+                    )
+                )
+            recovery_switch = "false"
+        elif switches:
+            raise TrialError("{} launch must not bind {}".format(system, RECOVERY_SWITCH_PARAMETER))
     return {
         "identity": identity,
         "node_name": policy["node"],
@@ -331,6 +380,9 @@ def validate_launch_contract(system: str, launch: Path) -> Dict[str, Any]:
         "s1_exact_header_pairing": system in S1_LIKE_SYSTEMS,
         "launch_landmark_elimination": landmark_elimination,
         "n0_matched_nullspace_control": system == "N0",
+        "recovery_ablated_system": system in RECOVERY_ABLATED_SYSTEMS,
+        "launch_recovery_switch": recovery_switch,
+        "recon_counterpart_system": RECOVERY_ABLATED_SYSTEMS.get(system),
         "ground_truth_bindings_absent": True,
     }
 
@@ -424,6 +476,8 @@ def _expected_resolved_parameters(
                 "kaist_vio_exact_header_stereo": True,
             }
         )
+        if system in RECOVERY_ABLATED_SYSTEMS:
+            common_values[RECOVERY_SWITCH_PARAMETER] = False
     return {namespace + key: value for key, value in common_values.items()}
 
 
@@ -474,6 +528,11 @@ def validate_resolved_parameters(
         "s1_frozen_exact_header_c2_seam": system in S1_LIKE_SYSTEMS,
         "landmark_elimination": (
             LANDMARK_ELIMINATION.get(system) if system in S1_LIKE_SYSTEMS else "upstream_native"
+        ),
+        "recovery_switch_resolved": (
+            normalized.get(namespace + RECOVERY_SWITCH_PARAMETER)
+            if system in RECOVERY_ABLATED_SYSTEMS
+            else "ABSENT_YAML_GOVERNS"
         ),
     }
 
@@ -1234,7 +1293,7 @@ def assess_kaist_output_coverage(
     result = common.assess_output_coverage(input_interval, state)
     result["recovery_supported_state_gap_count"] = 0
     result["recovery_supported_state_gaps"] = []
-    if system not in S1_LIKE_SYSTEMS or sequence != "rotation/rotation.bag":
+    if system not in RECOVERY_BOUND_SYSTEMS or sequence != "rotation/rotation.bag":
         return result
     if mechanism.get("pass") is not True:
         return result
@@ -1581,7 +1640,7 @@ def perturbation_record(args: argparse.Namespace) -> Dict[str, Any]:
     """
 
     campaign_id = getattr(args, "perturbation_campaign_id", None)
-    if campaign_id != PERTURBATION_CAMPAIGN_ID:
+    if campaign_id not in PERTURBATION_CAMPAIGN_IDS:
         raise TrialError("unknown perturbation campaign id: {}".format(campaign_id))
     offset_frames = getattr(args, "perturbation_offset_frames", None)
     frame_rate_hz = getattr(args, "perturbation_frame_rate_hz", None)
@@ -1628,6 +1687,12 @@ def perturbation_record(args: argparse.Namespace) -> Dict[str, Any]:
         "system": args.system,
         "landmark_elimination": (
             LANDMARK_ELIMINATION.get(args.system) if args.system in S1_LIKE_SYSTEMS else "upstream_native"
+        ),
+        "recovery_ablated": args.system in RECOVERY_ABLATED_SYSTEMS,
+        "recovery_switch": (
+            {"parameter": RECOVERY_SWITCH_PARAMETER, "launch_value": False, "recon_counterpart": RECOVERY_ABLATED_SYSTEMS[args.system]}
+            if args.system in RECOVERY_ABLATED_SYSTEMS
+            else None
         ),
     }
 
@@ -1727,6 +1792,20 @@ def _recovery_evidence(
             "pass": True,
             "event_line_count": 0,
         }
+    if system in RECOVERY_ABLATED_SYSTEMS:
+        # The switch is off: the parser asserts that no recovery line was
+        # emitted (otherwise the switch did not take effect) and records the
+        # DEFAULT_OFF contract used by U0's timing rule.
+        runtime = rotation.parse_recovery_runtime(console_text, False, sequence)
+        return {
+            "status": "NOT_APPLICABLE",
+            "reason": "RECOVERY_DISABLED_BY_ABLATION_SWITCH",
+            "sequence_contract": "ABLATED_OFF",
+            "pass": True,
+            "runtime": runtime,
+            "event_line_count": 0,
+            "post_pair_rotation_evaluation": "NOT_APPLICABLE",
+        }
     runtime = rotation.parse_recovery_runtime(console_text, True, sequence)
     result: Dict[str, Any] = {
         "status": "PASS",
@@ -1822,7 +1901,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             "pass": None,
             "post_pair_rotation_evaluation": (
                 "PENDING"
-                if args.system in S1_LIKE_SYSTEMS and args.sequence == "rotation/rotation.bag"
+                if args.system in RECOVERY_BOUND_SYSTEMS and args.sequence == "rotation/rotation.bag"
                 else "NOT_APPLICABLE"
             ),
         },
@@ -1911,7 +1990,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
             matrix,
             DATASET,
             args.sequence,
-            "S1" if args.system == "N0" else args.system,
+            "S1" if args.system in S1_LIKE_SYSTEMS else args.system,
             bag,
             args.bag_start,
         )
@@ -2131,7 +2210,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                 "reason": str(exc),
                 "post_pair_rotation_evaluation": (
                     "BLOCKED_BY_RUNTIME_CONTRACT"
-                    if args.system in S1_LIKE_SYSTEMS and args.sequence == "rotation/rotation.bag"
+                    if args.system in RECOVERY_BOUND_SYSTEMS and args.sequence == "rotation/rotation.bag"
                     else "NOT_APPLICABLE"
                 ),
             }
@@ -2216,7 +2295,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                 try:
                     recovery_runtime = (
                         {"status": "NOT_ENABLED", "sequence_contract": "DEFAULT_OFF"}
-                        if args.system == "U0"
+                        if args.system == "U0" or args.system in RECOVERY_ABLATED_SYSTEMS
                         else result["robustness_mechanism"].get("runtime", {})
                     )
                     timing_contract = rotation.validate_output_consistency(
