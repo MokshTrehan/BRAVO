@@ -72,6 +72,7 @@ SETS: Tuple[str, ...] = (
     "armA-remaining",
     "euroc-remaining",
     "u0-context",
+    "euroc-study-check",
 )
 RECOVERY_SWITCH_PARAMETER = "long_gap_recovery_enabled"
 TRAJECTORY_FILES = perturb.TRAJECTORY_FILES
@@ -132,7 +133,9 @@ class Cell:
         k: int,
         table_row: Optional[Mapping[str, Any]],
         replica_of: Optional[Mapping[str, Any]] = None,
+        study_check: bool = False,
     ) -> None:
+        self.study_check = study_check
         self.set_name = set_name
         self.row = row
         self.system = system
@@ -145,7 +148,7 @@ class Cell:
         if arm is None:
             self.run_id = "blackout1-integrity-{:02d}-{}-{}-off0-a1".format(row.order, _safe(row.sequence), system.lower())
         else:
-            self.run_id = "blackout1-{:02d}-{}-{}-arm{}-k{:02d}-a1".format(row.order, _safe(row.sequence), system.lower(), arm, k)
+            self.run_id = "blackout1-{:02d}-{}-{}-arm{}-k{:02d}-a1{}".format(row.order, _safe(row.sequence), system.lower(), arm, k, "-studycheck" if study_check else "")
 
     @property
     def role(self) -> str:
@@ -179,6 +182,14 @@ class Cell:
         inj = self.injection
         if inj is None:
             return False, "NO_INJECTION_POINT"
+        if self.system == "S1-recON-euroc" and not self.study_check:
+            return False, (
+                "NOT_RUNNABLE_STUDY_CONFIG_REJECTED_BY_FROZEN_BINARY: the frozen executable's compiled recovery contract "
+                "(VioManager.cpp:252-289) requires calib_cam_extrinsics/intrinsics/timeoffset=false; the frozen EuRoC config "
+                "sets them true, so enabling long_gap_recovery_enabled throws before initialization (DECISIONS D12; evidence run "
+                "set euroc-study-check)"
+                + ("; also NOT_RUNNABLE_MASK_PAST_END" if inj["per_k"][str(self.k)].get("mask_past_end") else "")
+            )
         if self.k == 0:
             return True, None
         per_k = inj["per_k"][str(self.k)]
@@ -233,6 +244,7 @@ class Cell:
             "frozen_matrix_bag_start_seconds": self.frozen_start,
             "estimator_bag_start_seconds": self.frozen_start,
             "replica_of": self.replica_of,
+            "study_check_outside_denominators": self.study_check,
             "runnable": runnable,
             "not_runnable_reason": reason,
             "run_id": self.run_id,
@@ -299,6 +311,9 @@ def plan_cells(rows: Sequence[campaign.MatrixRow], sets: Sequence[str]) -> List[
         for seq in KAIST_SEQUENCES:
             for k in (5, 15):
                 cells.append(Cell("u0-context", by_sequence[seq], "U0", "A", k, T(seq)))
+    if "euroc-study-check" in sets:
+        # D12 evidence run (outside every denominator): the study configuration is refused by the frozen binary.
+        cells.append(Cell("euroc-study-check", by_sequence["MH_05_difficult"], "S1-recON-euroc", "A", 2, T("MH_05_difficult"), study_check=True))
     return cells
 
 
@@ -776,7 +791,9 @@ class Driver:
                 "summary": recovery.get("summary"),
                 "event_log_file": str(driver_dir / "recovery_events.log") if recovery.get("event_lines") else None,
             } if recovery else None,
-            "completion": {k: completion.get(k) for k in ("pass", "tail_gap_pass", "maximum_state_gap_pass", "maximum_state_gap_s", "tail_gap_s", "unsupported_state_gaps", "supported_input_gap_count", "recovery_supported_state_gap_count", "recovery_supported_state_gaps", "input_gap_count", "state_gap_count", "first_state_timestamp_s", "last_state_timestamp_s")} if completion else None,
+            "completion": {k: completion.get(k) for k in ("pass", "tail_gap_pass", "maximum_state_gap_pass", "maximum_state_gap_s", "tail_gap_s", "unsupported_state_gaps", "supported_input_gap_count", "recovery_supported_state_gap_count", "recovery_supported_state_gaps", "input_gap_count", "state_gap_count", "first_state_timestamp_s", "last_state_timestamp_s", "quantization_aware")} if completion else None,
+            "passage_complete_quantization_aware": bool((completion.get("quantization_aware") or {}).get("pass")) if completion else False,
+            "rounding_only_unsupported_gap": bool((completion.get("quantization_aware") or {}).get("rounding_only_unsupported_gap")) if completion else False,
             "blackout_seam": completion.get("blackout_seam") if completion else None,
             "blackout_metrics": completion.get("blackout_metrics") if completion else None,
             "passage": value.get("passage"),
@@ -851,10 +868,12 @@ class Driver:
         self._publish_driver_record(cell, record)
         rec = record.get("recovery") or {}
         self.log(
-            "{} {} -> {} ({}, {}) passage={} commits={} failures={} hist={} false_commits={} ttr={}".format(
+            "{} {} -> {} ({}, {}) passage={} passageQA={} roundingOnly={} commits={} failures={} hist={} false_commits={} ttr={} resume={}".format(
                 cell.set_name, cell.run_id, record.get("status"), record.get("evidence_validity"), record.get("passage_reason"),
-                record.get("passage_complete"), rec.get("commits"), rec.get("failures"), rec.get("attempt_reason_histogram"),
+                record.get("passage_complete"), record.get("passage_complete_quantization_aware"), record.get("rounding_only_unsupported_gap"),
+                rec.get("commits"), rec.get("failures"), rec.get("attempt_reason_histogram"),
                 (record.get("gt_metrics") or {}).get("false_commit_count"), (record.get("blackout_metrics") or {}).get("time_to_recover_s"),
+                (record.get("blackout_metrics") or {}).get("time_to_resume_s"),
             )
         )
         return record

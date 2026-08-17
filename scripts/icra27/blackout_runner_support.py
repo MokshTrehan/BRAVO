@@ -30,6 +30,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 KV_RE = re.compile(r"([a-z_0-9]+)=([^\s]+)")
 GAP_SEAM_TOLERANCE_S = 0.10  # = frozen TAIL_GAP_MAX_SECONDS (input-support start tolerance) reused for the seam start
 COMMIT_MATCH_TOLERANCE_S = 1.0e-5
+QUANTIZATION_TOLERANCE_S = 2.0e-5  # D13: two state-file timestamp quanta
 CLOSURE_HORIZON_S = 30.0
 NS = 1_000_000_000
 
@@ -234,9 +235,11 @@ def blackout_completion(
     record: Mapping[str, Any],
     recovery: Mapping[str, Any],
     state_timestamps: Sequence[float],
+    input_gaps: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Apply the D7 recovery-supported seam to the frozen passage result (in place, recorded)."""
     result = dict(completion)
+    result["input_gaps_for_support"] = [dict(g) for g in (input_gaps or [])]
     result["blackout_seam"] = {
         "rule": (
             "state gap starting within 0.10 s of the masked input gap start and ending at a "
@@ -280,6 +283,39 @@ def blackout_completion(
     else:
         result.setdefault("recovery_supported_state_gap_count", 0)
         result.setdefault("recovery_supported_state_gaps", [])
+    # quantization-aware reading (D13): frozen bounds, duration/shift tolerance 2e-5 s (two state-file quanta)
+    input_gaps = list(result.get("input_gaps_for_support") or [])
+    qa_supported: List[Dict[str, Any]] = []
+    qa_remaining: List[Mapping[str, Any]] = []
+    for gap in (result.get("unsupported_state_gaps") or []):
+        start = float(gap["start_timestamp_s"])
+        end = float(gap["end_timestamp_s"])
+        dur = float(gap["duration_s"])
+        matched = None
+        for ig in input_gaps:
+            start_shift = start - float(ig["start_timestamp_s"])
+            end_shift = end - float(ig["end_timestamp_s"])
+            if (
+                abs(start_shift) <= GAP_SEAM_TOLERANCE_S
+                and abs(end_shift) <= GAP_SEAM_TOLERANCE_S
+                and abs(dur - float(ig["duration_s"])) <= QUANTIZATION_TOLERANCE_S
+                and abs(start_shift - end_shift) <= QUANTIZATION_TOLERANCE_S
+            ):
+                matched = ig
+                break
+        if matched is None:
+            qa_remaining.append(gap)
+        else:
+            qa_supported.append({"state_gap": dict(gap), "input_gap": dict(matched), "duration_delta_s": dur - float(matched["duration_s"])})
+    result["quantization_aware"] = {
+        "rule": "frozen input-support rule with duration/shift tolerance 2e-5 s instead of 1e-6 s (D13); D7 seam and tail rule unchanged",
+        "tolerance_s": QUANTIZATION_TOLERANCE_S,
+        "rounding_only_supported_gaps": qa_supported,
+        "unsupported_state_gaps": qa_remaining,
+        "maximum_state_gap_pass": not qa_remaining,
+        "pass": bool(result["tail_gap_pass"]) and not qa_remaining,
+        "rounding_only_unsupported_gap": bool(qa_supported) and not result.get("maximum_state_gap_pass", False),
+    }
     # gap-closure and timing metrics (descriptive)
     horizon_end = mask_end + CLOSURE_HORIZON_S
     intersecting = [
@@ -291,11 +327,17 @@ def blackout_completion(
         if float(t) >= mask_end:
             first_after = float(t)
             break
+    qa_intersecting = [
+        g for g in (result["quantization_aware"]["unsupported_state_gaps"] or [])
+        if not (float(g["end_timestamp_s"]) < mask_start or float(g["start_timestamp_s"]) > horizon_end)
+    ]
     result["blackout_metrics"] = {
         "mask_start_s": mask_start,
         "mask_end_s": mask_end,
         "mask_active": active,
         "gap_closure_success": (not intersecting) and bool(result["tail_gap_pass"]),
+        "gap_closure_success_quantization_aware": (not qa_intersecting) and bool(result["tail_gap_pass"]),
+        "resumed_at_first_post_mask_frame": (first_after is not None and (first_after - mask_end) <= GAP_SEAM_TOLERANCE_S),
         "unsupported_gaps_intersecting_mask_horizon": intersecting,
         "first_state_after_mask_end_s": first_after,
         "time_to_resume_s": (None if first_after is None else first_after - mask_end),

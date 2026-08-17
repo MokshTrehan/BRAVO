@@ -3021,6 +3021,7 @@ def run_trial(args: argparse.Namespace) -> Tuple[Dict[str, Any], Path]:
                         blackout_record,
                         (result.get("robustness_mechanism") or {}).get("blackout_recovery") or {},
                         blackout.read_timestamps(state_path),
+                        (result["input_interval"] or {}).get("gaps_over_threshold") or [],
                     )
                 coverage_pass = bool(result["completion"]["pass"])
                 continuity_pass = bool(result["completion"]["maximum_state_gap_pass"])
