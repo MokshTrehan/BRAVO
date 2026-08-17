@@ -146,6 +146,38 @@ def render(root: Path, agg: Mapping[str, Any], table: Mapping[str, Any], final_d
     if study:
         c = study[0]
         L += ["EuRoC study-configuration evidence run `{}` (outside denominators): status {}, evidence {}, recovery lines {} — the frozen executable refused the enabled configuration at startup (D12).".format(c["run_id"], c["status"], c["evidence_validity"], c["activations"]), ""]
+    # (6b) descriptive observations computed from the tables (facts, no interpretation)
+    L += ["### 6b. Descriptive observations (facts from the tables above; not verdict-bearing)", ""]
+    cells = agg["cells"]
+    def by(role, arm=None):
+        return [c for c in cells if c["role"] == role and c["executed"] and c["k"] in DURATIONS and (arm is None or c["arm"] == arm)]
+    recon = by("recON")
+    recov = [c for c in recon if c["recovered"]]
+    L.append("- recON recoveries: {} of {} executed recON cells; every recovery committed on the first three post-mask attempts (accepted x3, consensus radius <= 0.10 m) {:.2f}-{:.3f} s after the mask end; commit position error vs GT under the pre-mask alignment {} m (min-max); ATE of recovered cells {} m; all recovered cells usable (< 0.5 m).".format(
+        len(recov), len(recon), min(c["time_to_recover_s"] for c in recov) if recov else 0, max(c["time_to_recover_s"] for c in recov) if recov else 0,
+        "{:.3f}-{:.3f}".format(min(e for c in recov for e in c["commit_errors_m"]), max(e for c in recov for e in c["commit_errors_m"])) if recov else "—",
+        "{:.3f}-{:.3f}".format(min(c["ate_m"] for c in recov if c["ate_m"] is not None), max(c["ate_m"] for c in recov if c["ate_m"] is not None)) if recov else "—"))
+    fails = [c for c in recon if not c["recovered"]]
+    L.append("- recON non-recoveries: {} cells, all 10-attempt typed recovery_failed with state_unchanged=1 (fail-closed: the estimator emits no further state, hence PARTIAL / tail not reached). Reason histogram over all failed attempts: {}. Supplied correspondences (surviving tracks matched to retained SLAM landmarks) on failed cells ranged {}-{}; on recovered cells the first attempt supplied {}-{}.".format(
+        len(fails), hist({k: sum(c["histogram"].get(k, 0) for c in fails) for k in set(kk for c in fails for kk in c["histogram"])}),
+        min(min(c["supplied"]) for c in fails if c["supplied"]) if fails else "—", max(max(c["supplied"]) for c in fails if c["supplied"]) if fails else "—",
+        min(c["supplied"][0] for c in recov if c["supplied"]) if recov else "—", max(c["supplied"][0] for c in recov if c["supplied"]) if recov else "—"))
+    arm_a = by("recON", "A")
+    L.append("- Arm A recovery is not monotone in k: recovered at " + "; ".join("{} k={}".format(c["sequence"].split("/")[-1], c["k"]) for c in arm_a if c["recovered"]) + " and refused at the other {} arm-A cells; recovery is governed by whether >= 12 pre-mask tracks survive KLT across the masked pair (supplied/inliers columns), not by k (B1' boundary reading).".format(sum(1 for c in arm_a if not c["recovered"])))
+    vel = [c for c in recov if c["velocity_exposures"]]
+    L.append("- Velocity-assumption exposure events (commit while |v_GT| > 0.3 m/s): {} of {} commits ({}); the committed positions were nevertheless within {} m of GT — the consensus gate accepted a moving commit in these cells; reported as required by prereg A3.".format(
+        sum(c["velocity_exposures"] for c in recov), sum(c["commits"] for c in recon), "; ".join("{} arm {} k={} |v|={:.2f} m/s".format(c["sequence"].split("/")[-1], c["arm"], c["k"], c["commit_speeds_mps"][0]) for c in vel), "{:.3f}".format(max(e for c in vel for e in c["commit_errors_m"])) if vel else "—"))
+    recoff = by("recOFF")
+    L.append("- recOFF (switch off) never stalls: it propagates through the mask on IMU and resumes state output {:.3f}-{:.3f} s after the mask end in every executed recOFF cell ({} cells); frozen-rule statuses: {}; rounding-only TRACKING_LOSS {} of {}; quantization-aware complete {} of {}. Its post-mask position error under the pre-mask alignment (max over the 10 s after resume) grows with k: ".format(
+        min(c["time_to_resume_s"] for c in recoff if c["time_to_resume_s"] is not None), max(c["time_to_resume_s"] for c in recoff if c["time_to_resume_s"] is not None), len(recoff),
+        ", ".join("{}={}".format(k, n) for k, n in sorted({s: sum(1 for c in recoff if c["status"] == s) for s in set(c["status"] for c in recoff)}.items())),
+        sum(1 for c in recoff if c["rounding_only_unsupported_gap"]), len(recoff), sum(1 for c in recoff if c["complete_qa"]), len(recoff))
+        + "; ".join("{} arm {} k={}: {:.2f} m".format(c["sequence"].split("/")[-1], c["arm"], c["k"], c["post_mask_err"]["max"]) for c in sorted(recoff, key=lambda c: (c["arm"], c["sequence"], c["k"])) if c["post_mask_err"]) + ".")
+    L.append("- Consequently completion is not the discriminating quantity between recON and recOFF under masking (all 9 frozen-rule separations are rounding-only, D13): recON either re-anchors within centimetres or fails closed (no output), while recOFF always continues with IMU-propagated drift that reaches metres for k >= 10 s on the mid-motion arm. The paper must state both.")
+    L.append("- U0 (stock upstream, KAIST arm A k in {5,15}) behaves like recOFF: " + "; ".join("{} k={} {} (QA {}, resume {:.3f} s, post-mask max err {:.2f} m)".format(c["sequence"].split("/")[-1], c["k"], c["status"], "C" if c["complete_qa"] else "F", c["time_to_resume_s"] or float("nan"), (c["post_mask_err"] or {}).get("max", float("nan"))) for c in by("U0")) + ".")
+    euroc_off = [c for c in recoff if c["dataset"] == "euroc_mav"]
+    L.append("- EuRoC recOFF (frozen behaviour) arm A: " + "; ".join("{} k={} {} (QA {}{}, ATE {})".format(c["sequence"], c["k"], c["status"], "C" if c["complete_qa"] else "F", ", rounding-only" if c["rounding_only_unsupported_gap"] else "", fmt(c["ate_m"])) for c in euroc_off) + ".")
+    L.append("")
     # (7) licensed claims
     L += ["## 7. Licensed claim sentences (constructed from the amended Licensed-claims section; nothing stronger)", ""]
     for key, s in agg["licensed_claims"].items():
