@@ -1201,11 +1201,17 @@ def validate_resolved_parameters(
                 missing, extra, changed
             )
         )
+    # Outside KAIST the recovery option must never be enabled at runtime; the
+    # ABLATE-REC-1 recOFF systems bind it explicitly to False (the executable
+    # default), which keeps that guarantee.
     forbidden = [
         key
         for key in normalized
-        if key.rsplit("/", 1)[-1]
-        in ("path_gt", "initialize_with_gt", "long_gap_recovery_enabled")
+        if key.rsplit("/", 1)[-1] in ("path_gt", "initialize_with_gt")
+        or (
+            key.rsplit("/", 1)[-1] == RECOVERY_SWITCH_PARAMETER
+            and not (system in RECOVERY_ABLATED_SYSTEMS and normalized[key] is False)
+        )
     ]
     if forbidden:
         raise TrialError("forbidden runtime parameter present: {}".format(forbidden))
@@ -1214,7 +1220,14 @@ def validate_resolved_parameters(
         "exact_typed_map_match": True,
         "parameters": normalized,
         "ground_truth_parameters_absent": True,
-        "recovery_parameter_absent": True,
+        "recovery_parameter_absent": not any(
+            key.rsplit("/", 1)[-1] == RECOVERY_SWITCH_PARAMETER for key in normalized
+        ),
+        "recovery_switch_resolved": (
+            normalized.get(NODE_NAMESPACE + "/" + RECOVERY_SWITCH_PARAMETER)
+            if system in RECOVERY_ABLATED_SYSTEMS
+            else "ABSENT_DEFAULT_OFF"
+        ),
     }
 
 
