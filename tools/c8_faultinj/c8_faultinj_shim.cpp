@@ -271,6 +271,7 @@ struct Context {
   Eigen::MatrixXd saved_imu_value;
   bool saved_cov_valid = false;
   bool saved_imu_valid = false;
+  std::string presented_override; // hash of the live state right after a mid-update harness mutation (class 6)
 };
 thread_local Context t_ctx;
 std::atomic<std::uint64_t> g_invocations{0};
@@ -429,6 +430,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state,
   }
 
   const std::string h_post = hash_state(*state);
+  if (!c.presented_override.empty()) h_pre_presented = c.presented_override;
   const bool state_unchanged_vs_presented = (h_post == h_pre_presented);
 
   // Harness-side restoration of harness-side corruption, only when the
@@ -599,6 +601,7 @@ MSCKFUpdatePreviewResult UpdaterMSCKFPreview::ComputeFromSnapshot(
     Eigen::MatrixXd v = c.saved_imu_value;
     if (v.rows() > 4) v(4, 0) += 1.0e-3; // position x nominal perturbation
     c.state->_imu->set_value(v);
+    c.presented_override = hash_state(*c.state); // the prior the commit stage now sees
   }
   return r;
 }

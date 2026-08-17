@@ -296,7 +296,7 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     runs = load_runs(root)
     caps = [r for r in runs if r["_tag"] == "capture"]
-    cyc = [r for r in runs if r["_tag"].startswith("cycle")]
+    cyc = [r for r in runs if r["_tag"].startswith("cycle") and "superseded" not in r["_tag"]]
     r7a = [r for r in runs if r["_tag"] == "class7a-console"]
     r7b = [r for r in runs if r["_tag"].startswith("class7b-t0")]
 
@@ -311,17 +311,24 @@ def main() -> int:
     c7 = class7_table(r7a, r7b, ref_lines)
     nat = None if args.skip_natural else natural_incidents()
 
+    expected = {"capture": 22, "cycle": 22, "class7a": 22, "class7b_min": 116}
+    complete = (len(caps) == expected["capture"] and len(cyc) == expected["cycle"] and len(r7a) == expected["class7a"] and len(r7b) >= expected["class7b_min"])
     result = {
         "schema": "schurvio.icra27.c8.fault_matrix.v1",
         "root": str(root),
         "runs_total": len(runs),
+        "expected_runs": expected,
+        "observed_runs": {"capture": len(caps), "cycle": len(cyc), "class7a": len(r7a), "class7b": len(r7b)},
+        "complete": complete,
         "inertness": {"rows": inert, "byte_identical": sum(1 for x in inert if x["status"] == "BYTE_IDENTICAL"), "n": len(inert)},
         "cycle": cm,
         "class7": c7,
         "natural_incidents": nat,
         "verdict": {
             "H4_all_zero_violation_columns": (len(cm["violations"]) == 0 and c7["summary"]["7a_unaffected"] == c7["summary"]["7a_runs"]
-                                              and c7["summary"]["7b_unaffected"] == c7["summary"]["7b_runs"]),
+                                              and c7["summary"]["7b_unaffected"] == c7["summary"]["7b_runs"] and len(cyc) > 0),
+            "complete": complete,
+            "per_class_min_realized_ge_100": all(m["fault_realized"] >= 100 for m in cm["matrix"]) if cm["matrix"] else False,
             "violations_total": len(cm["violations"]),
             "class7_affected_runs": (c7["summary"]["7a_runs"] - c7["summary"]["7a_unaffected"]) + (c7["summary"]["7b_runs"] - c7["summary"]["7b_unaffected"]),
             "inertness_gate": "PASS" if inert and all(x["status"] == "BYTE_IDENTICAL" for x in inert) else "FAIL_OR_INCOMPLETE",
@@ -379,8 +386,9 @@ def main() -> int:
                "|---|---:|---:|" + "---:|" * len(NATURAL_PREFIXES)]
         for cid, v in nat["roots"].items():
             md.append("| {} | {} | {} | ".format(cid, v["console_files"], v["state_rows_total"]) + " | ".join(str(v["counts"].get(p, 0)) for p, _ in NATURAL_PREFIXES) + " |")
-    md += ["", "## Verdict", "", "H4 all-zero violation columns: **{}** (violations={}, class-7 affected runs={}, inertness gate={}).".format(
-        result["verdict"]["H4_all_zero_violation_columns"], result["verdict"]["violations_total"], result["verdict"]["class7_affected_runs"], result["verdict"]["inertness_gate"])]
+    md += ["", "## Verdict", "", "H4 all-zero violation columns: **{}** (violations={}, class-7 affected runs={}, inertness gate={}, campaign complete={} [observed {} vs expected {}], every class >=100 realized={}).".format(
+        result["verdict"]["H4_all_zero_violation_columns"], result["verdict"]["violations_total"], result["verdict"]["class7_affected_runs"], result["verdict"]["inertness_gate"],
+        complete, result["observed_runs"], expected, result["verdict"]["per_class_min_realized_ge_100"])]
     (out / "FAULT_MATRIX.md").write_text("\n".join(md) + "\n")
     with open(out / "SHA256SUMS", "w") as f:
         for p in sorted(out.iterdir()):
