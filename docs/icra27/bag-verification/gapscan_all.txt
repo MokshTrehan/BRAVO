@@ -1,0 +1,110 @@
+== kaistviodataset/data/circle/circle.bag ==
+  /camera/color/image_raw                  n=  4749  max_gap=    0.064s  [1624245127.211219 -> 1624245127.275563]
+  /camera/infra1/image_rect_raw            n=  4764  max_gap=    0.058s  [1624245127.210374 -> 1624245127.268079]
+  /camera/infra2/image_rect_raw            n=  4762  max_gap=    0.066s  [1624245128.711106 -> 1624245128.777219]
+  /mavros/imu/data                         n= 19142  max_gap=    0.175s  [1624245122.745673 -> 1624245122.920423]
+  /pose_transformed                        n=  8914  max_gap=    0.621s  [1624245119.754178 -> 1624245120.375471]
+== kaistviodataset/data/circle/circle_fast.bag ==
+  /camera/color/image_raw                  n=  4500  max_gap=    0.061s  [1624245367.095725 -> 1624245367.156263]
+  /camera/infra1/image_rect_raw            n=  4522  max_gap=    0.064s  [1624245402.597598 -> 1624245402.661806]
+  /camera/infra2/image_rect_raw            n=  4523  max_gap=    0.061s  [1624245404.809515 -> 1624245404.870424]
+  /mavros/imu/data                         n= 18380  max_gap=    0.057s  [1624245308.926393 -> 1624245308.983360]
+  /pose_transformed                        n=  8487  max_gap=    0.874s  [1624245385.331463 -> 1624245386.205292]
+== kaistviodataset/data/circle/circle_head.bag ==
+  /camera/color/image_raw                  n=  4460  max_gap=    0.062s  [1624245554.870249 -> 1624245554.932703]
+  /camera/infra1/image_rect_raw            n=  4464  max_gap=    0.079s  [1624245583.951006 -> 1624245584.029948]
+  /camera/infra2/image_rect_raw            n=  4464  max_gap=    0.082s  [1624245583.948102 -> 1624245584.029821]
+  /mavros/imu/data                         n= 17309  max_gap=    0.064s  [1624245493.793314 -> 1624245493.856871]
+  /pose_transformed                        n=  7010  max_gap=    1.182s  [1624245601.923572 -> 1624245603.105635]
+== kaistviodataset/data/infinite/infinite.bag ==
+  /camera/color/image_raw                  n=  4466  max_gap=    0.087s  [1624245731.028505 -> 1624245731.115649]
+  /camera/infra1/image_rect_raw            n=  4481  max_gap=    0.100s  [1624245731.006938 -> 1624245731.107087]
+  /camera/infra2/image_rect_raw            n=  4479  max_gap=    0.116s  [1624245730.990606 -> 1624245731.106955]
+  /mavros/imu/data                         n= 18882  max_gap=    0.094s  [1624245731.007959 -> 1624245731.101727]
+  /pose_transformed                        n=  8516  max_gap=    0.729s  [1624245720.956870 -> 1624245721.686229]
+== kaistviodataset/data/infinite/infinite_fast.bag ==
+  /camera/color/image_raw                  n=  6314  max_gap=    0.113s  [1624246022.351620 -> 1624246022.464320]
+  /camera/infra1/image_rect_raw            n=  6341  max_gap=    0.112s  [1624245884.073898 -> 1624245884.186194]
+  /camera/infra2/image_rect_raw            n=  6337  max_gap=    0.116s  [1624245884.070670 -> 1624245884.186385]
+  /mavros/imu/data                         n= 21151  max_gap=    0.092s  [1624246022.360128 -> 1624246022.452445]
+  /pose_transformed                        n=  9882  max_gap=    0.600s  [1624245837.943650 -> 1624245838.543495]
+== kaistviodataset/data/infinite/infinite_head.bag ==
+  /camera/color/image_raw                  n=  4747  max_gap=    0.071s  [1624246060.335314 -> 1624246060.406336]
+  /camera/infra1/image_rect_raw            n=  4759  max_gap=    0.099s  [1624246132.667445 -> 1624246132.766279]
+  /camera/infra2/image_rect_raw            n=  4760  max_gap=    0.103s  [1624246132.664765 -> 1624246132.767348]
+  /mavros/imu/data                         n= 18261  max_gap=    0.072s  [1624246132.688625 -> 1624246132.760248]
+  /pose_transformed                        n=  7845  max_gap=    1.270s  [1624246084.447580 -> 1624246085.717458]
+== kaistviodataset/data/rotation/rotation.bag ==
+  /camera/color/image_raw                  n=  4686  max_gap=   13.592s  [1624246998.476558 -> 1624247012.069052]
+  /camera/infra1/image_rect_raw            n=  4691  max_gap=   13.413s  [1624246998.480120 -> 1624247011.892647]
+  /camera/infra2/image_rect_raw            n=  4693  max_gap=   13.420s  [1624246998.477651 -> 1624247011.897183]
+  /mavros/imu/data                         n= 16994  max_gap=    0.075s  [1624246993.667024 -> 1624246993.742235]
+  /pose_transformed                        n=  7800  max_gap=    0.459s  [1624246943.148050 -> 1624246943.607287]
+== kaistviodataset/data/rotation/rotation_fast.bag ==
+  /camera/color/image_raw                  n=  3746  max_gap=    0.058s  [1624247128.591731 -> 1624247128.649760]
+  /camera/infra1/image_rect_raw            n=  3761  max_gap=    0.084s  [1624247058.004571 -> 1624247058.088754]
+  /camera/infra2/image_rect_raw            n=  3761  max_gap=    0.072s  [1624247036.836910 -> 1624247036.908565]
+  /mavros/imu/data                         n= 14691  max_gap=    0.060s  [1624247058.023845 -> 1624247058.083895]
+  /pose_transformed                        n=  6778  max_gap=    0.308s  [1624247035.017232 -> 1624247035.325452]
+== kaistviodataset/data/square/square.bag ==
+  /camera/color/image_raw                  n=  4803  max_gap=    0.072s  [1624246354.067385 -> 1624246354.139524]
+  /camera/infra1/image_rect_raw            n=  4821  max_gap=    0.073s  [1624246244.453134 -> 1624246244.525696]
+  /camera/infra2/image_rect_raw            n=  4821  max_gap=    0.071s  [1624246281.336520 -> 1624246281.407233]
+  /mavros/imu/data                         n= 18676  max_gap=    0.057s  [1624246254.584127 -> 1624246254.641161]
+  /pose_transformed                        n=  8774  max_gap=    0.448s  [1624246223.497936 -> 1624246223.945954]
+== kaistviodataset/data/square/square_fast.bag ==
+  /camera/color/image_raw                  n=  4335  max_gap=    0.059s  [1624246472.222621 -> 1624246472.281774]
+  /camera/infra1/image_rect_raw            n=  4353  max_gap=    0.068s  [1624246505.651783 -> 1624246505.720152]
+  /camera/infra2/image_rect_raw            n=  4355  max_gap=    0.066s  [1624246544.431017 -> 1624246544.497490]
+  /mavros/imu/data                         n= 16547  max_gap=    0.059s  [1624246447.872797 -> 1624246447.931807]
+  /pose_transformed                        n=  7258  max_gap=    1.319s  [1624246410.897109 -> 1624246412.216391]
+== kaistviodataset/data/square/square_head.bag ==
+  /camera/color/image_raw                  n=  8350  max_gap=    0.077s  [1624246782.033994 -> 1624246782.110495]
+  /camera/infra1/image_rect_raw            n=  8380  max_gap=    0.075s  [1624246675.799212 -> 1624246675.874449]
+  /camera/infra2/image_rect_raw            n=  8381  max_gap=    0.078s  [1624246675.796035 -> 1624246675.874360]
+  /mavros/imu/data                         n= 27947  max_gap=    0.063s  [1624246611.591831 -> 1624246611.654332]
+  /pose_transformed                        n= 13205  max_gap=    0.592s  [1624246627.372919 -> 1624246627.965001]
+== turnsafe_adapted/circle/circle.bag ==
+  /mavros/imu/data                         n= 19142  max_gap=    0.175s  [1624245122.745673 -> 1624245122.920423]
+  /turnsafe/kaist/infra1/image_raw         n=  4764  max_gap=    0.058s  [1624245127.210374 -> 1624245127.268079]
+  /turnsafe/kaist/infra2/image_raw         n=  4762  max_gap=    0.066s  [1624245128.711106 -> 1624245128.777219]
+== turnsafe_adapted/circle/circle_fast.bag ==
+  /mavros/imu/data                         n= 18380  max_gap=    0.057s  [1624245308.926393 -> 1624245308.983360]
+  /turnsafe/kaist/infra1/image_raw         n=  4522  max_gap=    0.064s  [1624245402.597598 -> 1624245402.661806]
+  /turnsafe/kaist/infra2/image_raw         n=  4523  max_gap=    0.061s  [1624245404.809515 -> 1624245404.870424]
+== turnsafe_adapted/circle/circle_head.bag ==
+  /mavros/imu/data                         n= 17309  max_gap=    0.064s  [1624245493.793314 -> 1624245493.856871]
+  /turnsafe/kaist/infra1/image_raw         n=  4464  max_gap=    0.079s  [1624245583.951006 -> 1624245584.029948]
+  /turnsafe/kaist/infra2/image_raw         n=  4464  max_gap=    0.082s  [1624245583.948102 -> 1624245584.029821]
+== turnsafe_adapted/infinite/infinite.bag ==
+  /mavros/imu/data                         n= 18882  max_gap=    0.094s  [1624245731.007959 -> 1624245731.101727]
+  /turnsafe/kaist/infra1/image_raw         n=  4481  max_gap=    0.100s  [1624245731.006938 -> 1624245731.107087]
+  /turnsafe/kaist/infra2/image_raw         n=  4479  max_gap=    0.116s  [1624245730.990606 -> 1624245731.106955]
+== turnsafe_adapted/infinite/infinite_fast.bag ==
+  /mavros/imu/data                         n= 21151  max_gap=    0.092s  [1624246022.360128 -> 1624246022.452445]
+  /turnsafe/kaist/infra1/image_raw         n=  6341  max_gap=    0.112s  [1624245884.073898 -> 1624245884.186194]
+  /turnsafe/kaist/infra2/image_raw         n=  6337  max_gap=    0.116s  [1624245884.070670 -> 1624245884.186385]
+== turnsafe_adapted/infinite/infinite_head.bag ==
+  /mavros/imu/data                         n= 18261  max_gap=    0.072s  [1624246132.688625 -> 1624246132.760248]
+  /turnsafe/kaist/infra1/image_raw         n=  4759  max_gap=    0.099s  [1624246132.667445 -> 1624246132.766279]
+  /turnsafe/kaist/infra2/image_raw         n=  4760  max_gap=    0.103s  [1624246132.664765 -> 1624246132.767348]
+== turnsafe_adapted/rotation/rotation.bag ==
+  /mavros/imu/data                         n= 16994  max_gap=    0.075s  [1624246993.667024 -> 1624246993.742235]
+  /turnsafe/kaist/infra1/image_raw         n=  4691  max_gap=   13.413s  [1624246998.480120 -> 1624247011.892647]
+  /turnsafe/kaist/infra2/image_raw         n=  4693  max_gap=   13.420s  [1624246998.477651 -> 1624247011.897183]
+== turnsafe_adapted/rotation/rotation_fast.bag ==
+  /mavros/imu/data                         n= 14691  max_gap=    0.060s  [1624247058.023845 -> 1624247058.083895]
+  /turnsafe/kaist/infra1/image_raw         n=  3761  max_gap=    0.084s  [1624247058.004571 -> 1624247058.088754]
+  /turnsafe/kaist/infra2/image_raw         n=  3761  max_gap=    0.072s  [1624247036.836910 -> 1624247036.908565]
+== turnsafe_adapted/square/square.bag ==
+  /mavros/imu/data                         n= 18676  max_gap=    0.057s  [1624246254.584127 -> 1624246254.641161]
+  /turnsafe/kaist/infra1/image_raw         n=  4821  max_gap=    0.073s  [1624246244.453134 -> 1624246244.525696]
+  /turnsafe/kaist/infra2/image_raw         n=  4821  max_gap=    0.071s  [1624246281.336520 -> 1624246281.407233]
+== turnsafe_adapted/square/square_fast.bag ==
+  /mavros/imu/data                         n= 16547  max_gap=    0.059s  [1624246447.872797 -> 1624246447.931807]
+  /turnsafe/kaist/infra1/image_raw         n=  4353  max_gap=    0.068s  [1624246505.651783 -> 1624246505.720152]
+  /turnsafe/kaist/infra2/image_raw         n=  4355  max_gap=    0.066s  [1624246544.431017 -> 1624246544.497490]
+== turnsafe_adapted/square/square_head.bag ==
+  /mavros/imu/data                         n= 27947  max_gap=    0.063s  [1624246611.591831 -> 1624246611.654332]
+  /turnsafe/kaist/infra1/image_raw         n=  8380  max_gap=    0.075s  [1624246675.799212 -> 1624246675.874449]
+  /turnsafe/kaist/infra2/image_raw         n=  8381  max_gap=    0.078s  [1624246675.796035 -> 1624246675.874360]
