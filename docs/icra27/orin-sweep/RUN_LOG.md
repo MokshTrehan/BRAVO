@@ -11,3 +11,4 @@
 - 2026-08-20T14:41Z D9 recorded (cold bag reads inflate the energy window: wall−Σlatency 66 s / 33 s on the first circle cells vs 14–16 s steady). STOP inserted after kaist-circle-S1-b100-r1 (cursor 9).
 - 2026-08-20T14:42:29Z Driver exited cleanly at STOP (DRIVER_COMPLETE, 9 sweep cells + 2 gate cells done). STOP removed; D9 driver (sha 2eae4689…) deployed; restarted 14:42:34Z from cursor 9 at kaist-circle-N0-b100-r1 (bag_warm_s=0.8).
 - 2026-08-20T14:43Z Early descriptive reads (r1 only, not verdicts): rotation_fast compliance 11 % at F, 89 % at 100 (both modes); circle 1 % at F, 55 % at 100 (S1); ATE rotation_fast 0.090 m (F) → 0.572 m (100) — accuracy cliff below F; S1/N0 ATE identical to 1e-7 at F on both sequences.
+- 2026-08-20T15:04:26Z D10 recorded (two-pass pre-read). Driver stopped cleanly at STOP after kaist-square_head-S1-b100-r1 (cursor 13), D10 driver deployed, resumed from cursor.
