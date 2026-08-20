@@ -1,0 +1,15 @@
+FROM ros:noetic
+
+# Frozen Orin build environment for SchurVIO-Lite (ORIN_BRINGUP_SESSION C5).
+# Ubuntu 20.04 userland + ROS Noetic, matching the desktop reference machine.
+# CPU-only: no CUDA, no GPU libraries.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential git cmake \
+    python3-catkin-tools python3-osrf-pycommon \
+    libeigen3-dev libboost-all-dev \
+    libopencv-dev libopencv-contrib-dev \
+    ros-noetic-rosbag ros-noetic-cv-bridge ros-noetic-image-transport \
+    ros-noetic-tf ros-noetic-nav-msgs ros-noetic-sensor-msgs \
+    ros-noetic-geometry-msgs ros-noetic-visualization-msgs \
+    ros-noetic-cmake-modules \
+    && rm -rf /var/lib/apt/lists/*

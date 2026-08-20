@@ -1,0 +1,9 @@
+/data/euroc/machine_hall/MH_01_easy/MH_01_easy.bag: OK
+/data/euroc/machine_hall/MH_02_easy/MH_02_easy.bag: OK
+/data/euroc/machine_hall/MH_03_medium/MH_03_medium.bag: OK
+/data/euroc/machine_hall/MH_04_difficult/MH_04_difficult.bag: OK
+/data/euroc/machine_hall/MH_05_difficult/MH_05_difficult.bag: OK
+/data/euroc/vicon_room1/V1_01_easy/V1_01_easy.bag: OK
+/data/euroc/vicon_room1/V1_02_medium/V1_02_medium.bag: OK
+/data/euroc/vicon_room1/V1_03_difficult/V1_03_difficult.bag: OK
+euroc-verify-exit=0
