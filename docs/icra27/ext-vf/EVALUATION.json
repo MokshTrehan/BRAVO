@@ -1,0 +1,952 @@
+{
+ "cells": [
+  {
+   "sequence": "rotation_fast",
+   "variant": "VF",
+   "rep": 1,
+   "poses": 1870,
+   "coverage": 0.8492,
+   "ate_rmse_m": 0.252548,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "rotation_fast",
+   "variant": "VF",
+   "rep": 2,
+   "poses": 1870,
+   "coverage": 0.8492,
+   "ate_rmse_m": 0.252548,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "rotation_fast",
+   "variant": "VF",
+   "rep": 3,
+   "poses": 1869,
+   "coverage": 0.8488,
+   "ate_rmse_m": 0.303864,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "rotation_fast",
+   "variant": "VF-imu",
+   "rep": 1,
+   "poses": 1870,
+   "coverage": 0.8492,
+   "ate_rmse_m": 0.117626,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "rotation_fast",
+   "variant": "VF-imu",
+   "rep": 2,
+   "poses": 1870,
+   "coverage": 0.8492,
+   "ate_rmse_m": 0.117599,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "rotation_fast",
+   "variant": "VF-imu",
+   "rep": 3,
+   "poses": 1869,
+   "coverage": 0.8488,
+   "ate_rmse_m": 0.113461,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "rotation",
+   "variant": "VF",
+   "rep": 1,
+   "poses": 2333,
+   "coverage": 0.9956,
+   "ate_rmse_m": 0.155242,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "rotation",
+   "variant": "VF",
+   "rep": 2,
+   "poses": 2332,
+   "coverage": 0.9952,
+   "ate_rmse_m": 0.181752,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "rotation",
+   "variant": "VF",
+   "rep": 3,
+   "poses": 2333,
+   "coverage": 0.9956,
+   "ate_rmse_m": 0.155242,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "rotation",
+   "variant": "VF-imu",
+   "rep": 1,
+   "poses": 2332,
+   "coverage": 0.9952,
+   "ate_rmse_m": 11.869746,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "rotation",
+   "variant": "VF-imu",
+   "rep": 2,
+   "poses": 2332,
+   "coverage": 0.9952,
+   "ate_rmse_m": 91.464621,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "rotation",
+   "variant": "VF-imu",
+   "rep": 3,
+   "poses": 2332,
+   "coverage": 0.9952,
+   "ate_rmse_m": 93.610661,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "circle_head",
+   "variant": "VF",
+   "rep": 1,
+   "poses": 2220,
+   "coverage": 0.8556,
+   "ate_rmse_m": 0.051133,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle_head",
+   "variant": "VF",
+   "rep": 2,
+   "poses": 2220,
+   "coverage": 0.8556,
+   "ate_rmse_m": 0.051133,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle_head",
+   "variant": "VF",
+   "rep": 3,
+   "poses": 2221,
+   "coverage": 0.856,
+   "ate_rmse_m": 0.053485,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle_head",
+   "variant": "VF-imu",
+   "rep": 1,
+   "poses": 2221,
+   "coverage": 0.856,
+   "ate_rmse_m": 0.098681,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle_head",
+   "variant": "VF-imu",
+   "rep": 2,
+   "poses": 2221,
+   "coverage": 0.856,
+   "ate_rmse_m": 0.098681,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle_head",
+   "variant": "VF-imu",
+   "rep": 3,
+   "poses": 2220,
+   "coverage": 0.8556,
+   "ate_rmse_m": 0.09832,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "infinite_head",
+   "variant": "VF",
+   "rep": 1,
+   "poses": 2367,
+   "coverage": 0.8651,
+   "ate_rmse_m": 0.053363,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "infinite_head",
+   "variant": "VF",
+   "rep": 2,
+   "poses": 2367,
+   "coverage": 0.8651,
+   "ate_rmse_m": 0.055716,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "infinite_head",
+   "variant": "VF",
+   "rep": 3,
+   "poses": 2368,
+   "coverage": 0.8655,
+   "ate_rmse_m": 0.048278,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "infinite_head",
+   "variant": "VF-imu",
+   "rep": 1,
+   "poses": 2368,
+   "coverage": 0.8655,
+   "ate_rmse_m": 0.110367,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "infinite_head",
+   "variant": "VF-imu",
+   "rep": 2,
+   "poses": 2368,
+   "coverage": 0.8655,
+   "ate_rmse_m": 0.110366,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "infinite_head",
+   "variant": "VF-imu",
+   "rep": 3,
+   "poses": 2368,
+   "coverage": 0.8655,
+   "ate_rmse_m": 0.110367,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "square_head",
+   "variant": "VF",
+   "rep": 1,
+   "poses": 4176,
+   "coverage": 0.9969,
+   "ate_rmse_m": 0.115688,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "square_head",
+   "variant": "VF",
+   "rep": 2,
+   "poses": 4176,
+   "coverage": 0.9969,
+   "ate_rmse_m": 0.115688,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "square_head",
+   "variant": "VF",
+   "rep": 3,
+   "poses": 4176,
+   "coverage": 0.9969,
+   "ate_rmse_m": 0.115688,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "square_head",
+   "variant": "VF-imu",
+   "rep": 1,
+   "poses": 4178,
+   "coverage": 0.9974,
+   "ate_rmse_m": 0.128991,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "square_head",
+   "variant": "VF-imu",
+   "rep": 2,
+   "poses": 4178,
+   "coverage": 0.9974,
+   "ate_rmse_m": 0.122221,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "square_head",
+   "variant": "VF-imu",
+   "rep": 3,
+   "poses": 4178,
+   "coverage": 0.9974,
+   "ate_rmse_m": 0.12899,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "circle",
+   "variant": "VF",
+   "rep": 1,
+   "poses": 2370,
+   "coverage": 0.8246,
+   "ate_rmse_m": 0.046361,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle",
+   "variant": "VF",
+   "rep": 2,
+   "poses": 2370,
+   "coverage": 0.8246,
+   "ate_rmse_m": 0.046361,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle",
+   "variant": "VF",
+   "rep": 3,
+   "poses": 2370,
+   "coverage": 0.8246,
+   "ate_rmse_m": 0.046361,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle",
+   "variant": "VF-imu",
+   "rep": 1,
+   "poses": 2370,
+   "coverage": 0.8246,
+   "ate_rmse_m": 0.065323,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle",
+   "variant": "VF-imu",
+   "rep": 2,
+   "poses": 2370,
+   "coverage": 0.8246,
+   "ate_rmse_m": 0.068359,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle",
+   "variant": "VF-imu",
+   "rep": 3,
+   "poses": 2370,
+   "coverage": 0.8246,
+   "ate_rmse_m": 0.06836,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle_fast",
+   "variant": "VF",
+   "rep": 1,
+   "poses": 2250,
+   "coverage": 0.8159,
+   "ate_rmse_m": 0.09328,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle_fast",
+   "variant": "VF",
+   "rep": 2,
+   "poses": 2251,
+   "coverage": 0.8163,
+   "ate_rmse_m": 0.089819,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle_fast",
+   "variant": "VF",
+   "rep": 3,
+   "poses": 2250,
+   "coverage": 0.8159,
+   "ate_rmse_m": 0.069396,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle_fast",
+   "variant": "VF-imu",
+   "rep": 1,
+   "poses": 2250,
+   "coverage": 0.8159,
+   "ate_rmse_m": 0.068506,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle_fast",
+   "variant": "VF-imu",
+   "rep": 2,
+   "poses": 2250,
+   "coverage": 0.8159,
+   "ate_rmse_m": 0.068506,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "circle_fast",
+   "variant": "VF-imu",
+   "rep": 3,
+   "poses": 2250,
+   "coverage": 0.8159,
+   "ate_rmse_m": 0.068506,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "infinite",
+   "variant": "VF",
+   "rep": 1,
+   "poses": 2226,
+   "coverage": 0.7878,
+   "ate_rmse_m": 0.039379,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "infinite",
+   "variant": "VF",
+   "rep": 2,
+   "poses": 2227,
+   "coverage": 0.7882,
+   "ate_rmse_m": 0.049847,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "infinite",
+   "variant": "VF",
+   "rep": 3,
+   "poses": 2226,
+   "coverage": 0.7878,
+   "ate_rmse_m": 0.023567,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "infinite",
+   "variant": "VF-imu",
+   "rep": 1,
+   "poses": 2227,
+   "coverage": 0.7882,
+   "ate_rmse_m": 0.067473,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "infinite",
+   "variant": "VF-imu",
+   "rep": 2,
+   "poses": 2226,
+   "coverage": 0.7878,
+   "ate_rmse_m": 0.076928,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "infinite",
+   "variant": "VF-imu",
+   "rep": 3,
+   "poses": 2226,
+   "coverage": 0.7878,
+   "ate_rmse_m": 0.076928,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "infinite_fast",
+   "variant": "VF",
+   "rep": 1,
+   "poses": 3156,
+   "coverage": 0.9965,
+   "ate_rmse_m": 0.056569,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "infinite_fast",
+   "variant": "VF",
+   "rep": 2,
+   "poses": 3157,
+   "coverage": 0.9968,
+   "ate_rmse_m": 0.070109,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "infinite_fast",
+   "variant": "VF",
+   "rep": 3,
+   "poses": 3157,
+   "coverage": 0.9968,
+   "ate_rmse_m": 0.041648,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "infinite_fast",
+   "variant": "VF-imu",
+   "rep": 1,
+   "poses": 3157,
+   "coverage": 0.9968,
+   "ate_rmse_m": 0.054737,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "infinite_fast",
+   "variant": "VF-imu",
+   "rep": 2,
+   "poses": 3157,
+   "coverage": 0.9968,
+   "ate_rmse_m": 0.054736,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "infinite_fast",
+   "variant": "VF-imu",
+   "rep": 3,
+   "poses": 3157,
+   "coverage": 0.9968,
+   "ate_rmse_m": 0.054737,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "square",
+   "variant": "VF",
+   "rep": 1,
+   "poses": 2400,
+   "coverage": 0.8564,
+   "ate_rmse_m": 0.087205,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "square",
+   "variant": "VF",
+   "rep": 2,
+   "poses": 2400,
+   "coverage": 0.8564,
+   "ate_rmse_m": 0.087205,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "square",
+   "variant": "VF",
+   "rep": 3,
+   "poses": 2400,
+   "coverage": 0.8564,
+   "ate_rmse_m": 0.087205,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "square",
+   "variant": "VF-imu",
+   "rep": 1,
+   "poses": 2400,
+   "coverage": 0.8564,
+   "ate_rmse_m": 0.081036,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "square",
+   "variant": "VF-imu",
+   "rep": 2,
+   "poses": 2399,
+   "coverage": 0.8561,
+   "ate_rmse_m": 0.117037,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "square",
+   "variant": "VF-imu",
+   "rep": 3,
+   "poses": 2399,
+   "coverage": 0.8561,
+   "ate_rmse_m": 0.117038,
+   "status": "PARTIAL"
+  },
+  {
+   "sequence": "square_fast",
+   "variant": "VF",
+   "rep": 1,
+   "poses": 2165,
+   "coverage": 0.925,
+   "ate_rmse_m": 0.068139,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "square_fast",
+   "variant": "VF",
+   "rep": 2,
+   "poses": 2164,
+   "coverage": 0.9246,
+   "ate_rmse_m": 0.071407,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "square_fast",
+   "variant": "VF",
+   "rep": 3,
+   "poses": 2165,
+   "coverage": 0.925,
+   "ate_rmse_m": 0.068241,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "square_fast",
+   "variant": "VF-imu",
+   "rep": 1,
+   "poses": 2165,
+   "coverage": 0.925,
+   "ate_rmse_m": 0.070786,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "square_fast",
+   "variant": "VF-imu",
+   "rep": 2,
+   "poses": 2165,
+   "coverage": 0.925,
+   "ate_rmse_m": 0.07079,
+   "status": "COMPLETE"
+  },
+  {
+   "sequence": "square_fast",
+   "variant": "VF-imu",
+   "rep": 3,
+   "poses": 2165,
+   "coverage": 0.925,
+   "ate_rmse_m": 0.070806,
+   "status": "COMPLETE"
+  }
+ ],
+ "summary": {
+  "VF|rotation_fast": {
+   "n_complete": "0/3",
+   "ate_median": null,
+   "ate_min": null,
+   "ate_max": null,
+   "statuses": [
+    "PARTIAL",
+    "PARTIAL",
+    "PARTIAL"
+   ],
+   "coverages": [
+    0.8492,
+    0.8492,
+    0.8488
+   ]
+  },
+  "VF-imu|rotation_fast": {
+   "n_complete": "0/3",
+   "ate_median": null,
+   "ate_min": null,
+   "ate_max": null,
+   "statuses": [
+    "PARTIAL",
+    "PARTIAL",
+    "PARTIAL"
+   ],
+   "coverages": [
+    0.8492,
+    0.8492,
+    0.8488
+   ]
+  },
+  "VF|rotation": {
+   "n_complete": "3/3",
+   "ate_median": 0.1552,
+   "ate_min": 0.1552,
+   "ate_max": 0.1818,
+   "statuses": [
+    "COMPLETE",
+    "COMPLETE",
+    "COMPLETE"
+   ],
+   "coverages": [
+    0.9956,
+    0.9952,
+    0.9956
+   ]
+  },
+  "VF-imu|rotation": {
+   "n_complete": "3/3",
+   "ate_median": 91.4646,
+   "ate_min": 11.8697,
+   "ate_max": 93.6107,
+   "statuses": [
+    "COMPLETE",
+    "COMPLETE",
+    "COMPLETE"
+   ],
+   "coverages": [
+    0.9952,
+    0.9952,
+    0.9952
+   ]
+  },
+  "VF|circle_head": {
+   "n_complete": "0/3",
+   "ate_median": null,
+   "ate_min": null,
+   "ate_max": null,
+   "statuses": [
+    "PARTIAL",
+    "PARTIAL",
+    "PARTIAL"
+   ],
+   "coverages": [
+    0.8556,
+    0.8556,
+    0.856
+   ]
+  },
+  "VF-imu|circle_head": {
+   "n_complete": "0/3",
+   "ate_median": null,
+   "ate_min": null,
+   "ate_max": null,
+   "statuses": [
+    "PARTIAL",
+    "PARTIAL",
+    "PARTIAL"
+   ],
+   "coverages": [
+    0.856,
+    0.856,
+    0.8556
+   ]
+  },
+  "VF|infinite_head": {
+   "n_complete": "0/3",
+   "ate_median": null,
+   "ate_min": null,
+   "ate_max": null,
+   "statuses": [
+    "PARTIAL",
+    "PARTIAL",
+    "PARTIAL"
+   ],
+   "coverages": [
+    0.8651,
+    0.8651,
+    0.8655
+   ]
+  },
+  "VF-imu|infinite_head": {
+   "n_complete": "0/3",
+   "ate_median": null,
+   "ate_min": null,
+   "ate_max": null,
+   "statuses": [
+    "PARTIAL",
+    "PARTIAL",
+    "PARTIAL"
+   ],
+   "coverages": [
+    0.8655,
+    0.8655,
+    0.8655
+   ]
+  },
+  "VF|square_head": {
+   "n_complete": "3/3",
+   "ate_median": 0.1157,
+   "ate_min": 0.1157,
+   "ate_max": 0.1157,
+   "statuses": [
+    "COMPLETE",
+    "COMPLETE",
+    "COMPLETE"
+   ],
+   "coverages": [
+    0.9969,
+    0.9969,
+    0.9969
+   ]
+  },
+  "VF-imu|square_head": {
+   "n_complete": "3/3",
+   "ate_median": 0.129,
+   "ate_min": 0.1222,
+   "ate_max": 0.129,
+   "statuses": [
+    "COMPLETE",
+    "COMPLETE",
+    "COMPLETE"
+   ],
+   "coverages": [
+    0.9974,
+    0.9974,
+    0.9974
+   ]
+  },
+  "VF|circle": {
+   "n_complete": "0/3",
+   "ate_median": null,
+   "ate_min": null,
+   "ate_max": null,
+   "statuses": [
+    "PARTIAL",
+    "PARTIAL",
+    "PARTIAL"
+   ],
+   "coverages": [
+    0.8246,
+    0.8246,
+    0.8246
+   ]
+  },
+  "VF-imu|circle": {
+   "n_complete": "0/3",
+   "ate_median": null,
+   "ate_min": null,
+   "ate_max": null,
+   "statuses": [
+    "PARTIAL",
+    "PARTIAL",
+    "PARTIAL"
+   ],
+   "coverages": [
+    0.8246,
+    0.8246,
+    0.8246
+   ]
+  },
+  "VF|circle_fast": {
+   "n_complete": "0/3",
+   "ate_median": null,
+   "ate_min": null,
+   "ate_max": null,
+   "statuses": [
+    "PARTIAL",
+    "PARTIAL",
+    "PARTIAL"
+   ],
+   "coverages": [
+    0.8159,
+    0.8163,
+    0.8159
+   ]
+  },
+  "VF-imu|circle_fast": {
+   "n_complete": "0/3",
+   "ate_median": null,
+   "ate_min": null,
+   "ate_max": null,
+   "statuses": [
+    "PARTIAL",
+    "PARTIAL",
+    "PARTIAL"
+   ],
+   "coverages": [
+    0.8159,
+    0.8159,
+    0.8159
+   ]
+  },
+  "VF|infinite": {
+   "n_complete": "0/3",
+   "ate_median": null,
+   "ate_min": null,
+   "ate_max": null,
+   "statuses": [
+    "PARTIAL",
+    "PARTIAL",
+    "PARTIAL"
+   ],
+   "coverages": [
+    0.7878,
+    0.7882,
+    0.7878
+   ]
+  },
+  "VF-imu|infinite": {
+   "n_complete": "0/3",
+   "ate_median": null,
+   "ate_min": null,
+   "ate_max": null,
+   "statuses": [
+    "PARTIAL",
+    "PARTIAL",
+    "PARTIAL"
+   ],
+   "coverages": [
+    0.7882,
+    0.7878,
+    0.7878
+   ]
+  },
+  "VF|infinite_fast": {
+   "n_complete": "3/3",
+   "ate_median": 0.0566,
+   "ate_min": 0.0416,
+   "ate_max": 0.0701,
+   "statuses": [
+    "COMPLETE",
+    "COMPLETE",
+    "COMPLETE"
+   ],
+   "coverages": [
+    0.9965,
+    0.9968,
+    0.9968
+   ]
+  },
+  "VF-imu|infinite_fast": {
+   "n_complete": "3/3",
+   "ate_median": 0.0547,
+   "ate_min": 0.0547,
+   "ate_max": 0.0547,
+   "statuses": [
+    "COMPLETE",
+    "COMPLETE",
+    "COMPLETE"
+   ],
+   "coverages": [
+    0.9968,
+    0.9968,
+    0.9968
+   ]
+  },
+  "VF|square": {
+   "n_complete": "0/3",
+   "ate_median": null,
+   "ate_min": null,
+   "ate_max": null,
+   "statuses": [
+    "PARTIAL",
+    "PARTIAL",
+    "PARTIAL"
+   ],
+   "coverages": [
+    0.8564,
+    0.8564,
+    0.8564
+   ]
+  },
+  "VF-imu|square": {
+   "n_complete": "0/3",
+   "ate_median": null,
+   "ate_min": null,
+   "ate_max": null,
+   "statuses": [
+    "PARTIAL",
+    "PARTIAL",
+    "PARTIAL"
+   ],
+   "coverages": [
+    0.8564,
+    0.8561,
+    0.8561
+   ]
+  },
+  "VF|square_fast": {
+   "n_complete": "3/3",
+   "ate_median": 0.0682,
+   "ate_min": 0.0681,
+   "ate_max": 0.0714,
+   "statuses": [
+    "COMPLETE",
+    "COMPLETE",
+    "COMPLETE"
+   ],
+   "coverages": [
+    0.925,
+    0.9246,
+    0.925
+   ]
+  },
+  "VF-imu|square_fast": {
+   "n_complete": "3/3",
+   "ate_median": 0.0708,
+   "ate_min": 0.0708,
+   "ate_max": 0.0708,
+   "statuses": [
+    "COMPLETE",
+    "COMPLETE",
+    "COMPLETE"
+   ],
+   "coverages": [
+    0.925,
+    0.925,
+    0.925
+   ]
+  }
+ }
+}
