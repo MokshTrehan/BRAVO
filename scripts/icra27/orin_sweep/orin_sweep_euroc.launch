@@ -1,0 +1,41 @@
+<launch>
+    <!--
+      Frozen S1 arm for the EuRoC/TUM-VI system comparison.  Relative to the
+      native dataset configuration, this launch changes exactly the selected
+      MSCKF elimination backend and the one-pass cap.  Long-gap recovery is
+      deliberately absent and must remain default-off outside KAIST.
+    -->
+    <arg name="config_path" />
+    <arg name="bag" />
+    <arg name="bag_start" default="0.0" />
+    <arg name="bag_durr" default="-1.0" />
+    <arg name="path_state" />
+    <arg name="path_std" />
+    <arg name="path_time" />
+    <arg name="record_timing" default="true" />
+    <!-- ORIN-SWEEP-1: the only two per-cell deltas (defaults = frozen values). -->
+    <arg name="num_pts" default="200" />
+    <arg name="landmark_elimination" default="schur" />
+
+    <node name="icra27_cross_dataset" pkg="ov_msckf"
+          type="ros1_serial_msckf" output="screen" clear_params="true"
+          required="true">
+        <param name="config_path" type="str" value="$(arg config_path)" />
+        <param name="path_bag" type="str" value="$(arg bag)" />
+        <param name="bag_start" type="double" value="$(arg bag_start)" />
+        <param name="bag_durr" type="double" value="$(arg bag_durr)" />
+
+        <param name="up_msckf_landmark_elimination" type="str"
+               value="$(arg landmark_elimination)" />
+        <param name="num_pts" type="int" value="$(arg num_pts)" />
+        <param name="up_msckf_max_visual_passes" type="int" value="1" />
+
+        <param name="save_total_state" type="bool" value="true" />
+        <param name="filepath_est" type="str" value="$(arg path_state)" />
+        <param name="filepath_std" type="str" value="$(arg path_std)" />
+        <param name="record_timing_information" type="bool"
+               value="$(arg record_timing)" />
+        <param name="record_timing_filepath" type="str"
+               value="$(arg path_time)" />
+    </node>
+</launch>
