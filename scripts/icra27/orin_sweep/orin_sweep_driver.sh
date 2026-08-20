@@ -52,7 +52,9 @@ while true; do
     while (( $(cpu_temp) > 50000 && waited < 600 )); do sleep 5; waited=$((waited + 5)); done
     pre_t=$(cpu_temp)
     if [[ "${budget}" == "C5" ]]; then extra=(); else extra=("num_pts:=${budget}" "landmark_elimination:=$([[ ${mode} == S1 ]] && echo schur || echo nullspace)"); fi
-    log "START ${name} pre_cpu_mC=${pre_t} waited=${waited}s extra=[${extra[*]:-}]"
+    # D9: warm the page cache for the bag identically before every cell (duration recorded)
+    bw0=$(date +%s.%N); cat "${bag}" > /dev/null; bag_warm_s=$(python3 -c "print(round($(date +%s.%N)-${bw0},1))")
+    log "START ${name} pre_cpu_mC=${pre_t} waited=${waited}s bag_warm_s=${bag_warm_s} extra=[${extra[*]:-}]"
     sudo tegrastats --interval 1000 > "${power}/${name}_tegrastats.txt" &
     bash "${tool}/orin_thermal_sampler.sh" "${power}/${name}_cooling.txt" &
     sampler_pid=$!
@@ -73,8 +75,8 @@ while true; do
     vline=$(python3 "${tool}/orin_sweep_verify_cell.py" --cell "${cell}" --name "${name}" --dataset "${dataset}" \
         --budget "${budget}" --mode "${mode}" --launch "${launch}" --cooling "${power}/${name}_cooling.txt" \
         --t-start "${t_start}" --t-end "${t_end}" 2>&1 | tail -1)
-    printf 'name=%s\ndataset=%s\nbudget=%s\nmode=%s\nrepeat=%s\nbag=%s\nbag_start=%s\nlaunch=%s\ncontainer_exit=%s\nt_start=%s\nt_end=%s\npre_cpu_mC=%s\nthermal_gate_wait_s=%s\n' \
-        "${name}" "${dataset}" "${budget}" "${mode}" "${repeat}" "${bag}" "${bag_start}" "${launch}" "${status}" "${t_start}" "${t_end}" "${pre_t}" "${waited}" \
+    printf 'name=%s\ndataset=%s\nbudget=%s\nmode=%s\nrepeat=%s\nbag=%s\nbag_start=%s\nlaunch=%s\ncontainer_exit=%s\nt_start=%s\nt_end=%s\npre_cpu_mC=%s\nthermal_gate_wait_s=%s\nbag_warm_s=%s\n' \
+        "${name}" "${dataset}" "${budget}" "${mode}" "${repeat}" "${bag}" "${bag_start}" "${launch}" "${status}" "${t_start}" "${t_end}" "${pre_t}" "${waited}" "${bag_warm_s}" \
         > "${cell}/diagnostics/host_invocation.txt"
     cp "${power}/${name}_tegrastats.txt" "${power}/${name}_cooling.txt" "${power}/${name}_post_thermal.txt" "${cell}/diagnostics/" 2>/dev/null || true
     ( cd "${cell}" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS )

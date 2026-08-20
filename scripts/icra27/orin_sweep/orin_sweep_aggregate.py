@@ -147,6 +147,8 @@ def read_cell(cell, idle, acc):
         return None
     fam, seq, mode, budget, rep, tflag = m.group(1), m.group(2), m.group(3), int(m.group(4)), int(m.group(5)), m.group(6)
     diag = cell / "diagnostics"
+    if not (diag / "cell_summary.json").is_file():
+        return {"cell": name, "family": fam, "sequence": seq, "mode": mode, "budget": budget, "repeat": rep, "status": "IN_PROGRESS", "thermal": None, "delta_verified": False, "ate_status": None, "max_cpu_C": None, "max_tj_C": None}
     J = lambda f: json.load(open(diag / f)) if (diag / f).is_file() else {}
     delta, summ, therm = J("cell_delta.json"), J("cell_summary.json"), J("thermal.json")
     host = dict(l.split("=", 1) for l in (diag / "host_invocation.txt").read_text().splitlines() if "=" in l) if (diag / "host_invocation.txt").is_file() else {}
@@ -158,7 +160,7 @@ def read_cell(cell, idle, acc):
            "status": summ.get("status"), "thermal": therm.get("verdict"), "throttle_samples": therm.get("throttle_samples"),
            "max_cpu_C": (therm.get("max_temp_mC") or {}).get("cpu-thermal", -1) / 1000.0 if therm else None,
            "max_tj_C": (therm.get("max_temp_mC") or {}).get("tj-thermal", -1) / 1000.0 if therm else None,
-           "thermal_gate_wait_s": float(host.get("thermal_gate_wait_s", 0) or 0), "pre_cpu_C": float(host.get("pre_cpu_mC", 0) or 0) / 1000.0,
+           "thermal_gate_wait_s": float(host.get("thermal_gate_wait_s", 0) or 0), "bag_warm_s": (float(host["bag_warm_s"]) if host.get("bag_warm_s") else None), "pre_D9": "bag_warm_s" not in host, "pre_cpu_C": float(host.get("pre_cpu_mC", 0) or 0) / 1000.0,
            "peak_rss_kb": summ.get("peak_rss_kb"), "wall_s": summ.get("wall_elapsed_s"), "state_sha256": summ.get("state_estimate_sha256")}
     # latency, recomputed
     period = NATIVE_PERIOD_MS[fam]
@@ -225,7 +227,7 @@ def main():
             "n_callbacks", "p50_ms", "p95_ms", "p99_ms", "max_ms", "mean_ms", "track_p50_ms", "deadline_misses", "compliance_pct",
             "energy_J", "energy_per_update_mJ", "power_mean_mW", "power_peak_mW", "power_samples", "peak_rss_kb", "wall_s",
             "ate_m", "rpe_t_1m_m", "rpe_r_1m_deg", "ate_status", "coverage_pct", "state_rows", "state_gaps", "max_state_gap_s",
-            "max_cpu_C", "max_tj_C", "throttle_samples", "thermal_gate_wait_s", "pre_cpu_C", "container_exit", "roslaunch_exit",
+            "max_cpu_C", "max_tj_C", "throttle_samples", "thermal_gate_wait_s", "pre_cpu_C", "bag_warm_s", "pre_D9", "container_exit", "roslaunch_exit",
             "state_sha256", "config_sha256", "launch_sha256", "binary_sha256", "board_p99_agrees"]
     with open(a.out / "cells_universal.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore"); w.writeheader()
@@ -234,7 +236,7 @@ def main():
     # per (family, sequence, mode, budget)
     G = defaultdict(list)
     for r in valid: G[(r["family"], r["sequence"], r["mode"], r["budget"])].append(r)
-    budgets = sorted({r["budget"] for r in rows})
+    budgets = sorted(set(GRID + EXT) | {r["budget"] for r in rows})
     seqs = {fam: sorted({r["sequence"] for r in rows if r["family"] == fam}) for fam in ("kaist", "euroc")}
     curves = {}
     for fam in ("kaist", "euroc"):
@@ -303,7 +305,7 @@ def main():
               "counts": {"cells_total": len(rows), "completed": sum(r["status"] == "COMPLETED" for r in rows),
                          "failed": sum(r["status"] != "COMPLETED" for r in rows), "invalid_thermal": sum(r["thermal"] == "INVALID_THERMAL" for r in rows),
                          "delta_unverified": sum(not r["delta_verified"] for r in rows), "valid_for_stats": len(valid),
-                         "ate_computed": sum(r["ate_status"] == "COMPUTED" for r in rows)},
+                         "ate_computed": sum(r["ate_status"] == "COMPUTED" for r in rows), "in_progress": sum(r["status"] == "IN_PROGRESS" for r in rows)},
               "bstar": {"%s/%s" % k: v for k, v in bstar.items()},
               "curves": {"%s/%s/%d" % k: v for k, v in curves.items()},
               "CL1": cl1, "CL2": cl2, "CL3": cl3, "F3": "SUPPORTED" if supported else "REFUTED",
