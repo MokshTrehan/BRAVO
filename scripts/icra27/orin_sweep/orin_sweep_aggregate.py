@@ -160,7 +160,7 @@ def read_cell(cell, idle, acc):
            "status": summ.get("status"), "thermal": therm.get("verdict"), "throttle_samples": therm.get("throttle_samples"),
            "max_cpu_C": (therm.get("max_temp_mC") or {}).get("cpu-thermal", -1) / 1000.0 if therm else None,
            "max_tj_C": (therm.get("max_temp_mC") or {}).get("tj-thermal", -1) / 1000.0 if therm else None,
-           "thermal_gate_wait_s": float(host.get("thermal_gate_wait_s", 0) or 0), "bag_warm_s": (float(host["bag_warm_s"]) if host.get("bag_warm_s") else None), "pre_D9": "bag_warm_s" not in host, "pre_cpu_C": float(host.get("pre_cpu_mC", 0) or 0) / 1000.0,
+           "thermal_gate_wait_s": float(host.get("thermal_gate_wait_s", 0) or 0), "bag_warm_s": host.get("bag_warm_s"), "pre_D9": "bag_warm_s" not in host, "pre_D10": "," not in host.get("bag_warm_s", ","), "pre_cpu_C": float(host.get("pre_cpu_mC", 0) or 0) / 1000.0,
            "peak_rss_kb": summ.get("peak_rss_kb"), "wall_s": summ.get("wall_elapsed_s"), "state_sha256": summ.get("state_estimate_sha256")}
     # latency, recomputed
     period = NATIVE_PERIOD_MS[fam]
@@ -178,6 +178,7 @@ def read_cell(cell, idle, acc):
                    p99_ms=float(np.percentile(total, 99)), max_ms=float(total.max()), mean_ms=float(total.mean()),
                    track_p50_ms=float(np.percentile(arr[:, 1] * 1000, 50)),
                    deadline_misses=miss, compliance_pct=100.0 * (len(total) - miss) / len(total),
+                   sum_latency_s=float(total.sum() / 1000.0), io_overhead_s=(row["wall_s"] - float(total.sum() / 1000.0)) if row.get("wall_s") is not None else None,
                    callback_span_start=float(arr[0, 0]), callback_span_end=float(arr[-1, 0]))
         bs = summ.get("timing", {}).get("total_ms", {}).get("p99")
         row["board_p99_agrees"] = (bs is not None and abs(bs - row["p99_ms"]) < 1e-6)
@@ -227,7 +228,7 @@ def main():
             "n_callbacks", "p50_ms", "p95_ms", "p99_ms", "max_ms", "mean_ms", "track_p50_ms", "deadline_misses", "compliance_pct",
             "energy_J", "energy_per_update_mJ", "power_mean_mW", "power_peak_mW", "power_samples", "peak_rss_kb", "wall_s",
             "ate_m", "rpe_t_1m_m", "rpe_r_1m_deg", "ate_status", "coverage_pct", "state_rows", "state_gaps", "max_state_gap_s",
-            "max_cpu_C", "max_tj_C", "throttle_samples", "thermal_gate_wait_s", "pre_cpu_C", "bag_warm_s", "pre_D9", "container_exit", "roslaunch_exit",
+            "max_cpu_C", "max_tj_C", "throttle_samples", "thermal_gate_wait_s", "pre_cpu_C", "bag_warm_s", "pre_D9", "pre_D10", "sum_latency_s", "io_overhead_s", "container_exit", "roslaunch_exit",
             "state_sha256", "config_sha256", "launch_sha256", "binary_sha256", "board_p99_agrees"]
     with open(a.out / "cells_universal.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore"); w.writeheader()

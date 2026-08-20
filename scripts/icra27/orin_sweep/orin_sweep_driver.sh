@@ -53,7 +53,8 @@ while true; do
     pre_t=$(cpu_temp)
     if [[ "${budget}" == "C5" ]]; then extra=(); else extra=("num_pts:=${budget}" "landmark_elimination:=$([[ ${mode} == S1 ]] && echo schur || echo nullspace)"); fi
     # D9: warm the page cache for the bag identically before every cell (duration recorded)
-    bw0=$(date +%s.%N); cat "${bag}" > /dev/null; bag_warm_s=$(python3 -c "print(round($(date +%s.%N)-${bw0},1))")
+    bw0=$(date +%s.%N); cat "${bag}" > /dev/null; bw1=$(date +%s.%N); cat "${bag}" > /dev/null; bw2=$(date +%s.%N)
+    bag_warm_s=$(python3 -c "print(str(round(${bw1}-${bw0},1))+','+str(round(${bw2}-${bw1},1)))")   # D10: two passes
     log "START ${name} pre_cpu_mC=${pre_t} waited=${waited}s bag_warm_s=${bag_warm_s} extra=[${extra[*]:-}]"
     sudo tegrastats --interval 1000 > "${power}/${name}_tegrastats.txt" &
     bash "${tool}/orin_thermal_sampler.sh" "${power}/${name}_cooling.txt" &
