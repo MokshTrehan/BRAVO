@@ -1,0 +1,24 @@
+# EXT-VF-1 permitted-delta record (machine-readable)
+# authors' config: kaistviodataset@ae67259 config/vins_fusion_config/realsense_stereo_imu_config.yaml
+## VF-imu.yaml deltas vs authors' original:
+11c11
+< output_path: "/home/dji/output/"
+---
+> output_path: "/out/"
+## VF.yaml deltas vs authors' original:
+5c5
+< imu: 1         
+---
+> imu: 0         
+11c11
+< output_path: "/home/dji/output/"
+---
+> output_path: "/out/"
+## calib files: verbatim copies
+identical
+## sha256
+520de361c02195a151fbfd24bc24c3607807c769becf120b9d210f68cfaff213  /home/moksh/datasets/KAIST_VIO/metadata/kaistviodataset/config/vins_fusion_config/realsense_stereo_imu_config.yaml
+74d1a20639d8fcaa0c18b6a4ed0055349d0949eee57df23a974a730ee5a4eaa8  /home/moksh/schurvio-icra27-artifacts/external-vf/extvf1-20260820T143502Z/configs/left.yaml
+c2ad96abe2e293c2f54ac0135405c21f672e613d6375a55a718eda23f40793b6  /home/moksh/schurvio-icra27-artifacts/external-vf/extvf1-20260820T143502Z/configs/right.yaml
+adeb569ab8f77633dea62d3c0fc7a1fc62dc7f4c1c8adc954a19a8f36e2fd24c  /home/moksh/schurvio-icra27-artifacts/external-vf/extvf1-20260820T143502Z/configs/VF-imu.yaml
+ee6ab4fa40a4c256d133b2fc60348a67e3746f52146cc6e298a36c8818429325  /home/moksh/schurvio-icra27-artifacts/external-vf/extvf1-20260820T143502Z/configs/VF.yaml
