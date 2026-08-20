@@ -1,0 +1,1193 @@
+{
+  "ceres_library": {
+    "mtime_ns": 1787229827000000000,
+    "path": "/repo/build/vendor/ceres-install/lib/libceres.so.1.14.0",
+    "sha256": "782b07f7597f29dc41487d233629b0bc80fcdc796313640067b34c5641443b2a",
+    "size_bytes": 2871704
+  },
+  "estimator_executable": {
+    "mtime_ns": 1787231686809596957,
+    "path": "/repo/build/cp0-ws/devel/lib/ov_msckf/ros1_serial_msckf",
+    "sha256": "b9f4f0348c56ec7fa97b823bc81533b405b6bf046bf53a7090327c6cdfc37708",
+    "size_bytes": 37218192
+  },
+  "generated_utc": "2026-08-20T13:15:42.515934Z",
+  "newest_source_mtime_ns": 1787228610223777725,
+  "python_executable": "/usr/bin/python3",
+  "runtime_artifacts": [
+    {
+      "mtime_ns": 1787230041612242156,
+      "path": "/repo/build/cp0-ws/devel/lib/libov_core_lib.so",
+      "sha256": "c90da9600ae775b9d6ae2bdd3553ac20bbed83f6a5c4966b54f5a9d25e485b54",
+      "size_bytes": 84878296
+    },
+    {
+      "mtime_ns": 1787230288685445801,
+      "path": "/repo/build/cp0-ws/devel/lib/libov_init_lib.so",
+      "sha256": "0fc226e57021294d040e62d9b830eadc3a6ebd1e0471c19cf738f2e1871a6050",
+      "size_bytes": 98086280
+    },
+    {
+      "mtime_ns": 1787231574879213046,
+      "path": "/repo/build/cp0-ws/devel/lib/libov_msckf_lib.so",
+      "sha256": "502dd1d3755cb8bb7b9bab54ae1cc1559e8daa3f19d3053d1519e46792ca6503",
+      "size_bytes": 301461056
+    },
+    {
+      "mtime_ns": 1787231686809596957,
+      "path": "/repo/build/cp0-ws/devel/lib/ov_msckf/ros1_serial_msckf",
+      "sha256": "b9f4f0348c56ec7fa97b823bc81533b405b6bf046bf53a7090327c6cdfc37708",
+      "size_bytes": 37218192
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "2751bcdc0fae25c993b3224dc5fa40aaab6571d7",
+  "source_files": [
+    {
+      "path": "ov_core/CMakeLists.txt",
+      "sha256": "1198912c828eee8dcb4a56aaf86406057877b8b78632d58212b479ad144dda2d",
+      "size_bytes": 3506
+    },
+    {
+      "path": "ov_core/cmake/ROS1.cmake",
+      "sha256": "30af5a06920309e33496fdeba459476d2c44068045358c24870319dac910348c",
+      "size_bytes": 3474
+    },
+    {
+      "path": "ov_core/cmake/ROS2.cmake",
+      "sha256": "78bd6085127d305897bc53e0393534902d0436a71f2805d757157f2a6275dca7",
+      "size_bytes": 2730
+    },
+    {
+      "path": "ov_core/package.xml",
+      "sha256": "09dc2ca52f2c655eb065ed2828d97d6f99321c367950ee7d2fa2892aa667414a",
+      "size_bytes": 1978
+    },
+    {
+      "path": "ov_core/src/cam/CamBase.h",
+      "sha256": "ebd03e29882525b47dfcf45631db90241d77994f42ef64c0cedf9624d3f59dde",
+      "size_bytes": 6852
+    },
+    {
+      "path": "ov_core/src/cam/CamEqui.h",
+      "sha256": "ab63c91de2d01a663f721ed55de1a251568b752e12c0d2069badc99074814e0b",
+      "size_bytes": 10070
+    },
+    {
+      "path": "ov_core/src/cam/CamRadtan.h",
+      "sha256": "f0c21847eb3e2c989c2f9cfde579f4321fd2c3913ea34f166f391098f455a82d",
+      "size_bytes": 8580
+    },
+    {
+      "path": "ov_core/src/cpi/CpiBase.h",
+      "sha256": "3c59f2cda240617d8061cdb39efd7bc5a15a6af5959328ed23a9df7c6ac9eb2d",
+      "size_bytes": 7862
+    },
+    {
+      "path": "ov_core/src/cpi/CpiV1.cpp",
+      "sha256": "9efcb6d30f05746f1c1c569e42774727dbfadc5c5f7c2a02fb8bf1f15374ada9",
+      "size_bytes": 12304
+    },
+    {
+      "path": "ov_core/src/cpi/CpiV1.h",
+      "sha256": "68fec348d9f20a820e8a406ef6a392c780d3818b84eb6ad6f4b659543a06d0c2",
+      "size_bytes": 3825
+    },
+    {
+      "path": "ov_core/src/cpi/CpiV2.cpp",
+      "sha256": "2380ba95165db4d1cdcfeb03315bd10ba4c6b8ee9334b3686c67dbbbc9a364d1",
+      "size_bytes": 16052
+    },
+    {
+      "path": "ov_core/src/cpi/CpiV2.h",
+      "sha256": "690813cde7c2a0a9a8ecfa6a6bf8bf4ae43f9a6cd41f5e29ff4e040eb17c8e3b",
+      "size_bytes": 4419
+    },
+    {
+      "path": "ov_core/src/dummy.cpp",
+      "sha256": "62e7f7a503df9b92c3b744356c8b0af8c18b92f89a3ff72eb2c3cf7d527c9953",
+      "size_bytes": 3655
+    },
+    {
+      "path": "ov_core/src/feat/Feature.cpp",
+      "sha256": "dccfa63da40b5f54a7aea3ae42dfdca9d4622b9f0320bf567e5cffdd59e9305c",
+      "size_bytes": 3767
+    },
+    {
+      "path": "ov_core/src/feat/Feature.h",
+      "sha256": "75a926e10ee9e0e29f0c769dda165e3daf20ed8c7ab21021f5aab509d40b3e61",
+      "size_bytes": 3571
+    },
+    {
+      "path": "ov_core/src/feat/FeatureDatabase.cpp",
+      "sha256": "2ebdd23caadabd6ad76588b4d8de6fcfcab5fae7409e7fab7a1872af60439239",
+      "size_bytes": 11341
+    },
+    {
+      "path": "ov_core/src/feat/FeatureDatabase.h",
+      "sha256": "d944dfa7830809aaa035ed143d307597622f40e52226c14c1f46413a99be5b44",
+      "size_bytes": 6501
+    },
+    {
+      "path": "ov_core/src/feat/FeatureHelper.h",
+      "sha256": "ad6972e451b1b8836712a10f9770616c62a7921b96bfbefddfc317ddf7b24bc8",
+      "size_bytes": 6813
+    },
+    {
+      "path": "ov_core/src/feat/FeatureInitializer.cpp",
+      "sha256": "719d665b9ea12bbc6360c7d99b8a68261869a4a7aa55d735efdbaa8cbe2b5525",
+      "size_bytes": 21967
+    },
+    {
+      "path": "ov_core/src/feat/FeatureInitializer.h",
+      "sha256": "79b0741bcde717cbfcd0d655204502e1356b3183101b79826bdc2d901577e2b3",
+      "size_bytes": 7126
+    },
+    {
+      "path": "ov_core/src/feat/FeatureInitializerOptions.h",
+      "sha256": "7ca685b9cd2d5d4fe547d873a912965b3f10b3edbadde4545ee8fb77ae9f7e73",
+      "size_bytes": 3843
+    },
+    {
+      "path": "ov_core/src/plot/matplotlibcpp.h",
+      "sha256": "2cd1ef263f3896a59dbbaa144a923e05db5f9c4e1ddc72af636cd86e8b2e07df",
+      "size_bytes": 60931
+    },
+    {
+      "path": "ov_core/src/sim/BsplineSE3.cpp",
+      "sha256": "3f9d342e789613e461e4845931289ef3b151adcd1da15f09d10a7ecc033f9ddd",
+      "size_bytes": 13910
+    },
+    {
+      "path": "ov_core/src/sim/BsplineSE3.h",
+      "sha256": "c33bb0da97e1d1eb454271146948802bf924d16797f468eaab3c8094545fee3d",
+      "size_bytes": 9838
+    },
+    {
+      "path": "ov_core/src/test_profile.cpp",
+      "sha256": "e9286ba4033ec00972586842cbd6cf0355af20f6005d8f6c71906156fa6a7774",
+      "size_bytes": 13995
+    },
+    {
+      "path": "ov_core/src/test_tracking.cpp",
+      "sha256": "a430103c7d4ff87bf1d58e3098867fc47e69491dd79f55ce1ae36d936064356e",
+      "size_bytes": 13880
+    },
+    {
+      "path": "ov_core/src/test_webcam.cpp",
+      "sha256": "0ad8fd58fad0005812ddf70156469bffc8acba77c0a4b47c43fe9ef2f14f9ed5",
+      "size_bytes": 8474
+    },
+    {
+      "path": "ov_core/src/track/Grider_FAST.h",
+      "sha256": "cde7dfde9703f4c8a93a038d7effea377357ded4ad8885b8a62f35a8b580f4b2",
+      "size_bytes": 7447
+    },
+    {
+      "path": "ov_core/src/track/Grider_GRID.h",
+      "sha256": "f06b3b67cd2f509cf4ee0c8211e7581fd15ad3bc2437290d387e69f8546fe778",
+      "size_bytes": 7670
+    },
+    {
+      "path": "ov_core/src/track/TrackAruco.cpp",
+      "sha256": "a67709aa8d026529aa9d19dacc3388ca658e6b788addb74400fcadf290f2ac1c",
+      "size_bytes": 9980
+    },
+    {
+      "path": "ov_core/src/track/TrackAruco.h",
+      "sha256": "5b099da03b663c3067f727a7dc60041194ea15e47b73964cb8a42206ce57f318",
+      "size_bytes": 5424
+    },
+    {
+      "path": "ov_core/src/track/TrackBase.cpp",
+      "sha256": "699d95687ad614dc449cc061a9f35afdd7e0a6e648c70357c0ef39fea13dede9",
+      "size_bytes": 11483
+    },
+    {
+      "path": "ov_core/src/track/TrackBase.h",
+      "sha256": "3761988460a4ee5cbcfb5b550f3603e83a3104e468f8d011c5db1a3599a80b98",
+      "size_bytes": 8293
+    },
+    {
+      "path": "ov_core/src/track/TrackDescriptor.cpp",
+      "sha256": "e040ac088f9439c23bdfd798a1da9644f99eee7fe5e63fc0538132e8624a8715",
+      "size_bytes": 25235
+    },
+    {
+      "path": "ov_core/src/track/TrackDescriptor.h",
+      "sha256": "3cd95659c7d9754116f325fa93e5107a88a81d3aed176459d82a3d1cbdea2369",
+      "size_bytes": 8388
+    },
+    {
+      "path": "ov_core/src/track/TrackKLT.cpp",
+      "sha256": "01c0e9bdf250292f511c21fc22b31b5a55e4718141f37bd378a2c3dc39a5742d",
+      "size_bytes": 55556
+    },
+    {
+      "path": "ov_core/src/track/TrackKLT.h",
+      "sha256": "5a5cd4aff5b9be22b9cf5b4ca6ea9bd1dacd4e6dc8c9ec966e5f13007c432932",
+      "size_bytes": 9585
+    },
+    {
+      "path": "ov_core/src/track/TrackKLTDiagnostics.cpp",
+      "sha256": "588b173e0017b5413690159cf241789c14c2ed1291f36a589a9b47bbd7b6c257",
+      "size_bytes": 6171
+    },
+    {
+      "path": "ov_core/src/track/TrackKLTDiagnostics.h",
+      "sha256": "eb8fd432620cec1e7563dcd16d2f5179ece31b0676a64f7b4d7936314eefc7bd",
+      "size_bytes": 3792
+    },
+    {
+      "path": "ov_core/src/track/TrackSIM.cpp",
+      "sha256": "af761beeb45e67c5c14a2a8738b08639859293e825c11012db3f45328880e1db",
+      "size_bytes": 2739
+    },
+    {
+      "path": "ov_core/src/track/TrackSIM.h",
+      "sha256": "9323bb6fd16bd8cc291a1a11a0d6936b77b269884d409b29bed166f9054a8eda",
+      "size_bytes": 2712
+    },
+    {
+      "path": "ov_core/src/types/IMU.h",
+      "sha256": "17e7536f0dd8094e9427114b80e45ba632a210d6168b463d5808c1ea0fe4605e",
+      "size_bytes": 6979
+    },
+    {
+      "path": "ov_core/src/types/JPLQuat.h",
+      "sha256": "2b6fd48feae5d0b1443b16b79ea95aced479e88c02242af5bfecf70cdf153c92",
+      "size_bytes": 6609
+    },
+    {
+      "path": "ov_core/src/types/Landmark.cpp",
+      "sha256": "6b52cd26f96272d0d5ce250bb0cf1c42126d11b41568c6f9d2e669aa7ed0c85f",
+      "size_bytes": 5170
+    },
+    {
+      "path": "ov_core/src/types/Landmark.h",
+      "sha256": "da434d1030e7c4f95bb4af51c2261a5fe91231a5f2e8659ab7c3c5e7ce5d99f0",
+      "size_bytes": 4019
+    },
+    {
+      "path": "ov_core/src/types/LandmarkRepresentation.h",
+      "sha256": "6300697bf6f15300741989e5bfbdcf4f646fce6acddb885a6b1e741b150f0458",
+      "size_bytes": 4132
+    },
+    {
+      "path": "ov_core/src/types/PoseJPL.h",
+      "sha256": "25886235f0c608a7ce4da951520fa95aaeffc67ad790a14207e45d0d0ee9ca3d",
+      "size_bytes": 5262
+    },
+    {
+      "path": "ov_core/src/types/Type.h",
+      "sha256": "99b89f7cf00c414c4a24f27b2ba3e5831c1435147cdf656a0858974e63377257",
+      "size_bytes": 4072
+    },
+    {
+      "path": "ov_core/src/types/Vec.h",
+      "sha256": "0092f5e5b6bf296bd3758e096d3e8f43272192729b845148c723b61c19736e3c",
+      "size_bytes": 1971
+    },
+    {
+      "path": "ov_core/src/utils/colors.h",
+      "sha256": "dc7adaee5e5b6a6427173f85ece9c6a0e75984c3edc05f83d9e8f28d16fec41f",
+      "size_bytes": 1999
+    },
+    {
+      "path": "ov_core/src/utils/dataset_reader.h",
+      "sha256": "d3be3da836a88be3c71a30568080b833cabf5e59857d3123f8543808dbdcd9d3",
+      "size_bytes": 8417
+    },
+    {
+      "path": "ov_core/src/utils/opencv_lambda_body.h",
+      "sha256": "6777ee289c5ea66b463c045a1104cadc577816a4196686f43a26ca8c389fc9ed",
+      "size_bytes": 1781
+    },
+    {
+      "path": "ov_core/src/utils/opencv_yaml_parse.h",
+      "sha256": "cbfe34103dea90c11c11b67fcb6f4c0ed362bdfeade06a5275293e06ab99a850",
+      "size_bytes": 31662
+    },
+    {
+      "path": "ov_core/src/utils/print.cpp",
+      "sha256": "4629a1f9c34bbc33ae20f596a60b80d9ecd5c6212cf7abbafcb36e3fa6fd6b97",
+      "size_bytes": 5409
+    },
+    {
+      "path": "ov_core/src/utils/print.h",
+      "sha256": "5924f94926bd8f350ecad90f5682ea172cef0dd46e809f0c2bae5f71d2944b57",
+      "size_bytes": 3868
+    },
+    {
+      "path": "ov_core/src/utils/quat_ops.h",
+      "sha256": "2e01cbd84740d6ba4f446ec12d4e2927d367fc07fcc4ec6ada85f4b0d81d3e9a",
+      "size_bytes": 21520
+    },
+    {
+      "path": "ov_core/src/utils/sensor_data.h",
+      "sha256": "5eee5beaddc13647630c61e2b4304785f228373f10dbbce7e9fe8e2dfe40f7b7",
+      "size_bytes": 2503
+    },
+    {
+      "path": "ov_eval/CMakeLists.txt",
+      "sha256": "82d97269763e5137c0289e1f95a870c8b03773387cbda65ccbaa0d37a862a016",
+      "size_bytes": 2584
+    },
+    {
+      "path": "ov_eval/cmake/ROS1.cmake",
+      "sha256": "057f746d4a413edf9d25f2e1800a03b65375ba937cee922a0bde4b48323659c5",
+      "size_bytes": 7823
+    },
+    {
+      "path": "ov_eval/cmake/ROS2.cmake",
+      "sha256": "e061685c0753d54aad73bd87ad86eaf76e0f86d44f10de1d4d0f175480940511",
+      "size_bytes": 5201
+    },
+    {
+      "path": "ov_eval/package.xml",
+      "sha256": "8d620ebea76d46fbbf32b6f7cd78bbcd8b95ced1ee12bae6dd0ce439d126d59f",
+      "size_bytes": 2029
+    },
+    {
+      "path": "ov_eval/src/alignment/AlignTrajectory.cpp",
+      "sha256": "db64e0716dfdf569706b30d1b0c0ea6a75d6fa1caea5a15e28c98bea263c55c8",
+      "size_bytes": 6367
+    },
+    {
+      "path": "ov_eval/src/alignment/AlignTrajectory.h",
+      "sha256": "96dd4cb6a4069cd8c5b978856ca666a54602dc17dcbefe8587f29132845e4d33",
+      "size_bytes": 6226
+    },
+    {
+      "path": "ov_eval/src/alignment/AlignUtils.cpp",
+      "sha256": "2e8371837ab7cec2e4d2378832c2a310e78c0c7aca87fafe444dc2dd5b75b77d",
+      "size_bytes": 7757
+    },
+    {
+      "path": "ov_eval/src/alignment/AlignUtils.h",
+      "sha256": "9c943dafaaad6749f8fc7f815c1c324fc346733934abb4cb3f8f1310dae944a3",
+      "size_bytes": 4628
+    },
+    {
+      "path": "ov_eval/src/calc/ResultSimulation.cpp",
+      "sha256": "0b67a3a6c3d6c2791d3aef4b24d48aa160090784e45bc5491b02ef414ba79d52",
+      "size_bytes": 27872
+    },
+    {
+      "path": "ov_eval/src/calc/ResultSimulation.h",
+      "sha256": "479fa3c6c028aec20a8b9e4e211f198b6aafeb27f5193a169f895d10f64db606",
+      "size_bytes": 24489
+    },
+    {
+      "path": "ov_eval/src/calc/ResultTrajectory.cpp",
+      "sha256": "00a3c5625d9e5b0011644213e293cf0f1904c8033029a43a711b21b8bf10c124",
+      "size_bytes": 18643
+    },
+    {
+      "path": "ov_eval/src/calc/ResultTrajectory.h",
+      "sha256": "e4757dbcf66ea5af24b900e1c7985fd2f9f46fa334a826e233dd41f59bbf5d6d",
+      "size_bytes": 8922
+    },
+    {
+      "path": "ov_eval/src/dummy.cpp",
+      "sha256": "034b7f087d6b50c8b5c76e57045dd21017aad57e10f28c2e7bf43265678a8edb",
+      "size_bytes": 2435
+    },
+    {
+      "path": "ov_eval/src/error_comparison.cpp",
+      "sha256": "30d737304b7989621cbddc60dd4bc4fa21f394a467044731febb22cd879bff0f",
+      "size_bytes": 19591
+    },
+    {
+      "path": "ov_eval/src/error_dataset.cpp",
+      "sha256": "4f72f481f21d04e1898e572b32cfd633ef141440b7c37c15257dc10762f6775b",
+      "size_bytes": 19502
+    },
+    {
+      "path": "ov_eval/src/error_simulation.cpp",
+      "sha256": "254cec9bc360fdabd2babe0ea42bd71c5bd4ca96b7e2bc4cb39db1ea20f722f6",
+      "size_bytes": 2339
+    },
+    {
+      "path": "ov_eval/src/error_singlerun.cpp",
+      "sha256": "d9f386c40e8b68ec386cdd38f75acfbaf5cf8fa923b1d1a7e2c9471eeea8f836",
+      "size_bytes": 13170
+    },
+    {
+      "path": "ov_eval/src/format_converter.cpp",
+      "sha256": "e8312b21064b56e143e6380e5264cd198a03762b147802c34cc478328d481b4c",
+      "size_bytes": 5141
+    },
+    {
+      "path": "ov_eval/src/live_align_trajectory.cpp",
+      "sha256": "de0a52c7ae30861ed8a5159f17d6748705f7e8dc7c929a8e9f45b950a8330ac1",
+      "size_bytes": 5876
+    },
+    {
+      "path": "ov_eval/src/plot_trajectories.cpp",
+      "sha256": "9e99f9d1e331190081647da8cce49385d6aa3be334310e0a54aee0f5035c21ed",
+      "size_bytes": 7601
+    },
+    {
+      "path": "ov_eval/src/pose_to_file.cpp",
+      "sha256": "53649a23faf26e2c05d4443efddb296f6f4e6a4db5c6d19432049bc4e18657b6",
+      "size_bytes": 2843
+    },
+    {
+      "path": "ov_eval/src/timing_comparison.cpp",
+      "sha256": "96b17dbc4741e3045e90e3ddcada2c9ce20d2f991e47cda63a6ea27cd76c27fa",
+      "size_bytes": 5904
+    },
+    {
+      "path": "ov_eval/src/timing_flamegraph.cpp",
+      "sha256": "d1f49d0d1cdab6e38ad4a7273ec5ab2a631abc66773941aedd29d4029540a8e4",
+      "size_bytes": 5001
+    },
+    {
+      "path": "ov_eval/src/timing_histogram.cpp",
+      "sha256": "3c45ff795638e0bfd8c018999ffaa937e023ee3efbfff1d472a38eed065f5dab",
+      "size_bytes": 3417
+    },
+    {
+      "path": "ov_eval/src/timing_percentages.cpp",
+      "sha256": "ad20db1f3dd242170f7c86c1612f85ef0a127eeabe1a0abe76b5de75cae08389",
+      "size_bytes": 9132
+    },
+    {
+      "path": "ov_eval/src/utils/Loader.cpp",
+      "sha256": "5e6806692e01fb863a0d7db00e5d72355898ad00e9e9b3d61910fd5df9a3f6fc",
+      "size_bytes": 12919
+    },
+    {
+      "path": "ov_eval/src/utils/Loader.h",
+      "sha256": "580330a0b7a2ee74a9732c1ab6e44c9ec480cc96419bbecfd9012e011551abc9",
+      "size_bytes": 4387
+    },
+    {
+      "path": "ov_eval/src/utils/Recorder.h",
+      "sha256": "c4a433e90e962da990f90d58162a88ce62b49ede52c1899a9cd99fbf749c3ca8",
+      "size_bytes": 7912
+    },
+    {
+      "path": "ov_eval/src/utils/Statistics.h",
+      "sha256": "f15e658022d33abcf0f17741f4f4225fe08118a0c138636297962299f8201777",
+      "size_bytes": 3931
+    },
+    {
+      "path": "ov_init/CMakeLists.txt",
+      "sha256": "fa847ef5ccc54b26c62abc09593e1f98e05b70b1d24f3552c523a2be4e480dab",
+      "size_bytes": 2998
+    },
+    {
+      "path": "ov_init/cmake/ROS1.cmake",
+      "sha256": "ef7814d1042a524db1711ade2584ea481cbc16ce5a9e7072a769e2844237f4d3",
+      "size_bytes": 4479
+    },
+    {
+      "path": "ov_init/cmake/ROS2.cmake",
+      "sha256": "ea9290ba0dbeb22e6013ba9b5d042a404e56e279a05d0d09441d5cfff4696b2c",
+      "size_bytes": 2939
+    },
+    {
+      "path": "ov_init/package.xml",
+      "sha256": "8b0a1202cfb8786c55b0a7c7b374cc32f9498163c8aac8046b81a8dd70e909d4",
+      "size_bytes": 2021
+    },
+    {
+      "path": "ov_init/src/ceres/Factor_GenericPrior.cpp",
+      "sha256": "c388c428fa58125281f1e3d2d93093eddbac10da917e4a72e5e41bdbf6130e67",
+      "size_bytes": 7757
+    },
+    {
+      "path": "ov_init/src/ceres/Factor_GenericPrior.h",
+      "sha256": "2273f1445a59ca53efc9408f9f9a5df441db24512fdfe228f6c12d3771a66a57",
+      "size_bytes": 3515
+    },
+    {
+      "path": "ov_init/src/ceres/Factor_ImageReprojCalib.cpp",
+      "sha256": "828404bf550be35ced68f950ca6dd684566ca2063ad19a6ef3429226801a892c",
+      "size_bytes": 6109
+    },
+    {
+      "path": "ov_init/src/ceres/Factor_ImageReprojCalib.h",
+      "sha256": "baabd80f52f73e4182b55dd62c95184f5e0132a8619416edf10e24f651966eb3",
+      "size_bytes": 2695
+    },
+    {
+      "path": "ov_init/src/ceres/Factor_ImuCPIv1.cpp",
+      "sha256": "495ef7e88a4628a02cff5c51cbd4fedc456745d2bf8bff9f94bde3496b5985d6",
+      "size_bytes": 10440
+    },
+    {
+      "path": "ov_init/src/ceres/Factor_ImuCPIv1.h",
+      "sha256": "8112b267baa3780038c7960b56f66c9d7119212835cfae63dd9cba03c834fd57",
+      "size_bytes": 2698
+    },
+    {
+      "path": "ov_init/src/ceres/State_JPLQuatLocal.cpp",
+      "sha256": "c72d5af943daf9692a5ca8dc1467ea571cb5c1f0a5972323e145d4e9295ec57b",
+      "size_bytes": 3065
+    },
+    {
+      "path": "ov_init/src/ceres/State_JPLQuatLocal.h",
+      "sha256": "d648965c7267ef2e867f507f0bbdce1bd05eaee63af34c949cd60f958cb8a199",
+      "size_bytes": 2870
+    },
+    {
+      "path": "ov_init/src/dummy.cpp",
+      "sha256": "5083f27573e5efcaffabd84550042ad47dd2d81f3f23655f8d839153f2d06ea9",
+      "size_bytes": 2059
+    },
+    {
+      "path": "ov_init/src/dynamic/DynamicInitializer.cpp",
+      "sha256": "d223bff748a3836c035c7829a5d054240a76db7aa938283f7a52429533bb0d3e",
+      "size_bytes": 53557
+    },
+    {
+      "path": "ov_init/src/dynamic/DynamicInitializer.h",
+      "sha256": "023085ca5fb42c5f9ce19abba65ee9c43056dab2bf0e93f5112048d6c5f97bf5",
+      "size_bytes": 4174
+    },
+    {
+      "path": "ov_init/src/init/InertialInitializer.cpp",
+      "sha256": "211601b4cf1ccc65392fe38e7c59ab5a3c61041d70984978028d3f166073df00",
+      "size_bytes": 6633
+    },
+    {
+      "path": "ov_init/src/init/InertialInitializer.h",
+      "sha256": "7be2af85b8e6bcda2a15d04907e5e9a6ccd5b18594891b510608edf6f959fb0d",
+      "size_bytes": 4943
+    },
+    {
+      "path": "ov_init/src/init/InertialInitializerOptions.h",
+      "sha256": "0c7a3b54dcb47c8fa24dc50974a1a3955fe4d55120860bcac5473585ef0a0fb5",
+      "size_bytes": 20195
+    },
+    {
+      "path": "ov_init/src/sim/SimulatorInit.cpp",
+      "sha256": "91e571e8862790dc2d074fd4956bde841176f15f6cd96cd3b4eb72b484898a49",
+      "size_bytes": 19828
+    },
+    {
+      "path": "ov_init/src/sim/SimulatorInit.h",
+      "sha256": "ccd3234dd813c1f27307c341127081eaa23864542c53414446daa96c6dbe2a94",
+      "size_bytes": 7306
+    },
+    {
+      "path": "ov_init/src/static/StaticInitializer.cpp",
+      "sha256": "9c0113c7acab30b5d98efc0368217031af64ad3b23d64bac924ad373f2f83511",
+      "size_bytes": 7172
+    },
+    {
+      "path": "ov_init/src/static/StaticInitializer.h",
+      "sha256": "3b9fdabe344f6661c7ea84f99e53ba150ba4d01d4315d784db20c738333559cd",
+      "size_bytes": 3973
+    },
+    {
+      "path": "ov_init/src/test_dynamic_init.cpp",
+      "sha256": "0137d56d1bebff018116f7bae4142c33015287574b599eb8bdcbb881d32d763d",
+      "size_bytes": 16801
+    },
+    {
+      "path": "ov_init/src/test_dynamic_mle.cpp",
+      "sha256": "285a40541faac69938a760971a1c90109622e8d28ecd29909c84481d7af92aba",
+      "size_bytes": 30132
+    },
+    {
+      "path": "ov_init/src/test_simulation.cpp",
+      "sha256": "1971fa1f217f69906ff650cd88f619cafffafc3a856b0609bc1e42c0c23d6cfb",
+      "size_bytes": 3204
+    },
+    {
+      "path": "ov_init/src/utils/helper.h",
+      "sha256": "34786cbb1084c89c548c1829ffbec325ac20d5b2d62c88a00cf7c55f50bae0e1",
+      "size_bytes": 20928
+    },
+    {
+      "path": "ov_msckf/CMakeLists.txt",
+      "sha256": "e71ba55b12b1ccec0cd47abc6e9d344a5b0b9a30da787b022b963e9027468031",
+      "size_bytes": 2741
+    },
+    {
+      "path": "ov_msckf/cmake/CP2Tests.cmake",
+      "sha256": "28c0fda321ae6b540a3bd5ae17fe16de28c6174c73034d5c2d8f14ce55af762e",
+      "size_bytes": 8981
+    },
+    {
+      "path": "ov_msckf/cmake/ROS1.cmake",
+      "sha256": "2391532586d431bbc6ddea652a584d3ba46ff6785cfbf537b94e2ffb5bbb7217",
+      "size_bytes": 15766
+    },
+    {
+      "path": "ov_msckf/cmake/ROS2.cmake",
+      "sha256": "49dac49a9d65434efcbd1bb55d5fc271e5a1b257e30c2889d3bf70b7b394b220",
+      "size_bytes": 6215
+    },
+    {
+      "path": "ov_msckf/package.xml",
+      "sha256": "783ec705e7734f474593943d109a90c8f1b104b1a00de7a00cf7a9a9b5cfbf95",
+      "size_bytes": 3519
+    },
+    {
+      "path": "ov_msckf/src/core/LongGapRelocalizer.cpp",
+      "sha256": "0effcadb5037a583f5f739996d7efd647bfb2a888455eaa9ef573a0440aacd57",
+      "size_bytes": 26990
+    },
+    {
+      "path": "ov_msckf/src/core/LongGapRelocalizer.h",
+      "sha256": "cba7ed033c09d7a5dad3ba66763f1d2926ef8be9d7dbfb9882365900148c5e84",
+      "size_bytes": 4520
+    },
+    {
+      "path": "ov_msckf/src/core/TurnSafeCallbackInstaller.h",
+      "sha256": "50558d9710b3c07582b7f6d38f438adf5456ee180a84f9fa7c6e7179045239e0",
+      "size_bytes": 1666
+    },
+    {
+      "path": "ov_msckf/src/core/VioManager.cpp",
+      "sha256": "47ffd65a7558f8d08f2bbf32cead3081df06a74f7dbef799ae10a2c71d1c4c5f",
+      "size_bytes": 62399
+    },
+    {
+      "path": "ov_msckf/src/core/VioManager.h",
+      "sha256": "fe84d347a940ce27e8b8114f3a7bc1e3bbddb9e82a2af3b66a8a23a17e557d52",
+      "size_bytes": 12349
+    },
+    {
+      "path": "ov_msckf/src/core/VioManagerHelper.cpp",
+      "sha256": "8ad52676cd0d1624f81e3a8e2f6010fb9a4097ee02d7befab478fcec203069ad",
+      "size_bytes": 31519
+    },
+    {
+      "path": "ov_msckf/src/core/VioManagerOptions.h",
+      "sha256": "44a2dfb2856332302bde8d2052ae2ec07b0fc297eacc3b1820fdd1bf66047e79",
+      "size_bytes": 41997
+    },
+    {
+      "path": "ov_msckf/src/dummy.cpp",
+      "sha256": "bdd0c10ab86468fae96d8bf8d365b606d39835ca7ac70d1cd4b7dcfcdbe555b2",
+      "size_bytes": 2714
+    },
+    {
+      "path": "ov_msckf/src/ros/CP2ROS1RuntimeParameters.cpp",
+      "sha256": "50f45fe1141b222f4a2de496544ecbfd543b428e127bfe7666c37ef0379e8110",
+      "size_bytes": 9078
+    },
+    {
+      "path": "ov_msckf/src/ros/CP2ROS1RuntimeParameters.h",
+      "sha256": "15d6cb9fc5d01913165e83c788cda4412287c22cce2ed6356a2c80adc63c12ac",
+      "size_bytes": 1298
+    },
+    {
+      "path": "ov_msckf/src/ros/ROS1Visualizer.cpp",
+      "sha256": "cbd404a6f0e4de7ad98e66a10050106cd54555118a22f30262db147b93d35992",
+      "size_bytes": 50926
+    },
+    {
+      "path": "ov_msckf/src/ros/ROS1Visualizer.h",
+      "sha256": "9692e4874663216f6b7b28428531cde139505043850fa7d327c5754b8a5f6b34",
+      "size_bytes": 9230
+    },
+    {
+      "path": "ov_msckf/src/ros/ROS2Visualizer.cpp",
+      "sha256": "4ae487016093b0e2a6c90a3514e852f06ba3d64830194dc350f22f3c89295205",
+      "size_bytes": 45522
+    },
+    {
+      "path": "ov_msckf/src/ros/ROS2Visualizer.h",
+      "sha256": "3676928f699452727af01a6471e6bc0a45c06f4b73b7859ee994fbe292161ca7",
+      "size_bytes": 7712
+    },
+    {
+      "path": "ov_msckf/src/ros/ROSVisualizerHelper.cpp",
+      "sha256": "5ac52b19febd79c1a51f87792c198df4802c346ce46791f2b1dec09493efdd63",
+      "size_bytes": 21150
+    },
+    {
+      "path": "ov_msckf/src/ros/ROSVisualizerHelper.h",
+      "sha256": "6d7c4eda0df29fec68c5b4cb46b5b7f48a994617732eff492ed43e898195843e",
+      "size_bytes": 4937
+    },
+    {
+      "path": "ov_msckf/src/ros1_serial_msckf.cpp",
+      "sha256": "93d9200a517585697ade5ce7cb83d9ca759635dbfaaa1f5915111588d4feefaf",
+      "size_bytes": 45186
+    },
+    {
+      "path": "ov_msckf/src/run_simulation.cpp",
+      "sha256": "e64eed514d8b60a624210175b8f0f4cb9c621a97022e8a6de7b41b3afafaf57a",
+      "size_bytes": 6363
+    },
+    {
+      "path": "ov_msckf/src/run_subscribe_msckf.cpp",
+      "sha256": "6a81931f2a0bfec726dd54b5d159484cc9c8c16a062bcf9d15b99943994e4546",
+      "size_bytes": 3648
+    },
+    {
+      "path": "ov_msckf/src/sim/Simulator.cpp",
+      "sha256": "c87eaf8abae5495b5a19fc38e2b7bd28f74c63602e2bad4502a3ebf3c3c90369",
+      "size_bytes": 21912
+    },
+    {
+      "path": "ov_msckf/src/sim/Simulator.h",
+      "sha256": "8d3978c7fc927b88e8f43110b2ce16e1335a8f33bd61b1562f92a70305f4a5fa",
+      "size_bytes": 7591
+    },
+    {
+      "path": "ov_msckf/src/state/Propagator.cpp",
+      "sha256": "b2b3dd6eba8c86b6d02ef65b911110781ab60a56d07f161d8f21d34a5ae6811f",
+      "size_bytes": 53294
+    },
+    {
+      "path": "ov_msckf/src/state/Propagator.h",
+      "sha256": "fd1021bd0d2198d97993fb1bc3b3dd85ee7dd7126e06960ec3074d1ea1dd0572",
+      "size_bytes": 22919
+    },
+    {
+      "path": "ov_msckf/src/state/State.cpp",
+      "sha256": "f9e523eeb63a83bc96e7be7dbb7ad1ecf0300e8195b939fcd233f8c5f9763050",
+      "size_bytes": 6652
+    },
+    {
+      "path": "ov_msckf/src/state/State.h",
+      "sha256": "ecbbb157b61220ebe2c85987866af520077388388e4253e58712164697b38bba",
+      "size_bytes": 6807
+    },
+    {
+      "path": "ov_msckf/src/state/StateHelper.cpp",
+      "sha256": "ca841a8738d2663078907dfd8963a3a0f06866ec10a1567b867a593cc9a96405",
+      "size_bytes": 32078
+    },
+    {
+      "path": "ov_msckf/src/state/StateHelper.h",
+      "sha256": "ed19f57fc6425192d7455e656dd2d1e49ea3ba505aa637674de60d743e51ad78",
+      "size_bytes": 13025
+    },
+    {
+      "path": "ov_msckf/src/state/StateOptions.h",
+      "sha256": "f3fec7fcbb213b145a2a7cfa4a051ff948e3c0f03f914edfa5b58c5ba82eb525",
+      "size_bytes": 7950
+    },
+    {
+      "path": "ov_msckf/src/test_sim_meas.cpp",
+      "sha256": "f8ce7e77e8d23bdced3f9feb5f78d090978f1d838dba6fd1d425b9aa6f06a713",
+      "size_bytes": 3179
+    },
+    {
+      "path": "ov_msckf/src/test_sim_repeat.cpp",
+      "sha256": "7c7670fa3f5fae4bd1c5caee10979edfe5682c2eac2d5b91b8978cf8282bef94",
+      "size_bytes": 5325
+    },
+    {
+      "path": "ov_msckf/src/update/CP2Canonical.cpp",
+      "sha256": "f033facb96e009ca1985b2cd3c74490abf5ac3d2e5677327cea73fe7206b4a85",
+      "size_bytes": 10930
+    },
+    {
+      "path": "ov_msckf/src/update/CP2Canonical.h",
+      "sha256": "58fe1f71cdecbd4a3e667858564b66819f39a906e190dca1ec580f10ddf26781",
+      "size_bytes": 3874
+    },
+    {
+      "path": "ov_msckf/src/update/CP2CommitBoundary.cpp",
+      "sha256": "04cd1a6fe0a6562e0d30093d291da8466225d60643cababa9c74802aaabe02d1",
+      "size_bytes": 479
+    },
+    {
+      "path": "ov_msckf/src/update/CP2CommitBoundary.h",
+      "sha256": "141859917d4da20d353b165b90600bf53fbb6e3ffd8e2b127e9d0cfff9b6c970",
+      "size_bytes": 5294
+    },
+    {
+      "path": "ov_msckf/src/update/CP2CommitOracle.cpp",
+      "sha256": "b10485addcfd35d5a2a3136f90a5fea6aba238ec763ccce0e04d8fc437351972",
+      "size_bytes": 21451
+    },
+    {
+      "path": "ov_msckf/src/update/CP2CommitOracle.h",
+      "sha256": "64a608439b23022a39e16a595ad16ebac27adf0839aaba0338da0dbf1e3867ff",
+      "size_bytes": 3462
+    },
+    {
+      "path": "ov_msckf/src/update/CP2CompositeState.cpp",
+      "sha256": "f443751c7cf7c8b5265959469b20c1615d183c0190f84556031f0562512df689",
+      "size_bytes": 73414
+    },
+    {
+      "path": "ov_msckf/src/update/CP2CompositeState.h",
+      "sha256": "c52efd20c66d3fdd0baf0b00efe343bd5ce0e7cde342306dbcdc40af51a3c8f1",
+      "size_bytes": 9429
+    },
+    {
+      "path": "ov_msckf/src/update/CP2FeatureGate.cpp",
+      "sha256": "9c80c0ddb635a9d1a6268d1ba01c7e016a89266f318745e6951a57bfc6676b14",
+      "size_bytes": 9796
+    },
+    {
+      "path": "ov_msckf/src/update/CP2FeatureGate.h",
+      "sha256": "aa991fc6e35693e2c64ac552d61f35a92e76980dba746d842a7e4d57aef87013",
+      "size_bytes": 5336
+    },
+    {
+      "path": "ov_msckf/src/update/CP2OfflineReplay.cpp",
+      "sha256": "ba294ec500d341127542a3f189f3da75dd0ecb19913064437575f1a9ab4d42a2",
+      "size_bytes": 145996
+    },
+    {
+      "path": "ov_msckf/src/update/CP2OfflineReplay.h",
+      "sha256": "eff341f81bfab57969d1a842ee5c12388abdb3819098b985b65a007e2c1af08d",
+      "size_bytes": 2331
+    },
+    {
+      "path": "ov_msckf/src/update/CP2OutputCapability.cpp",
+      "sha256": "d5efa08dd4f702535a7b0e3d75ea6793c5455fbb2c1862ba89abd8cc220f2702",
+      "size_bytes": 23065
+    },
+    {
+      "path": "ov_msckf/src/update/CP2OutputCapability.h",
+      "sha256": "66afe6067cf2980635089404e39a1c018cdf34e5c650fe14debb2a6d3add8dbb",
+      "size_bytes": 4601
+    },
+    {
+      "path": "ov_msckf/src/update/CP2RecordedAssemble.cpp",
+      "sha256": "6fa4cf9b0a9df346310fd2193e1ddf9d74259692de4a3deba8fb9f94fbd0c466",
+      "size_bytes": 111722
+    },
+    {
+      "path": "ov_msckf/src/update/CP2RuntimeContext.cpp",
+      "sha256": "a6b8d9e1978f4b2f7e5c0437396e230800648df0208e6c62080c34553a2ffbe8",
+      "size_bytes": 32298
+    },
+    {
+      "path": "ov_msckf/src/update/CP2RuntimeContext.h",
+      "sha256": "471f1ba7453bca0b57f024f3e3a67de0b1857046bd2700dcdc69f9872a000fab",
+      "size_bytes": 3402
+    },
+    {
+      "path": "ov_msckf/src/update/CP2SerialPairing.cpp",
+      "sha256": "9c0ba091c450ffa0f659456a73bda4236baaf6874e031a2cfa95815797566f7f",
+      "size_bytes": 6668
+    },
+    {
+      "path": "ov_msckf/src/update/CP2SerialPairing.h",
+      "sha256": "0cd0f6c15ff54198611db6d4cd3d4298165cb8cbe29eb7f2e393baba4b68dd4e",
+      "size_bytes": 3783
+    },
+    {
+      "path": "ov_msckf/src/update/CP2SerialRuntimeTrace.cpp",
+      "sha256": "be2dcb5ca3eb379e97abf571e93d69da349cf46c58ac42f717f7e832bb76755e",
+      "size_bytes": 35056
+    },
+    {
+      "path": "ov_msckf/src/update/CP2SerialRuntimeTrace.h",
+      "sha256": "ca1f38ef3416d8cf26ed475992c30c44bdb746d9b7bd88a001061ea5e78a4848",
+      "size_bytes": 5097
+    },
+    {
+      "path": "ov_msckf/src/update/CP2ShadowMath.cpp",
+      "sha256": "7fc90e043ab0325df6eead0f84c3a6fec009eb188299ddc96770bbe82bbbec46",
+      "size_bytes": 29164
+    },
+    {
+      "path": "ov_msckf/src/update/CP2ShadowMath.h",
+      "sha256": "2c282afb4285398a1184032aa6dee96c826726c2b3d697d510a884268bf8f974",
+      "size_bytes": 8083
+    },
+    {
+      "path": "ov_msckf/src/update/CP2StateTraceCodec.cpp",
+      "sha256": "21b2a9e8684fcfa620d2c8a50363ee6bb25474f88dd9fe93913d0a81f261434f",
+      "size_bytes": 28082
+    },
+    {
+      "path": "ov_msckf/src/update/CP2StateTraceCodec.h",
+      "sha256": "7ec64680e674d1c566f2d6a5f61404aafecbd7655dca72acecca4c6147eaaee3",
+      "size_bytes": 2268
+    },
+    {
+      "path": "ov_msckf/src/update/CP2TimingClock.cpp",
+      "sha256": "f9470a714b9f99d917b3c97649c23a7b621fe67e1668bf9bfefc8dbe78e098fb",
+      "size_bytes": 2089
+    },
+    {
+      "path": "ov_msckf/src/update/CP2TimingClock.h",
+      "sha256": "653f8da0eb2259c95f92e987b766782449bd6ab5380a4fea802aae04f1006fcc",
+      "size_bytes": 1524
+    },
+    {
+      "path": "ov_msckf/src/update/CP2TraceCodec.cpp",
+      "sha256": "01e8a528369f1e0b88ee2443a523fd41a67a108af9189e2bfeae945099a7d4e3",
+      "size_bytes": 39305
+    },
+    {
+      "path": "ov_msckf/src/update/CP2TraceCodec.h",
+      "sha256": "2e45ed644de77b56cfc1b93584053fe9a353a54327764310439d2af338b71ddd",
+      "size_bytes": 7352
+    },
+    {
+      "path": "ov_msckf/src/update/CP2TraceJournal.cpp",
+      "sha256": "13bcc705455e1570db07dde579d839806ec196f588534249841d89ea9548a7c2",
+      "size_bytes": 94415
+    },
+    {
+      "path": "ov_msckf/src/update/CP2TraceJournal.h",
+      "sha256": "118d26195b79bc6dfc00aa5d65e6f664a31e8a8b12cd7c20c82a10c0a6395389",
+      "size_bytes": 16742
+    },
+    {
+      "path": "ov_msckf/src/update/SchurUpdate.cpp",
+      "sha256": "2bcd7e6666ab49a60f2bcb66e2af8effe2bfdc4f36c7fd0b80217f63d2ae8994",
+      "size_bytes": 10354
+    },
+    {
+      "path": "ov_msckf/src/update/SchurUpdate.h",
+      "sha256": "58474a9cd9c957683c1197331dc25179835bacde931a10de423349b5782273ee",
+      "size_bytes": 4733
+    },
+    {
+      "path": "ov_msckf/src/update/TurnSafeDiagnostics.cpp",
+      "sha256": "3d8f4c4a54328c96293ab5b54f0795364148c1078cde9c47dc06b09b8c11413a",
+      "size_bytes": 159165
+    },
+    {
+      "path": "ov_msckf/src/update/TurnSafeDiagnostics.h",
+      "sha256": "3d9bc347ecae508a0487a838d8a4f59e0e0ef1129721922d501e26ead628d9fd",
+      "size_bytes": 9195
+    },
+    {
+      "path": "ov_msckf/src/update/TurnSafeTypes.h",
+      "sha256": "b40c7f3d17c8e3f8b15eb8d86fb3f37447207f80c51acb69da281a1b41de704c",
+      "size_bytes": 13091
+    },
+    {
+      "path": "ov_msckf/src/update/UpdaterHelper.cpp",
+      "sha256": "f68fc2e1dd04a6a33e94c576839dc4643114d2100ddb69f1b00da09bd7b12714",
+      "size_bytes": 21546
+    },
+    {
+      "path": "ov_msckf/src/update/UpdaterHelper.h",
+      "sha256": "43215c2af373cbf5b44b5d84702b71dfbc6ad6b10088781b2020cc90f7dfeb95",
+      "size_bytes": 5820
+    },
+    {
+      "path": "ov_msckf/src/update/UpdaterMSCKF.cpp",
+      "sha256": "a384628de6a4d179a110ec159cf17cc2d0be4b0f88c73ed3c57c6a417c5c785b",
+      "size_bytes": 191946
+    },
+    {
+      "path": "ov_msckf/src/update/UpdaterMSCKF.h",
+      "sha256": "beb697f3f457483a7ca43b6e38b36942111086361a448e589fe8879495f410d2",
+      "size_bytes": 18134
+    },
+    {
+      "path": "ov_msckf/src/update/UpdaterMSCKFPreview.cpp",
+      "sha256": "30fe0f850c6243285ad5002a190647972cd751a52512d32ecbbbd773be11f2ea",
+      "size_bytes": 37115
+    },
+    {
+      "path": "ov_msckf/src/update/UpdaterMSCKFPreview.h",
+      "sha256": "19eecede596365c1118b73636f02bf6a21caac6c883544af04d34c3e67365e1b",
+      "size_bytes": 12037
+    },
+    {
+      "path": "ov_msckf/src/update/UpdaterOptions.h",
+      "sha256": "36ae2d9e8f9d702c59115172dd9cdec48f6a54b0f32f270e43455bbc47176f0b",
+      "size_bytes": 4420
+    },
+    {
+      "path": "ov_msckf/src/update/UpdaterSLAM.cpp",
+      "sha256": "6f44e7dbab3b1787821597d275e7c4a59a8d447eac25e4dcfdeb4a70c1bd7e3c",
+      "size_bytes": 28243
+    },
+    {
+      "path": "ov_msckf/src/update/UpdaterSLAM.h",
+      "sha256": "20c98ae549756e5d5505ef88e0a9d6a21f11709ea5a1afe5c950c1ec232c5de8",
+      "size_bytes": 4118
+    },
+    {
+      "path": "ov_msckf/src/update/UpdaterZeroVelocity.cpp",
+      "sha256": "adeacc26e9286acb4cab7fb31eab383b23a5362a8dd1d28878c83c2934881ea1",
+      "size_bytes": 14300
+    },
+    {
+      "path": "ov_msckf/src/update/UpdaterZeroVelocity.h",
+      "sha256": "7dab2e1899488a54b444cf1a4f35518dab85ecb7b6e41e172deeb085e9a21220",
+      "size_bytes": 5775
+    },
+    {
+      "path": "ov_msckf/src/utils/KaistVioSerialPairing.cpp",
+      "sha256": "4b6f27f4e6a717147ba21772a90d31064960d138f8bcf105e1e61eb9c6c7c4e8",
+      "size_bytes": 8278
+    },
+    {
+      "path": "ov_msckf/src/utils/KaistVioSerialPairing.h",
+      "sha256": "c86ca185f4411e737a98a71e2526c684ad71b0e88315b16862301a0ee0c60098",
+      "size_bytes": 2941
+    },
+    {
+      "path": "ov_msckf/src/utils/NoiseManager.h",
+      "sha256": "ad42c71158e521771ac45ddd0434db85d36c0438dfd6550f842990e875d7f322",
+      "size_bytes": 2161
+    },
+    {
+      "path": "ov_msckf/test/cp1/cp1_fixture_utils.h",
+      "sha256": "20802270aedd54139c93518d4a99299bb557728aae4be608aa5c3479dd473eb9",
+      "size_bytes": 7774
+    },
+    {
+      "path": "ov_msckf/test/cp1/gtest_main.cpp",
+      "sha256": "6fbfbf42e30df97a77ec8ff4421722e48943bc5042ffb06326e290216d440078",
+      "size_bytes": 176
+    },
+    {
+      "path": "ov_msckf/test/cp1/test_one_pass_regression.cpp",
+      "sha256": "c1bdb7cee5a14102f8b4759418135328bad1c74b5ab4f071fb54ee97dd614532",
+      "size_bytes": 181549
+    },
+    {
+      "path": "ov_msckf/test/cp1/test_prior_and_compression.cpp",
+      "sha256": "7b93cd765a2d3a0aca0bd891763ec043f714037e6a3eb564472ab9ba428ed84b",
+      "size_bytes": 15408
+    },
+    {
+      "path": "ov_msckf/test/cp1/test_projection_jacobian.cpp",
+      "sha256": "acbc16b7ea0c7c54a6395cecad50958bc42ff892c3f0787a809f409cd4c7e2e4",
+      "size_bytes": 12707
+    },
+    {
+      "path": "ov_msckf/test/cp1/test_rank_rejection.cpp",
+      "sha256": "40d4a32b6304fb20f19ea27ca19963fd80537001bffa5afe3c625fa8ce2e54bc",
+      "size_bytes": 7276
+    },
+    {
+      "path": "ov_msckf/test/cp1/test_schur_equivalence.cpp",
+      "sha256": "f4ebd6d6700ae4fcec8c6dc49bab45fabbbacc4425a33c863d5f7a6378b984d1",
+      "size_bytes": 14079
+    },
+    {
+      "path": "ov_msckf/test/cp1/test_visual_pass_config.cpp",
+      "sha256": "f558de84fa6d3190b061d1e29f5cbb753541dc3c6519e613d847cb17b5e37725",
+      "size_bytes": 9793
+    },
+    {
+      "path": "ov_msckf/test/cp2/gtest_main.cpp",
+      "sha256": "6fbfbf42e30df97a77ec8ff4421722e48943bc5042ffb06326e290216d440078",
+      "size_bytes": 176
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_configuration_contract.cpp",
+      "sha256": "75faa083b8e56ca2dd20e4f9ab932247a5c39b6488c21b20d03d57e2b6df0c31",
+      "size_bytes": 13940
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_cp2_canonical.cpp",
+      "sha256": "f383481721ac0082c8f79b6148c7200a56988261d955cadbc8f9302e37000d37",
+      "size_bytes": 5966
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_cp2_commit_boundary.cpp",
+      "sha256": "50a4b32c453939f03e0ede7d476b24b8ec5907a7ca9e38e065f403c0d758152f",
+      "size_bytes": 7591
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_cp2_commit_oracle.cpp",
+      "sha256": "7fb700bfd499313d8cf9f3777170c977900cf9a775ad209dda9d07811459cdb9",
+      "size_bytes": 17609
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_cp2_composite_state.cpp",
+      "sha256": "b2bb9753803c0e1746deb1bcf4f16dd74718ad369e25a05388db3cc00db0061e",
+      "size_bytes": 101551
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_cp2_feature_gate.cpp",
+      "sha256": "5ec0e8037a715bb1a87f2ff84258f7699882fc964e15e6dd905252a7a2835363",
+      "size_bytes": 12560
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_cp2_offline_replay.cpp",
+      "sha256": "ddfd5874d1354d66df7949a487173929dc2cd13d0f5abc122749476fd7280202",
+      "size_bytes": 11243
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_cp2_recorded_assemble.cpp",
+      "sha256": "759eabafbd0e788669d2c2869092f9f2b97ec10d384199eb528917f931bbc172",
+      "size_bytes": 30499
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_cp2_ros1_runtime_parameters.cpp",
+      "sha256": "2213cf233c7c2e6ef8be56d3470355a583cd0a2c232d19fb680ad76b4275f7df",
+      "size_bytes": 5632
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_cp2_runtime_context.cpp",
+      "sha256": "129053b8af86408568c47d1e36b858e6dc8101edffa78caa3a2116e46b6a1a04",
+      "size_bytes": 16119
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_cp2_serial_pairing.cpp",
+      "sha256": "baea542c065fb6f2599d9eac69b7c881588c3d8caa819071eca3d811e3ae89c6",
+      "size_bytes": 7624
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_cp2_serial_runtime_trace.cpp",
+      "sha256": "4fbae2f91ac264bc0d2add87668a9bfbb51fcc33534826dfca623fe00a15ef5b",
+      "size_bytes": 40785
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_cp2_shadow_math.cpp",
+      "sha256": "b71c082947a8d307d79b07f0c51e78097c4cb8e7423ec1321e60041a3393f354",
+      "size_bytes": 29426
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_cp2_trace_codec.cpp",
+      "sha256": "7fab7774f3b9b944da01dea53f4f3c86aac31f16eab21f9befc4a318b7c2a3f4",
+      "size_bytes": 34965
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_cp2_trace_journal.cpp",
+      "sha256": "0b3faa87cb4e6854020c461b304c24aeb74fab1eebc74433627084680d8b59ea",
+      "size_bytes": 44671
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_fej_golden.cpp",
+      "sha256": "cac24f511eaa1ac5256cd9fa776459f17c2f1b455d30b5efc4df10d08aea5172",
+      "size_bytes": 12186
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_long_gap_relocalizer.cpp",
+      "sha256": "c283fe6596a8f8159a77cb55b975817aaf3c427e62c517917082475b5e5d8465",
+      "size_bytes": 19494
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_production_schur_reducer.cpp",
+      "sha256": "ca92515aaf1256387f84edf1da51cb3e80bb2a8cec8be3f84aada8b1ca26696a",
+      "size_bytes": 31852
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_state_update_semantics.cpp",
+      "sha256": "5fc48e4818cc1c218274d17ccb67057b0a7ef5ffa36f8b16d74fcbd6c9e75b0f",
+      "size_bytes": 35379
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_updater_msckf_end_to_end.cpp",
+      "sha256": "ce6e208f957b515d82d0bea1742ae1235b501860821e707bcb7ecc15a07f1ac5",
+      "size_bytes": 116019
+    },
+    {
+      "path": "ov_msckf/test/cp2/test_updater_msckf_preview_snapshot.cpp",
+      "sha256": "289f00eabd18c12f2a17b0967dc43dcf8fb4ff13e73649c9f3e33f2e0da0eb2d",
+      "size_bytes": 12768
+    },
+    {
+      "path": "ov_msckf/test/turnsafe/test_kaist_vio_serial_pairing.cpp",
+      "sha256": "0c001a19503e409dd7d2a17ec5f92fabe5c0b21de66810ebf8a164f1fcc28b05",
+      "size_bytes": 6465
+    },
+    {
+      "path": "ov_msckf/test/turnsafe/test_turnsafe_t0.cpp",
+      "sha256": "f9c9cce0a43a6c1264402e0e1f9405757498c397dc3b602cd87c54e9ecced6d6",
+      "size_bytes": 84144
+    }
+  ],
+  "source_tree_sha256": "ae0ebfd0b4e2935b07d43c1dca324b0263541ea6f8cb171c1929132395e84213"
+}
