@@ -19,15 +19,16 @@ L = {"kaist": TOOL + "/orin_sweep_kaist.launch", "euroc": TOOL + "/orin_sweep_eu
 C5L = {"kaist": "/repo/project/rotation_robustness_serial.launch", "euroc": "/data/tooling/icra27_cross_dataset_s1_serial.launch"}
 MODES = ["S1", "N0"]
 
-def cells(family, seqs, budgets, reps):
+def cells(family, seqs, budgets, reps, mode_order=None):
     for r in reps:
+        modes = (mode_order or {}).get(r, MODES)
         for seq, bag, bs in seqs:
             for b in budgets:
-                for m in MODES:
+                for m in modes:
                     yield "\t".join([f"{family}-{seq}-{m}-b{b}-r{r}", family, str(b), m, str(r), bag, bs, L[family]])
 
 def main():
-    ap = argparse.ArgumentParser(); ap.add_argument("phase"); ap.add_argument("--budgets", default=""); ap.add_argument("--families", default="kaist,euroc"); ap.add_argument("--reps", default="4,5")
+    ap = argparse.ArgumentParser(); ap.add_argument("phase"); ap.add_argument("--budgets", default=""); ap.add_argument("--families", default="kaist,euroc"); ap.add_argument("--reps", default="4,5"); ap.add_argument("--mode-order", default="4:N0,S1;5:S1,N0", help="D11: per-repeat mode order")
     a = ap.parse_args(); out = []
     if a.phase == "gate":
         out.append("\t".join(["gate-kaist-rotation_fast-C5", "kaist", "C5", "C5", "gate", KAIST[0][1], "0", C5L["kaist"]]))
@@ -39,8 +40,9 @@ def main():
     elif a.phase == "ext": out += cells("kaist", KAIST, [35, 25], [1, 2, 3])
     elif a.phase == "topup":
         bs = [int(x) for x in a.budgets.split(",")]; reps = [int(x) for x in a.reps.split(",")]
+        mo = {int(k): v.split(",") for k, v in (item.split(":") for item in a.mode_order.split(";") if item)}
         for fam in a.families.split(","):
-            out += cells(fam, KAIST if fam == "kaist" else EUROC, bs, reps)
+            out += cells(fam, KAIST if fam == "kaist" else EUROC, bs, reps, mo)
     else: sys.exit("unknown phase")
     print("\n".join(out))
 
