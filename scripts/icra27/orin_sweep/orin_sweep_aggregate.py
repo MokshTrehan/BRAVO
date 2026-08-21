@@ -96,7 +96,10 @@ class Accuracy:
     def evaluate(self, key, state_path, state_sha, system):
         if state_sha in self.cache:
             return dict(self.cache[state_sha], cached=True)
-        d = self.work / state_sha[:16]; d.mkdir(parents=True, exist_ok=True)
+        d = self.work / state_sha[:16]
+        if d.exists():
+            import shutil; shutil.rmtree(d)   # the frozen core writes exclusively; never reuse a work dir
+        d.mkdir(parents=True)
         tum = d / "estimate_raw.tum"
         res = {"status": None, "ate_m": None, "rpe_t_1m_m": None, "rpe_r_1m_deg": None, "associated": 0, "est_rows": 0, "gt_rows": 0}
         try:
@@ -346,11 +349,13 @@ def main():
             if all(c == "—" for c in cells): continue
             L.append("| %d%s | %s |" % (b, " (F)" if b == F else "", " | ".join(cells)))
         L.append("")
-    L.append("### B* table\n"); L.append("| family | B*(S1) | B*(N0) | per-sequence B* S1 | per-sequence B* N0 | ATE at B*(S1) | ATE at B*(N0) |"); L.append("|---|---|---|---|---|---|---|")
+    L.append("### B* table\n"); L.append("| family | B*(S1) | B*(N0) | per-sequence B* (S1 / N0) | ATE at B*(S1) [m] | ATE at B*(N0) [m] | ATE at F (reference) [m] |"); L.append("|---|---|---|---|---|---|---|")
+    fmtd = lambda d: "—" if not d else "; ".join("%s %s" % (k, fmt(v, 3)) for k, v in sorted(d.items()))
     for fam in ("kaist", "euroc"):
         s1, n0 = bstar[(fam, "S1")], bstar[(fam, "N0")]
-        L.append("| %s | %s | %s | %s | %s | %s | %s |" % (fam, s1["B"] or "NONE", n0["B"] or "NONE", s1["per_seq"], n0["per_seq"],
-                 cl1["detail"][fam]["ate_at_B_S1"], cl1["detail"][fam]["ate_at_B_N0"]))
+        ps = "; ".join("%s %s/%s" % (q, s1["per_seq"][q] or "NONE", n0["per_seq"][q] or "NONE") for q in seqs[fam])
+        L.append("| %s | %s | %s | %s | %s | %s | %s |" % (fam, s1["B"] or "NONE", n0["B"] or "NONE", ps,
+                 fmtd(cl1["detail"][fam]["ate_at_B_S1"]), fmtd(cl1["detail"][fam]["ate_at_B_N0"]), fmtd(curves[(fam, "S1", F)]["ate_by_seq"])))
     (a.out / "tables.md").write_text("\n".join(L) + "\n")
     print(json.dumps({k: result[k] for k in ("counts", "bstar", "F3", "F3_clauses_true", "kaist_extension_rule_fires")}, indent=1, default=str))
     return 0
